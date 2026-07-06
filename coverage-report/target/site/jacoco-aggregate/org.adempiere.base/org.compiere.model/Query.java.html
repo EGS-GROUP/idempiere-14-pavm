@@ -1,0 +1,1121 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Query.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">Query.java</span></div><h1>Query.java</h1><pre class="source lang-java linenums">/*******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                        *
+ * Copyright (C) 1999-2006 Adempiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it     *
+ * under the terms version 2 of the GNU General Public License as published    *
+ * by the Free Software Foundation. This program is distributed in the hope    *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied  *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.            *
+ * See the GNU General Public License for more details.                        *
+ * You should have received a copy of the GNU General Public License along     *
+ * with this program; if not, write to the Free Software Foundation, Inc.,     *
+ * 59 Temple Place, Suite 330, Boston, MA                                      *
+ * 02111-1307 USA.                                                             *
+ *                                                                             *
+ * Copyright (C) 2007 Low Heng Sin hengsin@avantz.com                          *
+ * Contributor(s):                                                             *
+ *                 Teo Sarca, www.arhipac.ro                                   *
+ * __________________________________________                                  *
+ ******************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Properties;
+import java.util.Spliterator;
+import java.util.Spliterators;
+import java.util.function.Consumer;
+import java.util.logging.Level;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
+
+import org.adempiere.exceptions.DBException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+/**
+ * Query model
+ * @author Low Heng Sin
+ * @author Teo Sarca, www.arhipac.ro
+ * 			&lt;li&gt;FR [ 1981760 ] Improve Query class
+ * 			&lt;li&gt;BF [ 2030280 ] org.compiere.model.Query apply access filter issue
+ * 			&lt;li&gt;FR [ 2041894 ] Add Query.match() method
+ * 			&lt;li&gt;FR [ 2107068 ] Query.setOrderBy should be more error tolerant
+ * 			&lt;li&gt;FR [ 2107109 ] Add method Query.setOnlyActiveRecords
+ * 			&lt;li&gt;FR [ 2421313 ] Introduce Query.firstOnly convenient method
+ * 			&lt;li&gt;FR [ 2546052 ] Introduce Query aggregate methods
+ * 			&lt;li&gt;FR [ 2726447 ] Query aggregate methods for all return types
+ * 			&lt;li&gt;FR [ 2818547 ] Implement Query.setOnlySelection
+ * 				https://sourceforge.net/p/adempiere/feature-requests/759/
+ * 			&lt;li&gt;FR [ 2818646 ] Implement Query.firstId/firstIdOnly
+ * 				https://sourceforge.net/p/adempiere/feature-requests/760/
+ * @author Redhuan D. Oon
+ * 			&lt;li&gt;FR: [ 2214883 ] Remove SQL code and Replace for Query // introducing SQL String prompt in log.info 
+ *			&lt;li&gt;FR: [ 2214883 ] - to introduce .setClient_ID
+ */
+public class Query
+{
+	public static final String AGGREGATE_COUNT		= &quot;COUNT&quot;;
+	public static final String AGGREGATE_SUM		= &quot;SUM&quot;;
+	public static final String AGGREGATE_AVG		= &quot;AVG&quot;;
+	public static final String AGGREGATE_MIN		= &quot;MIN&quot;;
+	public static final String AGGREGATE_MAX		= &quot;MAX&quot;;
+	
+<span class="nc" id="L73">	private static CLogger log	= CLogger.getCLogger (Query.class);</span>
+	
+<span class="nc" id="L75">	private Properties ctx = null;</span>
+<span class="nc" id="L76">	private MTable table = null;</span>
+<span class="nc" id="L77">	private String whereClause = null;</span>
+<span class="nc" id="L78">	private String orderBy = null;</span>
+<span class="nc" id="L79">	private String trxName = null;</span>
+<span class="nc" id="L80">	private Object[] parameters = null;</span>
+
+	/**
+	 * Name of virtual columns to be included in the query
+	 */
+<span class="nc" id="L85">	private String[] virtualColumns = null;</span>
+
+<span class="nc" id="L87">	private boolean applyAccessFilter = false;</span>
+<span class="nc" id="L88">	private boolean applyAccessFilterRW = false;</span>
+<span class="nc" id="L89">	private boolean applyAccessFilterFullyQualified = true;</span>
+<span class="nc" id="L90">	private boolean onlyActiveRecords = false;</span>
+<span class="nc" id="L91">	private boolean onlyClient_ID = false;</span>
+<span class="nc" id="L92">	private int onlySelection_ID = -1;</span>
+<span class="nc" id="L93">	private boolean forUpdate = false;</span>
+
+	/**
+	 * Whether to load (&lt;code&gt;false&lt;/code&gt; value) all declared virtual columns at once or use 
+	 * lazy loading (&lt;code&gt;true&lt;/code&gt; value).
+	 */
+<span class="nc" id="L99">	private boolean noVirtualColumn = true;</span>
+
+<span class="nc" id="L101">	private int queryTimeout = 0;</span>
+<span class="nc" id="L102">	private List&lt;String&gt; joinClauseList = new ArrayList&lt;String&gt;();</span>
+	
+    /**
+     * Limit current query rows return.
+     */
+    private int pageSize;
+
+    /**
+     * Number of records will be skipped on query run.
+     */
+    private int recordsToSkip;
+    
+    /** list of columns to include in select statement (optional) */
+    private String[] selectColumns;
+
+	/**
+	 * @param table
+	 * @param whereClause
+	 * @param trxName
+	 * @deprecated Use {@link #Query(Properties, MTable, String, String)} instead because this method is security error prone
+	 */
+    @Deprecated (since=&quot;13&quot;, forRemoval=true)
+<span class="nc" id="L124">	public Query(MTable table, String whereClause, String trxName)</span>
+	{
+<span class="nc" id="L126">		this.ctx = table.getCtx();</span>
+<span class="nc" id="L127">		this.table = table;</span>
+<span class="nc" id="L128">		this.whereClause = whereClause;</span>
+<span class="nc" id="L129">		this.trxName = trxName;</span>
+<span class="nc" id="L130">	}</span>
+	
+	/**
+	 * @param ctx context 
+	 * @param table
+	 * @param whereClause
+	 * @param trxName
+	 */
+<span class="nc" id="L138">	public Query(Properties ctx, MTable table, String whereClause, String trxName)</span>
+	{
+<span class="nc" id="L140">		this.ctx = ctx;</span>
+<span class="nc" id="L141">		this.table = table;</span>
+<span class="nc" id="L142">		this.whereClause = whereClause;</span>
+<span class="nc" id="L143">		this.trxName = trxName;</span>
+<span class="nc" id="L144">	}</span>
+	
+	/**
+	 * @param ctx
+	 * @param tableName
+	 * @param whereClause
+	 * @param trxName
+	 */
+	public Query(Properties ctx, String tableName, String whereClause, String trxName)
+	{
+<span class="nc" id="L154">		this(ctx, MTable.get(ctx, tableName), whereClause, trxName);</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">		if (this.table == null)</span>
+<span class="nc" id="L156">			throw new IllegalArgumentException(&quot;Table Name Not Found - &quot;+tableName);</span>
+<span class="nc" id="L157">	}</span>
+	
+	/**
+	 * Set query parameters
+	 * @param parameters
+	 */
+	public Query setParameters(Object ...parameters)
+	{
+<span class="nc" id="L165">		this.parameters = parameters;</span>
+<span class="nc" id="L166">		return this;</span>
+	}
+	
+	/**
+	 * Set query parameters
+	 * @param parameters collection of parameters
+	 */
+	public Query setParameters(List&lt;Object&gt; parameters)
+	{
+<span class="nc bnc" id="L175" title="All 2 branches missed.">		if (parameters == null) {</span>
+<span class="nc" id="L176">			this.parameters = null;</span>
+<span class="nc" id="L177">			return this;</span>
+		}
+<span class="nc" id="L179">		this.parameters = new Object[parameters.size()];</span>
+<span class="nc" id="L180">		parameters.toArray(this.parameters);</span>
+<span class="nc" id="L181">		return this;</span>
+	}
+	
+	/**
+	 * Set order by clause.&lt;br/&gt;
+	 * If the string starts with &quot;ORDER BY&quot; then &quot;ORDER BY&quot; keywords will be discarded. 
+	 * @param orderBy SQL ORDER BY clause
+	 */
+	public Query setOrderBy(String orderBy)
+	{
+<span class="nc bnc" id="L191" title="All 2 branches missed.">		this.orderBy = orderBy != null ? orderBy.trim() : null;</span>
+<span class="nc bnc" id="L192" title="All 4 branches missed.">		if (this.orderBy != null &amp;&amp; this.orderBy.toUpperCase().startsWith(&quot;ORDER BY&quot;))</span>
+		{
+<span class="nc" id="L194">			this.orderBy = this.orderBy.substring(8);</span>
+		}
+<span class="nc" id="L196">		return this;</span>
+	}
+	
+	/**
+	 * Turn on/off the addition of data access filter
+	 * @param flag
+	 */
+	public Query setApplyAccessFilter(boolean flag)
+	{
+<span class="nc" id="L205">		this.applyAccessFilter = flag;</span>
+<span class="nc" id="L206">		return this;</span>
+	}
+
+	/**
+	 * Turn on data access filter with controls
+	 * @param fullyQualified
+	 * @param RW
+	 */
+	public Query setApplyAccessFilter(boolean fullyQualified, boolean RW)
+	{
+<span class="nc" id="L216">		this.applyAccessFilter = true;</span>
+<span class="nc" id="L217">		this.applyAccessFilterFullyQualified = fullyQualified;</span>
+<span class="nc" id="L218">		this.applyAccessFilterRW = RW;</span>
+<span class="nc" id="L219">		return this;</span>
+	}
+		
+	/**
+	 * Select only active records (i.e. IsActive='Y')
+	 * @param onlyActiveRecords
+	 */
+	public Query setOnlyActiveRecords(boolean onlyActiveRecords)
+	{
+<span class="nc" id="L228">		this.onlyActiveRecords = onlyActiveRecords;</span>
+<span class="nc" id="L229">		return this;</span>
+	}
+	
+	/**
+	 * Set Client_ID true for WhereClause  to auto include AD_Client_ID
+	 */
+	public Query setClient_ID()
+	{
+<span class="nc" id="L237">		return setClient_ID (true);</span>
+	}
+	
+	/**
+	 * Set include or not include AD_Client_ID in where clause
+	 * @param isIncludeClient
+	 */
+	public Query setClient_ID(boolean isIncludeClient)
+	{
+<span class="nc" id="L246">		this.onlyClient_ID = isIncludeClient;</span>
+<span class="nc" id="L247">		return this;</span>
+	}
+	
+	/**
+	 * Only records that are in T_Selection with AD_PInstance_ID.
+	 * @param AD_PInstance_ID
+	 */
+	public Query setOnlySelection(int AD_PInstance_ID)
+	{
+<span class="nc" id="L256">		this.onlySelection_ID = AD_PInstance_ID;</span>
+<span class="nc" id="L257">		return this;</span>
+	}
+	
+	/**
+	 * Add FOR UPDATE clause
+	 * @param forUpdate
+	 */
+	public Query setForUpdate(boolean forUpdate)
+	{
+<span class="nc" id="L266">		this.forUpdate = forUpdate;</span>
+<span class="nc" id="L267">		return this;</span>
+	}
+
+	/**
+	 * Virtual columns are lazy loaded by default. In case lazy loading is not desired use this method with
+	 * the &lt;code&gt;false&lt;/code&gt; value.  
+	 * @param noVirtualColumn Whether to load (&lt;code&gt;false&lt;/code&gt; value) all declared virtual columns at once or use lazy loading (&lt;code&gt;true&lt;/code&gt; value).
+	 * @see #setVirtualColumns(String...)
+	 */
+	public Query setNoVirtualColumn(boolean noVirtualColumn)
+	{
+<span class="nc" id="L278">		this.noVirtualColumn = noVirtualColumn;</span>
+<span class="nc" id="L279">		return this;</span>
+	}
+	
+	/**
+	 * Set query statement timeout in seconds
+	 * @param seconds
+	 */
+	public Query setQueryTimeout(int seconds)
+	{
+<span class="nc" id="L288">		this.queryTimeout = seconds;</span>
+<span class="nc" id="L289">		return this;</span>
+	}
+	
+	/**
+	 * Add join clause (with JOIN keyword)
+	 * @param joinClause
+	 */
+	public Query addJoinClause(String joinClause)
+	{
+<span class="nc" id="L298">		joinClauseList.add(joinClause);</span>
+<span class="nc" id="L299">		return this;</span>
+	}
+	
+	/**
+	 * Convenient method to add table direct type of joint.&lt;br/&gt;
+	 * For e.g, if foreignTableName is C_BPartner and TableName for Query is AD_User,&lt;br/&gt;
+	 * this will add join clause of &lt;br/&gt;
+	 * &quot;INNER JOIN C_BPartner ON (AD_User.C_BPartner_ID=C_BPartner.C_BParner_ID)&quot;.
+	 * @param foreignTableName
+	 */
+	public void addTableDirectJoin(String foreignTableName) {
+<span class="nc" id="L310">		String foreignId = foreignTableName + &quot;_ID&quot;;</span>
+<span class="nc" id="L311">		addJoinClause(&quot;INNER JOIN &quot; + foreignTableName + &quot; ON (&quot; + table.getTableName() + &quot;.&quot; + foreignId </span>
+<span class="nc" id="L312">				+ &quot;=&quot; + foreignTableName + &quot;.&quot; + foreignId + &quot;)&quot;);</span>
+<span class="nc" id="L313">	}</span>
+	
+	/**
+	 * Get a list of POs that match the query criteria.
+	 * @return PO List
+	 * @throws DBException 
+	 */
+	public &lt;T extends PO&gt; List&lt;T&gt; list() throws DBException
+	{
+<span class="nc" id="L322">		List&lt;T&gt; list = new ArrayList&lt;T&gt;();</span>
+<span class="nc" id="L323">		String sql = buildSQL(null, true);</span>
+		
+<span class="nc" id="L325">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L326">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L329">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L330">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L333">				T po = getPO(rs);</span>
+<span class="nc" id="L334">				list.add(po);</span>
+			}
+<span class="nc" id="L336">		}</span>
+<span class="nc" id="L337">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L339">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L340">			throw new DBException(e, sql);</span>
+		} finally {
+<span class="nc" id="L342">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L343">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L345">		return list;</span>
+	}
+	
+	/**
+	 * Get first PO that match query criteria
+	 * @return first PO
+	 * @throws DBException
+	 */	
+	public &lt;T extends PO&gt; T first() throws DBException
+	{
+<span class="nc" id="L355">		T po = null;</span>
+		
+<span class="nc" id="L357">		int oldPageSize = this.pageSize;</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">		if(DB.getDatabase().isPagingSupported())</span>
+<span class="nc" id="L359">			setPageSize(1);	// Limit to One record</span>
+		
+<span class="nc" id="L361">		String sql = null;</span>
+		
+<span class="nc" id="L363">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L364">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L367">			sql = buildSQL(null, true);</span>
+			
+<span class="nc" id="L369">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L370">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">			if (rs.next ())</span>
+			{
+<span class="nc" id="L373">				po = getPO(rs);</span>
+			}
+<span class="nc" id="L375">		}</span>
+<span class="nc" id="L376">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L378">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L379">			throw new DBException(e, sql);</span>
+		} finally {
+<span class="nc" id="L381">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L382">			rs = null; pstmt = null;</span>
+<span class="nc" id="L383">			setPageSize(oldPageSize);</span>
+		}
+<span class="nc" id="L385">		return po;</span>
+	}
+
+	/**
+	 * Get partial or full PO
+	 * @param &lt;T&gt;
+	 * @param rs
+	 * @return partial or full PO. 
+	 */
+	@SuppressWarnings(&quot;unchecked&quot;)
+	private &lt;T extends PO&gt; T getPO(ResultSet rs) {
+		T po;
+<span class="nc bnc" id="L397" title="All 4 branches missed.">		if (selectColumns != null &amp;&amp; selectColumns.length &gt; 0)</span>
+<span class="nc" id="L398">			po = (T)table.getPartialPO(rs, selectColumns, trxName);</span>
+		else
+<span class="nc" id="L400">			po = (T)table.getPO(rs, trxName);</span>
+<span class="nc" id="L401">		return po;</span>
+	}
+	
+	/**
+	 * Get first PO that match query criteria.&lt;br/&gt;
+	 * If there are more PO that match query criteria, an exception will be thrown.
+	 * @return first PO
+	 * @throws DBException
+	 * @see {@link #first()}
+	 */
+	public &lt;T extends PO&gt; T firstOnly() throws DBException
+	{
+<span class="nc" id="L413">		T po = null;</span>
+		
+<span class="nc" id="L415">		int oldPageSize = this.pageSize;</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">		if(DB.getDatabase().isPagingSupported())</span>
+<span class="nc" id="L417">			setPageSize(2);	// Limit to 2 Records</span>
+		
+<span class="nc" id="L419">		String sql = null;</span>
+		
+<span class="nc" id="L421">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L422">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L425">			sql = buildSQL(null, true);</span>
+			
+<span class="nc" id="L427">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L428">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L431">				po = getPO(rs);</span>
+			}
+<span class="nc bnc" id="L433" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L435">				throw new DBException(Msg.getMsg(Env.getCtx(), &quot;QueryMoreThanOneRecordsFound&quot;));</span>
+			}
+		}
+<span class="nc" id="L438">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L440">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L441">			throw new DBException(e, sql);</span>
+		}
+		finally
+		{
+<span class="nc" id="L445">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L446">			rs = null; pstmt = null;</span>
+<span class="nc" id="L447">			setPageSize(oldPageSize);</span>
+		}
+<span class="nc" id="L449">		return po;</span>
+	}
+	
+	/**
+	 * Get first matching record id
+	 * @return first record ID or -1 if not found
+	 * @throws DBException
+	 */
+	public int firstId() throws DBException
+	{
+<span class="nc" id="L459">		return firstId(false);</span>
+	}
+	
+	/**
+	 * Get first matching record id.&lt;br/&gt;
+	 * If there are more than 1 matching records, an exception is thrown.
+	 * @return first record ID
+	 * @throws DBException
+	 */
+	public int firstIdOnly() throws DBException
+	{
+<span class="nc" id="L470">		return firstId(true);</span>
+	}
+	
+	/**
+	 * Get first matching record id.&lt;br/&gt;
+	 * If there are more than 1 matching records and assumeOnlyOneResult is true, an exception is thrown.
+	 * @param assumeOnlyOneResult
+	 * @return first record ID or -1 if not found
+	 * @throws DBException
+	 */
+	private int firstId(boolean assumeOnlyOneResult) throws DBException
+	{
+<span class="nc" id="L482">		String[] keys = table.getKeyColumns();</span>
+<span class="nc bnc" id="L483" title="All 2 branches missed.">		if (keys.length != 1)</span>
+		{
+<span class="nc" id="L485">			throw new DBException(&quot;Table &quot;+table+&quot; has 0 or more than 1 key columns&quot;);</span>
+		}
+
+<span class="nc" id="L488">		StringBuilder selectClause = new StringBuilder(&quot;SELECT &quot;);</span>
+<span class="nc bnc" id="L489" title="All 2 branches missed.">		if (!joinClauseList.isEmpty())</span>
+<span class="nc" id="L490">			selectClause.append(table.getTableName()).append(&quot;.&quot;);</span>
+<span class="nc" id="L491">		selectClause.append(keys[0]);</span>
+<span class="nc" id="L492">		selectClause.append(&quot; FROM &quot;).append(table.getTableName());</span>
+		
+<span class="nc" id="L494">		int oldPageSize = this.pageSize;</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">		if(DB.getDatabase().isPagingSupported())</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">			setPageSize(assumeOnlyOneResult ? 2 : 1);</span>
+
+<span class="nc" id="L498">		String sql = null;</span>
+		
+<span class="nc" id="L500">		int id = -1;</span>
+<span class="nc" id="L501">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L502">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L505">			sql = buildSQL(selectClause, true);</span>
+			
+<span class="nc" id="L507">			pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L508">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L511">				id = rs.getInt(1);</span>
+			}
+<span class="nc bnc" id="L513" title="All 4 branches missed.">			if (assumeOnlyOneResult &amp;&amp; rs.next())</span>
+			{
+<span class="nc" id="L515">				throw new DBException(Msg.getMsg(Env.getCtx(), &quot;QueryMoreThanOneRecordsFound&quot;));</span>
+			}
+		}
+<span class="nc" id="L518">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L520">			throw new DBException(e, sql);</span>
+		}
+		finally
+		{
+<span class="nc" id="L524">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L525">			rs = null; pstmt = null;</span>
+<span class="nc" id="L526">			setPageSize(oldPageSize);</span>
+		}
+		//
+<span class="nc" id="L529">		return id;</span>
+	}
+	
+	/**
+	 * Get full SQL select statement
+	 * @return SQL select statement
+	 * 
+	 */
+	public String getSQL() throws DBException
+	{
+<span class="nc" id="L539"> 		return buildSQL(null, true);</span>
+	}
+
+	/**
+	 * Get aggregate for given expression on this query criteria
+	 * @param sqlExpression can be null if sqlFunction is COUNT, otherwise mandatory
+	 * @param sqlFunction aggregate function
+	 * @return aggregated value
+	 * @throws DBException
+	 */
+	public BigDecimal aggregate(String sqlExpression, String sqlFunction) throws DBException
+	{
+<span class="nc" id="L551">		return aggregate(sqlExpression, sqlFunction, BigDecimal.class);</span>
+	}
+
+	/**
+	 * Get aggregate for given expression on this query criteria
+	 * @param &lt;T&gt;
+	 * @param sqlExpression can be null if sqlFunction is COUNT, otherwise mandatory
+	 * @param sqlFunction aggregate function
+	 * @param returnType
+	 * @return aggregated value
+	 * @throws DBException
+	 */
+	@SuppressWarnings(&quot;unchecked&quot;)
+	public &lt;T&gt; T aggregate(String sqlExpression, String sqlFunction, Class&lt;T&gt; returnType) throws DBException
+	{
+<span class="nc bnc" id="L566" title="All 2 branches missed.">		if (Util.isEmpty(sqlFunction, true))</span>
+		{
+<span class="nc" id="L568">			throw new DBException(&quot;No Aggregate Function defined&quot;);</span>
+		}
+<span class="nc bnc" id="L570" title="All 2 branches missed.">		if (Util.isEmpty(sqlExpression, true))</span>
+		{
+<span class="nc bnc" id="L572" title="All 2 branches missed.">			if (AGGREGATE_COUNT == sqlFunction)</span>
+			{
+<span class="nc" id="L574">				sqlExpression = &quot;*&quot;;</span>
+<span class="nc" id="L575">			}</span>
+			else
+			{
+<span class="nc" id="L578">				throw new DBException(&quot;No Expression defined&quot;);</span>
+			}
+		}
+		
+<span class="nc" id="L582">		StringBuilder sqlSelect = new StringBuilder(&quot;SELECT &quot;).append(sqlFunction).append(&quot;(&quot;)</span>
+<span class="nc" id="L583">					.append(sqlExpression).append(&quot;)&quot;)</span>
+<span class="nc" id="L584">					.append(&quot; FROM &quot;).append(table.getTableName());</span>
+		
+<span class="nc" id="L586">		T value = null;</span>
+<span class="nc" id="L587">		T defaultValue = null;</span>
+		
+<span class="nc" id="L589">		String sql = buildSQL(sqlSelect, false);</span>
+<span class="nc" id="L590">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L591">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L594">			pstmt = DB.prepareStatement(sql, this.trxName);</span>
+<span class="nc" id="L595">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L596" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc bnc" id="L598" title="All 2 branches missed.">				if (returnType.isAssignableFrom(BigDecimal.class))</span>
+				{
+<span class="nc" id="L600">					value = (T)rs.getBigDecimal(1);</span>
+<span class="nc" id="L601">					defaultValue = (T)Env.ZERO;</span>
+<span class="nc" id="L602">				}</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">				else if (returnType.isAssignableFrom(Double.class))</span>
+				{
+<span class="nc" id="L605">					value = (T)Double.valueOf(rs.getDouble(1));</span>
+<span class="nc" id="L606">					defaultValue = (T)Double.valueOf(0.00);</span>
+<span class="nc" id="L607">				}</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">				else if (returnType.isAssignableFrom(Integer.class))</span>
+				{
+<span class="nc" id="L610">					value = (T)Integer.valueOf(rs.getInt(1));</span>
+<span class="nc" id="L611">					defaultValue = (T)Integer.valueOf(0);</span>
+<span class="nc" id="L612">				}</span>
+<span class="nc bnc" id="L613" title="All 2 branches missed.">				else if (returnType.isAssignableFrom(Timestamp.class))</span>
+				{
+<span class="nc" id="L615">					value = (T)rs.getTimestamp(1);</span>
+<span class="nc" id="L616">				}</span>
+<span class="nc bnc" id="L617" title="All 2 branches missed.">				else if (returnType.isAssignableFrom(Boolean.class))</span>
+				{
+<span class="nc" id="L619">					value = (T) Boolean.valueOf(&quot;Y&quot;.equals(rs.getString(1)));</span>
+<span class="nc" id="L620">					defaultValue = (T) Boolean.FALSE;</span>
+<span class="nc" id="L621">				}</span>
+				else
+				{
+<span class="nc" id="L624">					value = (T)rs.getObject(1);</span>
+				}
+			}
+<span class="nc bnc" id="L627" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L629">				throw new DBException(Msg.getMsg(Env.getCtx(), &quot;QueryMoreThanOneRecordsFound&quot;));</span>
+			}
+		}
+<span class="nc" id="L632">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L634">			throw new DBException(e, sql);</span>
+		}
+		finally
+		{
+<span class="nc" id="L638">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L639">			rs = null; pstmt = null;</span>
+		}
+		//
+<span class="nc bnc" id="L642" title="All 2 branches missed.">		if (value == null)</span>
+		{
+<span class="nc" id="L644">			value = defaultValue;</span>
+		}
+<span class="nc" id="L646">		return value;</span>
+	}
+	
+	/**
+	 * Count records that match query criteria
+	 * @return count
+	 * @throws DBException
+	 */
+	public int count() throws DBException
+	{
+<span class="nc" id="L656">		return aggregate(&quot;*&quot;, AGGREGATE_COUNT).intValue();</span>
+	}
+	
+	/**
+	 * SUM sqlExpression for records that match query criteria
+	 * @param sqlExpression
+	 * @return sum
+	 */
+	public BigDecimal sum(String sqlExpression)
+	{
+<span class="nc" id="L666">		return aggregate(sqlExpression, AGGREGATE_SUM);</span>
+	}
+	
+	/**
+	 * Check if there are any matching records for this query criteria
+	 * @return true if exists, false otherwise
+	 * @throws DBException
+	 */
+	public boolean match() throws DBException
+	{
+<span class="nc" id="L676">		String sql = buildSQL(new StringBuilder(&quot;SELECT 1 FROM &quot;).append(table.getTableName()), false);</span>
+<span class="nc" id="L677">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L678">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L680">			pstmt = DB.prepareStatement(sql, this.trxName);</span>
+<span class="nc" id="L681">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L682" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L683">				return true;</span>
+		}
+<span class="nc" id="L685">		catch (SQLException e) {</span>
+<span class="nc" id="L686">			throw new DBException(e, sql);</span>
+		}
+		finally {
+<span class="nc" id="L689">			DB.close(rs, pstmt);</span>
+		}
+<span class="nc" id="L691">		return false;</span>
+	}
+	
+	/**
+	 * Get an Stream implementation to fetch one PO at a time. This method will only create POs on-demand and
+	 * they will become eligible for garbage collection once they have been consumed by the stream, so unlike
+	 * {@link #list()} it doesn't have to hold a copy of all the POs in the result set in memory at one time.
+	 * &lt;p&gt;
+	 * And unlike {#link #iterate()}, it only creates one ResultSet and iterates over it, creating a PO for each
+	 * row. ({@link #iterate()}, on the other hand, has to re-run the query for each element).&lt;br/&gt;
+	 * &lt;p&gt;
+	 * For situations where you need to iterate over a result set and operate on the results one-at-a-time rather
+	 * than operate on the group as a whole, this method is likely to give better performance than &lt;code&gt;list()&lt;/code&gt;
+	 * or &lt;code&gt;iterate()&lt;/code&gt;.
+	 * &lt;p&gt;
+	 * &lt;strong&gt;However&lt;/strong&gt;, because it keeps the underlying {@code ResultSet} open, you need to make sure that the
+	 * stream is properly disposed of using {@code close()} or else you will get resource leaks. As {@link Stream}
+	 * extends {@link AutoCloseable}, you can use it in a try-with-resources statement to automatically close it when
+	 * you are done.
+	 * 
+	 * @return Stream of POs.
+	 * @throws DBException 
+	 */
+	public &lt;T extends PO&gt; Stream&lt;T&gt; stream() throws DBException
+	{
+<span class="nc" id="L716">		String sql = buildSQL(null, true);</span>
+
+<span class="nc" id="L718">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L719">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L721">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L722">			final PreparedStatement finalPstmt = pstmt;</span>
+<span class="nc" id="L723">			rs = createResultSet(pstmt);</span>
+<span class="nc" id="L724">			final ResultSet finalRS = rs;</span>
+			
+<span class="nc" id="L726">			return StreamSupport.stream(new Spliterators.AbstractSpliterator&lt;T&gt;(</span>
+<span class="nc" id="L727">						Long.MAX_VALUE,Spliterator.ORDERED) {</span>
+					@Override
+					public boolean tryAdvance(Consumer&lt;? super T&gt; action) {
+						try {
+<span class="nc bnc" id="L731" title="All 2 branches missed.">							if(!finalRS.next()) return false;</span>
+<span class="nc" id="L732">							final T newRec = getPO(finalRS);</span>
+<span class="nc" id="L733">							action.accept(newRec);</span>
+<span class="nc" id="L734">							return true;</span>
+<span class="nc" id="L735">						} catch(SQLException ex) {</span>
+<span class="nc" id="L736">							log.log(Level.SEVERE, sql, ex);</span>
+<span class="nc" id="L737">							throw new DBException(ex, sql);</span>
+						}
+					}
+<span class="nc" id="L740">				}, false).onClose(() -&gt; DB.close(finalRS, finalPstmt));</span>
+		}
+<span class="nc" id="L742">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L744">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L745">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L746">			throw new DBException(e, sql);</span>
+		}
+	}
+
+	/**
+	 * Get an Iterator implementation to fetch one PO at a time.&lt;br/&gt;
+	 * The implementation first retrieve
+	 * all IDS that match the query criteria and issue SQL query to fetch each PO when caller want to
+	 * fetch the next PO.&lt;br/&gt;
+	 * This minimize memory usage (at both application and DB server end) but it is slower than the list, stream and scroll method.
+	 * @return Iterator
+	 * @throws DBException 
+	 */
+	public &lt;T extends PO&gt; Iterator&lt;T&gt; iterate() throws DBException
+	{
+<span class="nc" id="L761">		String[] keys = table.getKeyColumns();</span>
+<span class="nc" id="L762">		StringBuilder sqlBuffer = new StringBuilder(&quot; SELECT &quot;);</span>
+<span class="nc bnc" id="L763" title="All 2 branches missed.">		for (int i = 0; i &lt; keys.length; i++) {</span>
+<span class="nc bnc" id="L764" title="All 2 branches missed.">			if (i &gt; 0)</span>
+<span class="nc" id="L765">				sqlBuffer.append(&quot;, &quot;);</span>
+<span class="nc bnc" id="L766" title="All 2 branches missed.">			if (!joinClauseList.isEmpty())</span>
+<span class="nc" id="L767">				sqlBuffer.append(table.getTableName()).append(&quot;.&quot;);</span>
+<span class="nc" id="L768">			sqlBuffer.append(keys[i]);</span>
+		}
+<span class="nc" id="L770">		sqlBuffer.append(&quot; FROM &quot;).append(table.getTableName());</span>
+<span class="nc" id="L771">		String sql = buildSQL(sqlBuffer, true);</span>
+		
+<span class="nc" id="L773">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L774">		ResultSet rs = null;</span>
+<span class="nc" id="L775">		List&lt;Object[]&gt; idList = new ArrayList&lt;Object[]&gt;();</span>
+		try
+		{
+<span class="nc" id="L778">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L779">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L780" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L782">				Object[] ids = new Object[keys.length];</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">				for (int i = 0; i &lt; ids.length; i++) {</span>
+<span class="nc" id="L784">					ids[i] = rs.getObject(i+1);</span>
+				}
+<span class="nc" id="L786">				idList.add(ids);</span>
+			}
+<span class="nc" id="L788">		}</span>
+<span class="nc" id="L789">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L791">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L792">			throw new DBException(e, sql);</span>
+		} finally {
+<span class="nc" id="L794">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L795">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L797">		return new POIterator&lt;T&gt;(table, idList, trxName);</span>
+	}
+	
+	/**
+	 * Get a simple wrapper over a jdbc resultset.&lt;br/&gt; 
+	 * It is the caller responsibility to call the close method to release the underlying database resources.&lt;br/&gt;
+	 * Since POResultSet implements the AutoCloseable interface, it is recommended to use it in a try-with-resources 
+	 * statement to automatically close it when you are done.
+	 * @return POResultSet
+	 * @throws DBException 
+	 */
+	public &lt;T extends PO&gt; POResultSet&lt;T&gt; scroll() throws DBException
+	{
+<span class="nc" id="L810">		String sql = buildSQL(null, true);</span>
+<span class="nc" id="L811">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L812">		ResultSet rs = null;</span>
+<span class="nc" id="L813">		POResultSet&lt;T&gt; rsPO = null;</span>
+		try
+		{
+<span class="nc" id="L816">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L817">			rs = createResultSet(pstmt);</span>
+<span class="nc" id="L818">			rsPO = new POResultSet&lt;T&gt;(table, pstmt, rs, trxName);</span>
+<span class="nc" id="L819">			rsPO.setCloseOnError(true);</span>
+<span class="nc bnc" id="L820" title="All 4 branches missed.">			if (selectColumns != null &amp;&amp; selectColumns.length &gt; 0)</span>
+			{
+<span class="nc" id="L822">				rsPO.setSelectColumns(selectColumns);</span>
+			}
+<span class="nc" id="L824">			return rsPO;</span>
+		}
+<span class="nc" id="L826">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L828">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L829">			throw new DBException(e, sql);</span>
+		}
+		finally
+		{
+			// If there was an error, then close the statement and resultset
+<span class="nc bnc" id="L834" title="All 2 branches missed.">			if (rsPO == null) {</span>
+<span class="nc" id="L835">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L836">				rs = null; pstmt = null;</span>
+			}
+		}
+	}
+	
+	/**
+	 * Build SQL SELECT statement.
+	 * @param selectClause optional; if null the select statement will be built by {@link POInfo}
+	 * @param useOrderByClause
+	 * @return final SQL
+	 */
+	private final String buildSQL(StringBuilder selectClause, boolean useOrderByClause)
+	{
+<span class="nc bnc" id="L849" title="All 2 branches missed.">		if (selectClause == null)</span>
+		{
+<span class="nc" id="L851">			POInfo info = POInfo.getPOInfo(this.ctx, table.getAD_Table_ID(), trxName);</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">			if (info == null)</span>
+			{
+<span class="nc" id="L854">				throw new IllegalStateException(&quot;No POInfo found for AD_Table_ID=&quot;+table.getAD_Table_ID());</span>
+			}
+<span class="nc bnc" id="L856" title="All 2 branches missed.">			boolean isFullyQualified = !joinClauseList.isEmpty();</span>
+<span class="nc bnc" id="L857" title="All 4 branches missed.">			if (selectColumns != null &amp;&amp; selectColumns.length &gt; 0)</span>
+			{
+<span class="nc bnc" id="L859" title="All 2 branches missed.">				if (virtualColumns != null) {</span>
+<span class="nc bnc" id="L860" title="All 2 branches missed.">					for (String vc : virtualColumns) {</span>
+<span class="nc" id="L861">						boolean found = false;</span>
+<span class="nc bnc" id="L862" title="All 2 branches missed.">						for (String sc : selectColumns) {</span>
+<span class="nc bnc" id="L863" title="All 2 branches missed.">							if (vc.equalsIgnoreCase(sc)) {</span>
+<span class="nc" id="L864">								found = true;</span>
+<span class="nc" id="L865">								break;</span>
+							}
+						}
+<span class="nc bnc" id="L868" title="All 2 branches missed.">						if (!found) {</span>
+							// add vc to array selectColumns
+<span class="nc" id="L870">							String[] tmp = new String[selectColumns.length + 1];</span>
+<span class="nc" id="L871">							System.arraycopy(selectColumns, 0, tmp, 0, selectColumns.length);</span>
+<span class="nc" id="L872">							tmp[selectColumns.length] = vc;</span>
+<span class="nc" id="L873">							selectColumns = tmp;</span>
+						}
+					}
+				}
+<span class="nc" id="L877">				selectClause = info.buildSelectForColumns(isFullyQualified, selectColumns);</span>
+<span class="nc" id="L878">			}</span>
+			else
+			{
+<span class="nc bnc" id="L881" title="All 2 branches missed.">				if(virtualColumns == null)</span>
+<span class="nc" id="L882">					selectClause = info.buildSelect(isFullyQualified, noVirtualColumn);</span>
+				else
+<span class="nc" id="L884">					selectClause = info.buildSelect(isFullyQualified, virtualColumns);</span>
+			}
+		}
+<span class="nc bnc" id="L887" title="All 2 branches missed.">		if (!joinClauseList.isEmpty()) </span>
+		{
+<span class="nc bnc" id="L889" title="All 2 branches missed.">			for(String joinClause : joinClauseList)</span>
+			{
+<span class="nc" id="L891">				selectClause.append(&quot; &quot;).append(joinClause);</span>
+			}
+		}
+		
+<span class="nc" id="L895">		StringBuilder whereBuffer = new StringBuilder(); </span>
+<span class="nc bnc" id="L896" title="All 2 branches missed.">		if (!Util.isEmpty(this.whereClause, true))</span>
+		{
+<span class="nc bnc" id="L898" title="All 2 branches missed.">			if (whereBuffer.length() &gt; 0)</span>
+<span class="nc" id="L899">				whereBuffer.append(&quot; AND &quot;);</span>
+<span class="nc" id="L900">			whereBuffer.append(&quot;(&quot;).append(this.whereClause).append(&quot;)&quot;);</span>
+		}
+<span class="nc bnc" id="L902" title="All 2 branches missed.">		if (this.onlyActiveRecords)</span>
+		{
+<span class="nc bnc" id="L904" title="All 2 branches missed.">			if (whereBuffer.length() &gt; 0)</span>
+<span class="nc" id="L905">				whereBuffer.append(&quot; AND &quot;);</span>
+<span class="nc bnc" id="L906" title="All 2 branches missed.">			if (!joinClauseList.isEmpty())</span>
+<span class="nc" id="L907">				whereBuffer.append(table.getTableName()).append(&quot;.&quot;);</span>
+<span class="nc" id="L908">			whereBuffer.append(&quot;IsActive=?&quot;);</span>
+		}
+<span class="nc bnc" id="L910" title="All 2 branches missed.">		if (this.onlyClient_ID) //red1</span>
+		{
+<span class="nc bnc" id="L912" title="All 2 branches missed.">			if (whereBuffer.length() &gt; 0)</span>
+<span class="nc" id="L913">				whereBuffer.append(&quot; AND &quot;);</span>
+<span class="nc bnc" id="L914" title="All 2 branches missed.">			if (!joinClauseList.isEmpty())</span>
+<span class="nc" id="L915">				whereBuffer.append(table.getTableName()).append(&quot;.&quot;);</span>
+<span class="nc" id="L916">			whereBuffer.append(&quot;AD_Client_ID=?&quot;);</span>
+		}
+<span class="nc bnc" id="L918" title="All 2 branches missed.">		if (this.onlySelection_ID &gt; 0)</span>
+		{
+<span class="nc" id="L920">			String[] keys = table.getKeyColumns();</span>
+<span class="nc bnc" id="L921" title="All 2 branches missed.">			if (keys.length != 1)</span>
+			{
+<span class="nc" id="L923">				throw new DBException(&quot;Table &quot;+table+&quot; has 0 or more than 1 key columns&quot;);</span>
+			}
+			//
+<span class="nc bnc" id="L926" title="All 2 branches missed.">			if (whereBuffer.length() &gt; 0)</span>
+<span class="nc" id="L927">				whereBuffer.append(&quot; AND &quot;);</span>
+<span class="nc" id="L928">			whereBuffer.append(&quot; EXISTS (SELECT 1 FROM T_Selection s WHERE s.AD_PInstance_ID=? AND s.&quot;);</span>
+<span class="nc bnc" id="L929" title="All 2 branches missed.">			if (table.isUUIDKeyTable())</span>
+<span class="nc" id="L930">				whereBuffer.append(&quot;T_Selection_UU=&quot;);</span>
+			else
+<span class="nc" id="L932">				whereBuffer.append(&quot;T_Selection_ID=&quot;);</span>
+<span class="nc" id="L933">			whereBuffer.append(table.getTableName()).append(&quot;.&quot;).append(keys[0]).append(&quot;)&quot;);</span>
+		}
+		
+<span class="nc" id="L936">		StringBuilder sqlBuffer = new StringBuilder(selectClause);</span>
+<span class="nc bnc" id="L937" title="All 2 branches missed.">		if (whereBuffer.length() &gt; 0)</span>
+		{
+<span class="nc" id="L939">			sqlBuffer.append(&quot; WHERE &quot;).append(whereBuffer);</span>
+		}
+<span class="nc bnc" id="L941" title="All 4 branches missed.">		if (useOrderByClause &amp;&amp; !Util.isEmpty(orderBy, true))</span>
+		{
+<span class="nc" id="L943">			sqlBuffer.append(&quot; ORDER BY &quot;).append(orderBy);</span>
+		}
+<span class="nc" id="L945">		String sql = sqlBuffer.toString();</span>
+<span class="nc bnc" id="L946" title="All 2 branches missed.">		if (applyAccessFilter)</span>
+		{
+<span class="nc" id="L948">			MRole role = MRole.getDefault(this.ctx, false);</span>
+<span class="nc" id="L949">			sql = role.addAccessSQL(sql, table.getTableName(), applyAccessFilterFullyQualified, applyAccessFilterRW);</span>
+		}
+<span class="nc bnc" id="L951" title="All 2 branches missed.">		if (forUpdate) {</span>
+<span class="nc" id="L952">			sql = sql + &quot; FOR UPDATE&quot;;</span>
+<span class="nc bnc" id="L953" title="All 2 branches missed.">			if (DB.isPostgreSQL())</span>
+<span class="nc" id="L954">				sql = sql + &quot; OF &quot; + table.getTableName();</span>
+		}
+		
+		// If have pagination
+<span class="nc bnc" id="L958" title="All 4 branches missed.">        if (pageSize &gt; 0 || recordsToSkip &gt; 0) {</span>
+<span class="nc" id="L959">            sql = appendPagination(sql);</span>
+        }
+
+<span class="nc bnc" id="L962" title="All 2 branches missed.">        if (log.isLoggable(Level.FINEST))</span>
+<span class="nc" id="L963">            log.finest(&quot;TableName = &quot; + table.getTableName() + &quot;... SQL = &quot; + sql); // red1 - to assist in debugging SQL</span>
+
+<span class="nc" id="L965">        return sql;</span>
+    }
+
+    /**
+     * Set the pagination of the query.
+     * 
+     * @param pPageSize Limit number of query rows to return.
+     */
+    public Query setPageSize(int pPageSize) {
+<span class="nc" id="L974">        this.pageSize = pPageSize;</span>
+<span class="nc" id="L975">        return this;</span>
+    }
+
+    /**
+     * Set the pagination of the query.
+     * 
+     * @param pPageSize Limit number of rows to return.
+     * @param pPagesToSkip Number of pages to skipped on query run. ZERO for first page.
+     */
+    public Query setPage(int pPageSize, int pPagesToSkip) {
+<span class="nc bnc" id="L985" title="All 2 branches missed.">    	if (pPageSize &gt; 0) {</span>
+<span class="nc" id="L986">            this.pageSize = pPageSize;</span>
+<span class="nc" id="L987">            this.recordsToSkip = pPagesToSkip * pageSize;</span>
+<span class="nc" id="L988">    	} else {</span>
+<span class="nc" id="L989">    		log.warning(&quot;Wrong PageSize &lt;= 0&quot;);</span>
+    	}
+<span class="nc" id="L991">        return this;</span>
+    }
+
+    /**
+     * Set the number of records to skip (a.k.a. OFFSET)
+     * 
+     * @param pRecordsToSkip Number of records to skip
+     */
+    public Query setRecordstoSkip(int pRecordsToSkip) {
+<span class="nc" id="L1000">        this.recordsToSkip = pRecordsToSkip;</span>
+<span class="nc" id="L1001">        return this;</span>
+    }
+
+    /**
+     * Append pagination clause to pQuery
+     * @param pQuery SQL query statement
+     */
+    private String appendPagination(String pQuery) {
+
+<span class="nc" id="L1010">        String query = pQuery;</span>
+
+<span class="nc bnc" id="L1012" title="All 4 branches missed.">        if (pageSize &gt; 0 || recordsToSkip &gt; 0) {</span>
+<span class="nc bnc" id="L1013" title="All 2 branches missed.">        	if (DB.getDatabase().isPagingSupported()) {</span>
+<span class="nc bnc" id="L1014" title="All 2 branches missed.">        		query = DB.getDatabase().addPagingSQL(query, recordsToSkip+1, pageSize &lt;= 0 ? 0 : recordsToSkip + pageSize);</span>
+<span class="nc" id="L1015">        	} else {</span>
+<span class="nc" id="L1016">        		throw new IllegalArgumentException(&quot;Pagination not supported by database&quot;);</span>
+        	}
+        }
+
+<span class="nc" id="L1020">        return query;</span>
+    }
+	
+    /**
+     * Create result set
+     * @param pstmt
+     * @return result set
+     * @throws SQLException
+     */
+	private final ResultSet createResultSet (PreparedStatement pstmt) throws SQLException
+	{
+<span class="nc" id="L1031">		DB.setParameters(pstmt, parameters);</span>
+<span class="nc bnc" id="L1032" title="All 2 branches missed.">		int i = 1 + (parameters != null ? parameters.length : 0);</span>
+		
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">		if (this.onlyActiveRecords)</span>
+		{
+<span class="nc" id="L1036">			DB.setParameter(pstmt, i++, true);</span>
+<span class="nc bnc" id="L1037" title="All 2 branches missed.">			if (log.isLoggable(Level.FINEST)) log.finest(&quot;Parameter IsActive = Y&quot;);</span>
+		}
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">		if (this.onlyClient_ID)</span>
+		{
+<span class="nc" id="L1041">			int AD_Client_ID = Env.getAD_Client_ID(ctx);</span>
+<span class="nc" id="L1042">			DB.setParameter(pstmt, i++, AD_Client_ID);</span>
+<span class="nc bnc" id="L1043" title="All 2 branches missed.">			if (log.isLoggable(Level.FINEST)) log.finest(&quot;Parameter AD_Client_ID = &quot;+AD_Client_ID);</span>
+		}
+<span class="nc bnc" id="L1045" title="All 2 branches missed.">		if (this.onlySelection_ID &gt; 0)</span>
+		{
+<span class="nc" id="L1047">			DB.setParameter(pstmt, i++, this.onlySelection_ID);</span>
+<span class="nc bnc" id="L1048" title="All 2 branches missed.">			if (log.isLoggable(Level.FINEST)) log.finest(&quot;Parameter Selection AD_PInstance_ID = &quot;+this.onlySelection_ID);</span>
+		}
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">		if (queryTimeout &gt; 0)</span>
+		{
+<span class="nc" id="L1052">			pstmt.setQueryTimeout(queryTimeout);</span>
+		}
+<span class="nc" id="L1054">		return pstmt.executeQuery();</span>
+	}
+	
+	/**
+	 * Get all matching record IDs for this Query
+	 * @return Array of matching record IDs
+	 */
+	public int[] getIDs ()
+	{
+<span class="nc" id="L1063">		String[] keys = table.getKeyColumns();</span>
+<span class="nc bnc" id="L1064" title="All 2 branches missed.">		if (keys.length != 1)</span>
+		{
+<span class="nc" id="L1066">			throw new DBException(&quot;Table &quot;+table+&quot; has 0 or more than 1 key columns&quot;);</span>
+		}
+
+<span class="nc" id="L1069">		StringBuilder selectClause = new StringBuilder(&quot;SELECT &quot;);</span>
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">		if (!joinClauseList.isEmpty())</span>
+<span class="nc" id="L1071">			selectClause.append(table.getTableName()).append(&quot;.&quot;);</span>
+<span class="nc" id="L1072">		selectClause.append(keys[0]);</span>
+<span class="nc" id="L1073">		selectClause.append(&quot; FROM &quot;).append(table.getTableName());</span>
+<span class="nc" id="L1074">		String sql = buildSQL(selectClause, true);</span>
+		
+<span class="nc" id="L1076">		ArrayList&lt;Integer&gt; list = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc" id="L1077">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1078">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1081">			pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L1082">			rs = createResultSet(pstmt);</span>
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L1085">				list.add(rs.getInt(1));</span>
+			}
+<span class="nc" id="L1087">		}</span>
+<span class="nc" id="L1088">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L1090">			throw new DBException(e, sql);</span>
+		}
+		finally
+		{
+<span class="nc" id="L1094">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1095">			rs = null; pstmt = null;</span>
+		}
+		//	Convert to array
+<span class="nc" id="L1098">		int[] retValue = list.stream().mapToInt(Integer::intValue).toArray();</span>
+<span class="nc" id="L1099">		return retValue;</span>
+	}	//	get_IDs
+
+	/**
+	 * Virtual columns to be included in the query.
+	 * @param virtualColumns virtual column names
+	 */
+	public Query setVirtualColumns(String ... virtualColumns) {
+<span class="nc" id="L1107">		this.virtualColumns = virtualColumns;</span>
+<span class="nc" id="L1108">		return this;</span>
+	}
+
+	/**
+	 * Set the columns to include in select query.&lt;br/&gt;
+	 * Note that this doesn't effect {@link #iterate()}.
+	 * @param columns
+	 */
+	public Query selectColumns(String ...columns) {
+<span class="nc" id="L1117">		this.selectColumns = columns;</span>
+<span class="nc" id="L1118">		return this;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,738 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Convert.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.dbPort</a> &gt; <span class="el_source">Convert.java</span></div><h1>Convert.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.dbPort;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.SQLWarning;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Vector;
+import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.Adempiere;
+import org.compiere.db.Database;
+import org.compiere.model.I_AD_UserPreference;
+import org.compiere.util.CLogger;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Ini;
+import org.compiere.util.Util;
+
+/**
+ *  Convert SQL from Oracle syntax to Target DB syntax
+ *
+ *  @author     Jorg Janke, Victor Perez
+ *  @version    $Id: Convert.java,v 1.3 2006/07/30 00:55:04 jjanke Exp $
+ *  
+ *  @author Teo Sarca, www.arhipac.ro
+ *  		&lt;li&gt;BF [ 2782095 ] Do not log *Access records
+ *  			https://sourceforge.net/p/adempiere/bugs/1867/
+ *  		&lt;li&gt;TODO: BF [ 2782611 ] Migration scripts are not UTF8
+ *  			https://sourceforge.net/p/adempiere/bugs/1869/
+ *  @author Teo Sarca
+ *  		&lt;li&gt;BF [ 3137355 ] PG query not valid when contains quotes and backslashes
+ *  			https://sourceforge.net/p/adempiere/bugs/2560/	
+ */
+<span class="nc" id="L67">public abstract class Convert</span>
+{
+
+	/** RegEx: insensitive and dot to include line end characters   */
+	public static final int         REGEX_FLAGS = Pattern.CASE_INSENSITIVE | Pattern.DOTALL;
+
+	/** Statement used                  */
+<span class="nc" id="L74">	protected Statement               m_stmt = null;</span>
+
+	/** Last Conversion Error           */
+<span class="nc" id="L77">	protected String                  m_conversionError = null;</span>
+	/** Last Execution Error            */
+<span class="nc" id="L79">	protected Exception               m_exception = null;</span>
+	/** Verbose Messages                */
+<span class="nc" id="L81">	protected boolean                 m_verbose = true;</span>
+
+	/**	Logger	*/
+<span class="nc" id="L84">	private static final CLogger	log	= CLogger.getCLogger (Convert.class);</span>
+	
+<span class="nc" id="L86">    private static File fileOr = null;</span>
+<span class="nc" id="L87">    private static FileOutputStream fosScriptOr = null;</span>
+<span class="nc" id="L88">    private static Writer writerOr = null;</span>
+<span class="nc" id="L89">    private static File filePg = null;</span>
+<span class="nc" id="L90">    private static FileOutputStream fosScriptPg = null;</span>
+<span class="nc" id="L91">    private static Writer writerPg = null;</span>
+
+    /**
+	 *  Set Verbose
+	 *  @param verbose
+	 */
+	public void setVerbose (boolean verbose)
+	{
+<span class="nc" id="L99">		m_verbose = verbose;</span>
+<span class="nc" id="L100">	}   //  setVerbose</span>
+
+	/**
+	 *  Execute SQL Statements (stops at first error). &lt;br/&gt;
+	 *  If an error occur, hadError() returns true. &lt;br/&gt;
+	 *  You can get error details via getConversionError() or getException().
+	 *  @param sqlStatements
+	 *  @param conn connection
+	 *  @return true if success
+	 *  @throws IllegalStateException if no connection
+	 */
+	public boolean execute (String sqlStatements, Connection conn)
+	{
+<span class="nc bnc" id="L113" title="All 2 branches missed.">		if (conn == null)</span>
+<span class="nc" id="L114">			throw new IllegalStateException (&quot;Require connection&quot;);</span>
+		//
+<span class="nc" id="L116">		String[] sql = convert (sqlStatements);</span>
+<span class="nc" id="L117">		m_exception = null;</span>
+<span class="nc bnc" id="L118" title="All 4 branches missed.">		if (m_conversionError != null || sql == null)</span>
+<span class="nc" id="L119">			return false;</span>
+
+<span class="nc" id="L121">		boolean ok = true;</span>
+<span class="nc" id="L122">		int i = 0;</span>
+<span class="nc" id="L123">		String statement = null;</span>
+		try
+		{
+<span class="nc bnc" id="L126" title="All 2 branches missed.">			if (m_stmt == null)</span>
+<span class="nc" id="L127">				m_stmt = conn.createStatement();</span>
+			//
+<span class="nc bnc" id="L129" title="All 4 branches missed.">			for (i = 0; ok &amp;&amp; i &lt; sql.length; i++)</span>
+			{
+<span class="nc" id="L131">				statement = sql[i];</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">				if (statement.length() == 0)</span>
+				{
+<span class="nc bnc" id="L134" title="All 2 branches missed.">					if (m_verbose)</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">						if (log.isLoggable(Level.FINER)) log.finer(&quot;Skipping empty (&quot; + i + &quot;)&quot;);</span>
+<span class="nc" id="L136">				}</span>
+				else
+				{
+<span class="nc bnc" id="L139" title="All 2 branches missed.">					if (m_verbose) {</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;Executing (&quot; + i + &quot;) &lt;&lt;&quot; + statement + &quot;&gt;&gt;&quot;);</span>
+<span class="nc" id="L141">					} else {</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;Executing &quot; + i);</span>
+					}
+					try
+					{
+<span class="nc" id="L146">						m_stmt.clearWarnings();</span>
+<span class="nc" id="L147">						int no = m_stmt.executeUpdate(statement);</span>
+<span class="nc" id="L148">						SQLWarning warn = m_stmt.getWarnings();</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">						if (warn != null)</span>
+						{
+<span class="nc bnc" id="L151" title="All 2 branches missed.">							if (m_verbose) {</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">								if (log.isLoggable(Level.INFO)) log.info(&quot;- &quot; + warn);</span>
+<span class="nc" id="L153">							} else {</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">								if (log.isLoggable(Level.INFO)) {</span>
+<span class="nc" id="L155">									log.info(&quot;Executing (&quot; + i + &quot;) &lt;&lt;&quot; + statement + &quot;&gt;&gt;&quot;);</span>
+<span class="nc" id="L156">									log.info(&quot;- &quot; + warn);</span>
+								}
+							}
+						}
+<span class="nc bnc" id="L160" title="All 2 branches missed.">						if (m_verbose)</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(&quot;- ok &quot; + no);</span>
+<span class="nc" id="L162">					}</span>
+<span class="nc" id="L163">					catch (SQLException ex)</span>
+					{
+						//  Ignore Drop Errors
+<span class="nc bnc" id="L166" title="All 2 branches missed.">						if (!statement.startsWith(&quot;DROP &quot;))</span>
+						{
+<span class="nc" id="L168">							ok = false;</span>
+<span class="nc" id="L169">							m_exception = ex;</span>
+						}
+<span class="nc bnc" id="L171" title="All 2 branches missed.">						if (!m_verbose)</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">							if (log.isLoggable(Level.INFO)) log.info(&quot;Executing (&quot; + i + &quot;) &lt;&lt;&quot; + statement + &quot;&gt;&gt;&quot;);</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;Error executing &quot; + i + &quot;/&quot; + sql.length + &quot; = &quot; + ex);</span>
+					}
+				}
+			}   //  for all statements
+<span class="nc" id="L177">		}</span>
+<span class="nc" id="L178">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L180">			m_exception = e;</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">			if (!m_verbose)</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Executing (&quot; + i + &quot;) &lt;&lt;&quot; + statement + &quot;&gt;&gt;&quot;);</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;Error executing &quot; + i + &quot;/&quot; + sql.length + &quot; = &quot; + e);</span>
+<span class="nc" id="L184">			return false;</span>
+		}
+<span class="nc" id="L186">		return ok;</span>
+	}   //  execute
+
+	/**
+	 *  Return last execution exception
+	 *  @return execution exception
+	 */
+	public Exception getException()
+	{
+<span class="nc" id="L195">		return m_exception;</span>
+	}   //  getException
+
+	/**
+	 *  Returns true if a conversion or execution error had occurred.
+	 *  Get more details via getConversionError() or getException().
+	 *  @return true if error had occurred
+	 */
+	public boolean hasError()
+	{
+<span class="nc bnc" id="L205" title="All 4 branches missed.">		return (m_exception != null) || (m_conversionError != null);</span>
+	}   //  hasError
+
+	/**
+	 *  Convert SQL Statements (stops at first error). &lt;br/&gt;
+	 *  Statements are delimited by /. &lt;br/&gt;
+	 *  If an error occurred, hadError() returns true.
+	 *  You can get details via getConversionError().
+	 *  @param sqlStatements
+	 *  @return converted statement as a string
+	 */
+	public String convertAll (String sqlStatements)
+	{
+<span class="nc" id="L218">		String[] sql = convert (sqlStatements);</span>
+<span class="nc" id="L219">		StringBuilder sb = new StringBuilder (sqlStatements.length() + 10);</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">		for (int i = 0; i &lt; sql.length; i++)</span>
+		{
+			//  line.separator
+<span class="nc" id="L223">			sb.append(sql[i]).append(&quot;\n/\n&quot;);</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">			if (m_verbose)</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Statement &quot; + i + &quot;: &quot; + sql[i]);</span>
+		}
+<span class="nc" id="L227">		return sb.toString();</span>
+	}   //  convertAll
+
+	/**
+	 *  Convert SQL Statements (stops at first error).&lt;br/&gt;
+	 *  If an error occurred, hadError() returns true.
+	 *  You can get details via getConversionError().
+	 *  @param sqlStatements
+	 *  @return Array of converted Statements
+	 */
+	public String[] convert (String sqlStatements)
+	{
+<span class="nc" id="L239">		m_conversionError = null;</span>
+<span class="nc bnc" id="L240" title="All 4 branches missed.">		if (sqlStatements == null || sqlStatements.length() == 0)</span>
+		{
+<span class="nc" id="L242">			m_conversionError = &quot;SQL_Statement is null or has zero length&quot;;</span>
+<span class="nc" id="L243">			log.info(m_conversionError);</span>
+<span class="nc" id="L244">			return null;</span>
+		}
+		//
+<span class="nc" id="L247">		return convertIt (sqlStatements);</span>
+	}   //  convert
+
+	/**
+	 *  Return last conversion error or null.
+	 *  @return last conversion error
+	 */
+	public String getConversionError()
+	{
+<span class="nc" id="L256">		return m_conversionError;</span>
+	}   //  getConversionError
+	
+	/**
+	 *  Conversion routine (stops at first error).
+	 *  &lt;pre&gt;
+	 *  - convertStatement
+	 *      - convertWithConvertMap
+	 *      - convertComplexStatement
+	 *      - decode, sequence, exception
+	 *  &lt;/pre&gt;
+	 *  @param sqlStatements
+	 *  @return array of converted statements
+	 */
+	protected String[] convertIt (String sqlStatements)
+	{
+<span class="nc" id="L272">		ArrayList&lt;String&gt; result = new ArrayList&lt;String&gt; ();</span>
+<span class="nc" id="L273">		result.addAll(convertStatement(sqlStatements));     //  may return more than one target statement</span>
+		
+		//  convert to array
+<span class="nc" id="L276">		String[] sql = new String[result.size()];</span>
+<span class="nc" id="L277">		result.toArray(sql);</span>
+<span class="nc" id="L278">		return sql;</span>
+	}   //  convertIt
+
+	/**
+	 * Clean up Statement. Remove trailing spaces, carriage return and tab 
+	 * 
+	 * @param statement
+	 * @return sql statement
+	 */
+	protected String cleanUpStatement(String statement) {
+<span class="nc" id="L288">		String clean = statement.trim();</span>
+
+		// Convert cr/lf/tab to single space
+<span class="nc" id="L291">		Matcher m = Pattern.compile(&quot;\\s+&quot;).matcher(clean);</span>
+<span class="nc" id="L292">		clean = m.replaceAll(&quot; &quot;);</span>
+
+<span class="nc" id="L294">		clean = clean.trim();</span>
+<span class="nc" id="L295">		return clean;</span>
+	} // cleanUpStatement
+	
+	/**
+	 * Utility method to replace quoted string with a predefined marker.
+	 * @param inputValue
+	 * @param retVars
+	 * @param nonce
+	 * @return string
+	 */
+	protected String replaceQuotedStrings(String inputValue, Vector&lt;String&gt;retVars, String nonce) {
+		// save every value  
+		// Carlos Ruiz - globalqss - better matching regexp
+<span class="nc" id="L308">		retVars.clear();</span>
+		
+		// First we need to replace double quotes to not be matched by regexp - Teo Sarca BF [3137355 ]
+<span class="nc" id="L311">		final String quoteMarker = &quot;&lt;--QUOTE&quot;+nonce+&quot;--&gt;&quot;;</span>
+<span class="nc" id="L312">		inputValue = inputValue.replace(&quot;''&quot;, quoteMarker);</span>
+		
+<span class="nc" id="L314">		Pattern p = Pattern.compile(&quot;'[[^']*]*'&quot;);</span>
+<span class="nc" id="L315">		Matcher m = p.matcher(inputValue);</span>
+<span class="nc" id="L316">		int i = 0;</span>
+<span class="nc" id="L317">		StringBuilder retValue = new StringBuilder(inputValue.length());</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">		while (m.find()) {</span>
+<span class="nc" id="L319">			String var = inputValue.substring(m.start(), m.end()).replace(quoteMarker, &quot;''&quot;); // Put back quotes, if any</span>
+<span class="nc" id="L320">			retVars.addElement(var);</span>
+<span class="nc" id="L321">			m.appendReplacement(retValue, &quot;&lt;--QS&quot; + i + &quot;QS&quot; + nonce + &quot;--&gt;&quot;);</span>
+<span class="nc" id="L322">			i++;</span>
+		}
+<span class="nc" id="L324">		m.appendTail(retValue);</span>
+<span class="nc" id="L325">		return retValue.toString()</span>
+<span class="nc" id="L326">			.replace(quoteMarker, &quot;''&quot;) // Put back quotes, if any</span>
+		;
+	}
+
+	/**
+	 * Utility method to recover quoted string store in retVars
+	 * @param retValue
+	 * @param retVars
+	 * @param nonce
+	 * @return string
+	 */
+	protected String recoverQuotedStrings(String retValue, Vector&lt;String&gt;retVars, String nonce) {
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		for (int i = 0; i &lt; retVars.size(); i++) {</span>
+			//hengsin, special character in replacement can cause exception
+<span class="nc" id="L340">			String replacement = (String) retVars.get(i);</span>
+<span class="nc" id="L341">			replacement = escapeQuotedString(replacement);</span>
+<span class="nc" id="L342">			retValue = retValue.replace(&quot;&lt;--QS&quot; + i + &quot;QS&quot; + nonce + &quot;--&gt;&quot;, replacement);</span>
+		}
+<span class="nc" id="L344">		return retValue;</span>
+	}
+	
+	/**
+	 * hook for database specific escape of quoted string ( if needed )
+	 * @param in
+	 * @return string
+	 */
+	protected String escapeQuotedString(String in)
+	{
+<span class="nc" id="L354">		return in;</span>
+	}
+	
+	/**
+	 * Convert simple SQL Statement. Based on ConvertMap.
+	 * 
+	 * @param sqlStatement
+	 * @return converted Statement
+	 */
+	private String applyConvertMap(String sqlStatement) {
+		// Error Checks
+<span class="nc bnc" id="L365" title="All 2 branches missed.">		if (sqlStatement.toUpperCase().indexOf(&quot;EXCEPTION WHEN&quot;) != -1) {</span>
+<span class="nc" id="L366">			String error = &quot;Exception clause needs to be converted: &quot;</span>
+<span class="nc" id="L367">					+ sqlStatement;</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L369">				log.info(error);</span>
+<span class="nc" id="L370">			m_conversionError = error;</span>
+<span class="nc" id="L371">			return sqlStatement;</span>
+		}
+
+		// Carlos Ruiz - globalqss
+		// Standard Statement -- change the keys in ConvertMap
+		
+<span class="nc" id="L377">		String retValue = sqlStatement;</span>
+
+		Pattern p;
+		Matcher m;
+
+		// for each iteration in the conversion map
+<span class="nc" id="L383">		Map&lt;String,String&gt; convertMap = getConvertMap();</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (convertMap != null) {</span>
+<span class="nc" id="L385">			Iterator&lt;?&gt; iter = convertMap.keySet().iterator();</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">			while (iter.hasNext()) {</span>
+	
+			    // replace the key on convertmap (i.e.: number by numeric)   
+<span class="nc" id="L389">				String regex = (String) iter.next();</span>
+<span class="nc" id="L390">				String replacement = (String) convertMap.get(regex);</span>
+				try {
+<span class="nc" id="L392">					p = Pattern.compile(regex, REGEX_FLAGS);</span>
+<span class="nc" id="L393">					m = p.matcher(retValue);</span>
+<span class="nc" id="L394">					retValue = m.replaceAll(replacement);</span>
+	
+<span class="nc" id="L396">				} catch (Exception e) {</span>
+<span class="nc" id="L397">					String error = &quot;Error expression: &quot; + regex + &quot; - &quot; + e;</span>
+<span class="nc" id="L398">					log.warning(error);</span>
+<span class="nc" id="L399">					m_conversionError = error;</span>
+				}
+			}
+		}
+<span class="nc" id="L403">		return retValue;</span>
+	} // convertSimpleStatement
+	
+	/**
+	 * do convert map base conversion
+	 * @param sqlStatement
+	 * @return converted sql statement
+	 */
+	protected String convertWithConvertMap(String sqlStatement) {
+		try 
+		{
+<span class="nc" id="L414">			sqlStatement = applyConvertMap(cleanUpStatement(sqlStatement));</span>
+<span class="nc" id="L415">		}</span>
+<span class="nc" id="L416">		catch (RuntimeException e) {</span>
+<span class="nc" id="L417">			log.warning(e.getLocalizedMessage());</span>
+<span class="nc" id="L418">			m_exception = e;</span>
+		}
+		
+<span class="nc" id="L421">		return sqlStatement;</span>
+	}
+	
+	/**
+	 * Get convert map for use in sql convertion
+	 * @return map
+	 */
+	protected Map&lt;String,String&gt; getConvertMap() {
+<span class="nc" id="L429">		return null;</span>
+	}
+	
+	/**
+	 *  Convert single Statements.
+	 *  - remove comments
+	 *      - process FUNCTION/TRIGGER/PROCEDURE
+	 *      - process Statement
+	 *  @param sqlStatement
+	 *  @return converted statement
+	 */
+	protected abstract ArrayList&lt;String&gt; convertStatement (String sqlStatement);
+
+	/**
+	 * True if the database support native oracle dialect, false otherwise.
+	 * @return boolean
+	 */
+	public abstract boolean isOracle();
+
+	/**
+	 * Log oraStatement and pgStatement to SQL migration script file.
+	 * @param oraStatement
+	 * @param pgStatement
+	 */
+	public synchronized static void logMigrationScript(String oraStatement, String pgStatement) {
+		// Check AdempiereSys
+		// check property Log migration script
+<span class="nc" id="L456">		boolean logMigrationScript = isLogMigrationScript();</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">		if (logMigrationScript) {</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">			if (dontLog(oraStatement))</span>
+<span class="nc" id="L459">				return;</span>
+			// Log oracle and postgres migration scripts in migration/iD[version]/[oracle|postgresql] directory
+			// [timestamp]_[ticket].sql
+<span class="nc" id="L462">			String fileName = null;</span>
+<span class="nc" id="L463">			String folderOr = null;</span>
+<span class="nc" id="L464">			String folderPg = null;</span>
+<span class="nc" id="L465">			String prm_COMMENT = null;</span>
+			try {
+<span class="nc bnc" id="L467" title="All 4 branches missed.">				if (fosScriptOr == null || fosScriptPg == null) {</span>
+<span class="nc" id="L468">					prm_COMMENT = Env.getContext(Env.getCtx(), I_AD_UserPreference.COLUMNNAME_MigrationScriptComment);</span>
+<span class="nc" id="L469">					fileName = getMigrationScriptFileName(prm_COMMENT);</span>
+<span class="nc" id="L470">					folderOr = getMigrationScriptFolder(&quot;oracle&quot;);</span>
+<span class="nc" id="L471">					folderPg = getMigrationScriptFolder(&quot;postgresql&quot;);</span>
+<span class="nc" id="L472">					Files.createDirectories(Paths.get(folderOr));</span>
+<span class="nc" id="L473">					Files.createDirectories(Paths.get(folderPg));</span>
+				}
+<span class="nc bnc" id="L475" title="All 2 branches missed.">				if (fosScriptOr == null) {</span>
+<span class="nc" id="L476">					fileOr = new File(folderOr + fileName);</span>
+<span class="nc" id="L477">					fosScriptOr = new FileOutputStream(fileOr, true);</span>
+<span class="nc" id="L478">					writerOr = new BufferedWriter(new OutputStreamWriter(fosScriptOr, &quot;UTF8&quot;));</span>
+<span class="nc" id="L479">					writerOr.append(&quot;-- &quot;);</span>
+<span class="nc" id="L480">					writerOr.append(prm_COMMENT);</span>
+<span class="nc" id="L481">					writerOr.append(&quot;\nSELECT register_migration_script('&quot;).append(fileName).append(&quot;') FROM dual;\n\n&quot;);</span>
+					// adding these in prevention because some oracle scripts have multiline strings or @ that are misinterpreted by sqlplus
+<span class="nc" id="L483">					writerOr.append(&quot;SET SQLBLANKLINES ON\nSET DEFINE OFF\n\n&quot;);</span>
+				}
+<span class="nc" id="L485">				writeLogMigrationScript(writerOr, oraStatement);</span>
+<span class="nc bnc" id="L486" title="All 2 branches missed.">				if (pgStatement == null) {</span>
+					// if oracle call convert for postgres before logging
+<span class="nc" id="L488">					Convert convert = Database.getDatabase(Database.DB_POSTGRESQL).getConvert();</span>
+<span class="nc" id="L489">					String[] r = convert.convert(oraStatement);</span>
+<span class="nc" id="L490">					pgStatement = r[0];</span>
+				}
+<span class="nc bnc" id="L492" title="All 2 branches missed.">				if (fosScriptPg == null) {</span>
+<span class="nc" id="L493">					filePg = new File(folderPg + fileName);</span>
+<span class="nc" id="L494">					fosScriptPg = new FileOutputStream(filePg, true);</span>
+<span class="nc" id="L495">					writerPg = new BufferedWriter(new OutputStreamWriter(fosScriptPg, &quot;UTF8&quot;));</span>
+<span class="nc" id="L496">					writerPg.append(&quot;-- &quot;);</span>
+<span class="nc" id="L497">					writerPg.append(prm_COMMENT);</span>
+<span class="nc" id="L498">					writerPg.append(&quot;\nSELECT register_migration_script('&quot;).append(fileName).append(&quot;') FROM dual;\n\n&quot;);</span>
+				}
+<span class="nc" id="L500">				writeLogMigrationScript(writerPg, pgStatement);</span>
+<span class="nc" id="L501">			} catch (IOException e) {</span>
+<span class="nc" id="L502">				throw new AdempiereException(e);</span>
+			}
+		}
+<span class="nc" id="L505">	}</span>
+
+	/**
+	 * @param ticketComment
+	 * @return migration script file name
+	 */
+	public static String getMigrationScriptFileName(String ticketComment) {
+		// [timestamp]_[ticket].sql
+		String fileName;
+<span class="nc" id="L514">		String now = new SimpleDateFormat(&quot;yyyyMMddHHmm&quot;).format(new Date());					</span>
+<span class="nc" id="L515">		String pattern = &quot;(IDEMPIERE-[0-9]*)&quot;;</span>
+<span class="nc" id="L516">		Pattern p = Pattern.compile(pattern);</span>
+<span class="nc" id="L517">		Matcher m = p.matcher(ticketComment);</span>
+<span class="nc" id="L518">		String ticket = null;</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">		if (m.find())</span>
+<span class="nc" id="L520">			ticket = m.group(1);</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">		if (ticket == null)</span>
+<span class="nc" id="L522">			ticket = &quot;PlaceholderForTicket&quot;;</span>
+<span class="nc" id="L523">		fileName = now + &quot;_&quot; + ticket + &quot;.sql&quot;;</span>
+<span class="nc" id="L524">		return fileName;</span>
+	}
+
+	/**
+	 * @param dbtype oracle or postgresql
+	 * @return absolute migration script folder path for dbtype 
+	 */
+	public static String getMigrationScriptFolder(String dbtype) {
+		// migration/iD[version]/[oracle|postgresql] directory		
+<span class="nc" id="L533">		String version = Adempiere.MAIN_VERSION.substring(8);</span>
+		String homeScript;
+<span class="nc bnc" id="L535" title="All 2 branches missed.">		if (Util.isDeveloperMode())</span>
+<span class="nc" id="L536">			homeScript = Adempiere.getAdempiereHome() + File.separator;</span>
+		else
+<span class="nc" id="L538">			homeScript = System.getProperty(&quot;java.io.tmpdir&quot;) + File.separator;</span>
+<span class="nc" id="L539">		return homeScript + &quot;migration&quot; + File.separator + &quot;iD&quot; + version + File.separator + dbtype + File.separator;</span>
+	}
+	
+	/**
+	 * @return true if it is in log migration script mode
+	 */
+	public static boolean isLogMigrationScript() {
+<span class="nc" id="L546">		boolean logMigrationScript = false;</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">		if (Ini.isClient()) {</span>
+<span class="nc" id="L548">			logMigrationScript = Ini.isPropertyBool(Ini.P_LOGMIGRATIONSCRIPT);</span>
+<span class="nc" id="L549">		} else {</span>
+<span class="nc" id="L550">			String sysProperty = Env.getCtx().getProperty(Ini.P_LOGMIGRATIONSCRIPT, &quot;N&quot;);</span>
+<span class="nc bnc" id="L551" title="All 4 branches missed.">			logMigrationScript = &quot;y&quot;.equalsIgnoreCase(sysProperty) || &quot;true&quot;.equalsIgnoreCase(sysProperty);</span>
+		}
+<span class="nc" id="L553">		return logMigrationScript;</span>
+	}
+
+	/** List of tables to skip log migration script */
+<span class="nc" id="L557">	private static String [] dontLogTables = new String[] {</span>
+<span class="nc" id="L558">			&quot;AD_ACCESSLOG&quot;,</span>
+<span class="nc" id="L559">			&quot;AD_ALERTPROCESSORLOG&quot;,</span>
+<span class="nc" id="L560">			&quot;AD_CHANGELOG&quot;,</span>
+<span class="nc" id="L561">			&quot;AD_DOCUMENT_ACTION_ACCESS&quot;,</span>
+<span class="nc" id="L562">			&quot;AD_FORM_ACCESS&quot;,</span>
+<span class="nc" id="L563">			&quot;AD_INFOWINDOW_ACCESS&quot;,</span>
+<span class="nc" id="L564">			&quot;AD_ISSUE&quot;,</span>
+<span class="nc" id="L565">			&quot;AD_LDAPPROCESSORLOG&quot;,</span>
+<span class="nc" id="L566">			&quot;AD_PACKAGE_IMP&quot;,</span>
+<span class="nc" id="L567">			&quot;AD_PACKAGE_IMP_BACKUP&quot;,</span>
+<span class="nc" id="L568">			&quot;AD_PACKAGE_IMP_DETAIL&quot;,</span>
+<span class="nc" id="L569">			&quot;AD_PACKAGE_IMP_INST&quot;,</span>
+<span class="nc" id="L570">			&quot;AD_PACKAGE_IMP_PROC&quot;,</span>
+<span class="nc" id="L571">			&quot;AD_PINSTANCE&quot;,</span>
+<span class="nc" id="L572">			&quot;AD_PINSTANCE_LOG&quot;,</span>
+<span class="nc" id="L573">			&quot;AD_PINSTANCE_PARA&quot;,</span>
+<span class="nc" id="L574">			&quot;AD_PREFERENCE&quot;,</span>
+<span class="nc" id="L575">			&quot;AD_PROCESS_ACCESS&quot;,</span>
+<span class="nc" id="L576">			&quot;AD_RECENTITEM&quot;,</span>
+<span class="nc" id="L577">			&quot;AD_REPLICATION_LOG&quot;,</span>
+<span class="nc" id="L578">			&quot;AD_SCHEDULERLOG&quot;,</span>
+<span class="nc" id="L579">			&quot;AD_SESSION&quot;,</span>
+<span class="nc" id="L580">			&quot;AD_WINDOW_ACCESS&quot;,</span>
+<span class="nc" id="L581">			&quot;AD_WLISTBOX_CUSTOMIZATION&quot;,</span>
+<span class="nc" id="L582">			&quot;AD_WORKFLOW_ACCESS&quot;,</span>
+<span class="nc" id="L583">			&quot;AD_WORKFLOWPROCESSORLOG&quot;,</span>
+<span class="nc" id="L584">			&quot;AD_USERPREFERENCE&quot;,</span>
+<span class="nc" id="L585">			&quot;CM_WEBACCESSLOG&quot;,</span>
+<span class="nc" id="L586">			&quot;C_ACCTPROCESSORLOG&quot;,</span>
+<span class="nc" id="L587">			&quot;K_INDEXLOG&quot;,</span>
+<span class="nc" id="L588">			&quot;R_REQUESTPROCESSORLOG&quot;,</span>
+<span class="nc" id="L589">			&quot;T_AGING&quot;,</span>
+<span class="nc" id="L590">			&quot;T_ALTER_COLUMN&quot;,</span>
+<span class="nc" id="L591">			&quot;T_DISTRIBUTIONRUNDETAIL&quot;,</span>
+<span class="nc" id="L592">			&quot;T_INVENTORYVALUE&quot;,</span>
+<span class="nc" id="L593">			&quot;T_INVOICEGL&quot;,</span>
+<span class="nc" id="L594">			&quot;T_REPLENISH&quot;,</span>
+<span class="nc" id="L595">			&quot;T_REPORT&quot;,</span>
+<span class="nc" id="L596">			&quot;T_REPORTSTATEMENT&quot;,</span>
+<span class="nc" id="L597">			&quot;T_SELECTION&quot;,</span>
+<span class="nc" id="L598">			&quot;T_SELECTION2&quot;,</span>
+<span class="nc" id="L599">			&quot;T_SPOOL&quot;,</span>
+<span class="nc" id="L600">			&quot;T_TRANSACTION&quot;,</span>
+<span class="nc" id="L601">			&quot;T_TRIALBALANCE&quot;</span>
+<span class="nc" id="L602">		};</span>
+	
+	/**
+	 * @param tableName
+	 * @return true if log migration script should ignore tableName
+	 */
+	public static boolean isDontLogTable(String tableName) {
+<span class="nc bnc" id="L609" title="All 2 branches missed.">		if (Util.isEmpty(tableName))</span>
+<span class="nc" id="L610">			return false;</span>
+		
+		// Don't log trl - those will be created/maintained using synchronize terminology
+<span class="nc bnc" id="L613" title="All 2 branches missed.">		if (tableName.endsWith(&quot;_TRL&quot;))</span>
+<span class="nc" id="L614">			return true;</span>
+		
+<span class="nc bnc" id="L616" title="All 2 branches missed.">		for (String t : dontLogTables) {</span>
+<span class="nc bnc" id="L617" title="All 2 branches missed.">			if (t.equalsIgnoreCase(tableName))</span>
+<span class="nc" id="L618">				return true;</span>
+		}
+<span class="nc" id="L620">		return false;</span>
+	}
+	
+	private static boolean dontLog(String statement) {
+		// Do not log *Access records - teo_Sarca BF [ 2782095 ]
+		// IDEMPIERE-323 Migration script log AD_Document_Action_Access (nmicoud / CarlosRuiz_globalqss)
+
+<span class="nc" id="L627">		String uppStmt = statement.toUpperCase().trim();</span>
+		// don't log selects
+<span class="nc bnc" id="L629" title="All 2 branches missed.">		if (uppStmt.startsWith(&quot;SELECT &quot;))</span>
+<span class="nc" id="L630">			return true;</span>
+		// don't log update to statistic process
+<span class="nc bnc" id="L632" title="All 2 branches missed.">		if (uppStmt.startsWith(&quot;UPDATE AD_PROCESS SET STATISTIC_&quot;))</span>
+<span class="nc" id="L633">			return true;</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">		if (uppStmt.startsWith(&quot;UPDATE C_ACCTPROCESSOR SET DATENEXTRUN&quot;))</span>
+<span class="nc" id="L635">			return true;</span>
+<span class="nc bnc" id="L636" title="All 2 branches missed.">		if (uppStmt.startsWith(&quot;UPDATE R_REQUESTPROCESSOR SET DATELASTRUN&quot;))</span>
+<span class="nc" id="L637">			return true;</span>
+		// don't log sequence updates
+<span class="nc bnc" id="L639" title="All 2 branches missed.">		if (uppStmt.startsWith(&quot;UPDATE AD_SEQUENCE SET CURRENTNEXT&quot;))</span>
+<span class="nc" id="L640">			return true;</span>
+		// Don't log DELETE FROM Some_Table WHERE AD_Table_ID=? AND Record_ID=?
+<span class="nc bnc" id="L642" title="All 4 branches missed.">		if (uppStmt.startsWith(&quot;DELETE FROM &quot;) &amp;&amp; uppStmt.endsWith(&quot; WHERE AD_TABLE_ID=? AND RECORD_ID=?&quot;))</span>
+<span class="nc" id="L643">			return true;</span>
+		// Don't log trl related statements - those will be created/maintained using synchronize terminology
+<span class="nc bnc" id="L645" title="All 2 branches missed.">		if (uppStmt.matches(&quot;UPDATE .*_TRL SET .*&quot;))</span>
+<span class="nc" id="L646">			return true;</span>
+<span class="nc bnc" id="L647" title="All 2 branches missed.">		if (uppStmt.matches(&quot;INSERT INTO .*_TRL .*&quot;))</span>
+<span class="nc" id="L648">			return true;</span>
+<span class="nc bnc" id="L649" title="All 2 branches missed.">		if (uppStmt.matches(&quot;DELETE FROM .*_TRL .*&quot;))</span>
+<span class="nc" id="L650">			return true;</span>
+		// Don't log tree custom table statements (not present in core)
+<span class="nc bnc" id="L652" title="All 4 branches missed.">		if (uppStmt.startsWith(&quot;INSERT INTO AD_TREENODE &quot;) &amp;&amp; uppStmt.contains(&quot; AND T.TREETYPE='TL' AND T.AD_TABLE_ID=&quot;))</span>
+<span class="nc" id="L653">			return true;</span>
+<span class="nc bnc" id="L654" title="All 2 branches missed.">		for (int i = 0; i &lt; dontLogTables.length; i++) {</span>
+<span class="nc bnc" id="L655" title="All 2 branches missed.">			if (uppStmt.startsWith(&quot;INSERT INTO &quot; + dontLogTables[i] + &quot; &quot;))</span>
+<span class="nc" id="L656">				return true;</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">			if (uppStmt.startsWith(&quot;DELETE FROM &quot; + dontLogTables[i] + &quot; &quot;))</span>
+<span class="nc" id="L658">				return true;</span>
+<span class="nc bnc" id="L659" title="All 2 branches missed.">			if (uppStmt.startsWith(&quot;DELETE &quot; + dontLogTables[i] + &quot; &quot;))</span>
+<span class="nc" id="L660">				return true;</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">			if (uppStmt.startsWith(&quot;UPDATE &quot; + dontLogTables[i] + &quot; &quot;))</span>
+<span class="nc" id="L662">				return true;</span>
+<span class="nc bnc" id="L663" title="All 2 branches missed.">			if (uppStmt.startsWith(&quot;INSERT INTO &quot; + dontLogTables[i] + &quot;(&quot;))</span>
+<span class="nc" id="L664">				return true;</span>
+		}
+		
+		// don't log selects or insert/update for exception tables (i.e. AD_Issue, AD_ChangeLog)
+<span class="nc" id="L668">		return false;</span>
+	}
+
+	/**
+	 * Use writer to append SQL statement to an output media (usually file).
+	 * @param w {@link Writer}
+	 * @param statement SQL statement
+	 * @throws IOException
+	 */
+	private static void writeLogMigrationScript(Writer w, String statement) throws IOException
+	{
+		// log time and date
+<span class="nc" id="L680">		SimpleDateFormat format = DisplayType.getDateFormat(DisplayType.DateTime);</span>
+<span class="nc" id="L681">		String dateTimeText = format.format(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L682">		w.append(&quot;-- &quot;);</span>
+<span class="nc" id="L683">		w.append(dateTimeText);</span>
+<span class="nc" id="L684">		w.append(&quot;\n&quot;);</span>
+		// log statement
+<span class="nc" id="L686">		w.append(statement);</span>
+		// close statement
+<span class="nc" id="L688">		w.append(&quot;\n;\n\n&quot;);</span>
+		// flush stream - teo_sarca BF [ 1894474 ]
+<span class="nc" id="L690">		w.flush();</span>
+<span class="nc" id="L691">	}</span>
+
+	/**
+	 * Close the files for migration scripts, used just on Tests
+	 */
+	public static void closeLogMigrationScript() {
+		try {
+<span class="nc bnc" id="L698" title="All 2 branches missed.">			if (writerOr != null) {</span>
+<span class="nc" id="L699">				writerOr.flush();</span>
+<span class="nc" id="L700">				writerOr.close();</span>
+<span class="nc" id="L701">				writerOr = null;</span>
+			}
+<span class="nc bnc" id="L703" title="All 2 branches missed.">			if (writerPg != null) {</span>
+<span class="nc" id="L704">				writerPg.flush();</span>
+<span class="nc" id="L705">				writerPg.close();</span>
+<span class="nc" id="L706">				writerPg = null;</span>
+			}
+<span class="nc bnc" id="L708" title="All 2 branches missed.">			if (fosScriptOr != null) {</span>
+<span class="nc" id="L709">				fosScriptOr.flush();</span>
+<span class="nc" id="L710">				fosScriptOr.close();</span>
+<span class="nc" id="L711">				fosScriptOr = null;</span>
+			}
+<span class="nc bnc" id="L713" title="All 2 branches missed.">			if (fosScriptPg != null) {</span>
+<span class="nc" id="L714">				fosScriptPg.flush();</span>
+<span class="nc" id="L715">				fosScriptPg.close();</span>
+<span class="nc" id="L716">				fosScriptPg = null;</span>
+			}
+<span class="nc" id="L718">			fileOr = null;</span>
+<span class="nc" id="L719">			filePg = null;</span>
+<span class="nc" id="L720">		} catch (IOException e) {</span>
+			// ignore
+<span class="nc" id="L722">			e.printStackTrace();</span>
+		}
+<span class="nc" id="L724">	}</span>
+
+	/**
+	 * Get the name of the migration script file
+	 * @return
+	 */
+	public static String getGeneratedMigrationScriptFileName() {
+<span class="nc bnc" id="L731" title="All 2 branches missed.">		if (filePg != null) {</span>
+<span class="nc" id="L732">			return filePg.getName();</span>
+		}
+<span class="nc" id="L734">		return null;</span>
+	}
+
+}   //  Convert
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

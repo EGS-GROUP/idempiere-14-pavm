@@ -1,0 +1,476 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Convert_SQL92.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.dbPort</a> &gt; <span class="el_source">Convert_SQL92.java</span></div><h1>Convert_SQL92.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 Adempiere, Inc. All Rights Reserved.               *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.dbPort;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.logging.Level;
+
+import org.compiere.util.CLogger;
+import org.compiere.util.Util;
+
+/***
+ * Convert from oracle syntax to sql 92 standard
+ * @author Low Heng Sin
+ */
+<span class="nc" id="L28">public abstract class Convert_SQL92 extends Convert {</span>
+	
+	/**	Logger	*/
+<span class="nc" id="L31">	private static final CLogger	log	= CLogger.getCLogger (Convert_SQL92.class);</span>
+	
+	/**
+	 *  Convert Outer Join.&lt;br/&gt;
+	 *  Converting joins can be very complex when multiple tables/keys are involved.&lt;br/&gt;
+	 *  The main scenarios supported are two tables with multiple key columns
+	 *  and multiple tables with single key columns.
+	 *  &lt;pre&gt;{@code
+	 *      SELECT a.Col1, b.Col2 FROM tableA a, tableB b WHERE a.ID=b.ID(+)
+	 *      =&gt; SELECT a.Col1, b.Col2 FROM tableA a LEFT OUTER JOIN tableB b ON (a.ID=b.ID)
+	 *
+	 *      SELECT a.Col1, b.Col2 FROM tableA a, tableB b WHERE a.ID(+)=b.ID
+	 *      =&gt; SELECT a.Col1, b.Col2 FROM tableA a RIGHT OUTER JOIN tableB b ON (a.ID=b.ID)
+	 *  Assumptions:
+	 *  - No outer joins in sub queries (ignores sub-queries)
+	 *  - OR condition ignored (not sure what to do, should not happen)
+	 *  Limitations:
+	 *  - Parameters for outer joins must be first - as sequence of parameters changes
+	 *  }&lt;/pre&gt;
+	 *  @param sqlStatement
+	 *  @return converted statement
+	 */
+	protected String convertOuterJoin (String sqlStatement)
+	{
+<span class="nc" id="L55">		boolean trace = false;</span>
+		//
+<span class="nc" id="L57">		int fromIndex = Util.findIndexOf (sqlStatement.toUpperCase(), &quot; FROM &quot;);</span>
+<span class="nc" id="L58">		int whereIndex = Util.findIndexOf(sqlStatement.toUpperCase(), &quot; WHERE &quot;);</span>
+<span class="nc" id="L59">		int endWhereIndex = Util.findIndexOf(sqlStatement.toUpperCase(), &quot; GROUP BY &quot;);</span>
+<span class="nc bnc" id="L60" title="All 2 branches missed.">		if (endWhereIndex == -1)</span>
+<span class="nc" id="L61">			endWhereIndex = Util.findIndexOf(sqlStatement.toUpperCase(), &quot; ORDER BY &quot;);</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">		if (endWhereIndex == -1)</span>
+<span class="nc" id="L63">			endWhereIndex = sqlStatement.length();</span>
+		//
+<span class="nc bnc" id="L65" title="All 2 branches missed.">		if (trace)</span>
+		{
+<span class="nc bnc" id="L67" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;OuterJoin&lt;== &quot; + sqlStatement);</span>
+		}
+		//
+<span class="nc" id="L70">		String selectPart = sqlStatement.substring(0, fromIndex);</span>
+<span class="nc" id="L71">		String fromPart = sqlStatement.substring(fromIndex, whereIndex);</span>
+<span class="nc" id="L72">		String wherePart = sqlStatement.substring(whereIndex, endWhereIndex);</span>
+<span class="nc" id="L73">		String rest = sqlStatement.substring(endWhereIndex);</span>
+
+		//  find/remove all (+) from WHERE clase ------------------------------
+<span class="nc" id="L76">		String newWherePart = wherePart;</span>
+<span class="nc" id="L77">		ArrayList&lt;String&gt; joins = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L78">		int pos = newWherePart.indexOf(&quot;(+)&quot;);</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">		while (pos != -1)</span>
+		{
+			//  find starting point
+<span class="nc" id="L82">			int start = newWherePart.lastIndexOf(&quot; AND &quot;, pos);</span>
+<span class="nc" id="L83">			int startOffset = 5;</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">			if (start == -1)</span>
+			{
+<span class="nc" id="L86">				start = newWherePart.lastIndexOf(&quot; OR &quot;, pos);</span>
+<span class="nc" id="L87">				startOffset = 4;</span>
+			}
+<span class="nc bnc" id="L89" title="All 2 branches missed.">			if (start == -1)</span>
+			{
+<span class="nc" id="L91">				start = newWherePart.lastIndexOf(&quot;WHERE &quot;, pos);</span>
+<span class="nc" id="L92">				startOffset = 6;</span>
+			}
+<span class="nc bnc" id="L94" title="All 2 branches missed.">			if (start == -1)</span>
+			{
+<span class="nc" id="L96">				String error = &quot;Start point not found in clause &quot; + wherePart;</span>
+<span class="nc" id="L97">				log.severe(error);</span>
+<span class="nc" id="L98">				m_conversionError = error;</span>
+<span class="nc" id="L99">				return sqlStatement;</span>
+			}
+			//  find end point
+<span class="nc" id="L102">			int end = newWherePart.indexOf(&quot; AND &quot;, pos);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">			if (end == -1)</span>
+<span class="nc" id="L104">				end = newWherePart.indexOf(&quot; OR &quot;, pos);</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">			if (end == -1)</span>
+<span class="nc" id="L106">				end = newWherePart.length();</span>
+
+			//  extract condition
+<span class="nc" id="L109">			String condition = newWherePart.substring(start+startOffset, end);</span>
+<span class="nc" id="L110">			joins.add(condition);</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">			if (trace)</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;-&gt;&quot; + condition);</span>
+			//  new WHERE clause
+<span class="nc" id="L114">			newWherePart = newWherePart.substring(0, start) + newWherePart.substring(end);</span>
+			//
+<span class="nc" id="L116">			pos = newWherePart.indexOf(&quot;(+)&quot;);</span>
+		}
+		//  correct beginning
+<span class="nc" id="L119">		newWherePart = newWherePart.trim();</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">		if (newWherePart.startsWith(&quot;AND &quot;))</span>
+<span class="nc" id="L121">			newWherePart = &quot;WHERE&quot; + newWherePart.substring(3);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		else if (newWherePart.startsWith(&quot;OR &quot;))</span>
+<span class="nc" id="L123">			newWherePart = &quot;WHERE&quot; + newWherePart.substring(2);</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (trace)</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;=&gt; &quot; + newWherePart);</span>
+
+		//  Correct FROM clause -----------------------------------------------
+		//  Disassemble FROM
+<span class="nc" id="L129">		String[] fromParts = fromPart.trim().substring(4).split(&quot;,&quot;);</span>
+<span class="nc" id="L130">		HashMap&lt;String,String&gt; fromAlias = new HashMap&lt;String,String&gt;();      //  tables to be processed</span>
+<span class="nc" id="L131">		HashMap&lt;String,String&gt; fromLookup = new HashMap&lt;String,String&gt;();     //  used tabled</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">		for (int i = 0; i &lt; fromParts.length; i++)</span>
+		{
+<span class="nc" id="L134">			String entry = fromParts[i].trim();</span>
+<span class="nc" id="L135">			String alias = entry;   //  no alias</span>
+<span class="nc" id="L136">			String table = entry;</span>
+<span class="nc" id="L137">			int aPos = entry.lastIndexOf(' ');</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">			if (aPos != -1)</span>
+			{
+<span class="nc" id="L140">				alias = entry.substring(aPos+1);</span>
+<span class="nc" id="L141">				table = entry.substring(0, entry.indexOf(' ')); // may have AS</span>
+			}
+<span class="nc" id="L143">			fromAlias.put(alias, table);</span>
+<span class="nc" id="L144">			fromLookup.put(alias, table);</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">			if (trace)</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Alias=&quot; + alias + &quot;, Table=&quot; + table);</span>
+		}
+
+		/** Single column
+			SELECT t.TableName, w.Name FROM AD_Table t, AD_Window w
+			WHERE t.AD_Window_ID=w.AD_Window_ID(+)
+			--	275 rows
+			SELECT t.TableName, w.Name FROM AD_Table t
+			LEFT OUTER JOIN AD_Window w ON (t.AD_Window_ID=w.AD_Window_ID)
+
+			SELECT t.TableName, w.Name FROM AD_Table t, AD_Window w
+			WHERE t.AD_Window_ID(+)=w.AD_Window_ID
+			--	239 rows
+			SELECT t.TableName, w.Name FROM AD_Table t
+			RIGHT OUTER JOIN AD_Window w ON (t.AD_Window_ID=w.AD_Window_ID)
+
+		**  Multiple columns
+			SELECT tn.Node_ID,tn.Parent_ID,tn.SeqNo,tb.IsActive
+			FROM AD_TreeNode tn, AD_TreeBar tb
+			WHERE tn.AD_Tree_ID=tb.AD_Tree_ID(+) AND tn.Node_ID=tb.Node_ID(+)
+			  AND tn.AD_Tree_ID=10
+			--  235 rows
+			SELECT	tn.Node_ID,tn.Parent_ID,tn.SeqNo,tb.IsActive
+			FROM AD_TreeNode tn LEFT OUTER JOIN AD_TreeBar tb
+			  ON (tn.Node_ID=tb.Node_ID AND tn.AD_Tree_ID=tb.AD_Tree_ID AND tb.AD_User_ID=0)
+			WHERE tn.AD_Tree_ID=10
+
+			SELECT tn.Node_ID,tn.Parent_ID,tn.SeqNo,tb.IsActive
+			FROM AD_TreeNode tn, AD_TreeBar tb
+			WHERE tn.AD_Tree_ID=tb.AD_Tree_ID(+) AND tn.Node_ID=tb.Node_ID(+)
+			 AND tn.AD_Tree_ID=10 AND tb.AD_User_ID(+)=0
+			--  214 rows
+			SELECT tn.Node_ID,tn.Parent_ID,tn.SeqNo,tb.IsActive
+			FROM AD_TreeNode tn LEFT OUTER JOIN AD_TreeBar tb
+			  ON (tn.Node_ID=tb.Node_ID AND tn.AD_Tree_ID=tb.AD_Tree_ID AND tb.AD_User_ID=0)
+			WHERE tn.AD_Tree_ID=10
+
+		 */
+<span class="nc" id="L184">		StringBuilder newFrom = new StringBuilder ();</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		for (int i = 0; i &lt; joins.size(); i++)</span>
+		{
+<span class="nc" id="L187">			Join first = new Join ((String)joins.get(i));</span>
+<span class="nc" id="L188">			first.setMainTable((String)fromLookup.get(first.getMainAlias()));</span>
+<span class="nc" id="L189">			fromAlias.remove(first.getMainAlias());     //  remove from list</span>
+<span class="nc" id="L190">			first.setJoinTable((String)fromLookup.get(first.getJoinAlias()));</span>
+<span class="nc" id="L191">			fromAlias.remove(first.getJoinAlias());     //  remove from list</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">			if (trace)</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;-First: &quot; + first);</span>
+			//
+<span class="nc bnc" id="L195" title="All 2 branches missed.">			if (newFrom.length() == 0)</span>
+<span class="nc" id="L196">				newFrom.append(&quot; FROM &quot;);</span>
+			else
+<span class="nc" id="L198">				newFrom.append(&quot;, &quot;);</span>
+<span class="nc" id="L199">			newFrom.append(first.getMainTable()).append(&quot; &quot;).append(first.getMainAlias())</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">				.append(first.isLeft() ? &quot; LEFT&quot; : &quot; RIGHT&quot;).append(&quot; OUTER JOIN &quot;)</span>
+<span class="nc" id="L201">				.append(first.getJoinTable()).append(&quot; &quot;).append(first.getJoinAlias())</span>
+<span class="nc" id="L202">				.append(&quot; ON (&quot;).append(first.getCondition());</span>
+			//  keep it open - check for other key comparisons
+<span class="nc bnc" id="L204" title="All 2 branches missed.">			for (int j = i+1; j &lt; joins.size(); j++)</span>
+			{
+<span class="nc" id="L206">				Join second = new Join ((String)joins.get(j));</span>
+<span class="nc" id="L207">				second.setMainTable((String)fromLookup.get(second.getMainAlias()));</span>
+<span class="nc" id="L208">				second.setJoinTable((String)fromLookup.get(second.getJoinAlias()));</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">				if ((first.getMainTable().equals(second.getMainTable())</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">						&amp;&amp; first.getJoinTable().equals(second.getJoinTable()))</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">					|| second.isConditionOf(first) )</span>
+				{
+<span class="nc bnc" id="L213" title="All 2 branches missed.">					if (trace)</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;-Second/key: &quot; + second);</span>
+<span class="nc" id="L215">					newFrom.append(&quot; AND &quot;).append(second.getCondition());</span>
+<span class="nc" id="L216">					joins.remove(j);                        //  remove from join list</span>
+<span class="nc" id="L217">					fromAlias.remove(first.getJoinAlias()); //  remove from table list</span>
+					//----
+<span class="nc bnc" id="L219" title="All 2 branches missed.">					for (int k = i+1; k &lt; joins.size(); k++)</span>
+					{
+<span class="nc" id="L221">						Join third = new Join ((String)joins.get(k));</span>
+<span class="nc" id="L222">						third.setMainTable((String)fromLookup.get(third.getMainAlias()));</span>
+<span class="nc" id="L223">						third.setJoinTable((String)fromLookup.get(third.getJoinAlias()));</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">						if (third.isConditionOf(second))</span>
+						{
+<span class="nc bnc" id="L226" title="All 2 branches missed.">							if (trace)</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">								if (log.isLoggable(Level.INFO)) log.info(&quot;-Third/key: &quot; + third);</span>
+<span class="nc" id="L228">							newFrom.append(&quot; AND &quot;).append(third.getCondition());</span>
+<span class="nc" id="L229">							joins.remove(k);                            //  remove from join list</span>
+<span class="nc" id="L230">							fromAlias.remove(third.getJoinAlias());     //  remove from table list</span>
+<span class="nc" id="L231">						}</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">						else if (trace)</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">							if (log.isLoggable(Level.INFO)) log.info(&quot;-Third/key-skip: &quot; + third);</span>
+					}
+<span class="nc" id="L235">				}</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">				else if (trace)</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info(&quot;-Second/key-skip: &quot; + second);</span>
+			}
+<span class="nc" id="L239">			newFrom.append(&quot;)&quot;);    //  close ON</span>
+			//  check dependency on first table
+<span class="nc bnc" id="L241" title="All 2 branches missed.">			for (int j = i+1; j &lt; joins.size(); j++)</span>
+			{
+<span class="nc" id="L243">				Join second = new Join ((String)joins.get(j));</span>
+<span class="nc" id="L244">				second.setMainTable((String)fromLookup.get(second.getMainAlias()));</span>
+<span class="nc" id="L245">				second.setJoinTable((String)fromLookup.get(second.getJoinAlias()));</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">				if (first.getMainTable().equals(second.getMainTable()))</span>
+				{
+<span class="nc bnc" id="L248" title="All 2 branches missed.">					if (trace)</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;-Second/dep: &quot; + second);</span>
+					//   FROM (AD_Field f LEFT OUTER JOIN AD_Column c ON (f.AD_Column_ID = c.AD_Column_ID))
+					//  LEFT OUTER JOIN AD_FieldGroup fg ON (f.AD_FieldGroup_ID = fg.AD_FieldGroup_ID),
+<span class="nc" id="L252">					newFrom.insert(6, '(');     //  _FROM ...</span>
+<span class="nc" id="L253">					newFrom.append(')');        //  add parantesis on previous relation</span>
+					//
+<span class="nc bnc" id="L255" title="All 2 branches missed.">					newFrom.append(second.isLeft() ? &quot; LEFT&quot; : &quot; RIGHT&quot;).append(&quot; OUTER JOIN &quot;)</span>
+<span class="nc" id="L256">						.append(second.getJoinTable()).append(&quot; &quot;).append(second.getJoinAlias())</span>
+<span class="nc" id="L257">						.append(&quot; ON (&quot;).append(second.getCondition());</span>
+<span class="nc" id="L258">					joins.remove(j);                            //  remove from join list</span>
+<span class="nc" id="L259">					fromAlias.remove(second.getJoinAlias());    //  remove from table list</span>
+					//  additional join columns would come here
+<span class="nc" id="L261">					newFrom.append(&quot;)&quot;);    //  close ON</span>
+					//----
+<span class="nc bnc" id="L263" title="All 2 branches missed.">					for (int k = i+1; k &lt; joins.size(); k++)</span>
+					{
+<span class="nc" id="L265">						Join third = new Join ((String)joins.get(k));</span>
+<span class="nc" id="L266">						third.setMainTable((String)fromLookup.get(third.getMainAlias()));</span>
+<span class="nc" id="L267">						third.setJoinTable((String)fromLookup.get(third.getJoinAlias()));</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">						if (second.getJoinTable().equals(third.getMainTable()))</span>
+						{
+<span class="nc bnc" id="L270" title="All 2 branches missed.">							if (trace)</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">								if (log.isLoggable(Level.INFO)) log.info(&quot;-Third-dep: &quot; + third);</span>
+							//   FROM ((C_BPartner p LEFT OUTER JOIN AD_User c ON (p.C_BPartner_ID=c.C_BPartner_ID))
+							//  LEFT OUTER JOIN C_BPartner_Location l ON (p.C_BPartner_ID=l.C_BPartner_ID))
+							//  LEFT OUTER JOIN C_Location a ON (l.C_Location_ID=a.C_Location_ID)
+<span class="nc" id="L275">							newFrom.insert(6, '(');     //  _FROM ...</span>
+<span class="nc" id="L276">							newFrom.append(')');        //  add parantesis on previous relation</span>
+							//
+<span class="nc bnc" id="L278" title="All 2 branches missed.">							newFrom.append(third.isLeft() ? &quot; LEFT&quot; : &quot; RIGHT&quot;).append(&quot; OUTER JOIN &quot;)</span>
+<span class="nc" id="L279">								.append(third.getJoinTable()).append(&quot; &quot;).append(third.getJoinAlias())</span>
+<span class="nc" id="L280">								.append(&quot; ON (&quot;).append(third.getCondition());</span>
+<span class="nc" id="L281">							joins.remove(k);                            //  remove from join list</span>
+<span class="nc" id="L282">							fromAlias.remove(third.getJoinAlias());     //  remove from table list</span>
+							//  additional join columns would come here
+<span class="nc" id="L284">							newFrom.append(&quot;)&quot;);    //  close ON</span>
+<span class="nc" id="L285">						}</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">						else if (trace)</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">							if (log.isLoggable(Level.INFO)) log.info(&quot;-Third-skip: &quot; + third);</span>
+					}
+<span class="nc" id="L289">				}</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">				else if (trace)</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info(&quot;-Second/dep-skip: &quot; + second);</span>
+			}   //  dependency on first table
+		}
+		//  remaining Tables
+<span class="nc" id="L295">		Iterator&lt;String&gt; it = fromAlias.keySet().iterator();</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		while (it.hasNext())</span>
+		{
+<span class="nc" id="L298">			Object alias = it.next();</span>
+<span class="nc" id="L299">			Object table = fromAlias.get(alias);</span>
+<span class="nc" id="L300">			newFrom.append(&quot;, &quot;).append(table);</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">			if (!table.equals(alias))</span>
+<span class="nc" id="L302">				newFrom.append(&quot; &quot;).append(alias);</span>
+		}
+<span class="nc bnc" id="L304" title="All 2 branches missed.">		if (trace)</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(newFrom.toString());</span>
+		//
+<span class="nc" id="L307">		StringBuilder retValue = new StringBuilder (sqlStatement.length()+20);</span>
+<span class="nc" id="L308">		retValue.append(selectPart)</span>
+<span class="nc" id="L309">			.append(newFrom).append(&quot; &quot;)</span>
+<span class="nc" id="L310">			.append(newWherePart).append(rest);</span>
+		//
+<span class="nc bnc" id="L312" title="All 2 branches missed.">		if (trace)</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;OuterJoin==&gt; &quot; + retValue.toString());</span>
+<span class="nc" id="L314">		return retValue.toString();</span>
+	}   //  convertOuterJoin
+	
+	/**
+	 *  Converts Decode.
+	 *  &lt;pre&gt;{@code
+	 *      DECODE (a, 1, 'one', 2, 'two', 'none')
+	 *       =&gt; CASE WHEN a = 1 THEN 'one' WHEN a = 2 THEN 'two' ELSE 'none' END
+	 *  }&lt;/pre&gt;
+	 *  @param sqlStatement
+	 *  @return converted statement
+	 */
+	protected String convertDecode(String sqlStatement, int fromIndex)
+	{
+<span class="nc" id="L328">		String statement = sqlStatement;</span>
+<span class="nc" id="L329">		StringBuilder sb = new StringBuilder(&quot;CASE&quot;);</span>
+
+<span class="nc" id="L331">		int index = statement.toUpperCase().indexOf(&quot;DECODE&quot;, fromIndex);</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">		if (index &lt;= 0) return sqlStatement;</span>
+		
+<span class="nc" id="L334">		char previousChar = statement.charAt(index - 1);</span>
+<span class="nc bnc" id="L335" title="All 4 branches missed.">		if (!(Character.isWhitespace(previousChar) || isOperator(previousChar)))</span>
+<span class="nc" id="L336">			return sqlStatement;</span>
+		
+<span class="nc" id="L338">		String firstPart = statement.substring(0,index);</span>
+
+		//  find the opening (
+<span class="nc" id="L341">		index = index + 6;</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">		while (index &lt; statement.length()) {</span>
+<span class="nc" id="L343">			char c = statement.charAt(index);</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">			if (Character.isWhitespace(c)) {</span>
+<span class="nc" id="L345">				index++;</span>
+<span class="nc" id="L346">				continue;</span>
+			}
+<span class="nc bnc" id="L348" title="All 2 branches missed.">			if (c == '(') break;</span>
+<span class="nc" id="L349">			return sqlStatement;</span>
+		}
+		
+<span class="nc" id="L352">		statement = statement.substring(index+1);</span>
+
+		//  find the expression &quot;a&quot; - find first , ignoring ()
+<span class="nc" id="L355">		index = Util.findIndexOf (statement, ',');</span>
+<span class="nc" id="L356">		String expression = statement.substring(0, index).trim();</span>
+
+		//  Pairs &quot;1, 'one',&quot;
+<span class="nc" id="L359">		statement = statement.substring(index+1);</span>
+<span class="nc" id="L360">		index = Util.findIndexOf (statement, ',');</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">		while (index != -1)</span>
+		{
+<span class="nc" id="L363">			String first = statement.substring(0, index);</span>
+<span class="nc" id="L364">			char cc = statement.charAt(index);</span>
+<span class="nc" id="L365">			statement = statement.substring(index+1);</span>
+			//
+<span class="nc" id="L367">			boolean error = false;</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">			if (cc == ',')</span>
+			{
+<span class="nc" id="L370">				index = Util.findIndexOf (statement, ',',')');</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">				if (index == -1)</span>
+<span class="nc" id="L372">					error = true;</span>
+				else
+				{
+<span class="nc" id="L375">					String second = statement.substring(0, index);</span>
+<span class="nc" id="L376">					sb.append(&quot; WHEN &quot;).append(expression).append(&quot;=&quot;).append(first.trim())</span>
+<span class="nc" id="L377">						.append(&quot; THEN &quot;).append(second.trim());</span>
+<span class="nc" id="L378">					statement = statement.substring(index+1);</span>
+<span class="nc" id="L379">					index = Util.findIndexOf (statement, ',',')');</span>
+				}
+<span class="nc" id="L381">			}</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">			else if (cc == ')')</span>
+			{
+<span class="nc" id="L384">				sb.append(&quot; ELSE &quot;).append(first.trim()).append(&quot; END&quot;);</span>
+<span class="nc" id="L385">				index = -1;</span>
+<span class="nc" id="L386">			}</span>
+			else
+<span class="nc" id="L388">				error = true;</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">			if (error)</span>
+			{
+<span class="nc" id="L391">				log.log(Level.SEVERE, &quot;SQL=(&quot; + sqlStatement</span>
+<span class="nc" id="L392">					+ &quot;)\n====Result=(&quot; + sb.toString()</span>
+<span class="nc" id="L393">					+ &quot;)\n====Statement=(&quot; + statement</span>
+<span class="nc" id="L394">					+ &quot;)\n====First=(&quot; + first</span>
+<span class="nc" id="L395">					+ &quot;)\n====Index=&quot; + index);</span>
+<span class="nc" id="L396">				m_conversionError = &quot;Decode conversion error&quot;;</span>
+			}
+		}
+<span class="nc" id="L399">		sb.append(statement);</span>
+<span class="nc" id="L400">		sb.insert(0, firstPart);</span>
+<span class="nc" id="L401">		return sb.toString();</span>
+	}	//  convertDecode
+	
+	/**
+	 * Converts Delete.
+	 * 
+	 * &lt;pre&gt;
+	 *        DELETE C_Order i WHERE  
+	 *         =&amp;gt; DELETE FROM C_Order WHERE  
+	 * &lt;/pre&gt;
+	 * 
+	 * @param sqlStatement
+	 * @return converted statement
+	 */
+	protected String convertDelete(String sqlStatement) {
+
+<span class="nc" id="L417">		int index = sqlStatement.toUpperCase().indexOf(&quot;DELETE &quot;);</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">		if (index &lt; 7) {</span>
+<span class="nc" id="L419">			return &quot;DELETE FROM &quot; + sqlStatement.substring(index + 7);</span>
+
+		}
+
+<span class="nc" id="L423">		return sqlStatement;</span>
+	} // convertDelete
+	
+	/**
+	 * Is character a valid SQL operator
+	 * @param c
+	 * @return true if c is SQL operator
+	 */
+	protected boolean isOperator(char c)
+	{
+<span class="nc bnc" id="L433" title="All 2 branches missed.">		if ('=' == c)</span>
+<span class="nc" id="L434">			return true;</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">		else if ('&lt;' == c)</span>
+<span class="nc" id="L436">			return true;</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">		else if ('&gt;' == c)</span>
+<span class="nc" id="L438">			return true;</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">		else if ('|' == c)</span>
+<span class="nc" id="L440">			return true;</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">		else if ('(' == c)</span>
+<span class="nc" id="L442">			return true;</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">		else if (')' == c)</span>
+<span class="nc" id="L444">			return true;</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">		else if ('+' == c)</span>
+<span class="nc" id="L446">			return true;</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">		else if ('-' == c)</span>
+<span class="nc" id="L448">			return true;</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">		else if ('*' == c)</span>
+<span class="nc" id="L450">			return true;</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">		else if ('/' == c)</span>
+<span class="nc" id="L452">			return true;</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">		else if ('!' == c)</span>
+<span class="nc" id="L454">			return true;</span>
+<span class="nc bnc" id="L455" title="All 2 branches missed.">		else if (',' == c)</span>
+<span class="nc" id="L456">			return true;</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">		else if ('?' == c)</span>
+<span class="nc" id="L458">			return true;</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">		else if ('#' == c)</span>
+<span class="nc" id="L460">			return true;</span>
+<span class="nc bnc" id="L461" title="All 2 branches missed.">		else if ('@' == c)</span>
+<span class="nc" id="L462">			return true;</span>
+<span class="nc bnc" id="L463" title="All 2 branches missed.">		else if ('~' == c)</span>
+<span class="nc" id="L464">			return true;</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">		else if ('&amp;' == c)</span>
+<span class="nc" id="L466">			return true;</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">		else if ('^' == c)</span>
+<span class="nc" id="L468">			return true;</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">		else if ('!' == c)</span>
+<span class="nc" id="L470">			return true;</span>
+		else
+<span class="nc" id="L472">			return false;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

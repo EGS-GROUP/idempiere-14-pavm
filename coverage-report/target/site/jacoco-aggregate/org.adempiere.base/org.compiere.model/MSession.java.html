@@ -1,0 +1,516 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MSession.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MSession.java</span></div><h1>MSession.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.sql.ResultSet;
+import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+
+import org.compiere.Adempiere;
+import org.compiere.util.Env;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+import org.compiere.util.WebUtil;
+import org.idempiere.cache.ImmutableIntPOCache;
+import org.idempiere.cache.ImmutablePOSupport;
+import org.idempiere.tracking.AuditTraceContext;
+
+/**
+ *	Session Model.
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: MSession.java,v 1.3 2006/07/30 00:58:05 jjanke Exp $
+ * 
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;BF [ 1810182 ] Session lost after cache reset 
+ * 			&lt;li&gt;BF [ 1892156 ] MSession is not really cached 
+ */
+public class MSession extends X_AD_Session implements ImmutablePOSupport
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -5836154187760734691L;
+
+	/**
+	 * 	Get existing or create local session
+	 *	@param ctx context
+	 *	@param createNew create if not found
+	 *	@return session session
+	 *	@deprecated use Get and Create functions.
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static MSession get (Properties ctx, boolean createNew)
+	{
+<span class="nc" id="L63">		MSession session = get(ctx);</span>
+<span class="nc bnc" id="L64" title="All 4 branches missed.">		if(session == null &amp;&amp; createNew)</span>
+<span class="nc" id="L65">			return MSession.create(ctx);</span>
+<span class="nc" id="L66">		return session;</span>
+	}	//	get
+	
+	/**
+	 * 	Get session from context
+	 *	@param ctx context
+	 *	@return session
+	 */
+	public static MSession get (Properties ctx)
+	{
+<span class="nc" id="L76">		int AD_Session_ID = Env.getContextAsInt(ctx, Env.AD_SESSION_ID);</span>
+<span class="nc" id="L77">		MSession session = s_sessions.get(ctx, AD_Session_ID, e -&gt; new MSession(ctx, e));</span>
+		// Try to load
+<span class="nc bnc" id="L79" title="All 4 branches missed.">		if (session == null &amp;&amp; AD_Session_ID &gt; 0)</span>
+		{
+<span class="nc" id="L81">			session = new MSession(ctx, AD_Session_ID, null);</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">			if (session.get_ID () == AD_Session_ID)</span>
+			{
+<span class="nc" id="L84">				s_sessions.put (AD_Session_ID, session, e -&gt; new MSession(Env.getCtx(), e));</span>
+<span class="nc" id="L85">			} else </span>
+			{
+<span class="nc" id="L87">				session = null;</span>
+			}
+		}
+<span class="nc" id="L90">		return session;</span>
+	}	//	get
+	
+	/**
+	 * 	Create new session for context
+	 *	@param ctx context
+	 *	@return session
+	 */
+	public static MSession create (Properties ctx)
+	{
+<span class="nc" id="L100">		MSession session = new MSession (ctx, (String)null);	//	local session</span>
+<span class="nc" id="L101">		session.saveEx();</span>
+<span class="nc" id="L102">		int AD_Session_ID = session.getAD_Session_ID();</span>
+<span class="nc" id="L103">		Env.setContext (ctx, Env.AD_SESSION_ID, AD_Session_ID);</span>
+<span class="nc" id="L104">		return session;</span>
+	}	//	get
+	
+	/**
+	 * 	Get existing or create new session
+	 *	@param ctx context
+	 *	@param Remote_Addr remote address
+	 *	@param Remote_Host remote host
+	 *	@param WebSession web session
+	 *	@return session
+	 */
+	public static MSession get (Properties ctx, String Remote_Addr, String Remote_Host, String WebSession)
+	{
+<span class="nc" id="L117">		int AD_Session_ID = Env.getContextAsInt(ctx, Env.AD_SESSION_ID);</span>
+<span class="nc" id="L118">		MSession session = get(ctx);</span>
+
+<span class="nc bnc" id="L120" title="All 2 branches missed.">		if (session == null)</span>
+		{
+<span class="nc" id="L122">			session = new MSession (ctx, Remote_Addr, Remote_Host, WebSession, null);	//	remote session</span>
+<span class="nc" id="L123">			session.saveEx();</span>
+<span class="nc" id="L124">			AD_Session_ID = session.getAD_Session_ID();</span>
+<span class="nc" id="L125">			Env.setContext(ctx, Env.AD_SESSION_ID, AD_Session_ID);</span>
+<span class="nc" id="L126">		} else {</span>
+<span class="nc" id="L127">			session = new MSession(ctx, session.getAD_Session_ID(), null);</span>
+		}
+		
+<span class="nc" id="L130">		return session;</span>
+	}	//	get
+
+	/**	Session Cache				*/
+<span class="nc" id="L134">	private static ImmutableIntPOCache&lt;Integer,MSession&gt;	s_sessions = new ImmutableIntPOCache&lt;Integer,MSession&gt;(Table_Name, Table_Name, 100, 0, false, 0) {</span>
+		private static final long serialVersionUID = 8421415709907257867L;
+		public int reset() {
+<span class="nc" id="L137">			return 0; // do not remove on cache reset</span>
+		};
+		public int reset(int recordId) {
+<span class="nc" id="L140">			return 0; // do not remove the session on update</span>
+		};
+<span class="nc" id="L142">	};</span>
+		
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param AD_Session_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MSession(Properties ctx, String AD_Session_UU, String trxName) {
+<span class="nc" id="L151">        super(ctx, AD_Session_UU, trxName);</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		if (Util.isEmpty(AD_Session_UU))</span>
+<span class="nc" id="L153">			setInitialDefaults();</span>
+<span class="nc" id="L154">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param AD_Session_ID id
+	 *	@param trxName transaction
+	 */
+	public MSession (Properties ctx, int AD_Session_ID, String trxName)
+	{
+<span class="nc" id="L164">		super(ctx, AD_Session_ID, trxName);</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">		if (AD_Session_ID == 0)</span>
+<span class="nc" id="L166">			setInitialDefaults();</span>
+<span class="nc" id="L167">	}	//	MSession</span>
+
+	/**
+	 * Set the initial defaults for a new record
+	 */
+	private void setInitialDefaults() {
+<span class="nc" id="L173">		setProcessed (false);</span>
+<span class="nc" id="L174">	}</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MSession(Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L184">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L185">	}	//	MSession</span>
+
+	/**
+	 * 	New Session Constructor
+	 *	@param ctx context
+	 *	@param Remote_Addr remote address
+	 *	@param Remote_Host remote host
+	 *	@param WebSession web session
+	 *	@param trxName transaction
+	 */
+	public MSession (Properties ctx, String Remote_Addr, String Remote_Host, String WebSession, String trxName)
+	{
+<span class="nc" id="L197">		this (ctx, 0, trxName);</span>
+		
+<span class="nc" id="L199">		setServerName(WebUtil.getServerName());</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">		if (Remote_Addr != null)</span>
+<span class="nc" id="L201">			setRemote_Addr(Remote_Addr);</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (Remote_Host != null)</span>
+<span class="nc" id="L203">			setRemote_Host(Remote_Host);</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">		if (WebSession != null)</span>
+<span class="nc" id="L205">			setWebSession(WebSession);</span>
+<span class="nc" id="L206">		setDescription(Adempiere.MAIN_VERSION + &quot;_&quot;</span>
+<span class="nc" id="L207">				+ Adempiere.DATE_VERSION + &quot; &quot;</span>
+<span class="nc" id="L208">				+ Adempiere.getImplementationVersion());</span>
+<span class="nc" id="L209">		setAD_Role_ID(Env.getContextAsInt(ctx, Env.AD_ROLE_ID));</span>
+<span class="nc" id="L210">		setLoginDate(Env.getContextAsDate(ctx, Env.DATE));</span>
+<span class="nc" id="L211">	}	//	MSession</span>
+
+	/**
+	 * 	New Session Constructor
+	 *	@param ctx context
+	 *	@param trxName transaction
+	 */
+	public MSession (Properties ctx, String trxName)
+	{
+<span class="nc" id="L220">		this (ctx, 0, trxName);</span>
+		try
+		{
+<span class="nc" id="L223">			InetAddress lh = InetAddress.getLocalHost();</span>
+<span class="nc" id="L224">			setServerName(WebUtil.getServerName());</span>
+<span class="nc" id="L225">			setRemote_Addr(lh.getHostAddress());</span>
+<span class="nc" id="L226">			setRemote_Host(lh.getHostName());</span>
+<span class="nc" id="L227">			setDescription(Adempiere.MAIN_VERSION + &quot;_&quot;</span>
+<span class="nc" id="L228">					+ Adempiere.DATE_VERSION + &quot; &quot;</span>
+<span class="nc" id="L229">					+ Adempiere.getImplementationVersion());</span>
+<span class="nc" id="L230">			setAD_Role_ID(Env.getContextAsInt(ctx, Env.AD_ROLE_ID));</span>
+<span class="nc" id="L231">			setLoginDate(Env.getContextAsDate(ctx, Env.DATE));</span>
+<span class="nc" id="L232">		}</span>
+<span class="nc" id="L233">		catch (UnknownHostException e)</span>
+		{
+<span class="nc" id="L235">			log.log(Level.SEVERE, &quot;No Local Host&quot;, e);</span>
+		}
+<span class="nc" id="L237">	}	//	MSession</span>
+	
+	/**
+	 * Copy constructor
+	 * @param copy
+	 */
+	public MSession(MSession copy) 
+	{
+<span class="nc" id="L245">		this(Env.getCtx(), copy);</span>
+<span class="nc" id="L246">	}</span>
+
+	/**
+	 * Copy constructor
+	 * @param ctx
+	 * @param copy
+	 */
+	public MSession(Properties ctx, MSession copy) 
+	{
+<span class="nc" id="L255">		this(ctx, copy, (String) null);</span>
+<span class="nc" id="L256">	}</span>
+
+	/**
+	 * Copy constructor
+	 * @param ctx
+	 * @param copy
+	 * @param trxName
+	 */
+	public MSession(Properties ctx, MSession copy, String trxName) 
+	{
+<span class="nc" id="L266">		this(ctx, 0, trxName);</span>
+<span class="nc" id="L267">		copyPO(copy);</span>
+<span class="nc" id="L268">	}</span>
+
+	/**	Web Store Session		*/
+<span class="nc" id="L271">	private boolean		m_webStoreSession = false;</span>
+	
+	/**
+	 * 	Is it a Web Store Session
+	 *	@return true if this is a Web Store Session.
+	 */
+	public boolean isWebStoreSession ()
+	{
+<span class="nc" id="L279">		return m_webStoreSession;</span>
+	}	//	isWebStoreSession
+	
+	/**
+	 * 	Set Web Store Session
+	 *	@param webStoreSession Web Store Session flag 
+	 */
+	public void setWebStoreSession (boolean webStoreSession)
+	{
+<span class="nc" id="L288">		m_webStoreSession = webStoreSession;</span>
+<span class="nc" id="L289">	}	//	setWebStoreSession</span>
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L298">		StringBuilder sb = new StringBuilder(&quot;MSession[&quot;)</span>
+<span class="nc" id="L299">			.append(getAD_Session_ID())</span>
+<span class="nc" id="L300">			.append(&quot;,AD_User_ID=&quot;).append(getCreatedBy())</span>
+<span class="nc" id="L301">			.append(&quot;,&quot;).append(getCreated())</span>
+<span class="nc" id="L302">			.append(&quot;,Remote=&quot;).append(getRemote_Addr());</span>
+<span class="nc" id="L303">		String s = getRemote_Host();</span>
+<span class="nc bnc" id="L304" title="All 4 branches missed.">		if (s != null &amp;&amp; s.length() &gt; 0)</span>
+<span class="nc" id="L305">			sb.append(&quot;,&quot;).append(s);</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (m_webStoreSession)</span>
+<span class="nc" id="L307">			sb.append(&quot;,WebStoreSession&quot;);</span>
+<span class="nc" id="L308">		sb.append(&quot;]&quot;);</span>
+<span class="nc" id="L309">		return sb.toString();</span>
+	}	//	toString
+
+	/**
+	 * 	Logout this session
+	 */
+	public void logout()
+	{
+<span class="nc" id="L317">		setProcessed(true);</span>
+<span class="nc" id="L318">		saveEx();</span>
+<span class="nc" id="L319">		s_sessions.remove(Integer.valueOf(getAD_Session_ID()));</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(TimeUtil.formatElapsed(getCreated(), getUpdated()));</span>
+<span class="nc" id="L321">	}	//	logout</span>
+
+	/**
+	 * 	Preserved for backward compatibility
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public MChangeLog changeLog (
+		String TrxName, int AD_ChangeLog_ID,
+		int AD_Table_ID, int AD_Column_ID, int Record_ID,
+		int AD_Client_ID, int AD_Org_ID,
+		Object OldValue, Object NewValue)
+	{
+<span class="nc" id="L334">		return changeLog(TrxName, AD_ChangeLog_ID, AD_Table_ID, AD_Column_ID,</span>
+<span class="nc" id="L335">				Record_ID, null, AD_Client_ID, AD_Org_ID, OldValue, NewValue,</span>
+<span class="nc" id="L336">				(String) null);</span>
+	}	// changeLog
+
+	/**
+	 * 	Create Change Log (if table is logged)
+	 * 	@param TrxName transaction name
+	 *	@param AD_ChangeLog_ID 0 for new change log
+	 *	@param AD_Table_ID table
+	 *	@param AD_Column_ID column
+	 *	@param Record_ID record
+	 *	@param AD_Client_ID client
+	 *	@param AD_Org_ID org
+	 *	@param OldValue old
+	 *	@param NewValue new
+	 *  @param event
+	 *	@return saved change log or null
+	 */
+	public MChangeLog changeLog (
+		String TrxName, int AD_ChangeLog_ID,
+		int AD_Table_ID, int AD_Column_ID, int Record_ID,
+		int AD_Client_ID, int AD_Org_ID,
+		Object OldValue, Object NewValue, String event)
+	{
+<span class="nc" id="L359">		return changeLog(TrxName, AD_ChangeLog_ID, AD_Table_ID, AD_Column_ID,</span>
+<span class="nc" id="L360">				Record_ID, null, AD_Client_ID, AD_Org_ID, OldValue, NewValue,</span>
+<span class="nc" id="L361">				event);</span>
+	}
+
+	/**
+	 * 	Create Change Log (if table is logged)
+	 * 	@param TrxName transaction name
+	 *	@param AD_ChangeLog_ID 0 for new change log
+	 *	@param AD_Table_ID table
+	 *	@param AD_Column_ID column
+	 *	@param Record_ID record
+	 *	@param Record_UU record UUID
+	 *	@param AD_Client_ID client
+	 *	@param AD_Org_ID org
+	 *	@param OldValue old
+	 *	@param NewValue new
+	 *  @param event
+	 *	@return saved change log or null
+	 */
+	public MChangeLog changeLog (
+		String TrxName, int AD_ChangeLog_ID,
+		int AD_Table_ID, int AD_Column_ID, int Record_ID, String Record_UU,
+		int AD_Client_ID, int AD_Org_ID,
+		Object OldValue, Object NewValue, String event)
+	{
+<span class="nc" id="L385">		return changeLog(TrxName, AD_ChangeLog_ID, AD_Table_ID, AD_Column_ID,</span>
+<span class="nc" id="L386">				Record_ID, Record_UU, AD_Client_ID, AD_Org_ID, OldValue, NewValue,</span>
+<span class="nc" id="L387">				event, true);</span>
+	}
+
+	/**
+	 * 	Create Change Log (if table is logged)
+	 * 	@param TrxName transaction name
+	 *	@param AD_ChangeLog_ID 0 for new change log
+	 *	@param AD_Table_ID table
+	 *	@param AD_Column_ID column
+	 *	@param Record_ID record
+	 *	@param Record_UU record UUID
+	 *	@param AD_Client_ID client
+	 *	@param AD_Org_ID org
+	 *	@param OldValue old
+	 *	@param NewValue new
+	 *  @param event
+	 *  @param save true to save to DB, false to return change log without save
+	 *	@return saved change log or null
+	 */
+	public MChangeLog changeLog (
+		String TrxName, int AD_ChangeLog_ID,
+		int AD_Table_ID, int AD_Column_ID, int Record_ID, String Record_UU,
+		int AD_Client_ID, int AD_Org_ID,
+		Object OldValue, Object NewValue, String event, boolean save)
+	{
+		// never log change log itself (recursive error)
+<span class="nc bnc" id="L413" title="All 2 branches missed.">		if (AD_Table_ID == MChangeLog.Table_ID)</span>
+<span class="nc" id="L414">			return null;</span>
+		//	Null handling
+<span class="nc bnc" id="L416" title="All 4 branches missed.">		if (OldValue == null &amp;&amp; NewValue == null)</span>
+<span class="nc" id="L417">			return null;</span>
+		//	Equal Value
+<span class="nc bnc" id="L419" title="All 6 branches missed.">		if (OldValue != null &amp;&amp; NewValue != null &amp;&amp; OldValue.equals(NewValue))</span>
+<span class="nc" id="L420">			return null;</span>
+
+		//	Role Logging
+<span class="nc" id="L423">		MRole role = MRole.getDefault(getCtx(), false);</span>
+		//	Do we need to log
+<span class="nc bnc" id="L425" title="All 2 branches missed.">		if (m_webStoreSession						//	log if WebStore</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">			|| MChangeLog.isLogged(AD_Table_ID)		//	im/explicit log</span>
+<span class="nc bnc" id="L427" title="All 4 branches missed.">			|| (role != null &amp;&amp; role.isChangeLog()))//	Role Logging</span>
+<span class="nc" id="L428">			;</span>
+		else
+<span class="nc" id="L430">			return null;</span>
+		//
+<span class="nc bnc" id="L432" title="All 2 branches missed.">		if (log.isLoggable(Level.FINEST)) log.finest(&quot;AD_ChangeLog_ID=&quot; + AD_ChangeLog_ID</span>
+<span class="nc" id="L433">				+ &quot;, AD_Session_ID=&quot; + getAD_Session_ID()</span>
+<span class="nc" id="L434">				+ &quot;, AD_Table_ID=&quot; + AD_Table_ID + &quot;, AD_Column_ID=&quot; + AD_Column_ID</span>
+<span class="nc" id="L435">				+ &quot;: &quot; + OldValue + &quot; -&gt; &quot; + NewValue);</span>
+		try
+		{
+<span class="nc" id="L438">			MChangeLog cl = new MChangeLog(getCtx(), </span>
+<span class="nc" id="L439">				AD_ChangeLog_ID, TrxName, getAD_Session_ID(),</span>
+<span class="nc" id="L440">				AD_Table_ID, AD_Column_ID, Record_ID, Record_UU, AD_Client_ID, AD_Org_ID,</span>
+<span class="nc" id="L441">				OldValue, NewValue, event);</span>
+
+<span class="nc" id="L443">			String externalTraceId = AuditTraceContext.getExternalTraceId();</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">	        if (externalTraceId != null)</span>
+<span class="nc" id="L445">	            cl.setExternalTraceId(externalTraceId);</span>
+
+<span class="nc bnc" id="L447" title="All 2 branches missed.">			if (save)</span>
+			{
+<span class="nc bnc" id="L449" title="All 2 branches missed.">				if (cl.saveCrossTenantSafe())</span>
+<span class="nc" id="L450">					return cl;</span>
+			}
+			else
+			{
+<span class="nc" id="L454">				return cl;</span>
+			}
+		}
+<span class="nc" id="L457">		catch (Exception e)</span>
+		{
+<span class="nc" id="L459">			log.log(Level.SEVERE, &quot;AD_ChangeLog_ID=&quot; + AD_ChangeLog_ID</span>
+<span class="nc" id="L460">				+ &quot;, AD_Session_ID=&quot; + getAD_Session_ID()</span>
+<span class="nc" id="L461">				+ &quot;, AD_Table_ID=&quot; + AD_Table_ID + &quot;, AD_Column_ID=&quot; + AD_Column_ID, e);</span>
+<span class="nc" id="L462">			return null;</span>
+		}
+<span class="nc" id="L464">		log.log(Level.SEVERE, &quot;AD_ChangeLog_ID=&quot; + AD_ChangeLog_ID</span>
+<span class="nc" id="L465">			+ &quot;, AD_Session_ID=&quot; + getAD_Session_ID()</span>
+<span class="nc" id="L466">			+ &quot;, AD_Table_ID=&quot; + AD_Table_ID + &quot;, AD_Column_ID=&quot; + AD_Column_ID);</span>
+<span class="nc" id="L467">		return null;</span>
+	}	//	changeLog
+
+	/**
+	 * @return number of cached sessions
+	 */
+	public static int getCachedSessionCount() {
+<span class="nc" id="L474">		return s_sessions.size()-1;</span>
+	}
+	
+	@Override
+	public MSession markImmutable() {
+<span class="nc bnc" id="L479" title="All 2 branches missed.">		if (is_Immutable())</span>
+<span class="nc" id="L480">			return this;</span>
+
+<span class="nc" id="L482">		makeImmutable();</span>
+<span class="nc" id="L483">		return this;</span>
+	}
+	
+	/** Set of table name to disable capture of update change log */
+<span class="nc" id="L487">	private Set&lt;String&gt; skipChangeLogForUpdateSet = ConcurrentHashMap.newKeySet();</span>
+
+	/**
+	 * Add session flag to disable the capture of update change log for a table
+	 * @param tableName table name, case insensitive
+	 */
+	public void addSkipChangeLogForUpdate(String tableName) {
+<span class="nc" id="L494">		skipChangeLogForUpdateSet.add(tableName.toUpperCase());</span>
+<span class="nc" id="L495">	}</span>
+	
+	/**
+	 * Remove the session flag that disable the capture of update change log for a table.&lt;br/&gt;
+	 * After removal of the session flag, the logging decision is back to what have been configured at AD_Table and AD_Column level. 
+	 * @param tableName table name, case insensitive
+	 */
+	public void removeSkipChangeLogForUpdate(String tableName) {
+<span class="nc" id="L503">		skipChangeLogForUpdateSet.remove(tableName.toUpperCase());</span>
+<span class="nc" id="L504">	}</span>
+	
+	/**
+	 * Is skip the capture of update change log for this session
+	 * @param tableName table name, case insensitive
+	 * @return true if it is to skip the capture of update change log for this session
+	 */
+	public boolean isSkipChangeLogForUpdate(String tableName) {
+<span class="nc" id="L512">		return skipChangeLogForUpdateSet.contains(tableName.toUpperCase());</span>
+	}
+}	//	MSession
+
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,504 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ArchiveDBLOB.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">ArchiveDBLOB.java</span></div><h1>ArchiveDBLOB.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2012 Trek Global                                             *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.sql.Blob;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.logging.Level;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.osgi.service.component.annotations.Component;
+
+/**
+ * DB LOB implementation of {@link IArchiveStore}
+ */
+@Component(immediate = true, service = {IArchiveStore.class}, property = {&quot;method=DB_LOB&quot;})
+<span class="nc" id="L46">public class ArchiveDBLOB implements IArchiveStore {</span>
+
+	private static final String AD_ARCHIVE_BLOB_GET = &quot;SELECT BinaryData FROM AD_Archive_Blob WHERE AD_Archive_ID = ?&quot;;
+	
+	private static final String AD_ARCHIVE_BLOB_INSERT = &quot;INSERT INTO AD_Archive_Blob(AD_Archive_ID, BinaryData) Values (?, ?)&quot;;
+	
+	private static final String AD_ARCHIVE_BLOB_DELETE = &quot;DELETE FROM AD_Archive_Blob WHERE AD_Archive_ID=?&quot;;
+
+<span class="nc" id="L54">	private static final CLogger log = CLogger.getCLogger(ArchiveDB.class);</span>
+	
+	//temporary buffer when AD_Archive_ID=0;
+	private byte[] buffer;
+	private InputStream bufferInputStream;
+		
+	/* (non-Javadoc)
+	 * @see org.compiere.model.IArchiveStore#loadLOBData(org.compiere.model.MArchive, org.compiere.model.MStorageProvider)
+	 */
+	@Override
+	public byte[] loadLOBData(MArchive archive, MStorageProvider prov) {
+<span class="nc" id="L65">		buffer = null;</span>
+<span class="nc" id="L66">		bufferInputStream = null;</span>
+		
+<span class="nc" id="L68">		byte[] deflatedData = archive.getByteData();</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">		if (deflatedData == null)</span>
+<span class="nc" id="L70">			return null;</span>
+		//		
+<span class="nc bnc" id="L72" title="All 2 branches missed.">		if (deflatedData.length == 0)</span>
+<span class="nc" id="L73">			return null;</span>
+		
+<span class="nc" id="L75">		return getExternalDataAsBytes(archive);</span>
+	}
+	
+	/**
+	 * Get data from AD_Archive_Blob table
+	 * @param archive
+	 * @return byte[] of the archive data
+	 */
+	private byte[] getExternalDataAsBytes(MArchive archive) {
+<span class="nc" id="L84">		Connection conn = null; </span>
+		// With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L86" title="All 4 branches missed.">    	if (archive.get_TrxName() == null &amp;&amp; DB.isPostgreSQL()) {</span>
+<span class="nc" id="L87">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    		try {
+<span class="nc" id="L89">				conn.setAutoCommit(false);</span>
+<span class="nc" id="L90">			} catch (SQLException e) {</span>
+				try {
+<span class="nc" id="L92">					conn.close();</span>
+<span class="nc" id="L93">				} catch (SQLException e1) {</span>
+				}
+<span class="nc" id="L95">				throw new RuntimeException(&quot;Error setting auto commit to false&quot;, e);</span>
+			}
+    	}
+    	
+<span class="nc" id="L99">		String sql = AD_ARCHIVE_BLOB_GET;</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">		try (PreparedStatement pstmt = conn != null</span>
+<span class="nc" id="L101">				? DB.prepareStatement(conn, sql)</span>
+<span class="nc" id="L102">				: DB.prepareStatement(sql, archive.get_TrxName())) {</span>
+<span class="nc" id="L103">			pstmt.setInt(1, archive.getAD_Archive_ID());</span>
+<span class="nc" id="L104">			try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L106">					Blob blob = rs.getBlob(1);</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">					if (blob != null) {</span>
+<span class="nc" id="L108">						try (InputStream inputStream = blob.getBinaryStream();</span>
+<span class="nc" id="L109">	                        ZipInputStream zis = new ZipInputStream(inputStream)) {</span>
+<span class="nc" id="L110">							ZipEntry entry = zis.getNextEntry();</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">                            assert entry != null;</span>
+<span class="nc" id="L112">							ByteArrayOutputStream out = new ByteArrayOutputStream();</span>
+<span class="nc" id="L113">							byte[] buffer = new byte[2048];</span>
+							int length;
+<span class="nc bnc" id="L115" title="All 2 branches missed.">							while ((length = zis.read(buffer)) != -1) </span>
+<span class="nc" id="L116">								out.write(buffer, 0, length);</span>
+<span class="nc" id="L117">							return out.toByteArray();</span>
+						} finally {
+<span class="nc" id="L119">							blob.free();</span>
+						}
+					}
+				}
+			}
+<span class="nc" id="L124">		} catch (Exception e) {</span>
+<span class="nc" id="L125">			log.log(Level.SEVERE, e.getMessage(), e);</span>
+		} finally {
+<span class="nc bnc" id="L127" title="All 2 branches missed.">			if (conn != null) {</span>
+				try {
+<span class="nc" id="L129">					conn.commit();</span>
+<span class="nc" id="L130">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L133">					conn.setAutoCommit(true);</span>
+<span class="nc" id="L134">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L137">					conn.close();</span>
+<span class="nc" id="L138">				} catch (SQLException e) {</span>
+				}
+			}
+		}
+<span class="nc" id="L142">		return null;</span>
+	}
+
+	@Override
+	public InputStream loadLOBDataAsStream(MArchive archive, MStorageProvider prov) {
+<span class="nc" id="L147">		buffer = null;</span>
+<span class="nc" id="L148">		bufferInputStream = null;</span>
+		
+<span class="nc" id="L150">		byte[] deflatedData = archive.getByteData();</span>
+<span class="nc bnc" id="L151" title="All 4 branches missed.">		if (deflatedData == null || deflatedData.length == 0)</span>
+<span class="nc" id="L152">			return null;</span>
+		
+<span class="nc" id="L154">		String strValue = new String(deflatedData, StandardCharsets.US_ASCII);</span>
+<span class="nc" id="L155">		long size = Long.parseLong(strValue);</span>
+<span class="nc" id="L156">		return getExternalDataAsStream(archive, size);</span>
+	}
+
+	/**
+	 * Convert Blob stream to ByteArrayInputStream (if &lt; 2MB) or FileInputStream depends on size
+	 * @param blob
+	 * @param size 
+	 * @return ByteArrayInputStream or FileInputStream
+	 * @throws IOException
+	 */
+	private InputStream blobToLocalInputStream(Blob blob, long size) throws IOException {
+		// If the blob is small enough, read it into memory
+		try {
+<span class="nc bnc" id="L169" title="All 2 branches missed.">			if (size &lt; (1024 * 1024 * 2)) { </span>
+<span class="nc" id="L170">				try (InputStream inputStream = blob.getBinaryStream();</span>
+<span class="nc" id="L171">                    ZipInputStream zis = new ZipInputStream(inputStream)) {</span>
+<span class="nc" id="L172">					ZipEntry entry = zis.getNextEntry();</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">                    assert entry != null;</span>
+<span class="nc" id="L174">					ByteArrayOutputStream out = new ByteArrayOutputStream();</span>
+<span class="nc" id="L175">					byte[] buffer = new byte[2048];</span>
+<span class="nc" id="L176">					int length = 0;</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">					while ((length = zis.read(buffer)) != -1) {</span>
+<span class="nc" id="L178">						out.write(buffer, 0, length);</span>
+					}
+<span class="nc" id="L180">					return new ByteArrayInputStream(out.toByteArray());</span>
+				} finally {
+<span class="nc" id="L182">					blob.free();</span>
+				}
+			}
+<span class="nc" id="L185">		} catch (SQLException e) {</span>
+<span class="nc" id="L186">			throw new DBException(&quot;Error reading blob data&quot;, e);</span>
+<span class="nc" id="L187">		} catch (IOException e) {</span>
+<span class="nc" id="L188">			throw new AdempiereException(&quot;Error reading blob data&quot;, e);</span>
+		}
+		
+		// If the blob is too large, write it to a temporary file
+<span class="nc" id="L192">		Path tempDir = Files.createTempDirectory(&quot;archive_blob_&quot;);</span>
+<span class="nc" id="L193">		try (InputStream inputStream = blob.getBinaryStream();</span>
+<span class="nc" id="L194">            ZipInputStream zis = new ZipInputStream(inputStream)) {</span>
+<span class="nc" id="L195">			ZipEntry entry = zis.getNextEntry();</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">            assert entry != null;</span>
+<span class="nc" id="L197">			Path tempFile = tempDir.resolve(&quot;blob_data&quot;);</span>
+<span class="nc" id="L198">			Files.copy(zis, tempFile, StandardCopyOption.REPLACE_EXISTING);</span>
+<span class="nc" id="L199">			return Files.newInputStream(tempFile);</span>
+<span class="nc" id="L200">		} catch (SQLException e) {</span>
+<span class="nc" id="L201">			throw new DBException(&quot;Error reading blob data&quot;, e);</span>
+		} finally {
+			try {
+<span class="nc" id="L204">				blob.free();</span>
+<span class="nc" id="L205">			} catch (SQLException e) {</span>
+			}
+		}
+	}
+	
+	/**
+	 * Get data stream from AD_Archive_Blob table
+	 * @param archive
+	 * @param size 
+	 * @return InputStream of the archive data
+	 */
+	private InputStream getExternalDataAsStream(MArchive archive, long size) {
+<span class="nc" id="L217">		Connection conn = null; </span>
+		// With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L219" title="All 4 branches missed.">		if (archive.get_TrxName() == null &amp;&amp; DB.isPostgreSQL()) {</span>
+<span class="nc" id="L220">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    		try {
+<span class="nc" id="L222">				conn.setAutoCommit(false);</span>
+<span class="nc" id="L223">			} catch (SQLException e) {</span>
+				try {
+<span class="nc" id="L225">					conn.close();</span>
+<span class="nc" id="L226">				} catch (SQLException e1) {</span>
+				}
+<span class="nc" id="L228">				throw new RuntimeException(&quot;Error setting auto commit to false&quot;, e);</span>
+			}
+    	}
+<span class="nc" id="L231">		String sql = AD_ARCHIVE_BLOB_GET;</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">		try (PreparedStatement pstmt = conn != null </span>
+<span class="nc" id="L233">				? DB.prepareStatement(conn, sql) </span>
+<span class="nc" id="L234">				: DB.prepareStatement(sql, archive.get_TrxName())) {</span>
+<span class="nc" id="L235">			pstmt.setInt(1, archive.getAD_Archive_ID());</span>
+<span class="nc" id="L236">			try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L238">					Blob blob = rs.getBlob(1);</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">					if (blob != null) {</span>
+<span class="nc" id="L240">						return blobToLocalInputStream(blob, size);</span>
+					}
+				}
+			}
+<span class="nc" id="L244">		} catch (Exception e) {</span>
+<span class="nc" id="L245">			log.log(Level.SEVERE, e.getMessage(), e);</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">			if (conn != null) {</span>
+				try {
+<span class="nc" id="L248">					conn.rollback();</span>
+<span class="nc" id="L249">				} catch (SQLException e1) {</span>
+				}
+			}
+		} finally {
+<span class="nc bnc" id="L253" title="All 2 branches missed.">			if (conn != null) {</span>
+				try {
+<span class="nc" id="L255">					conn.commit();</span>
+<span class="nc" id="L256">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L259">					conn.setAutoCommit(true);</span>
+<span class="nc" id="L260">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L263">					conn.close();</span>
+<span class="nc" id="L264">				} catch (SQLException e) {</span>
+				}
+			}
+		}
+
+<span class="nc" id="L269">		return null;</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.compiere.model.IArchiveStore#save(org.compiere.model.MArchive, org.compiere.model.MStorageProvider, byte[])
+	 */
+	@Override
+	public void save(MArchive archive, MStorageProvider prov,byte[] byteDatas) {
+<span class="nc bnc" id="L277" title="All 4 branches missed.">		if (byteDatas == null || byteDatas.length == 0)</span>
+<span class="nc" id="L278">			throw new IllegalArgumentException(&quot;byteDatas is NULL&quot;);</span>
+		
+<span class="nc bnc" id="L280" title="All 2 branches missed.">		if(archive.get_ID()==0){</span>
+			//set binary data otherwise save will fail
+<span class="nc" id="L282">			archive.setByteData(new byte[]{'0'});</span>
+<span class="nc" id="L283">			buffer = byteDatas;</span>
+<span class="nc" id="L284">			bufferInputStream = null;</span>
+<span class="nc" id="L285">		} else {		</span>
+<span class="nc" id="L286">			write(archive, prov, byteDatas, null);			</span>
+		}
+<span class="nc" id="L288">	}</span>
+
+	@Override
+	public void save(MArchive archive, MStorageProvider prov, InputStream inputStream) {
+<span class="nc bnc" id="L292" title="All 2 branches missed.">		if (inputStream == null) {</span>
+<span class="nc" id="L293">			throw new IllegalArgumentException(&quot;inputStream is NULL&quot;);</span>
+		}
+<span class="nc bnc" id="L295" title="All 2 branches missed.">		if(archive.get_ID()==0){</span>
+			//set binary data otherwise save will fail
+<span class="nc" id="L297">			archive.setByteData(new byte[]{'0'});</span>
+<span class="nc" id="L298">			bufferInputStream = inputStream;</span>
+<span class="nc" id="L299">			buffer = null;</span>
+<span class="nc" id="L300">		} else {		</span>
+<span class="nc" id="L301">			write(archive, prov, null, inputStream);			</span>
+		}
+<span class="nc" id="L303">	}</span>
+
+	/**
+	 * Write archive data to AD_Archive_Blob table
+	 * @param archive
+	 * @param prov
+	 * @param byteDatas archive data
+	 * @param inputStream InputStream to read data from, if null, byteDatas will be used
+	 */
+	private void write(MArchive archive, MStorageProvider prov,
+			byte[] byteDatas, InputStream inputStream) {
+<span class="nc bnc" id="L314" title="All 6 branches missed.">		if ((byteDatas == null || byteDatas.length == 0) &amp;&amp; inputStream == null) {</span>
+<span class="nc" id="L315">			throw new IllegalArgumentException(&quot;Both byteDatas and inputStream is NULL&quot;);</span>
+		}
+		
+<span class="nc" id="L318">		BufferedOutputStream out = null;</span>
+		try {
+<span class="nc" id="L320">			Connection conn = null; </span>
+			// With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L322" title="All 4 branches missed.">	    	if (archive.get_TrxName() == null &amp;&amp; DB.isPostgreSQL()) {</span>
+<span class="nc" id="L323">	    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+	    		try {
+<span class="nc" id="L325">					conn.setAutoCommit(false);</span>
+<span class="nc" id="L326">				} catch (SQLException e) {</span>
+					try {
+<span class="nc" id="L328">						conn.close();</span>
+<span class="nc" id="L329">					} catch (SQLException e1) {</span>
+					}
+<span class="nc" id="L331">					throw new RuntimeException(&quot;Error setting auto commit to false&quot;, e);</span>
+				}
+	    	}
+	    	
+	    	// try to find existing blob
+<span class="nc" id="L336">	    	String sql = AD_ARCHIVE_BLOB_GET;</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">	    	if (DB.isOracle())</span>
+<span class="nc" id="L338">	            sql += &quot; FOR UPDATE &quot;;</span>
+<span class="nc" id="L339">	    	boolean updateBlob = false;</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">			try (PreparedStatement pstmt = conn != null </span>
+<span class="nc" id="L341">					? DB.prepareStatement(conn, sql) </span>
+<span class="nc" id="L342">					: DB.prepareStatement(sql, archive.get_TrxName())) {</span>
+<span class="nc" id="L343">				pstmt.setInt(1, archive.getAD_Archive_ID());</span>
+<span class="nc" id="L344">				try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">					if (rs.next()) {</span>
+<span class="nc" id="L346">						updateBlob = true;</span>
+<span class="nc" id="L347">						Blob blob = rs.getBlob(1);</span>
+<span class="nc" id="L348">						long size = 0;</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">						if (inputStream != null) {</span>
+<span class="nc" id="L350">							try (ZipOutputStream zos = new ZipOutputStream(blob.setBinaryStream(1))) {</span>
+<span class="nc" id="L351">	                            ZipEntry zipEntry = new ZipEntry(archive.getName());</span>
+<span class="nc" id="L352">	                            zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L353">								byte[] buffer = new byte[2048];</span>
+<span class="nc" id="L354">								int length = 0;							</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">								while ((length = inputStream.read(buffer)) != -1) {</span>
+<span class="nc" id="L356">									zos.write(buffer, 0, length);</span>
+<span class="nc" id="L357">									size += length;</span>
+								}
+							} finally {
+<span class="nc" id="L360">								blob.free();</span>
+							}
+<span class="nc bnc" id="L362" title="All 4 branches missed.">						} else if (byteDatas != null &amp;&amp; byteDatas.length &gt; 0) {</span>
+<span class="nc" id="L363">							try (ZipOutputStream zos = new ZipOutputStream(blob.setBinaryStream(1))) {</span>
+<span class="nc" id="L364">	                            ZipEntry zipEntry = new ZipEntry(archive.getName());</span>
+<span class="nc" id="L365">	                            zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L366">								zos.write(byteDatas);</span>
+<span class="nc" id="L367">								size = byteDatas.length;</span>
+							} finally {
+<span class="nc" id="L369">								blob.free();</span>
+							}
+						}
+<span class="nc bnc" id="L372" title="All 2 branches missed.">						if (size &gt; 0)</span>
+<span class="nc" id="L373">							archive.setByteData(String.valueOf(size).getBytes(StandardCharsets.US_ASCII));</span>
+						else
+<span class="nc" id="L375">							archive.setByteData(null);</span>
+<span class="nc" id="L376">						return;</span>
+					}
+				}
+<span class="nc bnc" id="L379" title="All 4 branches missed.">				if (updateBlob &amp;&amp; conn != null)</span>
+<span class="nc" id="L380">					conn.commit();</span>
+<span class="nc" id="L381">			} catch (Exception e) {</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">				if (conn != null) {</span>
+<span class="nc" id="L383">					conn.rollback();</span>
+				}
+<span class="nc" id="L385">				archive.setByteData(null);</span>
+<span class="nc" id="L386">				throw new RuntimeException(e);</span>
+			} finally {
+<span class="nc bnc" id="L388" title="All 2 branches missed.">				if (conn != null)</span>
+	    		{
+	    			try {
+<span class="nc" id="L391">						conn.setAutoCommit(true);</span>
+<span class="nc" id="L392">					} catch (SQLException e) {</span>
+					}
+	    			try {
+<span class="nc" id="L395">						conn.close();</span>
+<span class="nc" id="L396">					} catch (SQLException e) {</span>
+					}
+	    		}
+			}
+			
+			// no existing blob found, create a new one
+<span class="nc" id="L402">			sql = AD_ARCHIVE_BLOB_INSERT;</span>
+<span class="nc" id="L403">			Path tempFile = null;</span>
+			try {
+<span class="nc" id="L405">				long size = 0;</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">				try (PreparedStatement pstmt = conn != null </span>
+<span class="nc" id="L407">						? DB.prepareStatement(conn, sql) </span>
+<span class="nc" id="L408">						: DB.prepareStatement(sql, archive.get_TrxName())) {</span>
+<span class="nc" id="L409">					pstmt.setInt(1, archive.getAD_Archive_ID());</span>
+					try {
+<span class="nc" id="L411">		                Path tempDir = Files.createTempDirectory(&quot;attachment_&quot;);</span>
+<span class="nc" id="L412">		                tempFile = tempDir.resolve(archive.getName() + &quot;.zip&quot;);</span>
+<span class="nc" id="L413">		                try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(tempFile))) {</span>
+<span class="nc" id="L414">		                    ZipEntry zipEntry = new ZipEntry(archive.getName());</span>
+<span class="nc" id="L415">		                    zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L416">		                    byte[] buffer = new byte[2048];</span>
+		                    int length;
+<span class="nc" id="L418">		                    InputStream inputStreamToUse = null;</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">		                    if (inputStream != null) {</span>
+<span class="nc" id="L420">		                        inputStreamToUse = inputStream;</span>
+<span class="nc bnc" id="L421" title="All 4 branches missed.">		                    } else if (byteDatas != null &amp;&amp; byteDatas.length &gt; 0) {</span>
+<span class="nc" id="L422">		                    	inputStreamToUse = new ByteArrayInputStream(byteDatas);</span>
+		                    } 
+<span class="nc bnc" id="L424" title="All 2 branches missed.">		                    if (inputStreamToUse != null) {</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">		                        while ((length = inputStreamToUse.read(buffer)) != -1) {</span>
+<span class="nc" id="L426">		                            zos.write(buffer, 0, length);</span>
+<span class="nc" id="L427">		                            size += length;</span>
+		                        }
+		                    }
+		                }
+<span class="nc" id="L431">		            } catch (Exception e) {</span>
+<span class="nc" id="L432">		                throw new AdempiereException(e);</span>
+		            }
+<span class="nc" id="L434">					pstmt.setBlob(2, Files.newInputStream(tempFile));</span>
+<span class="nc" id="L435">					pstmt.executeUpdate();</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">					if (size &gt; 0)</span>
+<span class="nc" id="L437">						archive.setByteData(String.valueOf(size).getBytes(StandardCharsets.US_ASCII));</span>
+					else
+<span class="nc" id="L439">						archive.setByteData(null);</span>
+<span class="nc" id="L440">				} catch (Exception e) {</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">					if (conn != null) {</span>
+<span class="nc" id="L442">						conn.rollback();</span>
+					}
+<span class="nc" id="L444">					throw e;</span>
+				}
+<span class="nc bnc" id="L446" title="All 2 branches missed.">				if (conn != null) {</span>
+<span class="nc" id="L447">					conn.commit();</span>
+				}
+<span class="nc" id="L449">			} finally {</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">				if (conn != null)</span>
+	    		{
+	    			try {
+<span class="nc" id="L453">						conn.setAutoCommit(true);</span>
+<span class="nc" id="L454">					} catch (SQLException e) {</span>
+					}
+	    			try {
+<span class="nc" id="L457">						conn.close();</span>
+<span class="nc" id="L458">					} catch (SQLException e) {</span>
+					}
+	    		}
+<span class="nc bnc" id="L461" title="All 2 branches missed.">				if (tempFile != null) {</span>
+<span class="nc" id="L462">	                File f = tempFile.toFile();</span>
+<span class="nc bnc" id="L463" title="All 2 branches missed.">	                if (f.exists()) {</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">	                    if (!f.delete())</span>
+<span class="nc" id="L465">	                        f.deleteOnExit();;</span>
+	                }
+	            }
+			}
+<span class="nc" id="L469">		} catch (Exception e) {</span>
+<span class="nc" id="L470">			archive.setByteData(null);</span>
+<span class="nc" id="L471">			throw new RuntimeException(e);</span>
+		} finally {
+<span class="nc bnc" id="L473" title="All 2 branches missed.">			if(out != null){</span>
+				try {
+<span class="nc" id="L475">					out.close();</span>
+<span class="nc" id="L476">				} catch (Exception e) {	}</span>
+			}
+		}
+<span class="nc" id="L479">	}</span>
+	
+	@Override
+	public boolean deleteArchive(MArchive archive, MStorageProvider prov) {
+<span class="nc" id="L483">		DB.executeUpdateEx(AD_ARCHIVE_BLOB_DELETE, new Object[] {archive.getAD_Archive_ID()}, archive.get_TrxName());</span>
+<span class="nc" id="L484">		return true;</span>
+	}
+
+	@Override
+	public boolean isPendingFlush() {
+<span class="nc bnc" id="L489" title="All 6 branches missed.">		return (buffer != null &amp;&amp; buffer.length &gt; 0) || bufferInputStream != null;</span>
+	}
+
+	@Override
+	public void flush(MArchive archive, MStorageProvider prov) {
+		try {
+<span class="nc bnc" id="L495" title="All 6 branches missed.">			if ((buffer != null &amp;&amp; buffer.length &gt; 0) || bufferInputStream != null) {</span>
+<span class="nc" id="L496">				write(archive, prov, buffer, bufferInputStream);			</span>
+			}
+<span class="nc" id="L498">		} finally {</span>
+<span class="nc" id="L499">			buffer = null;</span>
+<span class="nc" id="L500">			bufferInputStream = null;</span>
+		}
+<span class="nc" id="L502">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,569 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PackInHandler.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.pipo</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.pipo2</a> &gt; <span class="el_source">PackInHandler.java</span></div><h1>PackInHandler.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 Adempiere, Inc. All Rights Reserved.               *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *                                                                            *
+ * Copyright (C) 2004 Marco LOMBARDO. lombardo@mayking.com                    *
+ * Contributor: Robert KLEIN. robeklein@hotmail.com                           *
+ * Contributor: Tim Heath                                                     *
+ * Contributor: Low Heng Sin  hengsin@avantz.com                              *
+ *****************************************************************************/
+
+package org.adempiere.pipo2;
+
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.Stack;
+import java.util.logging.Level;
+
+import org.adempiere.base.event.EventManager;
+import org.adempiere.base.event.IEventTopics;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.pipo2.exception.DatabaseAccessException;
+import org.compiere.model.MColumn;
+import org.compiere.model.MPackageImp;
+import org.compiere.model.MRole;
+import org.compiere.model.MTable;
+import org.compiere.model.Query;
+import org.compiere.model.X_AD_Package_Imp;
+import org.compiere.model.X_AD_Package_Imp_Inst;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Trx;
+import org.compiere.util.TrxEventListener;
+import org.compiere.util.Util;
+import org.xml.sax.Attributes;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.AttributesImpl;
+import org.xml.sax.helpers.DefaultHandler;
+
+/**
+ * SAX Handler for parsing XML description of the GUI.
+ *
+ * @author Marco LOMBARDO, lombardo@mayking.com
+ * @author Robert KLEIN, robeklein@hotmailo
+ *
+ * Contributor: William G. Heath - Import of workflows and dynamic validations
+ */
+public class PackInHandler extends DefaultHandler {
+
+	/**
+     * 	PackInHandler Handler
+     */
+<span class="nc" id="L67">    public PackInHandler () {</span>
+<span class="nc" id="L68">    	setupHandlers();</span>
+<span class="nc" id="L69">    }   // PackInHandler</span>
+
+    /** Set this if you want to update Dictionary  */
+<span class="nc" id="L72">    private boolean m_updateDictionary = false;</span>
+<span class="nc" id="L73">    private String packageDirectory = null;</span>
+<span class="nc" id="L74">    private int AD_Package_Imp_ID=0;</span>
+<span class="nc" id="L75">	private int AD_Package_Imp_Inst_ID=0;</span>
+<span class="nc" id="L76">    private static final CLogger log = CLogger.getCLogger(PackInHandler.class);</span>
+<span class="nc" id="L77">	private boolean isInit = false;</span>
+<span class="nc" id="L78">	private String packageStatus = MPackageImp.PACKAGE_STATUS_INSTALLING;</span>
+<span class="nc" id="L79">	private PIPOContext m_ctx = null;</span>
+
+<span class="nc" id="L81">	private IHandlerRegistry handlerRegistry = null;</span>
+<span class="nc" id="L82">	private List&lt;DeferEntry&gt; defer = new ArrayList&lt;DeferEntry&gt;();</span>
+<span class="nc" id="L83">	private List&lt;Integer&gt; deferFK = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc" id="L84">	private Stack&lt;Element&gt; stack = new Stack&lt;Element&gt;();</span>
+	private PackIn packIn;
+<span class="nc" id="L86">	private int elementProcessed = 0;</span>
+<span class="nc" id="L87">	private boolean isUpdateRoleAccess = false;</span>
+
+	private void init() throws SAXException {
+
+<span class="nc" id="L91">		packageDirectory = packIn.getPackageDirectory();</span>
+<span class="nc" id="L92">		m_updateDictionary = packIn.isUpdateDictionary();</span>
+
+<span class="nc bnc" id="L94" title="All 2 branches missed.">		if (m_ctx == null)</span>
+<span class="nc" id="L95">			m_ctx = new PIPOContext();</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">		if (m_ctx.trx == null)</span>
+<span class="nc" id="L97">			m_ctx.trx = Trx.get(&quot;PackIn&quot;, true);</span>
+
+<span class="nc" id="L99">		isInit=true;</span>
+<span class="nc" id="L100">	}</span>
+
+	private void setupHandlers() {
+<span class="nc" id="L103">		handlerRegistry = new OSGiHandlerRegistry();</span>
+<span class="nc" id="L104">	}</span>
+
+    /**
+     * 	Receive notification of the start of an element.
+     *
+     * 	@param uri namespace
+     * 	@param localName simple name
+     * 	@param qName qualified name
+     * 	@param atts attributes
+     * 	@throws org.xml.sax.SAXException
+     */
+	public void startElement (String uri, String localName, String qName, Attributes atts)
+	throws org.xml.sax.SAXException {
+
+		// Initialize the handler
+<span class="nc bnc" id="L119" title="All 2 branches missed.">		if (isInit == false){</span>
+<span class="nc" id="L120">			init();</span>
+		}
+
+		// idempiere
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (qName.equals(&quot;idempiere&quot;))</span>
+		{
+<span class="nc" id="L126">			String updateDictionary = atts.getValue(&quot;UpdateDictionary&quot;);</span>
+<span class="nc bnc" id="L127" title="All 4 branches missed.">			if (updateDictionary != null &amp;&amp; updateDictionary.equalsIgnoreCase(&quot;true&quot;))</span>
+			{
+<span class="nc" id="L129">				m_updateDictionary = true;</span>
+			}
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;idempiere updateMode=&quot;+m_updateDictionary);</span>
+
+			//check client
+<span class="nc" id="L134">			String clientAttribute = atts.getValue(&quot;Client&quot;);</span>
+<span class="nc" id="L135">			String[] clientComponent = clientAttribute.split(&quot;[-]&quot;);</span>
+<span class="nc" id="L136">			int clientId = Integer.parseInt(clientComponent[0]);</span>
+<span class="nc bnc" id="L137" title="All 4 branches missed.">			if (clientId == 0 &amp;&amp; Env.getAD_Client_ID(m_ctx.ctx) &gt; 0) {</span>
+<span class="nc" id="L138">				throw new RuntimeException(&quot;Package is created for System, not Tenant&quot;);</span>
+<span class="nc bnc" id="L139" title="All 4 branches missed.">			} else if (clientId &gt; 0 &amp;&amp; Env.getAD_Client_ID(m_ctx.ctx) == 0) {</span>
+<span class="nc" id="L140">				throw new RuntimeException(&quot;Package is created for Tenant, not System&quot;);</span>
+			}
+
+			// Update Summary Package History Table
+<span class="nc" id="L144">			int PK_preInstalled=0;</span>
+
+<span class="nc" id="L146">			String packageName = packIn.getPackageName();</span>
+<span class="nc bnc" id="L147" title="All 4 branches missed.">			if (packageName == null || packageName.trim().length() == 0)</span>
+			{
+<span class="nc" id="L149">				packageName = atts.getValue(&quot;Name&quot;);</span>
+			}
+<span class="nc" id="L151">			String packageVersion = packIn.getPackageVersion();</span>
+<span class="nc bnc" id="L152" title="All 4 branches missed.">			if (packageVersion == null || packageVersion.trim().length() == 0)</span>
+			{
+<span class="nc" id="L154">				packageVersion = atts.getValue(&quot;Version&quot;);</span>
+			}
+
+<span class="nc" id="L157">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L158">			ResultSet rs = null;</span>
+			try {
+<span class="nc" id="L160">				pstmt = DB.prepareStatement(&quot;SELECT AD_PACKAGE_IMP_INST_ID FROM AD_PACKAGE_IMP_INST WHERE NAME =? AND PK_VERSION =?&quot;, null);</span>
+<span class="nc" id="L161">				pstmt.setString(1,packageName);</span>
+<span class="nc" id="L162">				pstmt.setString(2,packageVersion);</span>
+<span class="nc" id="L163">				rs = pstmt.executeQuery();</span>
+
+<span class="nc bnc" id="L165" title="All 2 branches missed.">				if (rs.next())</span>
+				{
+<span class="nc" id="L167">					PK_preInstalled = rs.getInt(1);</span>
+				}
+<span class="nc" id="L169">			} catch (Exception e) {</span>
+<span class="nc" id="L170">				throw new DatabaseAccessException(e);</span>
+			} finally {
+<span class="nc" id="L172">				DB.close(rs, pstmt);</span>
+			}
+
+<span class="nc" id="L175">			X_AD_Package_Imp packageImp = new X_AD_Package_Imp(m_ctx.ctx, 0, null);</span>
+<span class="nc" id="L176">			packageImp.setAD_Org_ID(Env.getAD_Org_ID(m_ctx.ctx));</span>
+<span class="nc" id="L177">			packageImp.setReleaseNo(atts.getValue(&quot;CompVer&quot;));</span>
+<span class="nc" id="L178">			packageImp.setPK_Version(packageVersion);</span>
+<span class="nc" id="L179">			packageImp.setVersion(atts.getValue(&quot;DataBase&quot;));</span>
+<span class="nc" id="L180">			packageImp.setDescription(atts.getValue(&quot;Description&quot;).replace(&quot;'&quot;,&quot;''&quot;));</span>
+<span class="nc" id="L181">			packageImp.setName(packageName);</span>
+<span class="nc" id="L182">			packageImp.setCreator(atts.getValue(&quot;Creator&quot;));</span>
+<span class="nc" id="L183">			packageImp.setCreatorContact(atts.getValue(&quot;CreatorContact&quot;));</span>
+<span class="nc" id="L184">			packageImp.setPK_Status(packageStatus);</span>
+<span class="nc" id="L185">			packageImp.setAD_Package_Imp_Proc_ID(packIn.getAD_Package_Imp_Proc().getAD_Package_Imp_Proc_ID());</span>
+
+<span class="nc" id="L187">			packageImp.saveEx();</span>
+<span class="nc" id="L188">			AD_Package_Imp_ID = packageImp.getAD_Package_Imp_ID();</span>
+
+<span class="nc bnc" id="L190" title="All 2 branches missed.">			if ( PK_preInstalled &lt;= 0){</span>
+				//Insert Package into package install log
+
+<span class="nc" id="L193">				X_AD_Package_Imp_Inst packageInst = new X_AD_Package_Imp_Inst(m_ctx.ctx, 0, null);</span>
+<span class="nc" id="L194">				packageInst.setAD_Org_ID(Env.getAD_Org_ID(m_ctx.ctx));</span>
+<span class="nc" id="L195">				packageInst.setReleaseNo(atts.getValue(&quot;CompVer&quot;));</span>
+<span class="nc" id="L196">				packageInst.setPK_Version(atts.getValue(&quot;Version&quot;));</span>
+<span class="nc" id="L197">				packageInst.setVersion(atts.getValue(&quot;DataBase&quot;));</span>
+<span class="nc" id="L198">				packageInst.setDescription(atts.getValue(&quot;Description&quot;).replace(&quot;'&quot;,&quot;''&quot;));</span>
+<span class="nc" id="L199">				packageInst.setName(atts.getValue(&quot;Name&quot;));</span>
+<span class="nc" id="L200">				packageInst.setCreator(atts.getValue(&quot;Creator&quot;));</span>
+<span class="nc" id="L201">				packageInst.setCreatorContact(atts.getValue(&quot;CreatorContact&quot;));</span>
+<span class="nc" id="L202">				packageInst.setPK_Status(packageStatus);</span>
+<span class="nc" id="L203">				packageInst.saveEx();</span>
+<span class="nc" id="L204">				AD_Package_Imp_Inst_ID = packageInst.get_ID();</span>
+<span class="nc" id="L205">			} else {</span>
+				//Update package list with package status
+<span class="nc" id="L207">				AD_Package_Imp_Inst_ID = PK_preInstalled;</span>
+
+<span class="nc" id="L209">				X_AD_Package_Imp_Inst packageInst = new X_AD_Package_Imp_Inst(m_ctx.ctx, AD_Package_Imp_Inst_ID, null);</span>
+<span class="nc" id="L210">				packageInst.setPK_Status(packageStatus);</span>
+<span class="nc" id="L211">				packageInst.saveEx();</span>
+			}
+
+<span class="nc" id="L214">			Env.setContext(m_ctx.ctx, &quot;AD_Package_Imp_ID&quot;, String.valueOf(AD_Package_Imp_ID));</span>
+<span class="nc" id="L215">			Env.setContext(m_ctx.ctx, &quot;UpdateMode&quot;, m_updateDictionary);</span>
+<span class="nc" id="L216">			Env.setContext(m_ctx.ctx, &quot;PackageDirectory&quot;, packageDirectory);</span>
+<span class="nc" id="L217">			m_ctx.packIn = packIn;</span>
+<span class="nc" id="L218">		} else {</span>
+<span class="nc" id="L219">			Element e = new Element(uri, localName, qName, new AttributesImpl(atts));</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">			if (stack.size() &gt; 0)</span>
+			{
+<span class="nc" id="L222">				e.parent = stack.peek();</span>
+<span class="nc" id="L223">				String reference = atts.getValue(&quot;type&quot;);</span>
+<span class="nc bnc" id="L224" title="All 4 branches missed.">				if (reference == null || reference.equals(IHandlerRegistry.ELEMENT_TYPE_PROPERTIES))</span>
+				{
+<span class="nc" id="L226">					e.parent.properties.put(qName, e);</span>
+<span class="nc" id="L227">				}</span>
+				else
+				{
+<span class="nc" id="L230">					e.parent.childrens.add(e);</span>
+				}
+			}
+<span class="nc" id="L233">			stack.push(e);</span>
+		}
+<span class="nc" id="L235">	}   // startElement</span>
+
+	private void processElement(Element element) throws SAXException
+	{
+<span class="nc" id="L239">		ElementHandler handler = handlerRegistry.getHandler(element);</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">		if (handler != null)</span>
+<span class="nc" id="L241">			handler.startElement(m_ctx, element);</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">		if (element.defer)</span>
+		{
+<span class="nc" id="L244">			defer.add(new DeferEntry(element, true));</span>
+		}
+<span class="nc bnc" id="L246" title="All 2 branches missed.">		if (element.deferFKColumnID &gt; 0)</span>
+		{
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if (! deferFK.contains(element.deferFKColumnID))</span>
+<span class="nc" id="L249">				deferFK.add(element.deferFKColumnID);</span>
+		}
+<span class="nc bnc" id="L251" title="All 2 branches missed.">		if (element.requireRoleAccessUpdate) {</span>
+<span class="nc" id="L252">			isUpdateRoleAccess = true;</span>
+		}
+
+<span class="nc bnc" id="L255" title="All 2 branches missed.">		for (Element childElement : element.childrens)</span>
+		{
+<span class="nc" id="L257">			processElement(childElement);</span>
+		}
+
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		if (element.defer) {</span>
+<span class="nc" id="L261">			defer.add(new DeferEntry(element, false));</span>
+<span class="nc" id="L262">		} else {</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">    		if (handler != null)</span>
+<span class="nc" id="L264">    			handler.endElement(m_ctx, element);</span>
+<span class="nc bnc" id="L265" title="All 4 branches missed.">    		if (element.defer || element.deferEnd)</span>
+<span class="nc" id="L266">				defer.add(new DeferEntry(element, false));</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">    		else if (!element.skip) {</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">    			if (log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L269">    				log.info(&quot;Processed: &quot; + element.getElementValue() + &quot; - &quot; + element.attributes.getValue(0));</span>
+<span class="nc" id="L270">    			elementProcessed++;</span>
+    		}
+		}
+<span class="nc" id="L273">	}</span>
+
+	/**
+	 * @see org.xml.sax.helpers.DefaultHandler#characters(char[], int, int)
+	 */
+	@Override
+	public void characters(char[] ch, int start, int length)
+			throws SAXException {
+<span class="nc bnc" id="L281" title="All 4 branches missed.">		if (stack.size() &gt; 0 &amp;&amp; length &gt; 0)</span>
+		{
+<span class="nc" id="L283">			Element e = stack.peek();</span>
+<span class="nc" id="L284">			e.contents.append(ch, start, length);</span>
+		}
+<span class="nc" id="L286">	}</span>
+
+    /**
+     *	Receive notification of the end of an element.
+     * 	@param uri namespace
+     * 	@param localName simple name
+     * 	@param qName qualified name
+     * 	@throws SAXException
+     */
+    public void endElement (String uri, String localName, String qName) throws SAXException {
+    	// Check namespace.
+
+<span class="nc" id="L298">    	String elementValue = null;</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">    	if (&quot;&quot;.equals (uri))</span>
+<span class="nc" id="L300">    		elementValue = qName;</span>
+    	else
+<span class="nc" id="L302">    		elementValue = uri + localName;</span>
+
+<span class="nc bnc" id="L304" title="All 2 branches missed.">    	if (elementValue.equals(&quot;idempiere&quot;)){</span>
+<span class="nc" id="L305">    		processDeferElements();</span>
+
+<span class="nc" id="L307">    		processDeferFKElements();</span>
+    		
+<span class="nc" id="L309">    		updateRoleAccess();</span>
+
+<span class="nc bnc" id="L311" title="All 2 branches missed.">    		if (getUnresolvedCount() &gt; 0) {</span>
+<span class="nc" id="L312">    			packageStatus = MPackageImp.PACKAGE_STATUS_UNRESOLVED;</span>
+<span class="nc" id="L313">    		} else {</span>
+<span class="nc" id="L314">    			packageStatus = MPackageImp.PACKAGE_STATUS_COMPLETED;</span>
+<span class="nc" id="L315">    			packIn.setSuccess(true);</span>
+    		}
+<span class="nc" id="L317">    		packIn.getNotifier().addStatusLine(packageStatus);</span>
+
+<span class="nc" id="L319">    		updPackageImp(m_ctx.trx.getTrxName()); // do not set success until commit on PackInProcess, still can fail</span>
+<span class="nc" id="L320">    		updPackageImpInst(m_ctx.trx.getTrxName());</span>
+
+    		//reset
+<span class="nc" id="L323">    		setupHandlers();</span>
+<span class="nc" id="L324">    	} else {</span>
+<span class="nc" id="L325">    		Element e = stack.pop();</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">    		if (stack.isEmpty())</span>
+    		{
+    			try {
+<span class="nc" id="L329">    				processElement(e);</span>
+<span class="nc" id="L330">    			} catch (RuntimeException re) {</span>
+<span class="nc" id="L331">    				packageStatus = MPackageImp.PACKAGE_STATUS_IMPORT_FAILED;</span>
+<span class="nc" id="L332">    				packIn.getNotifier().addStatusLine(packageStatus);</span>
+<span class="nc" id="L333">    	    		updPackageImp(null);</span>
+<span class="nc" id="L334">    	    		throw re;</span>
+<span class="nc" id="L335">    			} catch (SAXException se) {</span>
+<span class="nc" id="L336">    				packageStatus = MPackageImp.PACKAGE_STATUS_IMPORT_FAILED;</span>
+<span class="nc" id="L337">    				packIn.getNotifier().addStatusLine(packageStatus);</span>
+<span class="nc" id="L338">    	    		updPackageImp(null);</span>
+<span class="nc" id="L339">    	    		throw se;</span>
+    			}
+    		}
+    	}
+<span class="nc" id="L343">    }   // endElement</span>
+
+    private void updPackageImp(String trxName) {
+    	// NOTE: Updating out of model to avoid change log insert that can cause locks
+		//Update package history log with package status
+<span class="nc" id="L348">    	DB.executeUpdateEx(&quot;UPDATE AD_Package_Imp SET Processed=?, PK_Status=?, UpdatedBy=?, Updated=getDate() WHERE AD_Package_Imp_ID=?&quot;,</span>
+<span class="nc" id="L349">    			new Object[] {&quot;Y&quot;, packageStatus, Env.getAD_User_ID(m_ctx.ctx), AD_Package_Imp_ID},</span>
+<span class="nc" id="L350">    			trxName);</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">		Trx trx = trxName == null ? null : Trx.get(trxName, false);</span>
+<span class="nc bnc" id="L352" title="All 2 branches missed.">		if (trx == null) {</span>
+<span class="nc" id="L353">			org.osgi.service.event.Event event = EventManager.newEvent(IEventTopics.POST_PACKIN_PACKAGE_IMP, AD_Package_Imp_ID, true);</span>
+<span class="nc" id="L354">			EventManager.getInstance().postEvent(event);</span>
+<span class="nc" id="L355">		} else {</span>
+<span class="nc" id="L356">			TrxEventListener listener = new TrxEventListener() {</span>
+
+				@Override
+				public void afterCommit(Trx trx, boolean success) {
+<span class="nc bnc" id="L360" title="All 2 branches missed.">					if (success) {</span>
+<span class="nc" id="L361">						org.osgi.service.event.Event event = EventManager.newEvent(IEventTopics.POST_PACKIN_PACKAGE_IMP, AD_Package_Imp_ID, true);</span>
+<span class="nc" id="L362">						EventManager.getInstance().sendEvent(event);</span>
+					}
+<span class="nc" id="L364">				}</span>
+
+				@Override
+				public void afterRollback(Trx trx, boolean success) {
+<span class="nc" id="L368">				}</span>
+
+				@Override
+				public void afterClose(Trx trx) {
+<span class="nc" id="L372">					trx.removeTrxEventListener(this);</span>
+<span class="nc" id="L373">				}				</span>
+			};
+<span class="nc" id="L375">			trx.addTrxEventListener(listener);</span>
+		}
+<span class="nc" id="L377">	}</span>
+
+    private void updPackageImpInst(String trxName) {
+    	// NOTE: Updating out of model to avoid change log insert that can cause locks
+<span class="nc" id="L381">    	DB.executeUpdateEx(&quot;UPDATE AD_Package_Imp_Inst SET PK_Status=?, UpdatedBy=?, Updated=getDate() WHERE AD_Package_Imp_Inst_ID=?&quot;,</span>
+<span class="nc" id="L382">    			new Object[] {packageStatus, Env.getAD_User_ID(m_ctx.ctx), AD_Package_Imp_Inst_ID},</span>
+<span class="nc" id="L383">    			trxName);</span>
+<span class="nc" id="L384">	}</span>
+
+	private void processDeferElements() throws SAXException {
+
+<span class="nc bnc" id="L388" title="All 2 branches missed.">    	if (defer.isEmpty()) return;</span>
+
+<span class="nc bnc" id="L390" title="All 2 branches missed.">    	do {</span>
+<span class="nc" id="L391">    		int startSize = defer.size();</span>
+<span class="nc" id="L392">    		List&lt;DeferEntry&gt; tmp = new ArrayList&lt;DeferEntry&gt;(defer);</span>
+<span class="nc" id="L393">    		defer.clear();</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">    		for (DeferEntry d : tmp) {</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">    			if (d.startElement) {</span>
+<span class="nc" id="L396">	    			d.element.defer = false;</span>
+<span class="nc" id="L397">	    			d.element.unresolved = &quot;&quot;;</span>
+<span class="nc" id="L398">	    			d.element.pass++;</span>
+<span class="nc" id="L399">    			} else {</span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">    				if (d.element.deferEnd) {</span>
+<span class="nc" id="L401">    					d.element.deferEnd = false;</span>
+<span class="nc" id="L402">    	    			d.element.unresolved = &quot;&quot;;</span>
+    				}
+    			}
+<span class="nc bnc" id="L405" title="All 2 branches missed.">    			if (log.isLoggable(Level.INFO)) {</span>
+<span class="nc" id="L406">    				log.info(&quot;Processing Element: &quot; + d.element.getElementValue() + &quot; - &quot;</span>
+<span class="nc" id="L407">						+ d.element.attributes.getValue(0));</span>
+    			}
+<span class="nc" id="L409">    			ElementHandler handler = handlerRegistry.getHandler(d.element);</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">    			if (handler != null) {</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">    				if (d.startElement)</span>
+<span class="nc" id="L412">    					handler.startElement(m_ctx, d.element);</span>
+    				else
+<span class="nc" id="L414">    					handler.endElement(m_ctx, d.element);</span>
+    			}
+<span class="nc bnc" id="L416" title="All 2 branches missed.">    			if (d.element.defer)</span>
+<span class="nc" id="L417">    				defer.add(d);</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">    			else if (!d.startElement) {</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">    				if (d.element.deferEnd)</span>
+<span class="nc" id="L420">    					defer.add(d);</span>
+    				else {
+<span class="nc bnc" id="L422" title="All 2 branches missed.">	    				if (log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L423">	    					log.info(&quot;Imported Defer Element: &quot; + d.element.getElementValue() + &quot; - &quot;</span>
+<span class="nc" id="L424">	    							+ d.element.attributes.getValue(0));</span>
+<span class="nc" id="L425">	    				elementProcessed++;</span>
+    				}
+    			}
+    		}
+<span class="nc" id="L429">    		int endSize = defer.size();</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">    		if (startSize == endSize) break;</span>
+<span class="nc" id="L431">    	} while (defer.size() &gt; 0);</span>
+<span class="nc" id="L432">    }</span>
+
+    private void processDeferFKElements() throws SAXException {
+
+<span class="nc bnc" id="L436" title="All 2 branches missed.">    	if (deferFK.isEmpty())</span>
+<span class="nc" id="L437">    		return;</span>
+
+<span class="nc bnc" id="L439" title="All 2 branches missed.">    	for (int columnID : deferFK) {</span>
+<span class="nc" id="L440">    		MColumn column = new MColumn(m_ctx.ctx, columnID, m_ctx.trx.getTrxName());</span>
+    		try {
+<span class="nc" id="L442">    			Connection conn = m_ctx.trx.getConnection();</span>
+<span class="nc" id="L443">    			DatabaseMetaData md = conn.getMetaData();</span>
+<span class="nc" id="L444">    			String catalog = DB.getDatabase().getCatalog();</span>
+<span class="nc" id="L445">    			String schema = DB.getDatabase().getSchema();</span>
+<span class="nc" id="L446">    			MTable table = MTable.get(m_ctx.ctx, column.getAD_Table_ID(), m_ctx.trx.getTrxName());</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">    			if (table.get_ID() != column.getAD_Table_ID()) {</span>
+    				// table not found
+<span class="nc" id="L449">    				log.warning(&quot;Table &quot; + column.getAD_Table_ID() + &quot; not found&quot;);</span>
+<span class="nc" id="L450">    				continue;</span>
+    			}
+<span class="nc bnc" id="L452" title="All 2 branches missed.">    			if (table.isView()) {</span>
+<span class="nc" id="L453">    				continue;</span>
+    			}
+<span class="nc" id="L455">    			String tableName = table.getTableName();</span>
+
+<span class="nc" id="L457">        		String fkConstraintSql = MColumn.getForeignKeyConstraintSql(md, catalog, schema, tableName, table, column, false);</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">        		if (! Util.isEmpty(fkConstraintSql)) {</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">        			if (fkConstraintSql.toLowerCase().contains(&quot; ad_sequence(ad_sequence_id)&quot;))</span>
+<span class="nc" id="L460">        				fkConstraintSql = fkConstraintSql + &quot;; COMMIT&quot;;</span>
+<span class="nc bnc" id="L461" title="All 2 branches missed.">        			if (fkConstraintSql.indexOf(DB.SQLSTATEMENT_SEPARATOR) == -1) {</span>
+<span class="nc" id="L462">        				DB.executeUpdate(fkConstraintSql, false, m_ctx.trx.getTrxName());</span>
+<span class="nc" id="L463">        			} else {</span>
+<span class="nc" id="L464">        				String statements[] = fkConstraintSql.split(DB.SQLSTATEMENT_SEPARATOR);</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">        				for (int i = 0; i &lt; statements.length; i++) {</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">        					if (Util.isEmpty(statements[i], true))</span>
+<span class="nc" id="L467">        						continue;</span>
+<span class="nc" id="L468">        					DB.executeUpdateEx(statements[i], m_ctx.trx.getTrxName());</span>
+        				}
+        			}
+        		}
+<span class="nc" id="L472">    		} catch (Exception e) {</span>
+<span class="nc" id="L473">    			throw new AdempiereException(e);</span>
+    		}
+    	}
+<span class="nc" id="L476">    }</span>
+
+	public void setCtx(PIPOContext ctx) {
+<span class="nc" id="L479">		m_ctx = ctx;</span>
+<span class="nc" id="L480">	}</span>
+
+	/**
+	 * @param packIn
+	 */
+	public void setProcess(PackIn packIn) {
+<span class="nc" id="L486">		this.packIn = packIn;</span>
+<span class="nc" id="L487">	}</span>
+
+	/**
+	 * @return number of elements that processed successfully
+	 */
+	public int getElementsProcessed() {
+<span class="nc" id="L493">		return elementProcessed;</span>
+	}
+
+	/**
+	 * @return number of unresolved elements
+	 */
+	public int getUnresolvedCount() {
+<span class="nc" id="L500">		int count = 0;</span>
+<span class="nc bnc" id="L501" title="All 4 branches missed.">		if (defer != null &amp;&amp; !defer.isEmpty()) {</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">			for(DeferEntry entry : defer) {</span>
+<span class="nc bnc" id="L503" title="All 2 branches missed.">				if (!entry.startElement)</span>
+<span class="nc" id="L504">					count++;</span>
+			}
+		}
+<span class="nc" id="L507">		return count;</span>
+	}
+	
+	public void dumpUnresolvedElements() {
+<span class="nc bnc" id="L511" title="All 4 branches missed.">		if (defer != null &amp;&amp; !defer.isEmpty()) {</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">			for(DeferEntry entry : defer) {</span>
+<span class="nc bnc" id="L513" title="All 2 branches missed.">				if (!entry.startElement)</span>
+				{
+<span class="nc" id="L515">					Element e = entry.element;</span>
+<span class="nc bnc" id="L516" title="All 4 branches missed.">					if (e.unresolved == null || e.unresolved.length() == 0)</span>
+<span class="nc" id="L517">						continue;</span>
+					
+<span class="nc" id="L519">					StringBuilder s = new StringBuilder(e.qName);</span>
+<span class="nc" id="L520">					s.append(&quot; [&quot;);</span>
+<span class="nc" id="L521">					Set&lt;String&gt; keys = e.properties.keySet();</span>
+<span class="nc" id="L522">					int i = 0;</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">					for(String key : keys) </span>
+					{
+<span class="nc" id="L525">						Element value = e.properties.get(key);</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">						if (i &gt; 0)</span>
+<span class="nc" id="L527">							s.append(&quot;, &quot;);</span>
+<span class="nc" id="L528">						s.append(key).append(&quot;=&quot;);</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">						if (value.contents != null)</span>
+<span class="nc" id="L530">							s.append(value.contents);</span>
+<span class="nc" id="L531">						i++;</span>
+					}
+<span class="nc" id="L533">					s.append(&quot;]&quot;);</span>
+<span class="nc" id="L534">					s.append(&quot; unresolved &quot;).append(e.unresolved);</span>
+<span class="nc" id="L535">					log.warning(s.toString());</span>
+<span class="nc" id="L536">					packIn.getNotifier().addFailureLine(s.toString());</span>
+				}
+			}
+		}
+<span class="nc" id="L540">	}</span>
+
+	static class DeferEntry {
+		Element element;
+<span class="nc" id="L544">		boolean startElement = false;</span>
+
+<span class="nc" id="L546">		DeferEntry(Element e, boolean b) {</span>
+<span class="nc" id="L547">			element = e;</span>
+<span class="nc" id="L548">			startElement = b;</span>
+<span class="nc" id="L549">		}</span>
+	}
+
+    private void updateRoleAccess() {
+<span class="nc bnc" id="L553" title="All 2 branches missed.">    	if (!isUpdateRoleAccess)</span>
+<span class="nc" id="L554">    		return;</span>
+
+<span class="nc" id="L556">    	int AD_Client_ID=Env.getAD_Client_ID(Env.getCtx());</span>
+    	
+<span class="nc" id="L558">    	List&lt;MRole&gt; roles = new Query(m_ctx.ctx, MRole.Table_Name, &quot;IsManual='N' AND (?=0 OR AD_Client_ID=?)&quot;, m_ctx.trx.getTrxName())</span>
+<span class="nc" id="L559">			.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L560">			.setOrderBy(&quot;AD_Client_ID, Name&quot;)</span>
+<span class="nc" id="L561">			.setParameters(AD_Client_ID, AD_Client_ID)</span>
+<span class="nc" id="L562">			.list();</span>
+<span class="nc bnc" id="L563" title="All 2 branches missed.">    	for (MRole role : roles) {</span>
+<span class="nc" id="L564">        	role.updateAccessRecords(false);</span>
+    	}
+<span class="nc" id="L566">	}</span>
+
+}   // PackInHandler
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

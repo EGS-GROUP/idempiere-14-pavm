@@ -1,0 +1,628 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>RelatedInfoWindow.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.info</a> &gt; <span class="el_source">RelatedInfoWindow.java</span></div><h1>RelatedInfoWindow.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Project: Trek Global ERP                                                   *
+ * Copyright (C) 2009-2018 Trek Global Corporation                			  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.webui.info;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.webui.component.ListModelTable;
+import org.adempiere.webui.component.WListItemRenderer;
+import org.adempiere.webui.component.WListbox;
+import org.adempiere.webui.editor.WEditor;
+import org.compiere.minigrid.ColumnInfo;
+import org.compiere.minigrid.EmbedWinInfo;
+import org.compiere.minigrid.IDColumn;
+import org.compiere.minigrid.UUIDColumn;
+import org.compiere.model.MSysConfig;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.event.Events;
+import org.zkoss.zul.Paging;
+import org.zkoss.zul.event.PagingEvent;
+import org.zkoss.zul.event.ZulEvents;
+import org.zkoss.zul.ext.Sortable;
+
+/**
+ * Related info window implementation (AD_InfoRelated)
+ * @author hengsin
+ */
+public class RelatedInfoWindow implements EventListener&lt;Event&gt;, Sortable&lt;Object&gt;{
+
+	private final static int DEFAULT_PAGE_PRELOAD = 4;
+
+	private EmbedWinInfo info;
+
+	private int m_count;
+	private int pageNo;
+	private List&lt;Object&gt; cache;
+	private int cacheStart;
+	private int cacheEnd;
+	private Object parentId;
+	protected Paging paging;
+<span class="nc" id="L70">	protected Map&lt;String, WEditor&gt; editorMap = new HashMap&lt;String, WEditor&gt;();</span>
+	private InfoWindow parentInfoWindow;
+
+<span class="nc" id="L73">	protected transient CLogger log = CLogger.getCLogger(getClass());</span>
+
+	private ListModelTable model;
+
+	private String m_sqlUserOrder;
+<span class="nc" id="L78">	private boolean m_useDatabasePaging = false;</span>
+
+	private String m_infoSqlCount;
+<span class="nc" id="L81">	protected int numPagePreLoad = MSysConfig.getIntValue(MSysConfig.ZK_INFO_NUM_PAGE_PRELOAD, DEFAULT_PAGE_PRELOAD);</span>
+<span class="nc" id="L82">	protected boolean isHasNextPage = false;</span>
+
+	private ColumnInfo[] columnsLayout;
+
+	/**
+	 * @param info
+	 * @param infoWindow
+	 * @param embeddedPaging
+	 * @param infoSqlCount
+	 * @param layoutEmbedded 
+	 * @param editorMap
+	 */
+<span class="nc" id="L94">	public RelatedInfoWindow(EmbedWinInfo info, InfoWindow infoWindow, Paging embeddedPaging, String infoSqlCount, ColumnInfo[] layoutEmbedded, Map&lt;String, WEditor&gt; editorMap) {</span>
+<span class="nc" id="L95">		this.editorMap = editorMap;</span>
+<span class="nc" id="L96">		this.info = info;</span>
+<span class="nc" id="L97">		parentInfoWindow = infoWindow;</span>
+<span class="nc" id="L98">		this.paging = embeddedPaging;</span>
+<span class="nc" id="L99">		m_infoSqlCount = infoSqlCount;</span>
+
+<span class="nc" id="L101">		columnsLayout = layoutEmbedded;</span>
+<span class="nc" id="L102">	}</span>
+
+	/**
+	 * Refresh info window
+	 * @param id id from parent info window
+	 */
+	public void refresh(Object id) {
+<span class="nc" id="L109">		parentId = id;</span>
+
+
+<span class="nc" id="L112">		cache = null;</span>
+<span class="nc" id="L113">		cacheStart = cacheEnd = 0;</span>
+
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		if (info.getInfowin().isLoadPageNum()) {</span>
+<span class="nc" id="L116">			testCount();</span>
+<span class="nc" id="L117">		} else {</span>
+<span class="nc" id="L118">			m_count = Integer.MAX_VALUE;</span>
+		}
+<span class="nc bnc" id="L120" title="All 4 branches missed.">		m_useDatabasePaging = (m_count &gt; 1000 || m_count &gt; (parentInfoWindow.getPageSize()*4));</span>
+
+<span class="nc" id="L122">		renderItems();</span>
+<span class="nc" id="L123">	}</span>
+
+	private void testCount() {
+<span class="nc" id="L126">		m_count = 0;</span>
+<span class="nc" id="L127">		Object linkPara = null;</span>
+<span class="nc bnc" id="L128" title="All 4 branches missed.">		if (parentId != null &amp;&amp; parentId instanceof IDColumn){</span>
+<span class="nc" id="L129">			IDColumn ID = (IDColumn) parentId;</span>
+<span class="nc" id="L130">			linkPara = ID.getRecord_ID();</span>
+<span class="nc bnc" id="L131" title="All 4 branches missed.">		} else if (parentId != null &amp;&amp; parentId instanceof UUIDColumn) {</span>
+<span class="nc" id="L132">			UUIDColumn ID = (UUIDColumn) parentId;</span>
+<span class="nc" id="L133">			linkPara = ID.getRecord_UU();</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		}else if (parentId != null){</span>
+<span class="nc" id="L135">			linkPara = parentId.toString();</span>
+		}
+<span class="nc bnc" id="L137" title="All 2 branches missed.">		if (linkPara != null) {</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">			if (info.getTypeDataOfLink().equals(String.class)){</span>
+<span class="nc" id="L139">				m_count = DB.getSQLValue((String)null, m_infoSqlCount, (String)linkPara);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">			}else if (info.getTypeDataOfLink().equals(int.class)){</span>
+<span class="nc" id="L141">				m_count = DB.getSQLValue((String)null, m_infoSqlCount, Integer.parseInt(linkPara.toString()));</span>
+<span class="nc" id="L142">			}else{</span>
+<span class="nc" id="L143">				m_count = DB.getSQLValue((String)null, m_infoSqlCount, linkPara);</span>
+			}
+		}
+<span class="nc" id="L146">	}</span>
+
+	private void renderItems() {
+<span class="nc" id="L149">		int pageSize = parentInfoWindow.getPageSize();</span>
+<span class="nc" id="L150">		WListbox contentPanel = (WListbox) info.getInfoTbl();</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">		if (m_count &gt; 0)</span>
+        {
+<span class="nc bnc" id="L153" title="All 4 branches missed.">        	if (m_count &gt; pageSize &amp;&amp; paging != null)</span>
+        	{
+<span class="nc" id="L155">        		paging.setVisible(true);</span>
+<span class="nc" id="L156">	    		paging.setPageSize(pageSize);</span>
+<span class="nc" id="L157">	    		paging.setTotalSize(m_count);</span>
+<span class="nc" id="L158">	    		paging.setDetailed(false);</span>
+<span class="nc" id="L159">	    		paging.addEventListener(ZulEvents.ON_PAGING, this);</span>
+
+<span class="nc" id="L161">    			List&lt;Object&gt; subList = readLine(0, pageSize);</span>
+<span class="nc" id="L162">    			model = new ListModelTable(subList);</span>
+<span class="nc" id="L163">    			model.setSorter(this);</span>
+<span class="nc" id="L164">	            model.setMultiple(false);</span>
+<span class="nc" id="L165">	            contentPanel.setData(model, null);</span>
+
+<span class="nc" id="L167">	            pageNo = 0;</span>
+<span class="nc" id="L168">        	}</span>
+        	else
+        	{
+<span class="nc bnc" id="L171" title="All 2 branches missed.">        		if (paging != null)</span>
+        		{
+<span class="nc" id="L173">        			paging.setTotalSize(m_count);</span>
+<span class="nc" id="L174">        			paging.setActivePage(0);</span>
+<span class="nc" id="L175">        			paging.setVisible(false);</span>
+<span class="nc" id="L176">        			pageNo = 0;</span>
+        		}
+<span class="nc" id="L178">	            model = new ListModelTable(readLine(0, -1));</span>
+<span class="nc" id="L179">	            model.setSorter(this);</span>
+<span class="nc" id="L180">	            model.setMultiple(false);</span>
+<span class="nc" id="L181">	            contentPanel.setData(model, null);</span>
+        	}
+<span class="nc" id="L183">        }</span>
+        else
+        {
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        	if (paging != null)</span>
+    		{
+<span class="nc" id="L188">    			paging.setTotalSize(m_count);</span>
+<span class="nc" id="L189">    			paging.setActivePage(0);</span>
+<span class="nc" id="L190">    			paging.setVisible(false);</span>
+<span class="nc" id="L191">    			pageNo = 0;</span>
+    		}
+<span class="nc" id="L193">        	model = new ListModelTable(new ArrayList&lt;Object&gt;());</span>
+<span class="nc" id="L194">            model.setMultiple(false);</span>
+<span class="nc" id="L195">            contentPanel.setData(model, null);</span>
+        }
+<span class="nc" id="L197">		contentPanel.getParent().invalidate();</span>
+<span class="nc" id="L198">	}</span>
+
+	@Override
+	public void onEvent(Event event) throws Exception {
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (event.getTarget() == paging)</span>
+        {
+<span class="nc" id="L204">			WListbox contentPanel = (WListbox) info.getInfoTbl();</span>
+<span class="nc" id="L205">			int pageSize = parentInfoWindow.getPageSize();</span>
+<span class="nc" id="L206">        	int pgNo = paging.getActivePage();</span>
+<span class="nc bnc" id="L207" title="All 4 branches missed.">        	if (pgNo == paging.getPageCount()-1  &amp;&amp; !info.getInfowin().isLoadPageNum()) {</span>
+<span class="nc" id="L208">        		testCount();</span>
+<span class="nc" id="L209">        		paging.setTotalSize(m_count);</span>
+<span class="nc" id="L210">        		pgNo = paging.getActivePage();</span>
+        	}
+        	
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        	if (pageNo != pgNo)</span>
+        	{
+
+<span class="nc" id="L216">        		contentPanel.clearSelection();</span>
+
+<span class="nc" id="L218">        		pageNo = pgNo;</span>
+<span class="nc" id="L219">        		int start = pageNo * pageSize;</span>
+<span class="nc" id="L220">        		int end = getOverIntValue ((long)start + pageSize, 1);</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">        		if (end &gt;= m_count)</span>
+<span class="nc" id="L222">        			end = m_count;</span>
+<span class="nc" id="L223">        		List&lt;Object&gt; subList = readLine(start, end);</span>
+<span class="nc" id="L224">    			model = new ListModelTable(subList);</span>
+<span class="nc" id="L225">    			model.setSorter(this);</span>
+<span class="nc" id="L226">	            model.setMultiple(false);</span>
+<span class="nc" id="L227">	            contentPanel.setData(model, null);</span>
+
+<span class="nc" id="L229">				contentPanel.setSelectedIndex(0);</span>
+			}
+        }
+<span class="nc" id="L232">	}</span>
+
+	/**
+	 * @return the cacheStart index
+	 */
+	protected int getCacheStart() {
+<span class="nc" id="L238">		return cacheStart;</span>
+	}
+
+	/**
+	 * @param cacheStart set cacheStart index
+	 */
+	private void setCacheStart(int cacheStart) {
+<span class="nc" id="L245">		this.cacheStart = cacheStart;</span>
+<span class="nc" id="L246">	}</span>
+
+	/**
+	 * @return the cacheEnd index
+	 */
+	protected int getCacheEnd() {
+<span class="nc" id="L252">		return cacheEnd;</span>
+	}
+
+	/**
+	 * @param fromIndex
+	 * @param toIndex
+	 * @param line
+	 * @return sublist from line
+	 */
+	private List&lt;Object&gt; getSubList (int fromIndex, int toIndex, List&lt;Object&gt; line){
+<span class="nc bnc" id="L262" title="All 2 branches missed.">    	if (toIndex &gt; line.size())</span>
+<span class="nc" id="L263">    		toIndex = line.size();</span>
+
+<span class="nc bnc" id="L265" title="All 2 branches missed.">    	if (fromIndex &gt;= line.size())</span>
+<span class="nc" id="L266">    		fromIndex = line.size();</span>
+
+    	// case line.size = 0
+<span class="nc bnc" id="L269" title="All 2 branches missed.">    	if (fromIndex &lt; 0)</span>
+<span class="nc" id="L270">    		fromIndex = 0;</span>
+
+<span class="nc" id="L272">    	return line.subList(fromIndex, toIndex);</span>
+    }
+
+	/**
+     * When calculate value at bound, sometime value is overflow by data type. &lt;br/&gt;
+     * This function calculate using higher type to workaround it.
+     * @param overValue
+     * @return int value
+     */
+    private int getOverIntValue (long overValue){
+<span class="nc" id="L282">    	return getOverIntValue (overValue, 0);</span>
+    }
+
+    /**
+     * see {@link #getOverIntValue(long)}. when value over max_value set it to nearest max_value.
+     * @param overValue
+     * @param extra
+     * @return
+     */
+    private int getOverIntValue (long overValue, int extra){
+<span class="nc bnc" id="L292" title="All 2 branches missed.">    	if (overValue &gt;= Integer.MAX_VALUE)</span>
+<span class="nc" id="L293">    		overValue = Integer.MAX_VALUE - extra;</span>
+
+<span class="nc" id="L295">    	return (int)overValue;</span>
+    }
+
+    /**
+     * Loading of data from DB
+     * @param start
+     * @param end
+     * @return list of values read
+     */
+	private List&lt;Object&gt; readLine(int start, int end) {
+<span class="nc" id="L305">		int pageSize = parentInfoWindow.getPageSize();</span>
+
+    	//cacheStart &amp; cacheEnd - 1 based index, start &amp; end - 0 based index
+<span class="nc bnc" id="L308" title="All 4 branches missed.">    	if (getCacheStart() &gt;= 1 &amp;&amp; cacheEnd &gt; getCacheStart())</span>
+    	{
+<span class="nc bnc" id="L310" title="All 2 branches missed.">    		if (m_useDatabasePaging)</span>
+    		{
+<span class="nc bnc" id="L312" title="All 4 branches missed.">    			if (start+1 &gt;= getCacheStart() &amp;&amp; end+1 &lt;= cacheEnd)</span>
+    			{
+<span class="nc bnc" id="L314" title="All 2 branches missed.">    				return end == -1 ? cache : getSubList(start-getCacheStart()+1, end-getCacheStart()+1, cache);</span>
+    			}
+    		}
+    		else
+    		{
+<span class="nc bnc" id="L319" title="All 4 branches missed.">    			if (end &gt;= cacheEnd || end &lt;= 0)</span>
+    			{
+<span class="nc" id="L321">    				end = cacheEnd;</span>
+    			}
+<span class="nc" id="L323">    			return getSubList (start, end, cache);</span>
+    		}
+    	}
+
+<span class="nc" id="L327">    	setCacheStart(getOverIntValue((long)start + 1 - (pageSize * numPagePreLoad)));</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">    	if (getCacheStart() &lt;= 0)</span>
+<span class="nc" id="L329">    		setCacheStart(1);</span>
+
+<span class="nc bnc" id="L331" title="All 2 branches missed.">    	if (end == -1)</span>
+    	{
+<span class="nc" id="L333">    		cacheEnd = m_count;</span>
+<span class="nc" id="L334">    	}</span>
+    	else
+    	{
+<span class="nc" id="L337">    		cacheEnd = getOverIntValue(end + 1 + (pageSize * numPagePreLoad));</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">	    	if (cacheEnd &gt; m_count)</span>
+<span class="nc" id="L339">	    		cacheEnd = m_count;</span>
+    	}
+
+<span class="nc" id="L342">    	cache = new ArrayList&lt;Object&gt;();</span>
+
+<span class="nc" id="L344">    	PreparedStatement m_pstmt = null;</span>
+<span class="nc" id="L345">		ResultSet m_rs = null;</span>
+<span class="nc" id="L346">		String dataSql = null;</span>
+
+<span class="nc" id="L348">		long startTime = System.currentTimeMillis();</span>
+<span class="nc" id="L349">        dataSql = info.getInfoSql();</span>
+        
+        // Other Clause and Order By clause
+<span class="nc" id="L352">        String otherClause = info.getInfowin().getOtherClause();</span>
+<span class="nc" id="L353">        String orderByClause = info.getInfowin().getOrderByClause();</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">        if (!Util.isEmpty(otherClause)) {</span>
+<span class="nc" id="L355">        	dataSql = dataSql + &quot; &quot; + otherClause;</span>
+        }
+<span class="nc bnc" id="L357" title="All 2 branches missed.">        if (!Util.isEmpty(m_sqlUserOrder)) {</span>
+<span class="nc" id="L358">        	dataSql = dataSql + m_sqlUserOrder;</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        	if(!Util.isEmpty(orderByClause))</span>
+<span class="nc" id="L360">        		dataSql = dataSql + &quot;, &quot; + orderByClause;</span>
+<span class="nc" id="L361">        }</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">        else if(!Util.isEmpty(orderByClause)) {</span>
+<span class="nc" id="L363">        	dataSql = dataSql + &quot; ORDER BY &quot; + orderByClause;</span>
+        }
+        //
+<span class="nc" id="L366">        isHasNextPage = false;</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">        if (log.isLoggable(Level.FINER))</span>
+<span class="nc" id="L368">        	log.finer(dataSql);</span>
+<span class="nc" id="L369">        Trx trx = null;</span>
+		try
+		{
+			//https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
+<span class="nc" id="L373">			String trxName = Trx.createTrxName(&quot;RelatedInfoLoad:&quot;);</span>
+<span class="nc" id="L374">			trx  = Trx.get(trxName, true);</span>
+<span class="nc" id="L375">			trx.setDisplayName(getClass().getName()+&quot;_readLine&quot;);</span>
+<span class="nc" id="L376">			m_pstmt = DB.prepareStatement(dataSql, trxName);</span>
+<span class="nc" id="L377">			Object linkPara = null;</span>
+<span class="nc bnc" id="L378" title="All 4 branches missed.">			if (parentId != null &amp;&amp; parentId instanceof IDColumn){</span>
+<span class="nc" id="L379">				IDColumn ID = (IDColumn) parentId;</span>
+<span class="nc" id="L380">				linkPara = ID.getRecord_ID();</span>
+<span class="nc bnc" id="L381" title="All 4 branches missed.">			} else if (parentId != null &amp;&amp; parentId instanceof UUIDColumn) {</span>
+<span class="nc" id="L382">				UUIDColumn ID = (UUIDColumn) parentId;</span>
+<span class="nc" id="L383">				linkPara = ID.getRecord_UU();</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">			}else if (parentId != null){</span>
+<span class="nc" id="L385">				linkPara = parentId.toString();</span>
+			}
+<span class="nc bnc" id="L387" title="All 2 branches missed.">			if (info.getTypeDataOfLink().equals(String.class)){</span>
+<span class="nc" id="L388">				m_pstmt.setString(1, (String)linkPara);</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">			}else if (info.getTypeDataOfLink().equals(int.class)){</span>
+<span class="nc" id="L390">				m_pstmt.setInt(1, Integer.parseInt(linkPara.toString()));</span>
+
+<span class="nc" id="L392">			}else{</span>
+<span class="nc" id="L393">				m_pstmt.setObject(1, linkPara);</span>
+			}
+<span class="nc bnc" id="L395" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L396">				log.fine(&quot;Start query - &quot; + (System.currentTimeMillis()-startTime) + &quot;ms&quot;);</span>
+<span class="nc" id="L397">			m_pstmt.setFetchSize(100);</span>
+<span class="nc" id="L398">			m_rs = m_pstmt.executeQuery();</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L400">				log.fine(&quot;End query - &quot; + (System.currentTimeMillis()-startTime) + &quot;ms&quot;);</span>
+			//skips the row that we dont need if we can't use native db paging
+<span class="nc bnc" id="L402" title="All 6 branches missed.">			if (end &gt; start &amp;&amp; m_useDatabasePaging &amp;&amp; !DB.getDatabase().isPagingSupported())</span>
+			{
+<span class="nc bnc" id="L404" title="All 2 branches missed.">				for (int i = 0; i &lt; getCacheStart() - 1; i++)</span>
+				{
+<span class="nc bnc" id="L406" title="All 2 branches missed.">					if (!m_rs.next())</span>
+<span class="nc" id="L407">						break;</span>
+				}
+			}
+
+<span class="nc" id="L411">			int rowPointer = getCacheStart()-1;</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">			while (m_rs.next())</span>
+			{
+<span class="nc" id="L414">				rowPointer++;</span>
+<span class="nc" id="L415">				cache.add(readData(m_rs));</span>
+				//check now of rows loaded, break if we hit the suppose end
+<span class="nc bnc" id="L417" title="All 4 branches missed.">				if (m_useDatabasePaging &amp;&amp; rowPointer &gt;= cacheEnd)</span>
+				{
+<span class="nc" id="L419">					isHasNextPage = true;</span>
+<span class="nc" id="L420">					break;</span>
+				}
+			}
+<span class="nc" id="L423">		}</span>
+
+<span class="nc" id="L425">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L427">			throw new AdempiereException(e);</span>
+		}
+
+		finally
+		{
+<span class="nc" id="L432">			DB.close(m_rs, m_pstmt);</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">			if (trx != null)</span>
+<span class="nc" id="L434">				trx.close();</span>
+		}
+
+<span class="nc bnc" id="L437" title="All 4 branches missed.">		if (end &gt; cacheEnd || end &lt;= 0)</span>
+		{
+<span class="nc" id="L439">			end = cacheEnd;</span>
+		}
+<span class="nc" id="L441">		validateEndPage ();</span>
+
+<span class="nc bnc" id="L443" title="All 2 branches missed.">		if (end == -1)</span>
+		{
+<span class="nc" id="L445">			return cache;</span>
+		}
+		else
+		{
+<span class="nc" id="L449">			int fromIndex = start-getCacheStart()+1;</span>
+<span class="nc" id="L450">			int toIndex = end-getCacheStart()+1;</span>
+<span class="nc" id="L451">			return getSubList(fromIndex, toIndex, cache);</span>
+		}
+	}
+
+	private  ArrayList&lt;Object&gt; readData(ResultSet rs) throws SQLException {
+
+<span class="nc" id="L457">		int colOffset = 1;  //  columns start with 1</span>
+<span class="nc" id="L458">		ArrayList&lt;Object&gt; data = new ArrayList&lt;Object&gt;();</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">		for (int col = 0; col &lt; columnsLayout.length; col++)</span>
+		{
+<span class="nc" id="L461">			Object value = null;</span>
+<span class="nc" id="L462">			Class&lt;?&gt; c = columnsLayout[col].getColClass();</span>
+<span class="nc" id="L463">			int colIndex = col + colOffset;</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">			if (c == IDColumn.class)</span>
+<span class="nc" id="L465">				value = new IDColumn(rs.getInt(colIndex));</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">			else if (c == UUIDColumn.class)</span>
+<span class="nc" id="L467">				value = new UUIDColumn(rs.getString(colIndex));</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">			else if (c == Boolean.class)</span>
+<span class="nc" id="L469">				value = Boolean.valueOf(&quot;Y&quot;.equals(rs.getString(colIndex)));</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">			else if (c == Timestamp.class)</span>
+<span class="nc" id="L471">				value = rs.getTimestamp(colIndex);</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">			else if (c == BigDecimal.class)</span>
+<span class="nc" id="L473">				value = rs.getBigDecimal(colIndex);</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">			else if (c == Double.class)</span>
+<span class="nc" id="L475">				value = Double.valueOf(rs.getDouble(colIndex));</span>
+<span class="nc bnc" id="L476" title="All 2 branches missed.">			else if (c == Integer.class)</span>
+<span class="nc" id="L477">				value = Integer.valueOf(rs.getInt(colIndex));</span>
+<span class="nc bnc" id="L478" title="All 2 branches missed.">			else if (c == KeyNamePair.class)</span>
+			{
+<span class="nc bnc" id="L480" title="All 2 branches missed.">				if (columnsLayout[col].isKeyPairCol())</span>
+				{
+<span class="nc" id="L482">					String display = rs.getString(colIndex);</span>
+<span class="nc" id="L483">					int key = rs.getInt(colIndex+1);</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">					if (! rs.wasNull()) {</span>
+<span class="nc" id="L485">						value = new KeyNamePair(key, display);</span>
+					}
+<span class="nc" id="L487">					colOffset++;</span>
+<span class="nc" id="L488">				}</span>
+				else
+				{
+<span class="nc" id="L491">					int key = rs.getInt(colIndex);</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">					if (! rs.wasNull()) {</span>
+<span class="nc" id="L493">						WEditor editor = editorMap.get(columnsLayout[col].getColSQL()); // rework this, it will fail</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">						if (editor != null)</span>
+						{
+<span class="nc" id="L496">							editor.setValue(key);</span>
+<span class="nc" id="L497">							value = new KeyNamePair(key, editor.getDisplayTextForGridView(key));</span>
+<span class="nc" id="L498">						}</span>
+						else
+						{
+<span class="nc" id="L501">							value = new KeyNamePair(key, Integer.toString(key));</span>
+						}
+					}
+				}
+<span class="nc" id="L505">			}</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">			else if (c == ValueNamePair.class)</span>
+			{
+<span class="nc" id="L508">				String key = rs.getString(colIndex);</span>
+<span class="nc" id="L509">				WEditor editor = editorMap.get(columnsLayout[col].getColSQL());</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">				if (editor != null)</span>
+				{
+<span class="nc" id="L512">					value = new ValueNamePair(key, editor.getDisplayTextForGridView(key));</span>
+<span class="nc" id="L513">				}</span>
+				else
+				{
+<span class="nc" id="L516">					value = new ValueNamePair(key, key);</span>
+				}
+<span class="nc" id="L518">			}</span>
+			else
+			{
+<span class="nc" id="L521">				value = rs.getString(colIndex);</span>
+			}
+<span class="nc" id="L523">			data.add(value);</span>
+		}
+
+<span class="nc" id="L526">		return data;</span>
+	}
+
+	@Override
+	public void sort(Comparator&lt;Object&gt; cmpr, boolean ascending) {
+
+<span class="nc" id="L532">		WListItemRenderer.ColumnComparator lsc = (WListItemRenderer.ColumnComparator) cmpr;</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">		if (m_useDatabasePaging)</span>
+		{
+<span class="nc" id="L535">			int col = lsc.getColumnIndex();</span>
+<span class="nc" id="L536">			String colsql = columnsLayout[col].getColSQL().trim();</span>
+<span class="nc" id="L537">			int lastSpaceIdx = colsql.lastIndexOf(&quot; &quot;);</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">			if (lastSpaceIdx &gt; 0)</span>
+			{
+<span class="nc" id="L540">				String tmp = colsql.substring(0, lastSpaceIdx).trim();</span>
+<span class="nc" id="L541">				char last = tmp.charAt(tmp.length() - 1);</span>
+<span class="nc bnc" id="L542" title="All 2 branches missed.">				if (tmp.toLowerCase().endsWith(&quot;as&quot;))</span>
+				{
+<span class="nc" id="L544">					colsql = colsql.substring(lastSpaceIdx).trim();</span>
+<span class="nc" id="L545">				}</span>
+<span class="nc bnc" id="L546" title="All 14 branches missed.">				else if (!(last == '*' || last == '-' || last == '+' || last == '/' || last == '&gt;' || last == '&lt;' || last == '='))</span>
+				{
+<span class="nc" id="L548">					tmp = colsql.substring(lastSpaceIdx).trim();</span>
+<span class="nc bnc" id="L549" title="All 4 branches missed.">					if (tmp.startsWith(&quot;\&quot;&quot;) &amp;&amp; tmp.endsWith(&quot;\&quot;&quot;))</span>
+					{
+<span class="nc" id="L551">						colsql = colsql.substring(lastSpaceIdx).trim();</span>
+<span class="nc" id="L552">					}</span>
+					else
+					{
+<span class="nc" id="L555">						boolean hasAlias = true;</span>
+<span class="nc bnc" id="L556" title="All 2 branches missed.">						for(int i = 0; i &lt; tmp.length(); i++)</span>
+						{
+<span class="nc" id="L558">							char c = tmp.charAt(i);</span>
+<span class="nc bnc" id="L559" title="All 2 branches missed.">							if (Character.isLetterOrDigit(c))</span>
+							{
+<span class="nc" id="L561">								continue;</span>
+							}
+							else
+							{
+<span class="nc" id="L565">								hasAlias = false;</span>
+<span class="nc" id="L566">								break;</span>
+							}
+						}
+<span class="nc bnc" id="L569" title="All 2 branches missed.">						if (hasAlias)</span>
+						{
+<span class="nc" id="L571">							colsql = colsql.substring(lastSpaceIdx).trim();</span>
+						}
+					}
+				}
+			}
+<span class="nc" id="L576">			m_sqlUserOrder = &quot; ORDER BY &quot; + colsql;</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">			if (!ascending)</span>
+<span class="nc" id="L578">				m_sqlUserOrder += &quot; DESC &quot;;</span>
+<span class="nc" id="L579">			refresh(parentId);</span>
+<span class="nc" id="L580">		}</span>
+		else
+		{
+<span class="nc" id="L583">			Collections.sort(cache, lsc);</span>
+<span class="nc" id="L584">			renderItems();</span>
+		}
+<span class="nc" id="L586">	}</span>
+
+	@Override
+	public String getSortDirection(Comparator&lt;Object&gt; cmpr) {
+<span class="nc" id="L590">		return &quot;natural&quot;;</span>
+	}
+
+	/**
+     * After query from database, validate paging. &lt;br/&gt;
+     * If end page included in cache, calculate record total. &lt;br/&gt;
+     * If current page is out of cache (no record is query), process query count to detect end page
+     */
+    protected void validateEndPage (){
+<span class="nc bnc" id="L599" title="All 4 branches missed.">    	if (paging == null || info.getInfowin().isLoadPageNum())</span>
+<span class="nc" id="L600">    		return;</span>
+
+<span class="nc bnc" id="L602" title="All 2 branches missed.">    	if (!isHasNextPage){</span>
+<span class="nc" id="L603">    		int pageSize = parentInfoWindow.getPageSize();</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">    		int extraPage = ((cache.size() % pageSize &gt; 0)?1:0);</span>
+<span class="nc" id="L605">    		int pageInCache = cache.size() / pageSize + extraPage;</span>
+
+<span class="nc bnc" id="L607" title="All 4 branches missed.">    		if (pageInCache == 0 || pageInCache &lt;= numPagePreLoad){</span>
+    			// selected page is out of page
+<span class="nc" id="L609">    			testCount();</span>
+<span class="nc bnc" id="L610" title="All 2 branches missed.">    			extraPage = ((m_count  % pageSize &gt; 0)?1:0);</span>
+<span class="nc" id="L611">        		pageInCache = m_count  / pageSize + extraPage;</span>
+    			// this one will set current page to end page
+<span class="nc" id="L613">    			paging.setTotalSize(m_count);</span>
+<span class="nc bnc" id="L614" title="All 2 branches missed.">    			if (m_count &lt;= pageSize)</span>
+<span class="nc" id="L615">    				paging.setVisible(false);</span>
+<span class="nc" id="L616">    			Event pagingEvent = new PagingEvent(&quot;onPaging&quot;, paging, paging.getPageCount() - 1);</span>
+<span class="nc" id="L617">    			Events.postEvent(pagingEvent);</span>
+<span class="nc bnc" id="L618" title="All 2 branches missed.">    		}else if (pageInCache &gt; numPagePreLoad){</span>
+    			// current page isn't end page. but page in cache has end page.
+<span class="nc" id="L620">    			int prePage = pageNo - numPagePreLoad;</span>
+<span class="nc bnc" id="L621" title="All 2 branches missed.">    			int readTotalRecord = (prePage &gt; 0?prePage:0) * pageSize + cache.size();</span>
+<span class="nc" id="L622">    			paging.setTotalSize(readTotalRecord);</span>
+<span class="nc" id="L623">    			m_count = readTotalRecord;</span>
+    		}
+    	}
+<span class="nc" id="L626">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

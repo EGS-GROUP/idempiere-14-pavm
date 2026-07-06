@@ -1,0 +1,927 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Allocation.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.apps.form</a> &gt; <span class="el_source">Allocation.java</span></div><h1>Allocation.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2009 Low Heng Sin                                            *
+ * Copyright (C) 2009 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.apps.form;
+
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.Vector;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.minigrid.IMiniTable;
+import org.compiere.model.MAllocationHdr;
+import org.compiere.model.MAllocationLine;
+import org.compiere.model.MDocType;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MPayment;
+import org.compiere.model.MSysConfig;
+import org.compiere.process.DocAction;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+
+/**
+ * Form to create allocation (C_AllocationHdr and C_AllocationLine).
+ * @author hengsin
+ */
+<span class="nc" id="L45">public class Allocation</span>
+{
+<span class="nc" id="L47">	protected DecimalFormat format = DisplayType.getNumberFormat(DisplayType.Amount);</span>
+
+	/**	Logger			*/
+<span class="nc" id="L50">	protected static final CLogger log = CLogger.getCLogger(Allocation.class);</span>
+
+<span class="nc" id="L52">	private boolean     m_calculating = false;</span>
+<span class="nc" id="L53">	protected int       m_C_Currency_ID = 0;</span>
+<span class="nc" id="L54">	protected int       m_C_Charge_ID = 0;</span>
+<span class="nc" id="L55">	protected int       m_C_DocType_ID = 0;</span>
+<span class="nc" id="L56">	protected int       m_C_BPartner_ID = 0;</span>
+<span class="nc" id="L57">	private int         m_noInvoices = 0;</span>
+<span class="nc" id="L58">	private int         m_noPayments = 0;</span>
+<span class="nc" id="L59">	protected BigDecimal	totalInv = Env.ZERO;</span>
+<span class="nc" id="L60">	protected BigDecimal 	totalPay = Env.ZERO;</span>
+<span class="nc" id="L61">	protected BigDecimal	totalDiff = Env.ZERO;</span>
+	
+<span class="nc" id="L63">	protected Timestamp allocDate = null;</span>
+
+	//  Index	changed if multi-currency
+<span class="nc" id="L66">	private int         i_payment = 7;</span>
+	//
+<span class="nc" id="L68">	private int         i_open = 6;</span>
+<span class="nc" id="L69">	private int         i_discount = 7;</span>
+<span class="nc" id="L70">	private int         i_writeOff = 8; </span>
+<span class="nc" id="L71">	private int         i_applied = 9;</span>
+<span class="nc" id="L72">	private int 		i_overUnder = 10;</span>
+	
+<span class="nc" id="L74">	protected int         	m_AD_Org_ID = 0;</span>
+
+<span class="nc" id="L76">	private ArrayList&lt;Integer&gt;	m_bpartnerCheck = new ArrayList&lt;Integer&gt;(); </span>
+
+	protected void dynInit() throws Exception
+	{
+<span class="nc" id="L80">		m_C_Currency_ID = Env.getContextAsInt(Env.getCtx(), Env.C_CURRENCY_ID);   //  default</span>
+		//
+<span class="nc bnc" id="L82" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Currency=&quot; + m_C_Currency_ID);</span>
+		
+<span class="nc" id="L84">		m_AD_Org_ID = Env.getAD_Org_ID(Env.getCtx());</span>
+<span class="nc" id="L85">		m_C_DocType_ID= MDocType.getDocType(MDocType.DOCBASETYPE_PaymentAllocation);</span>
+		
+<span class="nc" id="L87">	}</span>
+	
+	/**
+	 *  Load Business Partner Info
+	 *  &lt;li&gt;Payments&lt;/li&gt;
+	 *  &lt;li&gt;Invoices&lt;/li&gt;
+	 */
+	public void checkBPartner()
+	{		
+<span class="nc bnc" id="L96" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;BPartner=&quot; + m_C_BPartner_ID + &quot;, Cur=&quot; + m_C_Currency_ID);</span>
+		//  Need to have both values
+<span class="nc bnc" id="L98" title="All 4 branches missed.">		if (m_C_BPartner_ID == 0 || m_C_Currency_ID == 0)</span>
+<span class="nc" id="L99">			return;</span>
+
+		//	Async BPartner Test
+<span class="nc" id="L102">		Integer key = Integer.valueOf(m_C_BPartner_ID);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">		if (!m_bpartnerCheck.contains(key))</span>
+		{
+<span class="nc" id="L105">			new Thread()</span>
+			{
+				public void run()
+				{
+<span class="nc" id="L109">					MPayment.setIsAllocated (Env.getCtx(), m_C_BPartner_ID, null);</span>
+<span class="nc" id="L110">					MInvoice.setIsPaid (Env.getCtx(), m_C_BPartner_ID, null);</span>
+<span class="nc" id="L111">				}</span>
+<span class="nc" id="L112">			}.start();</span>
+<span class="nc" id="L113">			m_bpartnerCheck.add(key);</span>
+		}
+<span class="nc" id="L115">	}</span>
+	
+	/**
+	 * @deprecated
+	 * @param isMultiCurrency
+	 * @param date
+	 * @param paymentTable not used
+	 * @return list of payment record
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public Vector&lt;Vector&lt;Object&gt;&gt; getPaymentData(boolean isMultiCurrency, Object date, IMiniTable paymentTable)
+	{
+<span class="nc" id="L127">		return getPaymentData(isMultiCurrency, (Timestamp) date, (String)null);</span>
+	}
+	
+	/**
+	 * Get unallocated payment records
+	 * @param isMultiCurrency
+	 * @param date
+	 * @param trxName optional trx name
+	 * @return list of payment record
+	 */
+	public Vector&lt;Vector&lt;Object&gt;&gt; getPaymentData(boolean isMultiCurrency, Timestamp date, String trxName)
+	{		
+<span class="nc" id="L139">		return MPayment.getUnAllocatedPaymentData(m_C_BPartner_ID, m_C_Currency_ID, isMultiCurrency, date, m_AD_Org_ID, trxName);</span>
+	}
+	
+	/**
+	 * Get column names for {@link #getPaymentData(boolean, Timestamp, String)}
+	 * @param isMultiCurrency
+	 * @return column name list for payment data
+	 */
+	public Vector&lt;String&gt; getPaymentColumnNames(boolean isMultiCurrency)
+	{	
+		//  Header Info
+<span class="nc" id="L150">		Vector&lt;String&gt; columnNames = new Vector&lt;String&gt;();</span>
+<span class="nc" id="L151">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;Select&quot;));</span>
+<span class="nc" id="L152">		columnNames.add(Msg.translate(Env.getCtx(), &quot;Date&quot;));</span>
+<span class="nc" id="L153">		columnNames.add(Util.cleanAmp(Msg.translate(Env.getCtx(), &quot;DocumentNo&quot;)));</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">		if (isMultiCurrency)</span>
+		{
+<span class="nc" id="L156">			columnNames.add(Msg.getMsg(Env.getCtx(), &quot;TrxCurrency&quot;));</span>
+<span class="nc" id="L157">			columnNames.add(Msg.translate(Env.getCtx(), &quot;Amount&quot;));</span>
+		}
+<span class="nc" id="L159">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;ConvertedAmount&quot;));</span>
+<span class="nc" id="L160">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;OpenAmt&quot;));</span>
+<span class="nc" id="L161">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;AppliedAmt&quot;));</span>
+		
+<span class="nc" id="L163">		return columnNames;</span>
+	}
+	
+	/**
+	 * Set class/type of columns
+	 * @param paymentTable
+	 * @param isMultiCurrency
+	 */
+	public void setPaymentColumnClass(IMiniTable paymentTable, boolean isMultiCurrency)
+	{
+<span class="nc" id="L173">		int i = 0;</span>
+<span class="nc" id="L174">		paymentTable.setColumnClass(i++, Boolean.class, false);         //  0-Selection</span>
+<span class="nc" id="L175">		paymentTable.setColumnClass(i++, Timestamp.class, true);        //  1-TrxDate</span>
+<span class="nc" id="L176">		paymentTable.setColumnClass(i++, String.class, true);           //  2-Value</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">		if (isMultiCurrency)</span>
+		{
+<span class="nc" id="L179">			paymentTable.setColumnClass(i++, String.class, true);       //  3-Currency</span>
+<span class="nc" id="L180">			paymentTable.setColumnClass(i++, BigDecimal.class, true);   //  4-PayAmt</span>
+		}
+<span class="nc" id="L182">		paymentTable.setColumnClass(i++, BigDecimal.class, true);       //  5-ConvAmt</span>
+<span class="nc" id="L183">		paymentTable.setColumnClass(i++, BigDecimal.class, true);       //  6-ConvOpen</span>
+<span class="nc" id="L184">		paymentTable.setColumnClass(i++, BigDecimal.class, false);      //  7-Allocated</span>
+		//
+<span class="nc bnc" id="L186" title="All 2 branches missed.">		i_payment = isMultiCurrency ? 7 : 5;</span>
+		
+
+		//  Table UI
+<span class="nc" id="L190">		paymentTable.autoSize();</span>
+<span class="nc" id="L191">	}</span>
+	
+	/**
+	 * @deprecated
+	 * @param isMultiCurrency
+	 * @param date
+	 * @param invoiceTable not use
+	 * @return list of unpaid invoice data
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public Vector&lt;Vector&lt;Object&gt;&gt; getInvoiceData(boolean isMultiCurrency, Object date, IMiniTable invoiceTable)
+	{
+<span class="nc" id="L203">		return getInvoiceData(isMultiCurrency, (Timestamp) date, (String)null);</span>
+	}
+	
+	/**
+	 * Get unpaid invoices
+	 * @param isMultiCurrency
+	 * @param date
+	 * @param trxName optional trx name
+	 * @return list of unpaid invoice data
+	 */
+	public Vector&lt;Vector&lt;Object&gt;&gt; getInvoiceData(boolean isMultiCurrency, Timestamp date, String trxName)
+	{
+<span class="nc" id="L215">		return getInvoiceData(isMultiCurrency, date, true, trxName);</span>
+	}
+
+	/**
+	 * Get unpaid invoices
+	 * @param isMultiCurrency
+	 * @param date
+	 * @param sameBP
+	 * @param trxName optional trx name
+	 * @return list of unpaid invoice data
+	 */
+	public Vector&lt;Vector&lt;Object&gt;&gt; getInvoiceData(boolean isMultiCurrency, Timestamp date, boolean sameBP, String trxName)
+	{
+<span class="nc" id="L228">		return MInvoice.getUnpaidInvoiceData(isMultiCurrency, date, m_AD_Org_ID, m_C_Currency_ID, m_C_BPartner_ID, sameBP, trxName);</span>
+	}
+
+	/**
+	 * Get column names for {@link #getInvoiceData(boolean, Timestamp, String)}
+	 * @param isMultiCurrency
+	 * @return list of column name/header
+	 */
+	public Vector&lt;String&gt; getInvoiceColumnNames(boolean isMultiCurrency)
+	{
+<span class="nc" id="L238">		return getInvoiceColumnNames(isMultiCurrency, true);</span>
+	}
+
+	/**
+	 * Get column names for {@link #getInvoiceData(boolean, Timestamp, String)}
+	 * @param isMultiCurrency
+	 * @param sameBP
+	 * @return list of column name/header
+	 */
+	public Vector&lt;String&gt; getInvoiceColumnNames(boolean isMultiCurrency, boolean sameBP)
+	{
+		//  Header Info
+<span class="nc" id="L250">		Vector&lt;String&gt; columnNames = new Vector&lt;String&gt;();</span>
+<span class="nc" id="L251">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;Select&quot;));</span>
+<span class="nc" id="L252">		columnNames.add(Msg.translate(Env.getCtx(), &quot;Date&quot;));</span>
+<span class="nc" id="L253">		columnNames.add(Util.cleanAmp(Msg.translate(Env.getCtx(), &quot;DocumentNo&quot;)));</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">		if (isMultiCurrency)</span>
+		{
+<span class="nc" id="L256">			columnNames.add(Msg.getMsg(Env.getCtx(), &quot;TrxCurrency&quot;));</span>
+<span class="nc" id="L257">			columnNames.add(Msg.translate(Env.getCtx(), &quot;Amount&quot;));</span>
+		}
+<span class="nc" id="L259">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;ConvertedAmount&quot;));</span>
+<span class="nc" id="L260">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;OpenAmt&quot;));</span>
+<span class="nc" id="L261">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;Discount&quot;));</span>
+<span class="nc" id="L262">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;WriteOff&quot;));</span>
+<span class="nc" id="L263">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;AppliedAmt&quot;));</span>
+<span class="nc" id="L264">		columnNames.add(Msg.getMsg(Env.getCtx(), &quot;OverUnderAmt&quot;));</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">		if (!sameBP)</span>
+<span class="nc" id="L266">			columnNames.add(Util.cleanAmp(Msg.translate(Env.getCtx(), &quot;Name&quot;)));</span>
+
+<span class="nc" id="L268">		return columnNames;</span>
+	}
+	
+	/**
+	 * Set class type for each column
+	 * @param invoiceTable
+	 * @param isMultiCurrency
+	 */
+	public void setInvoiceColumnClass(IMiniTable invoiceTable, boolean isMultiCurrency)
+	{
+<span class="nc" id="L278">		setInvoiceColumnClass(invoiceTable, isMultiCurrency, true);</span>
+<span class="nc" id="L279">	}</span>
+
+	/**
+	 * Set class type for each column
+	 * @param invoiceTable
+	 * @param isMultiCurrency
+	 * @param sameBP
+	 */
+	public void setInvoiceColumnClass(IMiniTable invoiceTable, boolean isMultiCurrency, boolean sameBP)
+	{
+<span class="nc" id="L289">		int i = 0;</span>
+<span class="nc" id="L290">		invoiceTable.setColumnClass(i++, Boolean.class, false);         //  0-Selection</span>
+<span class="nc" id="L291">		invoiceTable.setColumnClass(i++, Timestamp.class, true);        //  1-TrxDate</span>
+<span class="nc" id="L292">		invoiceTable.setColumnClass(i++, String.class, true);           //  2-Value</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">		if (isMultiCurrency)</span>
+		{
+<span class="nc" id="L295">			invoiceTable.setColumnClass(i++, String.class, true);       //  3-Currency</span>
+<span class="nc" id="L296">			invoiceTable.setColumnClass(i++, BigDecimal.class, true);   //  4-Amt</span>
+		}
+<span class="nc" id="L298">		invoiceTable.setColumnClass(i++, BigDecimal.class, true);       //  5-ConvAmt</span>
+<span class="nc" id="L299">		invoiceTable.setColumnClass(i++, BigDecimal.class, true);       //  6-ConvAmt Open</span>
+<span class="nc" id="L300">		invoiceTable.setColumnClass(i++, BigDecimal.class, false);      //  7-Conv Discount</span>
+<span class="nc" id="L301">		invoiceTable.setColumnClass(i++, BigDecimal.class, false);      //  8-Conv WriteOff</span>
+<span class="nc" id="L302">		invoiceTable.setColumnClass(i++, BigDecimal.class, false);      //  9-Conv OverUnder</span>
+<span class="nc" id="L303">		invoiceTable.setColumnClass(i++, BigDecimal.class, true);		//	10-Conv Applied</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">		if (!sameBP)</span>
+		{
+<span class="nc" id="L306">			invoiceTable.setColumnClass(i++, String.class, true);       //  11-BPName</span>
+		}
+		//  Table UI
+<span class="nc" id="L309">		invoiceTable.autoSize();</span>
+<span class="nc" id="L310">	}</span>
+	
+	/**
+	 * Set column index for single or multi currency table
+	 * @param isMultiCurrency
+	 */
+	protected void prepareForCalculate(boolean isMultiCurrency)
+	{
+<span class="nc bnc" id="L318" title="All 2 branches missed.">		i_open = isMultiCurrency ? 6 : 4;</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">		i_discount = isMultiCurrency ? 7 : 5;</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">		i_writeOff = isMultiCurrency ? 8 : 6;</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">		i_applied = isMultiCurrency ? 9 : 7;</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">		i_overUnder = isMultiCurrency ? 10 : 8;</span>
+<span class="nc" id="L323">	}   //  loadBPartner</span>
+	
+	/**
+	 * Update payment or invoice applied and write off amount
+	 * @param row row to update
+	 * @param col change is trigger by selected or applied column
+	 * @param isInvoice update invoice or payment applied amount
+	 * @param payment
+	 * @param invoice
+	 * @param isAutoWriteOff true to write off difference, false to use over/under for difference
+	 * @return warning message (if any)
+	 */
+	public String writeOff(int row, int col, boolean isInvoice, IMiniTable payment, IMiniTable invoice, boolean isAutoWriteOff)
+	{
+<span class="nc" id="L337">		String msg = &quot;&quot;;</span>
+		/**
+		 *  Setting defaults
+		 */
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		if (m_calculating)  //  Avoid recursive calls</span>
+<span class="nc" id="L342">			return msg;</span>
+<span class="nc" id="L343">		m_calculating = true;</span>
+		
+<span class="nc bnc" id="L345" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;Row=&quot; + row </span>
+<span class="nc" id="L346">			+ &quot;, Col=&quot; + col + &quot;, InvoiceTable=&quot; + isInvoice);</span>
+        
+		//  Payments
+<span class="nc bnc" id="L349" title="All 2 branches missed.">		if (!isInvoice)</span>
+		{
+<span class="nc" id="L351">			BigDecimal open = (BigDecimal)payment.getValueAt(row, i_open);</span>
+<span class="nc" id="L352">			BigDecimal applied = (BigDecimal)payment.getValueAt(row, i_payment);</span>
+			
+<span class="nc bnc" id="L354" title="All 2 branches missed.">			if (col == 0)</span>
+			{
+				// selection of payment row
+<span class="nc bnc" id="L357" title="All 2 branches missed.">				if (((Boolean)payment.getValueAt(row, 0)).booleanValue())</span>
+				{
+<span class="nc" id="L359">					applied = open;   //  Open Amount</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">					if (totalDiff.abs().compareTo(applied.abs()) &lt; 0			// where less is available to allocate than open</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">							&amp;&amp; totalDiff.signum() == -applied.signum() )    	// and the available amount has the opposite sign</span>
+<span class="nc" id="L362">						applied = totalDiff.negate();						// reduce the amount applied to what's available</span>
+					
+<span class="nc" id="L364">				}</span>
+				else    //  de-selected
+<span class="nc" id="L366">					applied = Env.ZERO;</span>
+			}
+			
+			
+<span class="nc bnc" id="L370" title="All 2 branches missed.">			if (col == i_payment)</span>
+			{
+<span class="nc bnc" id="L372" title="All 2 branches missed.">				if (! MSysConfig.getBooleanValue(MSysConfig.ALLOW_APPLY_PAYMENT_TO_CREDITMEMO, false, Env.getAD_Client_ID(Env.getCtx())) </span>
+<span class="nc bnc" id="L373" title="All 4 branches missed.">						&amp;&amp; open.signum() &gt; 0 &amp;&amp; applied.signum() == -open.signum() )</span>
+<span class="nc" id="L374">					applied = applied.negate();</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">				if (! MSysConfig.getBooleanValue(MSysConfig.ALLOW_OVER_APPLIED_PAYMENT, false, Env.getAD_Client_ID(Env.getCtx())))</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">					if ( open.abs().compareTo( applied.abs() ) &lt; 0 )</span>
+<span class="nc" id="L377">						applied = open;</span>
+			}
+			
+<span class="nc" id="L380">			payment.setValueAt(applied, row, i_payment);</span>
+<span class="nc" id="L381">		}</span>
+
+		//  Invoice
+		else 
+		{
+<span class="nc" id="L386">			boolean selected = ((Boolean) invoice.getValueAt(row, 0)).booleanValue();</span>
+<span class="nc" id="L387">			BigDecimal open = (BigDecimal)invoice.getValueAt(row, i_open);</span>
+<span class="nc" id="L388">			BigDecimal discount = (BigDecimal)invoice.getValueAt(row, i_discount);</span>
+<span class="nc" id="L389">			BigDecimal applied = (BigDecimal)invoice.getValueAt(row, i_applied);</span>
+<span class="nc" id="L390">			BigDecimal writeOff = (BigDecimal) invoice.getValueAt(row, i_writeOff);</span>
+<span class="nc" id="L391">			BigDecimal overUnder = (BigDecimal) invoice.getValueAt(row, i_overUnder);</span>
+<span class="nc" id="L392">			int openSign = open.signum();</span>
+			
+<span class="nc bnc" id="L394" title="All 2 branches missed.">			if (col == 0)  //selection</span>
+			{
+				//  selected - set applied amount
+<span class="nc bnc" id="L397" title="All 2 branches missed.">				if ( selected )</span>
+				{
+<span class="nc" id="L399">					applied = open;    //  Open Amount</span>
+<span class="nc" id="L400">					applied = applied.subtract(discount);</span>
+<span class="nc" id="L401">					writeOff = Env.ZERO;  //  to be sure</span>
+<span class="nc" id="L402">					overUnder = Env.ZERO;</span>
+<span class="nc" id="L403">					totalDiff = Env.ZERO;</span>
+
+<span class="nc bnc" id="L405" title="All 2 branches missed.">					if (totalDiff.abs().compareTo(applied.abs()) &lt; 0			// where less is available to allocate than open</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">							&amp;&amp; totalDiff.signum() == applied.signum() )     	// and the available amount has the same sign</span>
+<span class="nc" id="L407">						applied = totalDiff;									// reduce the amount applied to what's available</span>
+
+<span class="nc bnc" id="L409" title="All 2 branches missed.">					if ( isAutoWriteOff )</span>
+<span class="nc" id="L410">						writeOff = open.subtract(applied.add(discount));</span>
+					else
+<span class="nc" id="L412">						overUnder = open.subtract(applied.add(discount));</span>
+<span class="nc" id="L413">				}</span>
+				else    //  de-selected
+				{
+<span class="nc" id="L416">					writeOff = Env.ZERO;</span>
+<span class="nc" id="L417">					applied = Env.ZERO;</span>
+<span class="nc" id="L418">					overUnder = Env.ZERO;</span>
+				}
+			}
+			
+			// check entered values are sensible and possibly auto write-off
+<span class="nc bnc" id="L423" title="All 4 branches missed.">			if ( selected &amp;&amp; col != 0 )</span>
+			{
+				
+				// values should have same sign as open except possibly over/under
+<span class="nc bnc" id="L427" title="All 2 branches missed.">				if ( discount.signum() == -openSign )</span>
+<span class="nc" id="L428">					discount = discount.negate();</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">				if ( writeOff.signum() == -openSign)</span>
+<span class="nc" id="L430">					writeOff = writeOff.negate();</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">				if ( applied.signum() == -openSign )</span>
+<span class="nc" id="L432">					applied = applied.negate();</span>
+				
+				// discount and write-off must be less than open amount
+<span class="nc bnc" id="L435" title="All 2 branches missed.">				if ( discount.abs().compareTo(open.abs()) &gt; 0)</span>
+<span class="nc" id="L436">					discount = open;</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">				if ( writeOff.abs().compareTo(open.abs()) &gt; 0)</span>
+<span class="nc" id="L438">					writeOff = open;</span>
+								
+				/*
+				 * Two rules to maintain:
+				 *
+				 * 1) |writeOff + discount| &lt; |open| 
+				 * 2) discount + writeOff + overUnder + applied = 0
+				 *
+				 *   As only one column is edited at a time and the initial position was one of compliance
+				 *   with the rules, we only need to redistribute the increase/decrease in the edited column to 
+				 *   the others.
+				*/
+<span class="nc" id="L450">				BigDecimal newTotal = discount.add(writeOff).add(applied).add(overUnder);  // all have same sign</span>
+<span class="nc" id="L451">				BigDecimal difference = newTotal.subtract(open);</span>
+				
+				// rule 2
+<span class="nc" id="L454">				BigDecimal diffWOD = writeOff.add(discount).subtract(open);</span>
+										
+<span class="nc bnc" id="L456" title="All 2 branches missed.">				if ( diffWOD.signum() == open.signum() )  // writeOff and discount are too large</span>
+				{
+<span class="nc bnc" id="L458" title="All 2 branches missed.">					if ( col == i_discount )       // then edit writeoff</span>
+					{
+<span class="nc" id="L460">						writeOff = writeOff.subtract(diffWOD);</span>
+<span class="nc" id="L461">					} </span>
+					else                            // col = i_writeoff
+					{
+<span class="nc" id="L464">						discount = discount.subtract(diffWOD);</span>
+					}
+					
+<span class="nc" id="L467">					difference = difference.subtract(diffWOD);</span>
+				}
+				
+				// rule 1
+<span class="nc bnc" id="L471" title="All 2 branches missed.">				if ( col == i_applied )</span>
+<span class="nc" id="L472">					overUnder = overUnder.subtract(difference);</span>
+				else
+<span class="nc" id="L474">					applied = applied.subtract(difference);</span>
+				
+			}
+			
+			//	Warning if write Off &gt; 30%
+<span class="nc bnc" id="L479" title="All 4 branches missed.">			if (isAutoWriteOff &amp;&amp; writeOff.doubleValue()/open.doubleValue() &gt; .30)</span>
+<span class="nc" id="L480">				msg = &quot;AllocationWriteOffWarn&quot;;</span>
+
+<span class="nc" id="L482">			invoice.setValueAt(discount, row, i_discount);</span>
+<span class="nc" id="L483">			invoice.setValueAt(applied, row, i_applied);</span>
+<span class="nc" id="L484">			invoice.setValueAt(writeOff, row, i_writeOff);</span>
+<span class="nc" id="L485">			invoice.setValueAt(overUnder, row, i_overUnder);</span>
+		}
+
+<span class="nc" id="L488">		m_calculating = false;</span>
+		
+<span class="nc" id="L490">		return msg;</span>
+	}
+	
+	/**
+	 * Perform allocation calculation
+	 * @param paymentTable
+	 * @param invoiceTable
+	 * @param isMultiCurrency
+	 */
+	public void calculate(IMiniTable paymentTable, IMiniTable invoiceTable, boolean isMultiCurrency)
+	{
+<span class="nc" id="L501">		allocDate = null;</span>
+<span class="nc" id="L502">		prepareForCalculate(isMultiCurrency);</span>
+<span class="nc" id="L503">		calculatePayment(paymentTable, isMultiCurrency);</span>
+<span class="nc" id="L504">		calculateInvoice(invoiceTable, isMultiCurrency);</span>
+<span class="nc" id="L505">		calculateDifference();</span>
+<span class="nc" id="L506">	}</span>
+	
+	/**
+	 * Calculate total of selected payments 
+	 * @param payment
+	 * @param isMultiCurrency
+	 * @return payment summary
+	 */
+	public String calculatePayment(IMiniTable payment, boolean isMultiCurrency)
+	{
+<span class="nc bnc" id="L516" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;&quot;);</span>
+
+		//  Payment
+<span class="nc" id="L519">		totalPay = Env.ZERO;</span>
+<span class="nc" id="L520">		int rows = payment.getRowCount();</span>
+<span class="nc" id="L521">		m_noPayments = 0;</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">		for (int i = 0; i &lt; rows; i++)</span>
+		{
+<span class="nc bnc" id="L524" title="All 2 branches missed.">			if (((Boolean)payment.getValueAt(i, 0)).booleanValue())</span>
+			{
+<span class="nc" id="L526">				Timestamp ts = (Timestamp)payment.getValueAt(i, 1);</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">				if ( !isMultiCurrency )  // the converted amounts are only valid for the selected date</span>
+<span class="nc" id="L528">					allocDate = TimeUtil.max(allocDate, ts);</span>
+<span class="nc" id="L529">				BigDecimal bd = (BigDecimal)payment.getValueAt(i, i_payment);</span>
+<span class="nc" id="L530">				totalPay = totalPay.add(bd);  //  Applied Pay</span>
+<span class="nc" id="L531">				m_noPayments++;</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Payment_&quot; + i + &quot; = &quot; + bd + &quot; - Total=&quot; + totalPay);</span>
+			}
+		}
+<span class="nc" id="L535">		return getPaymentInfoText();</span>
+	}
+
+	/**
+	 * Get summary info for payment selected and total applied
+	 * @return summary info for payment selected and total applied
+	 */
+	public String getPaymentInfoText() {
+<span class="nc" id="L543">		return String.valueOf(m_noPayments) + &quot; - &quot;</span>
+<span class="nc" id="L544">			+ Msg.getMsg(Env.getCtx(), &quot;Sum&quot;) + &quot;  &quot; + format.format(totalPay) + &quot; &quot;;</span>
+	}
+	
+	/**
+	 * Calculate total of selected invoices 
+	 * @param invoice
+	 * @param isMultiCurrency
+	 * @return invoice summary
+	 */
+	public String calculateInvoice(IMiniTable invoice, boolean isMultiCurrency)
+	{		
+		//  Invoices
+<span class="nc" id="L556">		totalInv = Env.ZERO;</span>
+<span class="nc" id="L557">		int rows = invoice.getRowCount();</span>
+<span class="nc" id="L558">		m_noInvoices = 0;</span>
+
+<span class="nc bnc" id="L560" title="All 2 branches missed.">		for (int i = 0; i &lt; rows; i++)</span>
+		{
+<span class="nc bnc" id="L562" title="All 2 branches missed.">			if (((Boolean)invoice.getValueAt(i, 0)).booleanValue())</span>
+			{
+<span class="nc" id="L564">				Timestamp ts = (Timestamp)invoice.getValueAt(i, 1);</span>
+<span class="nc bnc" id="L565" title="All 2 branches missed.">				if ( !isMultiCurrency )  // converted amounts only valid for selected date</span>
+<span class="nc" id="L566">					allocDate = TimeUtil.max(allocDate, ts);</span>
+<span class="nc" id="L567">				BigDecimal bd = (BigDecimal)invoice.getValueAt(i, i_applied);</span>
+<span class="nc" id="L568">				totalInv = totalInv.add(bd);  //  Applied Inv</span>
+<span class="nc" id="L569">				m_noInvoices++;</span>
+<span class="nc bnc" id="L570" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Invoice_&quot; + i + &quot; = &quot; + bd + &quot; - Total=&quot; + totalPay);</span>
+			}
+		}
+<span class="nc" id="L573">		return getInvoiceInfoText();</span>
+	}
+
+	/**
+	 * Get summary info for invoice selected and total applied
+	 * @return summary info for invoice selected and total applied
+	 */
+	public String getInvoiceInfoText() {
+<span class="nc" id="L581">		return String.valueOf(m_noInvoices) + &quot; - &quot;</span>
+<span class="nc" id="L582">			+ Msg.getMsg(Env.getCtx(), &quot;Sum&quot;) + &quot;  &quot; + format.format(totalInv) + &quot; &quot;;</span>
+	}
+	
+	/**
+	 * Save allocation data
+	 * @param m_WindowNo
+	 * @param dateTrx
+	 * @param payment
+	 * @param invoice
+	 * @param trxName
+	 * @return {@link MAllocationHdr}
+	 */
+	public MAllocationHdr saveData(int m_WindowNo, Timestamp dateTrx, IMiniTable payment, IMiniTable invoice, String trxName)
+	{
+<span class="nc bnc" id="L596" title="All 2 branches missed.">		if (m_noInvoices + m_noPayments == 0)</span>
+<span class="nc" id="L597">			return null;</span>
+
+		//  fixed fields
+<span class="nc" id="L600">		int AD_Client_ID = Env.getContextAsInt(Env.getCtx(), m_WindowNo, &quot;AD_Client_ID&quot;);</span>
+<span class="nc" id="L601">		int AD_Org_ID = Env.getContextAsInt(Env.getCtx(), m_WindowNo, &quot;AD_Org_ID&quot;);</span>
+<span class="nc" id="L602">		int C_BPartner_ID = m_C_BPartner_ID;</span>
+<span class="nc" id="L603">		int C_Order_ID = 0;</span>
+<span class="nc" id="L604">		int C_CashLine_ID = 0;</span>
+<span class="nc" id="L605">		int C_Currency_ID = m_C_Currency_ID;	//	the allocation currency</span>
+		//
+<span class="nc bnc" id="L607" title="All 2 branches missed.">		if (AD_Org_ID == 0)</span>
+		{
+<span class="nc" id="L609">			throw new AdempiereException(&quot;@Org0NotAllowed@&quot;);</span>
+		}
+		//
+<span class="nc bnc" id="L612" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;Client=&quot; + AD_Client_ID + &quot;, Org=&quot; + AD_Org_ID</span>
+<span class="nc" id="L613">			+ &quot;, BPartner=&quot; + C_BPartner_ID + &quot;, Date=&quot; + dateTrx);</span>
+
+		//  Payment - Loop and add them to paymentList/amountList
+<span class="nc" id="L616">		int pRows = payment.getRowCount();</span>
+<span class="nc" id="L617">		ArrayList&lt;Integer&gt; paymentList = new ArrayList&lt;Integer&gt;(pRows);</span>
+<span class="nc" id="L618">		ArrayList&lt;BigDecimal&gt; amountList = new ArrayList&lt;BigDecimal&gt;(pRows);</span>
+<span class="nc" id="L619">		BigDecimal paymentAppliedAmt = Env.ZERO;</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">		for (int i = 0; i &lt; pRows; i++)</span>
+		{
+			//  Payment line is selected
+<span class="nc bnc" id="L623" title="All 2 branches missed.">			if (((Boolean)payment.getValueAt(i, 0)).booleanValue())</span>
+			{
+<span class="nc" id="L625">				KeyNamePair pp = (KeyNamePair)payment.getValueAt(i, 2);   //  Value</span>
+				//  Payment variables
+<span class="nc" id="L627">				int C_Payment_ID = pp.getKey();</span>
+<span class="nc" id="L628">				paymentList.add(Integer.valueOf(C_Payment_ID));</span>
+				//
+<span class="nc" id="L630">				BigDecimal PaymentAmt = (BigDecimal)payment.getValueAt(i, i_payment);  //  Applied Payment</span>
+<span class="nc" id="L631">				amountList.add(PaymentAmt);</span>
+				//
+<span class="nc" id="L633">				paymentAppliedAmt = paymentAppliedAmt.add(PaymentAmt);</span>
+				//
+<span class="nc bnc" id="L635" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;C_Payment_ID=&quot; + C_Payment_ID </span>
+<span class="nc" id="L636">					+ &quot; - PaymentAmt=&quot; + PaymentAmt); // + &quot; * &quot; + Multiplier + &quot; = &quot; + PaymentAmtAbs);</span>
+			}
+		}
+<span class="nc bnc" id="L639" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;Number of Payments=&quot; + paymentList.size() + &quot; - Total=&quot; + paymentAppliedAmt);</span>
+
+		//  Invoices - Loop and generate allocations
+<span class="nc" id="L642">		int iRows = invoice.getRowCount();</span>
+		
+		//	Create Allocation
+<span class="nc" id="L645">		MAllocationHdr alloc = new MAllocationHdr (Env.getCtx(), true,	//	manual</span>
+<span class="nc" id="L646">			dateTrx, C_Currency_ID, Env.getContext(Env.getCtx(), Env.AD_USER_NAME), trxName);</span>
+<span class="nc" id="L647">		alloc.setAD_Org_ID(AD_Org_ID);</span>
+<span class="nc" id="L648">		alloc.setC_DocType_ID(m_C_DocType_ID);</span>
+<span class="nc" id="L649">		alloc.setDescription(alloc.getDescriptionForManualAllocation(m_C_BPartner_ID, trxName));</span>
+<span class="nc" id="L650">		alloc.saveEx();</span>
+		//	For all invoices
+<span class="nc" id="L652">		BigDecimal unmatchedApplied = Env.ZERO;</span>
+<span class="nc bnc" id="L653" title="All 2 branches missed.">		for (int i = 0; i &lt; iRows; i++)</span>
+		{
+			//  Invoice line is selected
+<span class="nc bnc" id="L656" title="All 2 branches missed.">			if (((Boolean)invoice.getValueAt(i, 0)).booleanValue())</span>
+			{
+<span class="nc" id="L658">				KeyNamePair pp = (KeyNamePair)invoice.getValueAt(i, 2);    //  Value</span>
+				//  Invoice variables
+<span class="nc" id="L660">				int C_Invoice_ID = pp.getKey();</span>
+<span class="nc" id="L661">				BigDecimal AppliedAmt = (BigDecimal)invoice.getValueAt(i, i_applied);</span>
+				//  semi-fixed fields (reset after first invoice)
+<span class="nc" id="L663">				BigDecimal DiscountAmt = (BigDecimal)invoice.getValueAt(i, i_discount);</span>
+<span class="nc" id="L664">				BigDecimal WriteOffAmt = (BigDecimal)invoice.getValueAt(i, i_writeOff);</span>
+				//	OverUnderAmt needs to be in Allocation Currency
+<span class="nc" id="L666">				BigDecimal OverUnderAmt = ((BigDecimal)invoice.getValueAt(i, i_open))</span>
+<span class="nc" id="L667">					.subtract(AppliedAmt).subtract(DiscountAmt).subtract(WriteOffAmt);</span>
+				
+<span class="nc bnc" id="L669" title="All 2 branches missed.">				if (log.isLoggable(Level.CONFIG)) log.config(&quot;Invoice #&quot; + i + &quot; - AppliedAmt=&quot; + AppliedAmt);// + &quot; -&gt; &quot; + AppliedAbs);</span>
+				//  loop through all payments until invoice applied				
+<span class="nc bnc" id="L671" title="All 4 branches missed.">				for (int j = 0; j &lt; paymentList.size() &amp;&amp; AppliedAmt.signum() != 0; j++)</span>
+				{
+<span class="nc" id="L673">					int C_Payment_ID = ((Integer)paymentList.get(j)).intValue();</span>
+<span class="nc" id="L674">					BigDecimal PaymentAmt = (BigDecimal)amountList.get(j);</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">					if (PaymentAmt.signum() == AppliedAmt.signum())	// only match same sign (otherwise appliedAmt increases)</span>
+					{												// and not zero (appliedAmt was checked earlier)
+<span class="nc bnc" id="L677" title="All 2 branches missed.">						if (log.isLoggable(Level.CONFIG)) log.config(&quot;.. with payment #&quot; + j + &quot;, Amt=&quot; + PaymentAmt);</span>
+						
+<span class="nc" id="L679">						BigDecimal amount = AppliedAmt;</span>
+<span class="nc bnc" id="L680" title="All 2 branches missed.">						if (amount.abs().compareTo(PaymentAmt.abs()) &gt; 0)  // if there's more open on the invoice</span>
+<span class="nc" id="L681">							amount = PaymentAmt;							// than left in the payment</span>
+						
+						//	Allocation Line
+<span class="nc" id="L684">						MAllocationLine aLine = new MAllocationLine (alloc, amount, </span>
+<span class="nc" id="L685">							DiscountAmt, WriteOffAmt, OverUnderAmt);</span>
+<span class="nc" id="L686">						aLine.setDocInfo(C_BPartner_ID, C_Order_ID, C_Invoice_ID);</span>
+<span class="nc" id="L687">						aLine.setPaymentInfo(C_Payment_ID, C_CashLine_ID);</span>
+<span class="nc" id="L688">						aLine.saveEx();</span>
+
+						//  Apply Discounts and WriteOff only first time
+<span class="nc" id="L691">						DiscountAmt = Env.ZERO;</span>
+<span class="nc" id="L692">						WriteOffAmt = Env.ZERO;</span>
+						//  subtract amount from Payment/Invoice
+<span class="nc" id="L694">						AppliedAmt = AppliedAmt.subtract(amount);</span>
+<span class="nc" id="L695">						PaymentAmt = PaymentAmt.subtract(amount);</span>
+<span class="nc bnc" id="L696" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;Allocation Amount=&quot; + amount + &quot; - Remaining  Applied=&quot; + AppliedAmt + &quot;, Payment=&quot; + PaymentAmt);</span>
+<span class="nc" id="L697">						amountList.set(j, PaymentAmt);  //  update</span>
+					}	//	for all applied amounts
+				}	//	loop through payments for invoice
+				
+<span class="nc bnc" id="L701" title="All 6 branches missed.">				if ( AppliedAmt.signum() == 0 &amp;&amp; DiscountAmt.signum() == 0 &amp;&amp; WriteOffAmt.signum() == 0)</span>
+<span class="nc" id="L702">					continue;</span>
+				else {			// remainder will need to match against other invoices
+<span class="nc" id="L704">					int C_Payment_ID = 0;</span>
+					
+					//	Allocation Line
+<span class="nc" id="L707">					MAllocationLine aLine = new MAllocationLine (alloc, AppliedAmt, </span>
+<span class="nc" id="L708">						DiscountAmt, WriteOffAmt, OverUnderAmt);</span>
+<span class="nc" id="L709">					aLine.setDocInfo(C_BPartner_ID, C_Order_ID, C_Invoice_ID);</span>
+<span class="nc" id="L710">					aLine.setPaymentInfo(C_Payment_ID, C_CashLine_ID);</span>
+<span class="nc" id="L711">					aLine.saveEx();</span>
+<span class="nc bnc" id="L712" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;Allocation Amount=&quot; + AppliedAmt);</span>
+<span class="nc" id="L713">					unmatchedApplied = unmatchedApplied.add(AppliedAmt);</span>
+				}
+			}   //  invoice selected
+		}   //  invoice loop
+
+		// check for unapplied payment amounts (eg from payment reversals)
+<span class="nc bnc" id="L719" title="All 2 branches missed.">		for (int i = 0; i &lt; paymentList.size(); i++)	{</span>
+<span class="nc" id="L720">			BigDecimal payAmt = (BigDecimal) amountList.get(i);</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">			if ( payAmt.signum() == 0 )</span>
+<span class="nc" id="L722">					continue;</span>
+<span class="nc" id="L723">			int C_Payment_ID = ((Integer)paymentList.get(i)).intValue();</span>
+<span class="nc bnc" id="L724" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Payment=&quot; + C_Payment_ID  </span>
+<span class="nc" id="L725">					+ &quot;, Amount=&quot; + payAmt);</span>
+
+			//	Allocation Line
+<span class="nc" id="L728">			MAllocationLine aLine = new MAllocationLine (alloc, payAmt, </span>
+<span class="nc" id="L729">				Env.ZERO, Env.ZERO, Env.ZERO);</span>
+<span class="nc" id="L730">			aLine.setDocInfo(C_BPartner_ID, 0, 0);</span>
+<span class="nc" id="L731">			aLine.setPaymentInfo(C_Payment_ID, 0);</span>
+<span class="nc" id="L732">			aLine.saveEx();</span>
+<span class="nc" id="L733">			unmatchedApplied = unmatchedApplied.subtract(payAmt);</span>
+		}		
+		
+		// check for charge amount
+<span class="nc bnc" id="L737" title="All 4 branches missed.">		if ( m_C_Charge_ID &gt; 0 &amp;&amp; unmatchedApplied.compareTo(Env.ZERO) != 0 )</span>
+		{
+<span class="nc" id="L739">			BigDecimal chargeAmt = totalDiff;</span>
+	
+			//	Allocation Line
+<span class="nc" id="L742">			MAllocationLine aLine = new MAllocationLine (alloc, chargeAmt.negate(), </span>
+<span class="nc" id="L743">				Env.ZERO, Env.ZERO, Env.ZERO);</span>
+<span class="nc" id="L744">			aLine.setC_Charge_ID(m_C_Charge_ID);</span>
+<span class="nc" id="L745">			aLine.setC_BPartner_ID(m_C_BPartner_ID);</span>
+<span class="nc bnc" id="L746" title="All 2 branches missed.">			if (!aLine.save(trxName)) {</span>
+<span class="nc" id="L747">				StringBuilder msg = new StringBuilder(&quot;Allocation Line not saved - Charge=&quot;).append(m_C_Charge_ID);</span>
+<span class="nc" id="L748">				throw new AdempiereException(msg.toString());</span>
+			}
+<span class="nc" id="L750">			unmatchedApplied = unmatchedApplied.add(chargeAmt);</span>
+		}	
+		
+<span class="nc bnc" id="L753" title="All 2 branches missed.">		if ( unmatchedApplied.signum() != 0 )</span>
+<span class="nc" id="L754">			throw new AdempiereException(&quot;Allocation not balanced -- out by &quot; + unmatchedApplied);</span>
+
+		//	Should start WF
+<span class="nc bnc" id="L757" title="All 2 branches missed.">		if (alloc.get_ID() != 0)</span>
+		{
+<span class="nc bnc" id="L759" title="All 2 branches missed.">			if (!alloc.processIt(DocAction.ACTION_Complete))</span>
+<span class="nc" id="L760">				throw new AdempiereException(&quot;Cannot complete allocation: &quot; + alloc.getProcessMsg());</span>
+<span class="nc" id="L761">			alloc.saveEx();</span>
+		}
+		
+		//  Test/Set IsPaid for Invoice - requires that allocation is posted
+<span class="nc bnc" id="L765" title="All 2 branches missed.">		for (int i = 0; i &lt; iRows; i++)</span>
+		{
+			//  Invoice line is selected
+<span class="nc bnc" id="L768" title="All 2 branches missed.">			if (((Boolean)invoice.getValueAt(i, 0)).booleanValue())</span>
+			{
+<span class="nc" id="L770">				KeyNamePair pp = (KeyNamePair)invoice.getValueAt(i, 2);    //  Value</span>
+				//  Invoice variables
+<span class="nc" id="L772">				int C_Invoice_ID = pp.getKey();</span>
+<span class="nc" id="L773">				String sql = &quot;SELECT invoiceOpen(C_Invoice_ID, 0) &quot;</span>
+					+ &quot;FROM C_Invoice WHERE C_Invoice_ID=?&quot;;
+<span class="nc" id="L775">				BigDecimal open = DB.getSQLValueBD(trxName, sql, C_Invoice_ID);</span>
+<span class="nc bnc" id="L776" title="All 4 branches missed.">				if (open != null &amp;&amp; open.signum() == 0)	 {</span>
+<span class="nc" id="L777">					sql = &quot;UPDATE C_Invoice SET IsPaid='Y' &quot;</span>
+<span class="nc" id="L778">						+ &quot;WHERE C_Invoice_ID=&quot; + C_Invoice_ID;</span>
+<span class="nc" id="L779">					int no = DB.executeUpdate(sql, trxName);</span>
+<span class="nc bnc" id="L780" title="All 2 branches missed.">					if (log.isLoggable(Level.CONFIG)) log.config(&quot;Invoice #&quot; + i + &quot; is paid - updated=&quot; + no);</span>
+<span class="nc" id="L781">				} else {</span>
+<span class="nc bnc" id="L782" title="All 2 branches missed.">					if (log.isLoggable(Level.CONFIG)) log.config(&quot;Invoice #&quot; + i + &quot; is not paid - &quot; + open);</span>
+				}
+			}
+		}
+		//  Test/Set Payment is fully allocated
+<span class="nc bnc" id="L787" title="All 2 branches missed.">		for (int i = 0; i &lt; paymentList.size(); i++)</span>
+		{
+<span class="nc" id="L789">			int C_Payment_ID = ((Integer)paymentList.get(i)).intValue();</span>
+<span class="nc" id="L790">			MPayment pay = new MPayment (Env.getCtx(), C_Payment_ID, trxName);</span>
+<span class="nc bnc" id="L791" title="All 2 branches missed.">			if (pay.testAllocation())</span>
+<span class="nc" id="L792">				pay.saveEx();</span>
+<span class="nc bnc" id="L793" title="All 4 branches missed.">			if (log.isLoggable(Level.CONFIG)) log.config(&quot;Payment #&quot; + i + (pay.isAllocated() ? &quot; not&quot; : &quot; is&quot;) </span>
+					+ &quot; fully allocated&quot;);
+		}
+<span class="nc" id="L796">		paymentList.clear();</span>
+<span class="nc" id="L797">		amountList.clear();</span>
+		
+<span class="nc" id="L799">		return alloc;</span>
+	}   //  saveData
+
+	/**
+	 * @return C_BPartner_ID
+	 */
+	public int getC_BPartner_ID() {
+<span class="nc" id="L806">		return m_C_BPartner_ID;</span>
+	}
+
+	/**
+	 * @param C_BPartner_ID
+	 */
+	public void setC_BPartner_ID(int C_BPartner_ID) {
+<span class="nc" id="L813">		this.m_C_BPartner_ID = C_BPartner_ID;</span>
+<span class="nc" id="L814">	}</span>
+
+	/**
+	 * @return C_Currency_ID
+	 */
+	public int getC_Currency_ID() {
+<span class="nc" id="L820">		return m_C_Currency_ID;</span>
+	}
+
+	/**
+	 * @param C_Currency_ID
+	 */
+	public void setC_Currency_ID(int C_Currency_ID) {
+<span class="nc" id="L827">		this.m_C_Currency_ID = C_Currency_ID;</span>
+<span class="nc" id="L828">	}</span>
+
+	/**
+	 * @return C_DocType_ID
+	 */
+	public int getC_DocType_ID() {
+<span class="nc" id="L834">		return m_C_DocType_ID;</span>
+	}
+
+	/**
+	 * @param C_DocType_ID
+	 */
+	public void setC_DocType_ID(int C_DocType_ID) {
+<span class="nc" id="L841">		this.m_C_DocType_ID = C_DocType_ID;</span>
+<span class="nc" id="L842">	}</span>
+
+	/**
+	 * @return C_Charge_ID
+	 */
+	public int getC_Charge_ID() {
+<span class="nc" id="L848">		return m_C_Charge_ID;</span>
+	}
+
+	/**
+	 * @param C_Charge_ID
+	 */
+	public void setC_Charge_ID(int C_Charge_ID) {
+<span class="nc" id="L855">		this.m_C_Charge_ID = C_Charge_ID;</span>
+<span class="nc" id="L856">	}</span>
+
+	/**
+	 * @return AD_Org_ID
+	 */
+	public int getAD_Org_ID() {
+<span class="nc" id="L862">		return m_AD_Org_ID;</span>
+	}
+
+	/**
+	 * @param AD_Org_ID
+	 */
+	public void setAD_Org_ID(int AD_Org_ID) {
+<span class="nc" id="L869">		this.m_AD_Org_ID = AD_Org_ID;</span>
+<span class="nc" id="L870">	}</span>
+
+	/**
+	 * Get number of selected invoice
+	 * @return number of selected invoice
+	 */
+	public int getSelectedInvoiceCount() {
+<span class="nc" id="L877">		return m_noInvoices;</span>
+	}
+
+	/**
+	 * Get number of selected payment
+	 * @return number of selected payment
+	 */
+	public int getSelectedPaymentCount() {
+<span class="nc" id="L885">		return m_noPayments;</span>
+	}
+
+	/**
+	 * Get total of invoice applied amount
+	 * @return total of invoice applied amount
+	 */
+	public BigDecimal getInvoiceAppliedTotal() {
+<span class="nc" id="L893">		return totalInv;</span>
+	}
+
+	/**
+	 * Get total of payment applied amount
+	 * @return total of payment applied amount
+	 */
+	public BigDecimal getPaymentAppliedTotal() {
+<span class="nc" id="L901">		return totalPay;</span>
+	}
+
+	/**
+	 * Is ok to perform allocation
+	 * @return true if all condition is meet to proceed with allocation
+	 */
+	public boolean isOkToAllocate() {
+<span class="nc bnc" id="L909" title="All 4 branches missed.">		return totalDiff.signum() == 0 || getC_Charge_ID() &gt; 0;</span>
+	}
+
+	/**
+	 * Get difference between invoice and payment applied amount
+	 * @return difference between invoice and payment applied amount
+	 */
+	public BigDecimal getTotalDifference() {
+<span class="nc" id="L917">		return totalDiff;</span>
+	}
+
+	/**
+	 * Calculate difference between invoice and payment applied amount
+	 */
+	public void calculateDifference() {
+<span class="nc" id="L924">		totalDiff = totalPay.subtract(totalInv);</span>
+<span class="nc" id="L925">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

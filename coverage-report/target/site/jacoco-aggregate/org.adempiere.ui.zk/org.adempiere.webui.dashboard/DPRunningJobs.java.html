@@ -1,0 +1,318 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DPRunningJobs.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.dashboard</a> &gt; <span class="el_source">DPRunningJobs.java</span></div><h1>DPRunningJobs.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2014 Elaine Tan                                              *
+ * Copyright (C) 2014 Trek Global
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+
+package org.adempiere.webui.dashboard;
+
+import java.lang.ref.WeakReference;
+import java.util.List;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.event.EventManager;
+import org.adempiere.webui.apps.AEnv;
+import org.adempiere.webui.apps.BackgroundJob;
+import org.adempiere.webui.component.FlexVlayout;
+import org.adempiere.webui.component.ToolBarButton;
+import org.adempiere.webui.theme.ThemeManager;
+import org.adempiere.webui.util.Icon;
+import org.adempiere.webui.util.ServerPushTemplate;
+import org.adempiere.webui.util.ZKUpdateUtil;
+import org.compiere.model.MPInstance;
+import org.compiere.model.MProcess;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.idempiere.distributed.IMessageService;
+import org.idempiere.distributed.ITopic;
+import org.idempiere.distributed.ITopicSubscriber;
+import org.osgi.service.event.EventHandler;
+import org.zkoss.zk.ui.Component;
+import org.zkoss.zk.ui.Desktop;
+import org.zkoss.zk.ui.Page;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.event.Events;
+import org.zkoss.zk.ui.util.DesktopCleanup;
+import org.zkoss.zul.A;
+import org.zkoss.zul.Image;
+import org.zkoss.zul.Layout;
+import org.zkoss.zul.Panel;
+import org.zkoss.zul.Panelchildren;
+import org.zkoss.zul.Toolbar;
+
+/**
+ * Dashboard gadget: running background jobs (Run As Job in Process Dialog).
+ */
+public class DPRunningJobs extends DashboardPanel implements EventListener&lt;Event&gt;, EventHandler {
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -8515643315156488709L;
+
+	/** Job link ({@link A}) attribute to store AD_PInstance_ID value */
+	private static final String AD_PINSTANCE_ID_ATTR = &quot;AD_PInstance_ID&quot;;
+	
+	private static TopicSubscriber topicSubscriber;
+
+	private Layout bxJobs;
+
+	/** Login user id */
+	private int AD_User_ID;
+	
+	private WeakReference&lt;Desktop&gt; desktop;
+
+	/** Desktop cleanup listener to call {@link #cleanup()} */
+	private DesktopCleanup listener;
+	
+	/**
+	 * Default constructor
+	 */
+	public DPRunningJobs()
+	{
+<span class="nc" id="L82">		super();</span>
+
+<span class="nc" id="L84">		AD_User_ID = Env.getAD_User_ID(Env.getCtx());</span>
+		
+<span class="nc" id="L86">		Panel panel = new Panel();</span>
+<span class="nc" id="L87">		this.appendChild(panel);</span>
+
+<span class="nc" id="L89">		Panelchildren jobsContent = new Panelchildren();</span>
+<span class="nc" id="L90">		panel.appendChild(jobsContent);</span>
+<span class="nc" id="L91">		bxJobs = new FlexVlayout();</span>
+<span class="nc" id="L92">		ZKUpdateUtil.setHflex(bxJobs, &quot;1&quot;);</span>
+<span class="nc" id="L93">		this.setSclass(&quot;recentitems-box&quot;);</span>
+<span class="nc" id="L94">		jobsContent.appendChild(bxJobs);</span>
+		
+<span class="nc" id="L96">		Toolbar jobsToolbar = new Toolbar();</span>
+<span class="nc" id="L97">		this.appendChild(jobsToolbar);</span>
+		
+<span class="nc bnc" id="L99" title="All 2 branches missed.">		if (ThemeManager.isUseFontIconForImage())</span>
+		{
+<span class="nc" id="L101">			ToolBarButton btn = new ToolBarButton();</span>
+<span class="nc" id="L102">			btn.setIconSclass(Icon.getIconSclass(Icon.REFRESH));</span>
+<span class="nc" id="L103">			btn.setSclass(&quot;trash-toolbarbutton&quot;);</span>
+<span class="nc" id="L104">			jobsToolbar.appendChild(btn);</span>
+<span class="nc" id="L105">			btn.setTooltiptext(Util.cleanAmp(Msg.getMsg(Env.getCtx(), &quot;Refresh&quot;)));</span>
+<span class="nc" id="L106">			btn.addEventListener(Events.ON_CLICK, this);</span>
+<span class="nc" id="L107">		}</span>
+		else
+		{
+<span class="nc" id="L110">			Image imgr = new Image(ThemeManager.getThemeResource(&quot;images/Refresh24.png&quot;));</span>
+<span class="nc" id="L111">			jobsToolbar.appendChild(imgr);</span>
+<span class="nc" id="L112">			imgr.setStyle(&quot;text-align: right; cursor: pointer; width:24px; height:24px;&quot;);</span>
+<span class="nc" id="L113">			imgr.setTooltiptext(Util.cleanAmp(Msg.getMsg(Env.getCtx(), &quot;Refresh&quot;)));</span>
+<span class="nc" id="L114">			imgr.addEventListener(Events.ON_CLICK, this);</span>
+		}
+		
+<span class="nc" id="L117">		createTopicSubscriber();</span>
+		
+<span class="nc" id="L119">		listener = new DesktopCleanup() {			</span>
+			@Override
+			public void cleanup(Desktop desktop) throws Exception {
+<span class="nc" id="L122">				DPRunningJobs.this.cleanup();</span>
+<span class="nc" id="L123">			}</span>
+		};
+<span class="nc" id="L125">	}</span>
+	
+	/**
+	 * Perform clean up
+	 */
+	protected void cleanup() 
+	{
+<span class="nc" id="L132">		EventManager.getInstance().unregister(this);</span>
+<span class="nc" id="L133">		desktop = null;</span>
+<span class="nc" id="L134">	}</span>
+
+	/**
+	 * Setup {@link #topicSubscriber}
+	 */
+	private static synchronized void createTopicSubscriber() 
+	{
+<span class="nc bnc" id="L141" title="All 2 branches missed.">		if (topicSubscriber == null) {</span>
+<span class="nc" id="L142">			topicSubscriber = new TopicSubscriber();</span>
+<span class="nc" id="L143">			IMessageService service = Core.getMessageService();</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L145">				ITopic&lt;Integer&gt; topic = service.getTopic(MPInstance.ON_RUNNING_JOB_CHANGED_TOPIC);</span>
+<span class="nc" id="L146">				topic.subscribe(topicSubscriber);</span>
+			}
+		}
+<span class="nc" id="L149">	}</span>
+
+	@Override
+	public void onEvent(Event event) throws Exception 
+	{
+<span class="nc" id="L154">		Component comp = event.getTarget();</span>
+<span class="nc" id="L155">        String eventName = event.getName();</span>
+
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        if (eventName.equals(Events.ON_CLICK))</span>
+<span class="nc" id="L158">            doOnClick(comp);</span>
+<span class="nc" id="L159">	}</span>
+
+	/**
+     * Handle onClick event from Job link/button
+     * @param comp Component
+     */
+	private void doOnClick(Component comp) 
+	{
+<span class="nc bnc" id="L167" title="All 2 branches missed.">		if (comp instanceof A)</span>
+		{
+<span class="nc" id="L169">			A btn = (A) comp;</span>
+
+<span class="nc" id="L171">			int AD_PInstance_ID = 0;</span>
+			try
+			{
+<span class="nc" id="L174">				AD_PInstance_ID = Integer.valueOf((String)btn.getAttribute(AD_PINSTANCE_ID_ATTR));</span>
+<span class="nc" id="L175">			}</span>
+<span class="nc" id="L176">			catch (Exception e) {</span>
+			}
+
+<span class="nc bnc" id="L179" title="All 2 branches missed.">			if (AD_PInstance_ID &gt; 0)</span>
+<span class="nc" id="L180">				AEnv.zoom(MPInstance.Table_ID, AD_PInstance_ID);</span>
+		}
+		
+<span class="nc bnc" id="L183" title="All 4 branches missed.">		if (comp instanceof Image || comp instanceof ToolBarButton) // Refresh button</span>
+		{
+<span class="nc" id="L185">			refresh();</span>
+		}
+<span class="nc" id="L187">	}</span>
+
+	/**
+	 * Reload from DB
+	 */
+	private synchronized void refresh() 
+	{
+		// Please review here - is throwing NPE in some cases when user push repeatedly the refresh button
+<span class="nc" id="L195">		List&lt;?&gt; childs = bxJobs.getChildren();</span>
+<span class="nc" id="L196">		int childCount = childs.size();</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		for (int c = childCount - 1; c &gt;=0; c--) {</span>
+<span class="nc" id="L198">			Component comp = (Component) childs.get(c);</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">			if (comp instanceof A) {</span>
+<span class="nc" id="L200">				comp.removeEventListener(Events.ON_CLICK, this);</span>
+			}
+<span class="nc" id="L202">			bxJobs.removeChild(comp);</span>
+		}
+		
+<span class="nc" id="L205">		List&lt;MPInstance&gt; pis = getRunningJobForUser(AD_User_ID);</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">		for (MPInstance pi : pis) {			</span>
+<span class="nc" id="L207">			MProcess process = new MProcess(pi.getCtx(), pi.getAD_Process_ID(), pi.get_TrxName());</span>
+<span class="nc" id="L208">			String label = process.getName() + &quot; [&quot; + Msg.getElement(pi.getCtx(), &quot;Created&quot;) + &quot; = &quot; + pi.getCreated() + &quot;]&quot;;</span>
+<span class="nc" id="L209">			A btnJob = new A();</span>
+<span class="nc" id="L210">			btnJob.setAttribute(AD_PINSTANCE_ID_ATTR, String.valueOf(pi.getAD_PInstance_ID()));</span>
+<span class="nc" id="L211">			bxJobs.appendChild(btnJob);</span>
+<span class="nc" id="L212">			btnJob.setLabel(label);</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">			if (ThemeManager.isUseFontIconForImage())</span>
+<span class="nc" id="L214">				btnJob.setIconSclass(Icon.getIconSclass(Icon.WINDOW));</span>
+			else
+<span class="nc" id="L216">				btnJob.setImage(ThemeManager.getThemeResource(&quot;images/mWindow.png&quot;));</span>
+<span class="nc" id="L217">			btnJob.addEventListener(Events.ON_CLICK, this);</span>
+<span class="nc" id="L218">			btnJob.setSclass(&quot;menu-href&quot;);</span>
+<span class="nc" id="L219">			ZKUpdateUtil.setHflex(btnJob, &quot;1&quot;);</span>
+		}
+<span class="nc" id="L221">	}</span>
+	
+	/**
+	 * @param AD_User_ID
+	 * @return List of running background jobs for AD_User_ID
+	 */
+	public static List&lt;MPInstance&gt; getRunningJobForUser(int AD_User_ID) 
+	{
+<span class="nc" id="L229">		return BackgroundJob.getRunningJobForUser(AD_User_ID);</span>
+	}
+
+	@Override
+    public void refresh(ServerPushTemplate template)
+	{			
+<span class="nc" id="L235">    	template.executeAsync(this);</span>
+<span class="nc" id="L236">	}</span>
+
+	@Override
+	public void updateUI() 
+	{
+<span class="nc" id="L241">		refresh();</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">		if (bxJobs != null)</span>
+<span class="nc" id="L243">			bxJobs.invalidate();</span>
+<span class="nc" id="L244">		updateDesktopReference();</span>
+<span class="nc" id="L245">	}</span>
+
+	/**
+	 * Update {@link #desktop} reference and setup {@link #listener}
+	 */
+	protected void updateDesktopReference() 
+	{
+<span class="nc bnc" id="L252" title="All 8 branches missed.">		if ((desktop == null || desktop.get() == null) || (desktop.get() != null &amp;&amp; desktop.get() != getDesktop())) {</span>
+<span class="nc bnc" id="L253" title="All 4 branches missed.">			if (desktop != null &amp;&amp; desktop.get() != null)</span>
+<span class="nc" id="L254">				desktop.get().removeListener(listener);</span>
+			
+<span class="nc" id="L256">			desktop = new WeakReference&lt;Desktop&gt;(getDesktop());</span>
+<span class="nc bnc" id="L257" title="All 4 branches missed.">			if (desktop != null &amp;&amp; desktop.get() != null)</span>
+<span class="nc" id="L258">				desktop.get().addListener(listener);</span>
+		}
+<span class="nc" id="L260">	}</span>
+
+	@Override
+	public void handleEvent(org.osgi.service.event.Event event) 
+	{
+<span class="nc bnc" id="L265" title="All 4 branches missed.">		if (event.getTopic().equals(MPInstance.ON_RUNNING_JOB_CHANGED_TOPIC) &amp;&amp; event.getProperty(&quot;AD_User_ID&quot;) != null) {</span>
+<span class="nc" id="L266">			Object property = event.getProperty(&quot;AD_User_ID&quot;);</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">			if (property instanceof Number) {</span>
+<span class="nc" id="L268">				int id = ((Number)property).intValue();</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">				if (id == AD_User_ID) {</span>
+					try {
+<span class="nc bnc" id="L271" title="All 6 branches missed.">						if (desktop != null &amp;&amp; desktop.get() != null &amp;&amp; desktop.get().isAlive()) {</span>
+<span class="nc" id="L272">							ServerPushTemplate template = new ServerPushTemplate(desktop.get());</span>
+<span class="nc" id="L273">							refresh(template);</span>
+						}
+<span class="nc" id="L275">					} catch (Exception e) {</span>
+<span class="nc" id="L276">						EventManager.getInstance().unregister(this);</span>
+					}
+				}
+			}
+		}
+<span class="nc" id="L281">	}</span>
+
+	@Override
+	public void onPageAttached(Page newpage, Page oldpage) 
+	{
+<span class="nc" id="L286">		super.onPageAttached(newpage, oldpage);</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		if (newpage != null) {</span>
+<span class="nc" id="L288">			EventManager.getInstance().register(MPInstance.ON_RUNNING_JOB_CHANGED_TOPIC, this);</span>
+<span class="nc" id="L289">			updateDesktopReference();</span>
+		}
+<span class="nc" id="L291">	}</span>
+	
+	@Override
+	public void onPageDetached(Page page) {
+<span class="nc" id="L295">		super.onPageDetached(page);</span>
+<span class="nc" id="L296">		cleanup();</span>
+<span class="nc" id="L297">	}</span>
+	
+	@Override
+	public boolean isLazy() {
+<span class="nc" id="L301">		return true;</span>
+	}
+	
+	/**
+	 * {@link ITopicSubscriber} for &quot;onRunningJobChanged&quot; topic. &lt;br/&gt;
+	 * Call {@link MPInstance#postOnChangedEvent(int)}.
+	 */
+<span class="nc" id="L308">	static class TopicSubscriber implements ITopicSubscriber&lt;Integer&gt; {</span>
+		/**
+		 * @param message AD_User_ID
+		 */
+		@Override
+		public void onMessage(Integer message) {
+<span class="nc" id="L314">			MPInstance.postOnChangedEvent(message);</span>
+<span class="nc" id="L315">		}		</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

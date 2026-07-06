@@ -1,0 +1,3389 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MPayment.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MPayment.java</span></div><h1>MPayment.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Properties;
+import java.util.Vector;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.CreditStatus;
+import org.adempiere.base.ICreditManager;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.PeriodClosedException;
+import org.adempiere.util.IProcessUI;
+import org.adempiere.util.PaymentUtil;
+import org.compiere.process.DocAction;
+import org.compiere.process.DocumentEngine;
+import org.compiere.process.IDocsPostProcess;
+import org.compiere.process.ProcessCall;
+import org.compiere.process.ProcessInfo;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.IBAN;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+
+/**
+ *  Payment Model.
+ *  @author 	Jorg Janke
+ *  @author victor.perez@e-evolution.com, e-Evolution http://www.e-evolution.com
+ * 			&lt;li&gt;FR [ 1948157  ]  Is necessary the reference for document reverse
+ *  		@see https://sourceforge.net/p/adempiere/feature-requests/412/
+ *			&lt;li&gt; FR [ 1866214 ]  
+ *			@sse https://sourceforge.net/p/adempiere/feature-requests/298/
+ * 			&lt;li&gt; FR [ 2520591 ] Support multiples calendar for Org 
+ *			@see https://sourceforge.net/p/adempiere/feature-requests/631/
+ *
+ *  @author Carlos Ruiz - globalqss [ 2141475 ] Payment &amp;lt;&amp;gt; allocations must not be completed - implement lots of validations on prepareIt
+ *  @version 	$Id: MPayment.java,v 1.4 2006/10/02 05:18:39 jjanke Exp $
+ */
+public class MPayment extends X_C_Payment 
+	implements DocAction, ProcessCall, PaymentInterface, IDocsPostProcess
+{
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -1157628050370126666L;
+
+	/**
+	 * 	Get Payments Of BPartner
+	 *	@param ctx context
+	 *	@param C_BPartner_ID id
+	 *	@param trxName transaction
+	 *	@return array of payment
+	 */
+	public static MPayment[] getOfBPartner (Properties ctx, int C_BPartner_ID, String trxName)
+	{
+		//FR: [ 2214883 ] Remove SQL code and Replace for Query - red1
+<span class="nc" id="L88">		final String whereClause = &quot;C_BPartner_ID=?&quot;;</span>
+<span class="nc" id="L89">		List &lt;MPayment&gt; list = new Query(ctx, I_C_Payment.Table_Name, whereClause, trxName)</span>
+<span class="nc" id="L90">		.setParameters(C_BPartner_ID)</span>
+<span class="nc" id="L91">		.list();</span>
+
+		//
+<span class="nc" id="L94">		MPayment[] retValue = new MPayment[list.size()];</span>
+<span class="nc" id="L95">		list.toArray(retValue);</span>
+<span class="nc" id="L96">		return retValue;</span>
+	}	//	getOfBPartner
+	
+	/**
+	 * 	Get Payments of Bank Transfer
+	 *	@param ctx context
+	 *	@param C_BankTransfer_ID id
+	 *	@param trxName transaction
+	 *	@return array of payment
+	 */
+	public static MPayment[] getOfBankTransfer (Properties ctx, int C_BankTransfer_ID, String trxName)
+	{
+<span class="nc" id="L108">		final String whereClause = &quot;C_BankTransfer_ID=?&quot;;</span>
+<span class="nc" id="L109">		List &lt;MPayment&gt; list = new Query(ctx, Table_Name, whereClause, trxName)</span>
+<span class="nc" id="L110">				.setParameters(C_BankTransfer_ID)</span>
+<span class="nc" id="L111">				.setOrderBy(COLUMNNAME_C_Payment_ID)</span>
+<span class="nc" id="L112">				.list();</span>
+<span class="nc" id="L113">		MPayment[] retValue = new MPayment[list.size()];</span>
+<span class="nc" id="L114">		list.toArray(retValue);</span>
+<span class="nc" id="L115">		return retValue;</span>
+	}	//	getOfBankTransfer
+	
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param C_Payment_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MPayment(Properties ctx, String C_Payment_UU, String trxName) {
+<span class="nc" id="L125">        super(ctx, C_Payment_UU, trxName);</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">		if (Util.isEmpty(C_Payment_UU))</span>
+<span class="nc" id="L127">			setInitialDefaults();</span>
+<span class="nc" id="L128">    }</span>
+
+	/**
+	 *  Default Constructor
+	 *  @param ctx context
+	 *  @param  C_Payment_ID    payment to load, (0 create new payment)
+	 *  @param trxName trx name
+	 */
+	public MPayment (Properties ctx, int C_Payment_ID, String trxName)
+	{
+<span class="nc" id="L138">		super (ctx, C_Payment_ID, trxName);</span>
+		//  New
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (C_Payment_ID == 0)</span>
+<span class="nc" id="L141">			setInitialDefaults();</span>
+<span class="nc" id="L142">	}   //  MPayment</span>
+	
+	/**
+	 * Set the initial defaults for a new record
+	 */
+	private void setInitialDefaults() {
+<span class="nc" id="L148">		setDocAction(DOCACTION_Complete);</span>
+<span class="nc" id="L149">		setDocStatus(DOCSTATUS_Drafted);</span>
+<span class="nc" id="L150">		setTrxType(TRXTYPE_Sales);</span>
+		//
+<span class="nc" id="L152">		setR_AvsAddr (R_AVSZIP_Unavailable);</span>
+<span class="nc" id="L153">		setR_AvsZip (R_AVSZIP_Unavailable);</span>
+		//
+<span class="nc" id="L155">		setIsReceipt (true);</span>
+<span class="nc" id="L156">		setIsApproved (false);</span>
+<span class="nc" id="L157">		setIsReconciled (false);</span>
+<span class="nc" id="L158">		setIsAllocated(false);</span>
+<span class="nc" id="L159">		setIsOnline (false);</span>
+<span class="nc" id="L160">		setIsSelfService(false);</span>
+<span class="nc" id="L161">		setIsDelayedCapture (false);</span>
+<span class="nc" id="L162">		setIsPrepayment(false);</span>
+<span class="nc" id="L163">		setProcessed(false);</span>
+<span class="nc" id="L164">		setProcessing(false);</span>
+<span class="nc" id="L165">		setPosted (false);</span>
+		//
+<span class="nc" id="L167">		setPayAmt(Env.ZERO);</span>
+<span class="nc" id="L168">		setDiscountAmt(Env.ZERO);</span>
+<span class="nc" id="L169">		setTaxAmt(Env.ZERO);</span>
+<span class="nc" id="L170">		setWriteOffAmt(Env.ZERO);</span>
+<span class="nc" id="L171">		setIsOverUnderPayment (true);</span>
+<span class="nc" id="L172">		setOverUnderAmt(Env.ZERO);</span>
+		//
+<span class="nc" id="L174">		setDateTrx (new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L175">		setDateAcct (getDateTrx());</span>
+<span class="nc" id="L176">		setTenderType(TENDERTYPE_Check);</span>
+<span class="nc" id="L177">	}</span>
+
+	/**
+	 *  Load Constructor
+	 *  @param ctx context
+	 *  @param rs result set record
+	 *	@param trxName transaction
+	 */
+	public MPayment (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L187">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L188">	}	//	MPayment</span>
+
+	/**	Temporary	Bank Account Processors		*/
+<span class="nc" id="L191">	protected MBankAccountProcessor[]	m_mBankAccountProcessors = null;</span>
+	/**	Temporary	Bank Account Processor		*/
+<span class="nc" id="L193">	protected MBankAccountProcessor	m_mBankAccountProcessor = null;</span>
+	/** Logger								*/
+<span class="nc" id="L195">	protected static CLogger		s_log = CLogger.getCLogger (MPayment.class);</span>
+	/** Error Message						*/
+<span class="nc" id="L197">	protected String				m_errorMessage = null;</span>
+	
+	/** Reversal Indicator			*/
+<span class="nc" id="L200">	public static String	REVERSE_INDICATOR = &quot;^&quot;;</span>
+	
+	/**
+	 *  Reset Payment to new status
+	 */
+	public void resetNew()
+	{
+<span class="nc" id="L207">		setC_Payment_ID(0);		//	forces new Record</span>
+<span class="nc" id="L208">		set_ValueNoCheck (&quot;DocumentNo&quot;, null);</span>
+<span class="nc" id="L209">		setDocAction(DOCACTION_Prepare);</span>
+<span class="nc" id="L210">		setDocStatus(DOCSTATUS_Drafted);</span>
+<span class="nc" id="L211">		setProcessed(false);</span>
+<span class="nc" id="L212">		setPosted (false);</span>
+<span class="nc" id="L213">		setIsReconciled (false);</span>
+<span class="nc" id="L214">		setIsAllocated(false);</span>
+<span class="nc" id="L215">		setIsOnline(false);</span>
+<span class="nc" id="L216">		setIsDelayedCapture (false);</span>
+<span class="nc" id="L217">		setC_Invoice_ID(0);</span>
+<span class="nc" id="L218">		setC_Order_ID(0);</span>
+<span class="nc" id="L219">		setC_Charge_ID(0);</span>
+<span class="nc" id="L220">		setC_Project_ID(0);</span>
+<span class="nc" id="L221">		setIsPrepayment(false);</span>
+<span class="nc" id="L222">	}	//	resetNew</span>
+
+	/**
+	 * 	Is Cash Trx
+	 *	@return true if Cash Trx
+	 */
+	public boolean isCashTrx()
+	{
+<span class="nc" id="L230">		return &quot;X&quot;.equals(getTenderType());</span>
+	}	//	isCashTrx
+	
+	/**
+	 * Is Cashbook Trx
+	 * @return true if this is a cashbook trx
+	 */
+	public boolean isCashbookTrx() {
+<span class="nc bnc" id="L238" title="All 4 branches missed.">		return isCashTrx() &amp;&amp; !MSysConfig.getBooleanValue(MSysConfig.CASH_AS_PAYMENT, true , getAD_Client_ID());</span>
+	}
+	
+	/**
+	 *  Set Credit Card details.
+	 *  Need to set PatmentProcessor after Amount/Currency Set.
+	 *
+	 *  @param TrxType Transaction Type see TRX_
+	 *  @param creditCardType CC type
+	 *  @param creditCardNumber CC number
+	 *  @param creditCardVV CC verification
+	 *  @param creditCardExpMM CC Exp MM
+	 *  @param creditCardExpYY CC Exp YY
+	 *  @return true if valid
+	 */
+	public boolean setCreditCard (String TrxType, String creditCardType, String creditCardNumber,
+		String creditCardVV, int creditCardExpMM, int creditCardExpYY)
+	{
+<span class="nc" id="L256">		setTenderType(TENDERTYPE_CreditCard);</span>
+<span class="nc" id="L257">		setTrxType(TrxType);</span>
+		//
+<span class="nc" id="L259">		setCreditCardType (creditCardType);</span>
+<span class="nc" id="L260">		setCreditCardNumber (creditCardNumber);</span>
+<span class="nc" id="L261">		setCreditCardVV (creditCardVV);</span>
+<span class="nc" id="L262">		setCreditCardExpMM (creditCardExpMM);</span>
+<span class="nc" id="L263">		setCreditCardExpYY (creditCardExpYY);</span>
+		//
+<span class="nc" id="L265">		int check = MPaymentValidate.validateCreditCardNumber(creditCardNumber, creditCardType).length()</span>
+<span class="nc" id="L266">			+ MPaymentValidate.validateCreditCardExp(creditCardExpMM, creditCardExpYY).length();</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">		if (creditCardVV.length() &gt; 0)</span>
+<span class="nc" id="L268">			check += MPaymentValidate.validateCreditCardVV(creditCardVV, creditCardType).length();</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">		return check == 0;</span>
+	}   //  setCreditCard
+
+	/**
+	 *  Set Credit Card details.
+	 *  Need to set PatmentProcessor after Amount/Currency Set.
+	 *
+	 *  @param TrxType Transaction Type see TRX_
+	 *  @param creditCardType CC type
+	 *  @param creditCardNumber CC number
+	 *  @param creditCardVV CC verification
+	 *  @param creditCardExp CC Exp (include both year and month)
+	 *  @return true if valid
+	 */
+	public boolean setCreditCard (String TrxType, String creditCardType, String creditCardNumber,
+		String creditCardVV, String creditCardExp)
+	{
+<span class="nc" id="L286">		return setCreditCard(TrxType, creditCardType, creditCardNumber,</span>
+<span class="nc" id="L287">			creditCardVV, MPaymentValidate.getCreditCardExpMM(creditCardExp), </span>
+<span class="nc" id="L288">			MPaymentValidate.getCreditCardExpYY(creditCardExp));</span>
+	}   //  setCreditCard
+
+	/**
+	 *  Set ACH BankAccount Info
+	 *
+	 *  @param preparedPayment
+	 *  @return true if valid
+	 */
+	public boolean setBankACH (MPaySelectionCheck preparedPayment)
+	{
+		//	Our Bank
+<span class="nc" id="L300">		setC_BankAccount_ID(preparedPayment.getParent().getC_BankAccount_ID());</span>
+		//	Target Bank
+<span class="nc" id="L302">		int C_BP_BankAccount_ID = preparedPayment.getC_BP_BankAccount_ID();</span>
+<span class="nc" id="L303">		MBPBankAccount ba = new MBPBankAccount (preparedPayment.getCtx(), C_BP_BankAccount_ID, null);</span>
+<span class="nc" id="L304">		setRoutingNo(ba.getRoutingNo());</span>
+<span class="nc" id="L305">		setAccountNo(ba.getAccountNo());</span>
+<span class="nc" id="L306">		setIBAN(ba.getIBAN());</span>
+<span class="nc" id="L307">		setSwiftCode(ba.getSwiftCode()) ;</span>
+<span class="nc" id="L308">		MPaySelection ps = new MPaySelection (preparedPayment.getCtx(), preparedPayment.getC_PaySelection_ID(), preparedPayment.get_TrxName());</span>
+<span class="nc" id="L309">		setDescription(ps.getName());</span>
+<span class="nc" id="L310">		setIsReceipt (X_C_Order.PAYMENTRULE_DirectDebit.equals	//	AR only</span>
+<span class="nc" id="L311">				(preparedPayment.getPaymentRule()));</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">		if ( MPaySelectionCheck.PAYMENTRULE_DirectDebit.equals(preparedPayment.getPaymentRule()) )</span>
+<span class="nc" id="L313">			setTenderType(MPayment.TENDERTYPE_DirectDebit);</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">		else if ( MPaySelectionCheck.PAYMENTRULE_DirectDeposit.equals(preparedPayment.getPaymentRule()))</span>
+<span class="nc" id="L315">			setTenderType(MPayment.TENDERTYPE_DirectDeposit);</span>
+		//
+<span class="nc" id="L317">		int check = MPaymentValidate.validateRoutingNo(getRoutingNo()).length()</span>
+<span class="nc" id="L318">			+ MPaymentValidate.validateAccountNo(getAccountNo()).length();</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">		return check == 0;</span>
+	}	//	setBankACH
+
+	/**
+	 *  Set ACH BankAccount Info
+	 *
+	 *  @param C_BankAccount_ID bank account
+	 *  @param isReceipt true if receipt
+	 * 	@param tenderType - Direct Debit or Direct Deposit
+	 *  @param routingNo routing
+	 *  @param accountNo account
+	 *  @return true if valid
+	 */
+	public boolean setBankACH (int C_BankAccount_ID, boolean isReceipt, String tenderType, 
+		String routingNo, String accountNo)
+	{
+<span class="nc" id="L335">		setTenderType (tenderType);</span>
+<span class="nc" id="L336">		setIsReceipt (isReceipt);</span>
+		//
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		if (C_BankAccount_ID &gt; 0</span>
+<span class="nc bnc" id="L339" title="All 8 branches missed.">			&amp;&amp; (routingNo == null || routingNo.length() == 0 || accountNo == null || accountNo.length() == 0))</span>
+<span class="nc" id="L340">			setBankAccountDetails(C_BankAccount_ID);</span>
+		else
+		{
+<span class="nc" id="L343">			setC_BankAccount_ID(C_BankAccount_ID);</span>
+<span class="nc" id="L344">			setRoutingNo (routingNo);</span>
+<span class="nc" id="L345">			setAccountNo (accountNo);</span>
+		}
+<span class="nc" id="L347">		setCheckNo (&quot;&quot;);</span>
+		//
+<span class="nc" id="L349">		int check = MPaymentValidate.validateRoutingNo(routingNo).length()</span>
+<span class="nc" id="L350">			+ MPaymentValidate.validateAccountNo(accountNo).length();</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">		return check == 0;</span>
+	}   //  setBankACH
+	
+	/**
+	 *  Set Cash BankAccount Info
+	 *
+	 *  @param C_BankAccount_ID bank account
+	 *  @param isReceipt true if receipt
+	 * 	@param tenderType - Cash (Payment)
+	 *  @return true if valid
+	 */
+	public boolean setBankCash (int C_BankAccount_ID, boolean isReceipt, String tenderType)
+	{
+<span class="nc" id="L364">		setTenderType (tenderType);</span>
+<span class="nc" id="L365">		setIsReceipt (isReceipt);</span>
+		//
+<span class="nc bnc" id="L367" title="All 2 branches missed.">		if (C_BankAccount_ID &gt; 0)</span>
+<span class="nc" id="L368">			setBankAccountDetails(C_BankAccount_ID);</span>
+		else
+		{
+<span class="nc" id="L371">			setC_BankAccount_ID(C_BankAccount_ID);</span>
+		}
+		//
+<span class="nc" id="L374">		return true;</span>
+	}   //  setBankCash
+
+	/**
+	 *  Set Check BankAccount Info
+	 *
+	 *  @param C_BankAccount_ID bank account
+	 *  @param isReceipt true if receipt
+	 *  @param checkNo check no
+	 *  @return true if valid
+	 */
+	public boolean setBankCheck (int C_BankAccount_ID, boolean isReceipt, String checkNo)
+	{
+<span class="nc" id="L387">		return setBankCheck (C_BankAccount_ID, isReceipt, null, null, checkNo);</span>
+	}	//	setBankCheck
+
+	/**
+	 *  Set Check BankAccount Info
+	 *
+	 *  @param C_BankAccount_ID bank account
+	 *  @param isReceipt true if receipt
+	 *  @param routingNo routing no
+	 *  @param accountNo account no
+	 *  @param checkNo check no
+	 *  @return true if valid
+	 */
+	public boolean setBankCheck (int C_BankAccount_ID, boolean isReceipt, 
+		String routingNo, String accountNo, String checkNo)
+	{
+<span class="nc" id="L403">		setTenderType (TENDERTYPE_Check);</span>
+<span class="nc" id="L404">		setIsReceipt (isReceipt);</span>
+		//
+<span class="nc bnc" id="L406" title="All 2 branches missed.">		if (C_BankAccount_ID &gt; 0</span>
+<span class="nc bnc" id="L407" title="All 4 branches missed.">			&amp;&amp; (routingNo == null || routingNo.length() == 0 </span>
+<span class="nc bnc" id="L408" title="All 4 branches missed.">				|| accountNo == null || accountNo.length() == 0))</span>
+<span class="nc" id="L409">			setBankAccountDetails(C_BankAccount_ID);</span>
+		else
+		{
+<span class="nc" id="L412">			setC_BankAccount_ID(C_BankAccount_ID);</span>
+<span class="nc" id="L413">			setRoutingNo (routingNo);</span>
+<span class="nc" id="L414">			setAccountNo (accountNo);</span>
+		}
+<span class="nc" id="L416">		setCheckNo (checkNo);</span>
+		//
+<span class="nc" id="L418">		int check = MPaymentValidate.validateRoutingNo(routingNo).length()</span>
+<span class="nc" id="L419">			+ MPaymentValidate.validateAccountNo(accountNo).length()</span>
+<span class="nc" id="L420">			+ MPaymentValidate.validateCheckNo(checkNo).length();</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">		return check == 0;       //  no error message</span>
+	}   //  setBankCheck
+
+	/**
+	 * 	Set Bank Account Details.
+	 * 	Look up Routing No and Bank Acct No
+	 * 	@param C_BankAccount_ID bank account
+	 */
+	public void setBankAccountDetails (int C_BankAccount_ID)
+	{
+<span class="nc bnc" id="L431" title="All 2 branches missed.">		if (C_BankAccount_ID == 0)</span>
+<span class="nc" id="L432">			return;</span>
+<span class="nc" id="L433">		setC_BankAccount_ID(C_BankAccount_ID);</span>
+		//
+<span class="nc" id="L435">		String sql = &quot;SELECT b.RoutingNo, ba.AccountNo, ba.IBAN, b.SwiftCode &quot;</span>
+			+ &quot;FROM C_BankAccount ba&quot;
+			+ &quot; INNER JOIN C_Bank b ON (ba.C_Bank_ID=b.C_Bank_ID) &quot;
+			+ &quot;WHERE C_BankAccount_ID=?&quot;;
+<span class="nc" id="L439">		PreparedStatement pstmt = null; </span>
+<span class="nc" id="L440">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L443">			pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L444">			pstmt.setInt(1, C_BankAccount_ID);</span>
+<span class="nc" id="L445">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L448">				setRoutingNo (rs.getString(1));</span>
+<span class="nc" id="L449">				setAccountNo (rs.getString(2));</span>
+<span class="nc" id="L450">				setIBAN(rs.getString(3)) ;</span>
+<span class="nc" id="L451">				setSwiftCode(rs.getString(4)) ;</span>
+			}
+<span class="nc" id="L453">		}</span>
+<span class="nc" id="L454">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L456">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L460">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L461">			rs = null;</span>
+<span class="nc" id="L462">			pstmt = null;</span>
+		}
+<span class="nc" id="L464">	}	//	setBankAccountDetails</span>
+
+	/**
+	 *  Set Account Address
+	 *
+	 *  @param name name
+	 *  @param street street
+	 *  @param city city
+	 *  @param state state
+	 *  @param zip zip
+	 * 	@param country country
+	 */
+	public void setAccountAddress (String name, String street,
+		String city, String state, String zip, String country)
+	{
+<span class="nc" id="L479">		setA_Name (name);</span>
+<span class="nc" id="L480">		setA_Street (street);</span>
+<span class="nc" id="L481">		setA_City (city);</span>
+<span class="nc" id="L482">		setA_State (state);</span>
+<span class="nc" id="L483">		setA_Zip (zip);</span>
+<span class="nc" id="L484">		setA_Country(country);</span>
+<span class="nc" id="L485">	}   //  setAccountAddress</span>
+	
+	/**
+	 *  Execute online processing of payment
+	 *  @return true if approved
+	 */
+	public boolean processOnline()
+	{
+<span class="nc bnc" id="L493" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;Amt=&quot; + getPayAmt());</span>
+		//
+<span class="nc" id="L495">		setIsOnline(true);</span>
+<span class="nc" id="L496">		setErrorMessage(null);</span>
+		//	prevent charging twice
+<span class="nc bnc" id="L498" title="All 4 branches missed.">		if(getTrxType().equals(TRXTYPE_Void) || getTrxType().equals(TRXTYPE_CreditPayment))</span>
+		{
+<span class="nc bnc" id="L500" title="All 2 branches missed.">			if (isVoided())</span>
+			{
+<span class="nc bnc" id="L502" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Already voided - &quot; + getR_Result() + &quot; - &quot; + getR_RespMsg());</span>
+<span class="nc" id="L503">				setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentAlreadyVoided&quot;));</span>
+<span class="nc" id="L504">				return true;</span>
+			}
+		}
+<span class="nc bnc" id="L507" title="All 2 branches missed.">		else if(getTrxType().equals(TRXTYPE_DelayedCapture))</span>
+		{
+<span class="nc bnc" id="L509" title="All 2 branches missed.">			if (isDelayedCapture())</span>
+			{
+<span class="nc bnc" id="L511" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Already delayed capture - &quot; + getR_Result() + &quot; - &quot; + getR_RespMsg());</span>
+<span class="nc" id="L512">				setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentAlreadyDelayedCapture&quot;));</span>
+<span class="nc" id="L513">				return true;</span>
+			}
+		}
+		else
+		{
+<span class="nc bnc" id="L518" title="All 2 branches missed.">			if (isApproved())</span>
+			{
+<span class="nc bnc" id="L520" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Already processed - &quot; + getR_Result() + &quot; - &quot; + getR_RespMsg());</span>
+<span class="nc" id="L521">				setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentAlreadyProcessed&quot;));</span>
+<span class="nc" id="L522">				return true;</span>
+			}
+		}
+
+<span class="nc bnc" id="L526" title="All 2 branches missed.">		if (m_mBankAccountProcessor == null)</span>
+<span class="nc" id="L527">			setPaymentProcessor();</span>
+<span class="nc bnc" id="L528" title="All 2 branches missed.">		if (m_mBankAccountProcessor == null)</span>
+		{
+<span class="nc bnc" id="L530" title="All 2 branches missed.">			if (getC_PaymentProcessor_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L532">				MPaymentProcessor pp = new MPaymentProcessor(getCtx(), getC_PaymentProcessor_ID(), get_TrxName());</span>
+<span class="nc" id="L533">				log.log(Level.WARNING, &quot;No Payment Processor Model &quot; + pp.toString());</span>
+<span class="nc" id="L534">				setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentNoProcessorModel&quot;) + &quot;: &quot; + pp.toString());</span>
+<span class="nc" id="L535">			}</span>
+			else
+			{
+<span class="nc" id="L538">				log.log(Level.WARNING, &quot;No Payment Processor Model&quot;);</span>
+<span class="nc" id="L539">				setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentNoProcessorModel&quot;));</span>
+			}
+<span class="nc" id="L541">			return false;</span>
+		}
+
+<span class="nc" id="L544">		boolean approved = false;</span>
+
+		try
+		{
+<span class="nc" id="L548">			PaymentProcessor pp = PaymentProcessor.create(m_mBankAccountProcessor, this);</span>
+<span class="nc bnc" id="L549" title="All 2 branches missed.">			if (pp == null)</span>
+<span class="nc" id="L550">				setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentNoProcessor&quot;));</span>
+			else
+			{
+<span class="nc" id="L553">				approved = pp.processCC();</span>
+
+<span class="nc bnc" id="L555" title="All 2 branches missed.">				if (approved)</span>
+<span class="nc" id="L556">					setErrorMessage(null);</span>
+				else
+				{
+<span class="nc bnc" id="L559" title="All 4 branches missed.">					if(getTrxType().equals(TRXTYPE_Void) || getTrxType().equals(TRXTYPE_CreditPayment))</span>
+<span class="nc" id="L560">						setErrorMessage(&quot;From &quot; +  getCreditCardName() + &quot;: &quot; + getR_VoidMsg());</span>
+					else
+<span class="nc" id="L562">						setErrorMessage(&quot;From &quot; +  getCreditCardName() + &quot;: &quot; + getR_RespMsg());							</span>
+				}
+			}
+<span class="nc" id="L565">		}</span>
+<span class="nc" id="L566">		catch (Exception e)</span>
+		{
+<span class="nc" id="L568">			log.log(Level.SEVERE, &quot;processOnline&quot;, e);</span>
+<span class="nc" id="L569">			setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentNotProcessed&quot;) + &quot;: &quot; + e.getMessage());</span>
+		}
+		
+<span class="nc bnc" id="L572" title="All 2 branches missed.">		if (approved)</span>
+		{
+<span class="nc" id="L574">			setCreditCardNumber(PaymentUtil.encrpytCreditCard(getCreditCardNumber()));</span>
+<span class="nc" id="L575">			setCreditCardVV(PaymentUtil.encrpytCvv(getCreditCardVV()));</span>
+			
+<span class="nc" id="L577">			setDateTrx(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L578">			setDateAcct(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L579">			setProcessed(true);		// prevent editing of payment details once approved</span>
+		}
+		
+<span class="nc" id="L582">		setIsApproved(approved);</span>
+		
+<span class="nc" id="L584">		Trx trx = Trx.get(Trx.createTrxName(&quot;ppt-&quot;), true);</span>
+<span class="nc" id="L585">		trx.setDisplayName(getClass().getName()+&quot;_processOnline&quot;);</span>
+		
+		try
+		{
+<span class="nc" id="L589">			trx.start();</span>
+			
+<span class="nc" id="L591">			MPaymentTransaction m_mPaymentTransaction = createPaymentTransaction(trx.getTrxName());</span>
+<span class="nc" id="L592">			m_mPaymentTransaction.setIsApproved(approved);</span>
+<span class="nc bnc" id="L593" title="All 4 branches missed.">			if(getTrxType().equals(TRXTYPE_Void) || getTrxType().equals(TRXTYPE_CreditPayment))</span>
+<span class="nc" id="L594">				m_mPaymentTransaction.setIsVoided(approved);	</span>
+<span class="nc" id="L595">			m_mPaymentTransaction.setProcessed(approved);</span>
+<span class="nc" id="L596">			m_mPaymentTransaction.setC_Payment_ID(getC_Payment_ID());</span>
+<span class="nc" id="L597">			m_mPaymentTransaction.saveEx();</span>
+			
+<span class="nc" id="L599">			MOnlineTrxHistory history = new MOnlineTrxHistory(getCtx(), 0, trx.getTrxName());</span>
+<span class="nc" id="L600">			history.setAD_Table_ID(MPaymentTransaction.Table_ID);</span>
+<span class="nc" id="L601">			history.setRecord_ID(m_mPaymentTransaction.getC_PaymentTransaction_ID());</span>
+<span class="nc bnc" id="L602" title="All 2 branches missed.">			history.setIsError(!approved);</span>
+<span class="nc" id="L603">			history.setProcessed(approved);</span>
+			
+<span class="nc" id="L605">			StringBuilder msg = new StringBuilder();</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">			if (approved)</span>
+			{
+<span class="nc bnc" id="L608" title="All 4 branches missed.">				if(getTrxType().equals(TRXTYPE_Void) || getTrxType().equals(TRXTYPE_CreditPayment))</span>
+<span class="nc" id="L609">					msg.append(getR_VoidMsg() + &quot;\n&quot;);</span>
+				else
+				{
+<span class="nc" id="L612">					msg.append(&quot;Result: &quot; + getR_Result() + &quot;\n&quot;);</span>
+<span class="nc" id="L613">					msg.append(&quot;Response Message: &quot; + getR_RespMsg() + &quot;\n&quot;);</span>
+<span class="nc" id="L614">					msg.append(&quot;Reference: &quot; + getR_PnRef() + &quot;\n&quot;);</span>
+<span class="nc" id="L615">					msg.append(&quot;Authorization Code: &quot; + getR_AuthCode() + &quot;\n&quot;);</span>
+				}
+<span class="nc" id="L617">			}</span>
+			else
+<span class="nc" id="L619">				msg.append(&quot;ERROR: &quot; + getErrorMessage() + &quot;\n&quot;);</span>
+<span class="nc" id="L620">			msg.append(&quot;Transaction Type: &quot; + getTrxType());</span>
+<span class="nc" id="L621">			history.setTextMsg(msg.toString());</span>
+			
+<span class="nc" id="L623">			history.saveEx();</span>
+<span class="nc" id="L624">		}</span>
+<span class="nc" id="L625">		catch (Exception e)</span>
+		{
+<span class="nc" id="L627">			log.log(Level.SEVERE, &quot;processOnline&quot;, e);</span>
+<span class="nc" id="L628">			setErrorMessage(Msg.getMsg(Env.getCtx(), &quot;PaymentNotProcessed&quot;) + &quot;: &quot; + e.getMessage());</span>
+		}
+		finally
+		{
+<span class="nc bnc" id="L632" title="All 2 branches missed.">			if (trx != null)</span>
+			{
+<span class="nc" id="L634">				trx.commit();</span>
+<span class="nc" id="L635">				trx.close();</span>
+			}
+		}
+		
+<span class="nc bnc" id="L639" title="All 4 branches missed.">		if(getTrxType().equals(TRXTYPE_Void) || getTrxType().equals(TRXTYPE_CreditPayment))</span>
+<span class="nc" id="L640">			setIsVoided(approved);</span>
+		
+<span class="nc" id="L642">		return approved;</span>
+	}   //  processOnline
+
+	/**
+	 *  Execute online processing of payment (delegate to {@link #processOnline()}).
+	 *
+	 *  @param ctx Context
+	 *  @param pi Process Info
+	 *  @param trx transaction
+	 *  @return true if the next process should be performed
+	 */
+	public boolean startProcess (Properties ctx, ProcessInfo pi, Trx trx)
+	{
+<span class="nc bnc" id="L655" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;startProcess - &quot; + pi.getRecord_ID());</span>
+<span class="nc" id="L656">		boolean retValue = false;</span>
+		//
+<span class="nc bnc" id="L658" title="All 2 branches missed.">		if (pi.getRecord_ID() != get_ID())</span>
+		{
+<span class="nc" id="L660">			log.log(Level.SEVERE, &quot;startProcess - Not same Payment - &quot; + pi.getRecord_ID());</span>
+<span class="nc" id="L661">			return false;</span>
+		}
+		//  Process it
+<span class="nc" id="L664">		retValue = processOnline();</span>
+<span class="nc" id="L665">		saveEx();</span>
+<span class="nc" id="L666">		return retValue;    //  Payment processed</span>
+	}   //  startProcess
+	
+	@Override
+	protected boolean beforeSave (boolean newRecord)
+	{
+		// Disallow changes to fields with financial implications if payment have been processed
+<span class="nc bnc" id="L673" title="All 2 branches missed.">		if (isProcessed() &amp;&amp; </span>
+<span class="nc bnc" id="L674" title="All 2 branches missed.">			! is_ValueChanged(COLUMNNAME_Processed) &amp;&amp;</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">            (   is_ValueChanged(COLUMNNAME_C_BankAccount_ID)</span>
+<span class="nc bnc" id="L676" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_C_BPartner_ID)</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_C_Charge_ID)</span>
+<span class="nc bnc" id="L678" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_C_Currency_ID)</span>
+<span class="nc bnc" id="L679" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_C_DocType_ID)</span>
+<span class="nc bnc" id="L680" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_DateAcct)</span>
+<span class="nc bnc" id="L681" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_DateTrx)</span>
+<span class="nc bnc" id="L682" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_DiscountAmt)</span>
+<span class="nc bnc" id="L683" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_PayAmt)</span>
+<span class="nc bnc" id="L684" title="All 2 branches missed.">             || is_ValueChanged(COLUMNNAME_WriteOffAmt))) {</span>
+<span class="nc" id="L685">			log.saveError(&quot;PaymentAlreadyProcessed&quot;, Msg.translate(getCtx(), &quot;C_Payment_ID&quot;));</span>
+<span class="nc" id="L686">			return false;</span>
+		}
+		// Validate that either cash book or bank account is mandatory depending on whether this is a cash book transaction
+<span class="nc bnc" id="L689" title="All 2 branches missed.">		if ( isCashbookTrx()) {</span>
+			// Cash Book Is mandatory
+<span class="nc bnc" id="L691" title="All 2 branches missed.">			if ( getC_CashBook_ID() &lt;= 0 ) {</span>
+<span class="nc" id="L692">				log.saveError(&quot;Error&quot;, Msg.parseTranslation(getCtx(), &quot;@Mandatory@: @C_CashBook_ID@&quot;));</span>
+<span class="nc" id="L693">				return false;</span>
+			}
+		} else {
+			// Bank Account Is mandatory
+<span class="nc bnc" id="L697" title="All 2 branches missed.">			if ( getC_BankAccount_ID() &lt;= 0 ) {</span>
+<span class="nc" id="L698">				log.saveError(&quot;Error&quot;, Msg.parseTranslation(getCtx(), &quot;@Mandatory@: @C_BankAccount_ID@&quot;));</span>
+<span class="nc" id="L699">				return false;</span>
+			}
+		}
+		
+		// Reset order, invoice, write off, discount, isOverUnderPayment, OverUnderAmt and IsPrepayment for new Charge payment 
+		// or after Charge have been changed
+<span class="nc bnc" id="L705" title="All 2 branches missed.">		if (getC_Charge_ID() != 0) </span>
+		{
+<span class="nc bnc" id="L707" title="All 4 branches missed.">			if (newRecord || is_ValueChanged(&quot;C_Charge_ID&quot;))</span>
+			{
+<span class="nc" id="L709">				setC_Order_ID(0);</span>
+<span class="nc" id="L710">				setC_Invoice_ID(0);</span>
+<span class="nc" id="L711">				setWriteOffAmt(Env.ZERO);</span>
+<span class="nc" id="L712">				setDiscountAmt(Env.ZERO);</span>
+<span class="nc" id="L713">				setIsOverUnderPayment(false);</span>
+<span class="nc" id="L714">				setOverUnderAmt(Env.ZERO);</span>
+<span class="nc" id="L715">				setIsPrepayment(false);</span>
+			}
+<span class="nc" id="L717">		}		</span>
+<span class="nc bnc" id="L718" title="All 4 branches missed.">		else if (getC_BPartner_ID() == 0 &amp;&amp; !isCashTrx())</span>
+		{
+<span class="nc bnc" id="L720" title="All 2 branches missed.">			if (getC_Invoice_ID() != 0)</span>
+<span class="nc" id="L721">				;</span>
+<span class="nc bnc" id="L722" title="All 2 branches missed.">			else if (getC_Order_ID() != 0)</span>
+<span class="nc" id="L723">				;</span>
+			else
+			{
+<span class="nc" id="L726">				log.saveError(&quot;Error&quot;, Msg.parseTranslation(getCtx(), &quot;@NotFound@: @C_BPartner_ID@&quot;));</span>
+<span class="nc" id="L727">				return false;</span>
+			}
+		}
+		// Update IsPrepayment flag
+<span class="nc bnc" id="L731" title="All 2 branches missed.">		if (newRecord </span>
+<span class="nc bnc" id="L732" title="All 4 branches missed.">			|| is_ValueChanged(&quot;C_Charge_ID&quot;) || is_ValueChanged(&quot;C_Invoice_ID&quot;)</span>
+<span class="nc bnc" id="L733" title="All 4 branches missed.">			|| is_ValueChanged(&quot;C_Order_ID&quot;) || is_ValueChanged(&quot;C_Project_ID&quot;))</span>
+		{
+<span class="nc bnc" id="L735" title="All 2 branches missed.">			if (getReversal_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L737">				MPayment reversal = new MPayment(getCtx(), getReversal_ID(), get_TrxName());</span>
+<span class="nc" id="L738">				setIsPrepayment(reversal.isPrepayment());</span>
+<span class="nc" id="L739">			}</span>
+			else
+			{
+<span class="nc bnc" id="L742" title="All 2 branches missed.">				setIsPrepayment (getC_Charge_ID() == 0 </span>
+<span class="nc bnc" id="L743" title="All 2 branches missed.">					&amp;&amp; getC_BPartner_ID() != 0</span>
+<span class="nc bnc" id="L744" title="All 2 branches missed.">					&amp;&amp; (getC_Order_ID() != 0 </span>
+<span class="nc bnc" id="L745" title="All 4 branches missed.">						|| (getC_Project_ID() != 0 &amp;&amp; getC_Invoice_ID() == 0)));</span>
+			}
+		}
+		// Prepayment: reset write off, discount,IsOverUnderPayment and OverUnderAmt for new record or after change of order/project.
+<span class="nc bnc" id="L749" title="All 2 branches missed.">		if (isPrepayment())</span>
+		{
+<span class="nc bnc" id="L751" title="All 2 branches missed.">			if (newRecord </span>
+<span class="nc bnc" id="L752" title="All 4 branches missed.">				|| is_ValueChanged(&quot;C_Order_ID&quot;) || is_ValueChanged(&quot;C_Project_ID&quot;))</span>
+			{
+<span class="nc" id="L754">				setWriteOffAmt(Env.ZERO);</span>
+<span class="nc" id="L755">				setDiscountAmt(Env.ZERO);</span>
+<span class="nc" id="L756">				setIsOverUnderPayment(false);</span>
+<span class="nc" id="L757">				setOverUnderAmt(Env.ZERO);</span>
+			}
+		}
+		
+		//	Document Type/Receipt
+<span class="nc bnc" id="L762" title="All 2 branches missed.">		if (getC_DocType_ID() == 0)</span>
+<span class="nc" id="L763">			setC_DocType_ID();</span>
+		else
+		{
+<span class="nc" id="L766">			MDocType dt = MDocType.get(getCtx(), getC_DocType_ID());</span>
+<span class="nc" id="L767">			setIsReceipt(dt.isSOTrx());</span>
+		}
+<span class="nc" id="L769">		setDocumentNo();</span>
+		//
+<span class="nc bnc" id="L771" title="All 2 branches missed.">		if (getDateAcct() == null)</span>
+<span class="nc" id="L772">			setDateAcct(getDateTrx());</span>
+		//
+<span class="nc bnc" id="L774" title="All 2 branches missed.">		if (!isOverUnderPayment())</span>
+<span class="nc" id="L775">			setOverUnderAmt(Env.ZERO);</span>
+		
+		//	Organization
+<span class="nc bnc" id="L778" title="All 4 branches missed.">		if ((newRecord || is_ValueChanged(&quot;C_BankAccount_ID&quot;))</span>
+<span class="nc bnc" id="L779" title="All 2 branches missed.">			&amp;&amp; getC_Charge_ID() == 0)	//	allow different org for charge</span>
+		{
+<span class="nc" id="L781">			MBankAccount ba = MBankAccount.get(getCtx(), getC_BankAccount_ID());</span>
+<span class="nc bnc" id="L782" title="All 2 branches missed.">			if (ba.getAD_Org_ID() != 0)</span>
+<span class="nc" id="L783">				setAD_Org_ID(ba.getAD_Org_ID());</span>
+		}
+		
+		// Validate C_BPartner_ID same as C_BPartner_ID from order and invoice
+<span class="nc bnc" id="L787" title="All 2 branches missed.">		if (   is_new()</span>
+<span class="nc bnc" id="L788" title="All 2 branches missed.">			|| is_ValueChanged(&quot;C_BPartner_ID&quot;)</span>
+<span class="nc bnc" id="L789" title="All 2 branches missed.">			|| is_ValueChanged(&quot;C_Invoice_ID&quot;)</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">			|| is_ValueChanged(&quot;C_Order_ID&quot;)) {</span>
+<span class="nc bnc" id="L791" title="All 6 branches missed.">			if (getC_BPartner_ID() != 0 &amp;&amp; (getC_Invoice_ID() != 0 || getC_Order_ID() != 0)) {</span>
+<span class="nc bnc" id="L792" title="All 2 branches missed.">				if (getC_Invoice_ID() != 0) {</span>
+<span class="nc" id="L793">					MInvoice inv = new MInvoice(getCtx(), getC_Invoice_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L794" title="All 2 branches missed.">					if (!isPayBPAllowed(inv.getC_BPartner_ID())) {</span>
+<span class="nc" id="L795">						log.saveError(&quot;Error&quot;, Msg.getMsg(getCtx(), &quot;BPDifferentFromBPInvoice&quot;));</span>
+<span class="nc" id="L796">						return false;</span>
+					}
+				}
+<span class="nc bnc" id="L799" title="All 2 branches missed.">				if (getC_Order_ID() != 0) {</span>
+<span class="nc" id="L800">					MOrder ord = new MOrder(getCtx(), getC_Order_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L801" title="All 2 branches missed.">					if (!isPayBPAllowed(ord.getC_BPartner_ID())) {</span>
+<span class="nc" id="L802">						log.saveError(&quot;Error&quot;, Msg.getMsg(getCtx(), &quot;BPDifferentFromBPOrder&quot;));</span>
+<span class="nc" id="L803">						return false;</span>
+					}
+				}
+			}
+		}
+
+		// Encrypt credit card number and cvv
+<span class="nc bnc" id="L810" title="All 2 branches missed.">		if (isProcessed())</span>
+		{
+<span class="nc bnc" id="L812" title="All 2 branches missed.">			if (getCreditCardNumber() != null)</span>
+			{
+<span class="nc" id="L814">				String encrpytedCCNo = PaymentUtil.encrpytCreditCard(getCreditCardNumber());</span>
+<span class="nc bnc" id="L815" title="All 2 branches missed.">				if (!encrpytedCCNo.equals(getCreditCardNumber()))</span>
+<span class="nc" id="L816">					setCreditCardNumber(encrpytedCCNo);</span>
+			}
+			
+<span class="nc bnc" id="L819" title="All 2 branches missed.">			if (getCreditCardVV() != null)</span>
+			{
+<span class="nc" id="L821">				String encrpytedCvv = PaymentUtil.encrpytCvv(getCreditCardVV());</span>
+<span class="nc bnc" id="L822" title="All 2 branches missed.">				if (!encrpytedCvv.equals(getCreditCardVV()))</span>
+<span class="nc" id="L823">					setCreditCardVV(encrpytedCvv);</span>
+			}
+		}
+		// Validate IBAN
+<span class="nc bnc" id="L827" title="All 2 branches missed.">		if (MSysConfig.getBooleanValue(MSysConfig.IBAN_VALIDATION, true, Env.getAD_Client_ID(Env.getCtx()))) {</span>
+<span class="nc bnc" id="L828" title="All 2 branches missed.">			if (!Util.isEmpty(getIBAN())) {</span>
+<span class="nc" id="L829">				setIBAN(IBAN.normalizeIBAN(getIBAN()));</span>
+<span class="nc bnc" id="L830" title="All 2 branches missed.">				if (!IBAN.isValid(getIBAN())) {</span>
+<span class="nc" id="L831">					log.saveError(&quot;Error&quot;, Msg.getMsg(getCtx(), &quot;InvalidIBAN&quot;));</span>
+<span class="nc" id="L832">					return false;</span>
+				}
+			}
+		}
+		// Validate IsOverrideCurrencyRate and Currency Rate
+<span class="nc bnc" id="L837" title="All 2 branches missed.">		if (!isProcessed())</span>
+		{
+<span class="nc" id="L839">			MClientInfo info = MClientInfo.get(getCtx(), getAD_Client_ID(), get_TrxName()); </span>
+<span class="nc" id="L840">			MAcctSchema as = MAcctSchema.get (getCtx(), info.getC_AcctSchema1_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L841" title="All 2 branches missed.">			if (as.getC_Currency_ID() != getC_Currency_ID())</span>
+			{
+<span class="nc bnc" id="L843" title="All 2 branches missed.">				if (isOverrideCurrencyRate())</span>
+				{
+<span class="nc bnc" id="L845" title="All 4 branches missed.">					if(getCurrencyRate() == null || getCurrencyRate().signum() == 0)</span>
+					{
+<span class="nc" id="L847">						log.saveError(&quot;FillMandatory&quot;, Msg.getElement(getCtx(), COLUMNNAME_CurrencyRate));</span>
+<span class="nc" id="L848">						return false;</span>
+					}
+<span class="nc bnc" id="L850" title="All 4 branches missed.">					if (getConvertedAmt() == null || getConvertedAmt().signum() == 0)</span>
+					{
+<span class="nc" id="L852">						log.saveError(&quot;FillMandatory&quot;, Msg.getElement(getCtx(), COLUMNNAME_ConvertedAmt));</span>
+<span class="nc" id="L853">						return false;</span>
+					}
+<span class="nc" id="L855">					BigDecimal converted = getPayAmt().multiply(getCurrencyRate());</span>
+<span class="nc" id="L856">					int stdPrecision = MCurrency.getStdPrecision(getCtx(), as.getC_Currency_ID());</span>
+<span class="nc bnc" id="L857" title="All 2 branches missed.">					if (converted.scale() &gt; stdPrecision)</span>
+<span class="nc" id="L858">						converted = converted.setScale(stdPrecision, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L859">					setConvertedAmt(converted);</span>
+<span class="nc" id="L860">				}</span>
+				else
+				{
+<span class="nc" id="L863">					setCurrencyRate(null);</span>
+<span class="nc" id="L864">					setConvertedAmt(null);</span>
+				}
+<span class="nc" id="L866">			}</span>
+			else
+			{
+<span class="nc" id="L869">				setCurrencyRate(null);</span>
+<span class="nc" id="L870">				setConvertedAmt(null);</span>
+			}
+		}
+
+		// Clear credit card fields if tender type is not credit card
+<span class="nc bnc" id="L875" title="All 2 branches missed.">		if (!isProcessed())</span>
+		{
+<span class="nc bnc" id="L877" title="All 2 branches missed.">			if (!TENDERTYPE_CreditCard.equals(getTenderType()))</span>
+			{
+<span class="nc bnc" id="L879" title="All 2 branches missed.">				if (!Util.isEmpty(getCreditCardType(), true))</span>
+				{
+<span class="nc" id="L881">					setCreditCardType(null);					</span>
+				}
+				
+<span class="nc bnc" id="L884" title="All 2 branches missed.">				if (!Util.isEmpty(getCreditCardNumber(), true))</span>
+				{
+<span class="nc" id="L886">					setCreditCardNumber(null);</span>
+				}
+				
+<span class="nc bnc" id="L889" title="All 2 branches missed.">				if (!Util.isEmpty(getCreditCardVV(), true))</span>
+				{
+<span class="nc" id="L891">					setCreditCardVV(null);</span>
+				}
+				
+<span class="nc bnc" id="L894" title="All 2 branches missed.">				if (getCreditCardExpMM() &gt; 0)</span>
+				{
+<span class="nc" id="L896">					set_Value(COLUMNNAME_CreditCardExpMM, null);</span>
+				}
+				
+<span class="nc bnc" id="L899" title="All 2 branches missed.">				if (getCreditCardExpYY() &gt; 0)</span>
+				{
+<span class="nc" id="L901">					set_Value(COLUMNNAME_CreditCardExpYY, null);</span>
+				}
+			}
+		}
+		
+<span class="nc" id="L906">		return true;</span>
+	}	//	beforeSave
+
+	/**
+	 * Validates if the BP is allowed to pay as owner of the document or as a proxy in BP Relationship
+	 * @param c_BPartner_ID
+	 * @return
+	 */
+	private boolean isPayBPAllowed(int bpId) {
+<span class="nc bnc" id="L915" title="All 2 branches missed.">		if (bpId == getC_BPartner_ID()) // same BP of the document</span>
+<span class="nc" id="L916">			return true;</span>
+<span class="nc bnc" id="L917" title="All 2 branches missed.">		if (MBPRelation.canPay(getCtx(), getC_BPartner_ID(), bpId, get_TrxName())) // can pay as a proxy in BP relationship</span>
+<span class="nc" id="L918">			return true;</span>
+<span class="nc" id="L919">		return false;</span>
+	}
+
+	@Override
+	protected boolean beforeDelete() {
+		@SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L925">		boolean ok = MPaySelectionCheck.deleteGeneratedDraft(getCtx(), getC_Payment_ID(), get_TrxName());</span>
+<span class="nc" id="L926">		return true;</span>
+	}
+
+	/**
+	 * 	Document Status is Complete or Closed
+	 *	@return true if CO, CL or RE
+	 */
+	public boolean isComplete()
+	{
+<span class="nc" id="L935">		String ds = getDocStatus();</span>
+<span class="nc bnc" id="L936" title="All 2 branches missed.">		return DOCSTATUS_Completed.equals(ds)</span>
+<span class="nc bnc" id="L937" title="All 2 branches missed.">			|| DOCSTATUS_Closed.equals(ds)</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">			|| DOCSTATUS_Reversed.equals(ds);</span>
+	}	//	isComplete
+
+	/**
+	 * 	Get Allocated Amt in Payment Currency
+	 *	@return allocated amount or null
+	 */
+	public BigDecimal getAllocatedAmt ()
+	{
+<span class="nc" id="L947">		BigDecimal retValue = null;</span>
+<span class="nc bnc" id="L948" title="All 2 branches missed.">		if (getC_Charge_ID() != 0)</span>
+<span class="nc" id="L949">			return getPayAmt();</span>
+		//
+<span class="nc" id="L951">		String sql = &quot;SELECT SUM(currencyConvert(al.Amount,&quot;</span>
+				+ &quot;ah.C_Currency_ID, p.C_Currency_ID,ah.DateTrx,p.C_ConversionType_ID, al.AD_Client_ID,al.AD_Org_ID)) &quot;
+			+ &quot;FROM C_AllocationLine al&quot;
+			+ &quot; INNER JOIN C_AllocationHdr ah ON (al.C_AllocationHdr_ID=ah.C_AllocationHdr_ID) &quot;
+			+ &quot; INNER JOIN C_Payment p ON (al.C_Payment_ID=p.C_Payment_ID) &quot;
+			+ &quot;WHERE al.C_Payment_ID=?&quot;
+			+ &quot; AND ah.IsActive='Y' AND al.IsActive='Y'&quot;;
+<span class="nc" id="L958">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L959">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L962">			pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L963">			pstmt.setInt(1, getC_Payment_ID());</span>
+<span class="nc" id="L964">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L965" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L966">				retValue = rs.getBigDecimal(1);</span>
+<span class="nc" id="L967">		}</span>
+<span class="nc" id="L968">		catch (Exception e)</span>
+		{
+<span class="nc" id="L970">			log.log(Level.SEVERE, &quot;getAllocatedAmt&quot;, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L974">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L975">			rs = null;</span>
+<span class="nc" id="L976">			pstmt = null;</span>
+		}
+<span class="nc" id="L978">		return retValue;</span>
+	}	//	getAllocatedAmt
+
+	/**
+	 * 	Test Allocation (and set allocated flag)
+	 *	@return true if IsAllocated updated
+	 */
+	public boolean testAllocation()
+	{
+		//
+<span class="nc" id="L988">		BigDecimal alloc = getAllocatedAmt();</span>
+<span class="nc bnc" id="L989" title="All 2 branches missed.">		if (alloc == null)</span>
+<span class="nc" id="L990">			alloc = Env.ZERO;</span>
+<span class="nc" id="L991">		BigDecimal total = getPayAmt();</span>
+<span class="nc bnc" id="L992" title="All 2 branches missed.">		if (!isReceipt())</span>
+<span class="nc" id="L993">			total = total.negate();</span>
+<span class="nc bnc" id="L994" title="All 2 branches missed.">		boolean test = total.compareTo(alloc) == 0;</span>
+<span class="nc" id="L995">		boolean change = test != isAllocated();</span>
+<span class="nc bnc" id="L996" title="All 2 branches missed.">		if (change)</span>
+<span class="nc" id="L997">			setIsAllocated(test);</span>
+<span class="nc bnc" id="L998" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Allocated=&quot; + test </span>
+<span class="nc" id="L999">			+ &quot; (&quot; + alloc + &quot;=&quot; + total + &quot;)&quot;);</span>
+<span class="nc" id="L1000">		return change;</span>
+	}	//	testAllocation
+	
+	/**
+	 * 	Set Allocated Flag for payments
+	 * 	@param ctx context
+	 *	@param C_BPartner_ID if 0 all
+	 *	@param trxName trx
+	 */
+	public static void setIsAllocated (Properties ctx, int C_BPartner_ID, String trxName)
+	{
+<span class="nc" id="L1011">		int counter = 0;</span>
+<span class="nc" id="L1012">		String sql = &quot;SELECT * FROM C_Payment &quot;</span>
+			+ &quot;WHERE IsAllocated='N' AND DocStatus IN ('CO','CL')&quot;;
+<span class="nc bnc" id="L1014" title="All 2 branches missed.">		if (C_BPartner_ID &gt; 1)</span>
+<span class="nc" id="L1015">			sql += &quot; AND C_BPartner_ID=?&quot;;</span>
+		else
+<span class="nc" id="L1017">			sql += &quot; AND AD_Client_ID=&quot; + Env.getAD_Client_ID(ctx);</span>
+<span class="nc" id="L1018">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1019">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1022">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc bnc" id="L1023" title="All 2 branches missed.">			if (C_BPartner_ID &gt; 1)</span>
+<span class="nc" id="L1024">				pstmt.setInt (1, C_BPartner_ID);</span>
+<span class="nc" id="L1025">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L1028">				MPayment pay = new MPayment (ctx, rs, trxName);</span>
+<span class="nc bnc" id="L1029" title="All 2 branches missed.">				if (pay.testAllocation())</span>
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">					if (pay.save())</span>
+<span class="nc" id="L1031">						counter++;</span>
+			}
+<span class="nc" id="L1033">		}</span>
+<span class="nc" id="L1034">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1036">			s_log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L1040">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1041">			rs = null;</span>
+<span class="nc" id="L1042">			pstmt = null;</span>
+		}
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;#&quot; + counter);</span>
+<span class="nc" id="L1045">	}	//	setIsAllocated</span>
+
+	/**
+	 * 	Set Error Message
+	 *	@param errorMessage error message
+	 */
+	public void setErrorMessage(String errorMessage)
+	{
+<span class="nc" id="L1053">		m_errorMessage = errorMessage;</span>
+<span class="nc" id="L1054">	}	//	setErrorMessage</span>
+
+	/**
+	 * 	Get Error Message
+	 *	@return error message
+	 */
+	public String getErrorMessage()
+	{
+<span class="nc" id="L1062">		return m_errorMessage;</span>
+	}	//	getErrorMessage
+
+	/**
+	 *  Set Bank Account for Payment.
+	 *  @param C_BankAccount_ID C_BankAccount_ID
+	 */
+	public void setC_BankAccount_ID (int C_BankAccount_ID)
+	{
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">		if (C_BankAccount_ID == 0)</span>
+		{
+<span class="nc" id="L1073">			setPaymentProcessor();</span>
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">			if (getC_BankAccount_ID() == 0)</span>
+<span class="nc" id="L1075">				throw new IllegalArgumentException(&quot;Can't find Bank Account&quot;);</span>
+		}
+		else
+<span class="nc" id="L1078">			super.setC_BankAccount_ID(C_BankAccount_ID);</span>
+<span class="nc" id="L1079">	}	//	setC_BankAccount_ID</span>
+
+	/**
+	 *  Set BankAccount and PaymentProcessor
+	 *  @return true if found
+	 */
+	public boolean setPaymentProcessor ()
+	{
+<span class="nc" id="L1087">		return setPaymentProcessor (getTenderType(), getCreditCardType(), getC_PaymentProcessor_ID());</span>
+	}	//	setPaymentProcessor
+
+	/**
+	 *  Find and Set BankAccount and PaymentProcessor
+	 *  @param tender TenderType see TENDER_
+	 *  @param CCType CC Type see CC_
+	 *  @return true if found
+	 */
+	public boolean setPaymentProcessor (String tender, String CCType, int C_PaymentProcessor_ID)
+	{
+<span class="nc" id="L1098">		m_mBankAccountProcessor = null;</span>
+		//	Get Processor List
+<span class="nc bnc" id="L1100" title="All 4 branches missed.">		if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L1101">			m_mBankAccountProcessors = MBankAccountProcessor.find(getCtx(), tender, CCType, getAD_Client_ID(),</span>
+<span class="nc" id="L1102">				getC_Currency_ID(), getPayAmt(), get_TrxName());</span>
+		//	Relax Amount
+<span class="nc bnc" id="L1104" title="All 4 branches missed.">		if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L1105">			m_mBankAccountProcessors = MBankAccountProcessor.find(getCtx(), tender, CCType, getAD_Client_ID(),</span>
+<span class="nc" id="L1106">				getC_Currency_ID(), Env.ZERO, get_TrxName());</span>
+<span class="nc bnc" id="L1107" title="All 4 branches missed.">		if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L1108">			return false;</span>
+
+		//	Find the first right one
+<span class="nc bnc" id="L1111" title="All 2 branches missed.">		for (int i = 0; i &lt; m_mBankAccountProcessors.length; i++)</span>
+		{
+<span class="nc" id="L1113">			MBankAccountProcessor bankAccountProcessor = m_mBankAccountProcessors[i];</span>
+<span class="nc bnc" id="L1114" title="All 2 branches missed.">			if (bankAccountProcessor.accepts(tender, CCType))</span>
+			{
+<span class="nc bnc" id="L1116" title="All 4 branches missed.">				if (C_PaymentProcessor_ID == 0 || bankAccountProcessor.getC_PaymentProcessor_ID() == C_PaymentProcessor_ID)</span>
+				{
+<span class="nc" id="L1118">					m_mBankAccountProcessor = m_mBankAccountProcessors[i];</span>
+<span class="nc" id="L1119">					break;</span>
+				}
+			}
+		}
+<span class="nc bnc" id="L1123" title="All 2 branches missed.">		if (m_mBankAccountProcessor != null)</span>
+		{
+<span class="nc" id="L1125">			setC_BankAccount_ID (m_mBankAccountProcessor.getC_BankAccount_ID());</span>
+<span class="nc" id="L1126">			setC_PaymentProcessor_ID (m_mBankAccountProcessor.getC_PaymentProcessor_ID());</span>
+		}
+		//
+<span class="nc bnc" id="L1129" title="All 2 branches missed.">		return m_mBankAccountProcessor != null;</span>
+	}   //  setPaymentProcessor
+
+
+	/**
+	 * 	Get Accepted Credit Cards for PayAmt (default 0)
+	 *	@return credit cards
+	 */
+	public ValueNamePair[] getCreditCards ()
+	{
+<span class="nc" id="L1139">		return getCreditCards(getPayAmt());</span>
+	}	//	getCreditCards
+
+
+	/**
+	 * 	Get Accepted Credit Cards for amount
+	 *	@param amt trx amount
+	 *	@return credit cards
+	 */
+	public ValueNamePair[] getCreditCards (BigDecimal amt)
+	{
+		try
+		{
+<span class="nc bnc" id="L1152" title="All 4 branches missed.">			if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L1153">				m_mBankAccountProcessors = MBankAccountProcessor.find(getCtx (), null, null, </span>
+<span class="nc" id="L1154">					getAD_Client_ID (), getC_Currency_ID (), amt, get_TrxName());</span>
+			//
+<span class="nc" id="L1156">			HashMap&lt;String,ValueNamePair&gt; map = new HashMap&lt;String,ValueNamePair&gt;(); //	to eliminate duplicates</span>
+<span class="nc bnc" id="L1157" title="All 2 branches missed.">			for (int i = 0; i &lt; m_mBankAccountProcessors.length; i++)</span>
+			{
+<span class="nc" id="L1159">				MBankAccountProcessor bankAccountProcessor = m_mBankAccountProcessors[i];</span>
+<span class="nc" id="L1160">				MPaymentProcessor paymentProcessor = new MPaymentProcessor(getCtx(), bankAccountProcessor.getC_PaymentProcessor_ID(), get_TrxName());</span>
+				
+<span class="nc bnc" id="L1162" title="All 4 branches missed.">				if (bankAccountProcessor.isAcceptAMEX() &amp;&amp; paymentProcessor.isAcceptAMEX())</span>
+<span class="nc" id="L1163">					map.put (CREDITCARDTYPE_Amex, getCreditCardPair (CREDITCARDTYPE_Amex));</span>
+<span class="nc bnc" id="L1164" title="All 4 branches missed.">				if (bankAccountProcessor.isAcceptDiners() &amp;&amp; paymentProcessor.isAcceptDiners())</span>
+<span class="nc" id="L1165">					map.put (CREDITCARDTYPE_Diners, getCreditCardPair (CREDITCARDTYPE_Diners));</span>
+<span class="nc bnc" id="L1166" title="All 4 branches missed.">				if (bankAccountProcessor.isAcceptDiscover() &amp;&amp; paymentProcessor.isAcceptDiscover())</span>
+<span class="nc" id="L1167">					map.put (CREDITCARDTYPE_Discover, getCreditCardPair (CREDITCARDTYPE_Discover));</span>
+<span class="nc bnc" id="L1168" title="All 4 branches missed.">				if (bankAccountProcessor.isAcceptMC() &amp;&amp; paymentProcessor.isAcceptMC())</span>
+<span class="nc" id="L1169">					map.put (CREDITCARDTYPE_MasterCard, getCreditCardPair (CREDITCARDTYPE_MasterCard));</span>
+<span class="nc bnc" id="L1170" title="All 4 branches missed.">				if (bankAccountProcessor.isAcceptCorporate() &amp;&amp; paymentProcessor.isAcceptCorporate())</span>
+<span class="nc" id="L1171">					map.put (CREDITCARDTYPE_PurchaseCard, getCreditCardPair (CREDITCARDTYPE_PurchaseCard));</span>
+<span class="nc bnc" id="L1172" title="All 4 branches missed.">				if (bankAccountProcessor.isAcceptVisa() &amp;&amp; paymentProcessor.isAcceptVisa())</span>
+<span class="nc" id="L1173">					map.put (CREDITCARDTYPE_Visa, getCreditCardPair (CREDITCARDTYPE_Visa));</span>
+			} //	for all payment processors
+			//
+<span class="nc" id="L1176">			ValueNamePair[] retValue = new ValueNamePair[map.size ()];</span>
+<span class="nc" id="L1177">			map.values ().toArray (retValue);</span>
+<span class="nc bnc" id="L1178" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;getCreditCards - #&quot; + retValue.length + &quot; - Processors=&quot; + m_mBankAccountProcessors.length);</span>
+<span class="nc" id="L1179">			return retValue;</span>
+		}
+<span class="nc" id="L1181">		catch (Exception ex)</span>
+		{
+<span class="nc" id="L1183">			ex.printStackTrace();</span>
+<span class="nc" id="L1184">			return null;</span>
+		}
+	}	//	getCreditCards
+
+	/**
+	 * 	Get Type and name pair
+	 *	@param CreditCardType credit card Type
+	 *	@return ValueNamePair (CreditCardType, Name)
+	 */
+	protected ValueNamePair getCreditCardPair (String CreditCardType)
+	{
+<span class="nc" id="L1195">		return new ValueNamePair (CreditCardType, getCreditCardName(CreditCardType));</span>
+	}	//	getCreditCardPair
+	
+	/**
+	 *  Set Credit Card Number.
+	 *  @param CreditCardNumber CreditCard Number
+	 */
+	@Override
+	public void setCreditCardNumber (String CreditCardNumber)
+	{
+<span class="nc" id="L1205">		super.setCreditCardNumber (MPaymentValidate.checkNumeric(CreditCardNumber));</span>
+<span class="nc" id="L1206">	}	//	setCreditCardNumber</span>
+	
+	/**
+	 *  Set Verification Code
+	 *  @param newCreditCardVV CC verification
+	 */
+	@Override
+	public void setCreditCardVV(String newCreditCardVV)
+	{
+<span class="nc" id="L1215">		super.setCreditCardVV (MPaymentValidate.checkNumeric(newCreditCardVV));</span>
+<span class="nc" id="L1216">	}	//	setCreditCardVV</span>
+
+	/**
+	 *  Set Two Digit CreditCard MM
+	 *  @param CreditCardExpMM Exp month
+	 */
+	@Override
+	public void setCreditCardExpMM (int CreditCardExpMM)
+	{
+<span class="nc bnc" id="L1225" title="All 4 branches missed.">		if (CreditCardExpMM &lt; 1 || CreditCardExpMM &gt; 12)</span>
+<span class="nc" id="L1226">			;</span>
+		else
+<span class="nc" id="L1228">			super.setCreditCardExpMM (CreditCardExpMM);</span>
+<span class="nc" id="L1229">	}	//	setCreditCardExpMM</span>
+
+	/**
+	 *  Set Two digit CreditCard YY (til 2020)
+	 *  @param newCreditCardExpYY 2 or 4 digit year
+	 */
+	@Override
+	public void setCreditCardExpYY (int newCreditCardExpYY)
+	{
+<span class="nc" id="L1238">		int CreditCardExpYY = newCreditCardExpYY;</span>
+<span class="nc bnc" id="L1239" title="All 2 branches missed.">		if (newCreditCardExpYY &gt; 1999)</span>
+<span class="nc" id="L1240">			CreditCardExpYY = newCreditCardExpYY-2000;</span>
+<span class="nc" id="L1241">		super.setCreditCardExpYY(CreditCardExpYY);</span>
+<span class="nc" id="L1242">	}	//	setCreditCardExpYY</span>
+
+	/**
+	 *  Set CreditCard Exp  MMYY
+	 *  @param mmyy Exp in form of mmyy
+	 *  @return true if valid
+	 */
+	public boolean setCreditCardExp (String mmyy)
+	{
+<span class="nc bnc" id="L1251" title="All 2 branches missed.">		if (MPaymentValidate.validateCreditCardExp(mmyy).length() != 0)</span>
+<span class="nc" id="L1252">			return false;</span>
+		//
+<span class="nc" id="L1254">		String exp = MPaymentValidate.checkNumeric(mmyy);</span>
+<span class="nc" id="L1255">		String mmStr = exp.substring(0,2);</span>
+<span class="nc" id="L1256">		String yyStr = exp.substring(2,4);</span>
+<span class="nc" id="L1257">		setCreditCardExpMM (Integer.parseInt(mmStr));</span>
+<span class="nc" id="L1258">		setCreditCardExpYY (Integer.parseInt(yyStr));</span>
+<span class="nc" id="L1259">		return true;</span>
+	}   //  setCreditCardExp
+
+
+	/**
+	 *  CreditCard Exp  MMYY
+	 *  @param delimiter / - or null
+	 *  @return Exp (mm + delimiter + yy)
+	 */
+	public String getCreditCardExp(String delimiter)
+	{
+<span class="nc" id="L1270">		String mm = String.valueOf(getCreditCardExpMM());</span>
+<span class="nc" id="L1271">		String yy = String.valueOf(getCreditCardExpYY());</span>
+
+<span class="nc" id="L1273">		StringBuilder retValue = new StringBuilder();</span>
+<span class="nc bnc" id="L1274" title="All 2 branches missed.">		if (mm.length() == 1)</span>
+<span class="nc" id="L1275">			retValue.append(&quot;0&quot;);</span>
+<span class="nc" id="L1276">		retValue.append(mm);</span>
+		//
+<span class="nc bnc" id="L1278" title="All 2 branches missed.">		if (delimiter != null)</span>
+<span class="nc" id="L1279">			retValue.append(delimiter);</span>
+		//
+<span class="nc bnc" id="L1281" title="All 2 branches missed.">		if (yy.length() == 1)</span>
+<span class="nc" id="L1282">			retValue.append(&quot;0&quot;);</span>
+<span class="nc" id="L1283">		retValue.append(yy);</span>
+		//
+<span class="nc" id="L1285">		return (retValue.toString());</span>
+	}   //  getCreditCardExp
+
+	/**
+	 *  MICR
+	 *  @param MICR MICR
+	 */
+	@Override
+	public void setMicr (String MICR)
+	{
+<span class="nc" id="L1295">		super.setMicr (MPaymentValidate.checkNumeric(MICR));</span>
+<span class="nc" id="L1296">	}	//	setBankMICR</span>
+
+	/**
+	 *  Routing No
+	 *  @param RoutingNo Routing No
+	 */
+	@Override
+	public void setRoutingNo(String RoutingNo)
+	{
+<span class="nc" id="L1305">		super.setRoutingNo (RoutingNo);</span>
+<span class="nc" id="L1306">	}	//	setBankRoutingNo</span>
+
+	/**
+	 *  Bank Account No
+	 *  @param AccountNo AccountNo
+	 */
+	@Override
+	public void setAccountNo (String AccountNo)
+	{
+<span class="nc" id="L1315">		super.setAccountNo (MPaymentValidate.checkNumeric(AccountNo));</span>
+<span class="nc" id="L1316">	}	//	setBankAccountNo</span>
+
+	/**
+	 *  Check No
+	 *  @param CheckNo Check No
+	 */
+	@Override
+	public void setCheckNo(String CheckNo)
+	{
+<span class="nc" id="L1325">		super.setCheckNo(MPaymentValidate.checkNumeric(CheckNo));</span>
+<span class="nc" id="L1326">	}	//	setBankCheckNo</span>
+
+
+	/**
+	 *  Derive DocumentNo from Payment info.
+	 * 	If there is a R_PnRef, take R_PnRef as DocumentNo.
+	 */
+	protected void setDocumentNo()
+	{
+		//	Cash Transfer
+<span class="nc bnc" id="L1336" title="All 2 branches missed.">		if (&quot;X&quot;.equals(getTenderType()))</span>
+<span class="nc" id="L1337">			return;</span>
+		//	Current Document No
+<span class="nc" id="L1339">		String documentNo = getDocumentNo();</span>
+		//	Existing reversal
+<span class="nc bnc" id="L1341" title="All 2 branches missed.">		if (documentNo != null </span>
+<span class="nc bnc" id="L1342" title="All 2 branches missed.">			&amp;&amp; documentNo.indexOf(REVERSE_INDICATOR) &gt;= 0)</span>
+<span class="nc" id="L1343">			return;</span>
+		
+		//	If external number exists - enforce it 
+<span class="nc bnc" id="L1346" title="All 4 branches missed.">		if (getR_PnRef() != null &amp;&amp; getR_PnRef().length() &gt; 0)</span>
+		{
+<span class="nc bnc" id="L1348" title="All 2 branches missed.">			if (!getR_PnRef().equals(documentNo))</span>
+<span class="nc" id="L1349">				setDocumentNo(getR_PnRef());</span>
+<span class="nc" id="L1350">			return;</span>
+		}
+		
+<span class="nc" id="L1353">		documentNo = &quot;&quot;;</span>
+		// globalqss - read configuration to assign credit card or check number number for Payments
+		//	Credit Card
+<span class="nc bnc" id="L1356" title="All 2 branches missed.">		if (TENDERTYPE_CreditCard.equals(getTenderType()))</span>
+		{
+<span class="nc bnc" id="L1358" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.PAYMENT_OVERWRITE_DOCUMENTNO_WITH_CREDIT_CARD, true, getAD_Client_ID())) {</span>
+<span class="nc" id="L1359">				documentNo = getCreditCardType()</span>
+<span class="nc" id="L1360">					+ &quot; &quot; + Obscure.obscure(getCreditCardNumber())</span>
+<span class="nc" id="L1361">					+ &quot; &quot; + getCreditCardExpMM() </span>
+<span class="nc" id="L1362">					+ &quot;/&quot; + getCreditCardExpYY();</span>
+			}
+<span class="nc" id="L1364">		}</span>
+		//	Own Check No
+<span class="nc bnc" id="L1366" title="All 2 branches missed.">		else if (TENDERTYPE_Check.equals(getTenderType())</span>
+<span class="nc bnc" id="L1367" title="All 2 branches missed.">			&amp;&amp; !isReceipt()</span>
+<span class="nc bnc" id="L1368" title="All 4 branches missed.">			&amp;&amp; getCheckNo() != null &amp;&amp; getCheckNo().length() &gt; 0)</span>
+		{
+<span class="nc bnc" id="L1370" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.PAYMENT_OVERWRITE_DOCUMENTNO_WITH_CHECK_ON_PAYMENT, true, getAD_Client_ID())) {</span>
+<span class="nc" id="L1371">				documentNo = getCheckNo();</span>
+			}
+<span class="nc" id="L1373">		}</span>
+		//	Customer Check: Routing: Account #Check 
+<span class="nc bnc" id="L1375" title="All 2 branches missed.">		else if (TENDERTYPE_Check.equals(getTenderType())</span>
+<span class="nc bnc" id="L1376" title="All 2 branches missed.">			&amp;&amp; isReceipt())</span>
+		{
+<span class="nc bnc" id="L1378" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.PAYMENT_OVERWRITE_DOCUMENTNO_WITH_CHECK_ON_RECEIPT, true, getAD_Client_ID())) {</span>
+<span class="nc bnc" id="L1379" title="All 2 branches missed.">				if (getRoutingNo() != null)</span>
+<span class="nc" id="L1380">					documentNo = getRoutingNo() + &quot;: &quot;;</span>
+<span class="nc bnc" id="L1381" title="All 2 branches missed.">				if (getAccountNo() != null)</span>
+<span class="nc" id="L1382">					documentNo += getAccountNo();</span>
+<span class="nc bnc" id="L1383" title="All 2 branches missed.">				if (getCheckNo() != null)</span>
+				{
+<span class="nc bnc" id="L1385" title="All 2 branches missed.">					if (documentNo.length() &gt; 0)</span>
+<span class="nc" id="L1386">						documentNo += &quot; &quot;;</span>
+<span class="nc" id="L1387">					documentNo += &quot;#&quot; + getCheckNo();</span>
+				}
+			}
+		}
+
+		//	Set Document No
+<span class="nc" id="L1393">		documentNo = documentNo.trim();</span>
+<span class="nc bnc" id="L1394" title="All 2 branches missed.">		if (documentNo.length() &gt; 0)</span>
+<span class="nc" id="L1395">			setDocumentNo(documentNo);</span>
+<span class="nc" id="L1396">	}	//	setDocumentNo</span>
+
+	/**
+	 * 	Set Reference No (and Document No)
+	 *	@param R_PnRef reference
+	 */
+	@Override
+	public void setR_PnRef (String R_PnRef)
+	{
+<span class="nc" id="L1405">		super.setR_PnRef (R_PnRef);</span>
+<span class="nc bnc" id="L1406" title="All 2 branches missed.">		if (R_PnRef != null)</span>
+<span class="nc" id="L1407">			setDocumentNo (R_PnRef);</span>
+<span class="nc" id="L1408">	}	//	setR_PnRef</span>
+	
+	/**
+	 *  Set Payment Amount
+	 *  @param PayAmt Pay Amt
+	 */
+	@Override
+	public void setPayAmt (BigDecimal PayAmt)
+	{
+<span class="nc bnc" id="L1417" title="All 2 branches missed.">		super.setPayAmt(PayAmt == null ? Env.ZERO : PayAmt);</span>
+<span class="nc" id="L1418">	}	//	setPayAmt</span>
+
+	/**
+	 * Set Payment Amount and Currency
+	 *
+	 * @param C_Currency_ID currency
+	 * @param payAmt amount
+	 */
+	public void setAmount (int C_Currency_ID, BigDecimal payAmt)
+	{
+<span class="nc bnc" id="L1428" title="All 2 branches missed.">		if (C_Currency_ID == 0)</span>
+<span class="nc" id="L1429">			C_Currency_ID = MClient.get(getCtx()).getC_Currency_ID();</span>
+<span class="nc" id="L1430">		setC_Currency_ID(C_Currency_ID);</span>
+<span class="nc" id="L1431">		setPayAmt(payAmt);</span>
+<span class="nc" id="L1432">	}   //  setAmount</span>
+
+	/**
+	 *  Discount Amt
+	 *  @param DiscountAmt Discount
+	 */
+	@Override
+	public void setDiscountAmt (BigDecimal DiscountAmt)
+	{
+<span class="nc bnc" id="L1441" title="All 2 branches missed.">		super.setDiscountAmt (DiscountAmt == null ? Env.ZERO : DiscountAmt);</span>
+<span class="nc" id="L1442">	}	//	setDiscountAmt</span>
+
+	/**
+	 *  WriteOff Amt
+	 *  @param WriteOffAmt WriteOff
+	 */
+	@Override
+	public void setWriteOffAmt (BigDecimal WriteOffAmt)
+	{
+<span class="nc bnc" id="L1451" title="All 2 branches missed.">		super.setWriteOffAmt (WriteOffAmt == null ? Env.ZERO : WriteOffAmt);</span>
+<span class="nc" id="L1452">	}	//	setWriteOffAmt</span>
+
+	/**
+	 *  OverUnder Amt
+	 *  @param OverUnderAmt OverUnder
+	 */
+	@Override
+	public void setOverUnderAmt (BigDecimal OverUnderAmt)
+	{
+<span class="nc bnc" id="L1461" title="All 2 branches missed.">		super.setOverUnderAmt (OverUnderAmt == null ? Env.ZERO : OverUnderAmt);</span>
+<span class="nc bnc" id="L1462" title="All 2 branches missed.">		setIsOverUnderPayment(getOverUnderAmt().compareTo(Env.ZERO) != 0);</span>
+<span class="nc" id="L1463">	}	//	setOverUnderAmt</span>
+
+	/**
+	 *  Tax Amt
+	 *  @param TaxAmt Tax
+	 */
+	@Override
+	public void setTaxAmt (BigDecimal TaxAmt)
+	{
+<span class="nc bnc" id="L1472" title="All 2 branches missed.">		super.setTaxAmt (TaxAmt == null ? Env.ZERO : TaxAmt);</span>
+<span class="nc" id="L1473">	}	//	setTaxAmt</span>
+
+	/**
+	 * 	Set Info from BP Bank Account
+	 *	@param ba BP bank account
+	 */
+	public void setBP_BankAccount (MBPBankAccount ba)
+	{
+<span class="nc bnc" id="L1481" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;&quot; + ba);</span>
+<span class="nc bnc" id="L1482" title="All 2 branches missed.">		if (ba == null)</span>
+<span class="nc" id="L1483">			return;</span>
+<span class="nc" id="L1484">		setC_BPartner_ID(ba.getC_BPartner_ID());</span>
+<span class="nc" id="L1485">		setAccountAddress(ba.getA_Name(), ba.getA_Street(), ba.getA_City(),</span>
+<span class="nc" id="L1486">			ba.getA_State(), ba.getA_Zip(), ba.getA_Country());</span>
+<span class="nc" id="L1487">		setA_EMail(ba.getA_EMail());</span>
+<span class="nc" id="L1488">		setA_Ident_DL(ba.getA_Ident_DL());</span>
+<span class="nc" id="L1489">		setA_Ident_SSN(ba.getA_Ident_SSN());</span>
+		//	CC
+<span class="nc bnc" id="L1491" title="All 2 branches missed.">		if (ba.getCreditCardType() != null)</span>
+<span class="nc" id="L1492">			setCreditCardType(ba.getCreditCardType());</span>
+<span class="nc bnc" id="L1493" title="All 2 branches missed.">		if (ba.getCreditCardNumber() != null)</span>
+<span class="nc" id="L1494">			setCreditCardNumber(ba.getCreditCardNumber());</span>
+<span class="nc bnc" id="L1495" title="All 2 branches missed.">		if (ba.getCreditCardExpMM() != 0)</span>
+<span class="nc" id="L1496">			setCreditCardExpMM(ba.getCreditCardExpMM());</span>
+<span class="nc bnc" id="L1497" title="All 2 branches missed.">		if (ba.getCreditCardExpYY() != 0)</span>
+<span class="nc" id="L1498">			setCreditCardExpYY(ba.getCreditCardExpYY());</span>
+<span class="nc bnc" id="L1499" title="All 2 branches missed.">		if (ba.getCreditCardVV() != null)</span>
+<span class="nc" id="L1500">			setCreditCardVV(ba.getCreditCardVV());</span>
+		//	Bank
+<span class="nc bnc" id="L1502" title="All 2 branches missed.">		if (ba.getAccountNo() != null)</span>
+<span class="nc" id="L1503">			setAccountNo(ba.getAccountNo());</span>
+<span class="nc bnc" id="L1504" title="All 2 branches missed.">		if (ba.getRoutingNo() != null)</span>
+<span class="nc" id="L1505">			setRoutingNo(ba.getRoutingNo());</span>
+<span class="nc bnc" id="L1506" title="All 2 branches missed.">		if (ba.getIBAN() != null)</span>
+<span class="nc" id="L1507">			setIBAN(ba.getIBAN());</span>
+<span class="nc bnc" id="L1508" title="All 2 branches missed.">		if (ba.getSwiftCode() != null)</span>
+<span class="nc" id="L1509">			setSwiftCode(ba.getSwiftCode()) ;</span>
+<span class="nc" id="L1510">	}	//	setBP_BankAccount</span>
+
+	/**
+	 * 	Save Info to BP Bank Account
+	 *	@param ba BP bank account
+	 * 	@return true if saved
+	 */
+	public boolean saveToBP_BankAccount (MBPBankAccount ba)
+	{
+<span class="nc bnc" id="L1519" title="All 2 branches missed.">		if (ba == null)</span>
+<span class="nc" id="L1520">			return false;</span>
+<span class="nc" id="L1521">		ba.setA_Name(getA_Name());</span>
+<span class="nc" id="L1522">		ba.setA_Street(getA_Street());</span>
+<span class="nc" id="L1523">		ba.setA_City(getA_City());</span>
+<span class="nc" id="L1524">		ba.setA_State(getA_State());</span>
+<span class="nc" id="L1525">		ba.setA_Zip(getA_Zip());</span>
+<span class="nc" id="L1526">		ba.setA_Country(getA_Country());</span>
+<span class="nc" id="L1527">		ba.setA_EMail(getA_EMail());</span>
+<span class="nc" id="L1528">		ba.setA_Ident_DL(getA_Ident_DL());</span>
+<span class="nc" id="L1529">		ba.setA_Ident_SSN(getA_Ident_SSN());</span>
+		//	CC
+<span class="nc" id="L1531">		ba.setCreditCardType(getCreditCardType());</span>
+<span class="nc" id="L1532">		ba.setCreditCardNumber(getCreditCardNumber());</span>
+<span class="nc" id="L1533">		ba.setCreditCardExpMM(getCreditCardExpMM());</span>
+<span class="nc" id="L1534">		ba.setCreditCardExpYY(getCreditCardExpYY());</span>
+<span class="nc" id="L1535">		ba.setCreditCardVV(getCreditCardVV());</span>
+		//	Bank
+<span class="nc bnc" id="L1537" title="All 2 branches missed.">		if (getAccountNo() != null)</span>
+<span class="nc" id="L1538">			ba.setAccountNo(getAccountNo());</span>
+<span class="nc bnc" id="L1539" title="All 2 branches missed.">		if (getRoutingNo() != null)</span>
+<span class="nc" id="L1540">			ba.setRoutingNo(getRoutingNo());</span>
+<span class="nc bnc" id="L1541" title="All 2 branches missed.">		if (getIBAN() != null)</span>
+<span class="nc" id="L1542">			ba.setIBAN(getIBAN());</span>
+		//	Trx
+<span class="nc" id="L1544">		ba.setR_AvsAddr(getR_AvsAddr());</span>
+<span class="nc" id="L1545">		ba.setR_AvsZip(getR_AvsZip());</span>
+		//
+<span class="nc" id="L1547">		boolean ok = ba.save(get_TrxName());</span>
+<span class="nc bnc" id="L1548" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;saveToBP_BankAccount - &quot; + ba);</span>
+<span class="nc" id="L1549">		return ok;</span>
+	}	//	setBP_BankAccount
+
+	/**
+	 * 	Set Doc Type bases on IsReceipt
+	 */
+	protected void setC_DocType_ID ()
+	{
+<span class="nc" id="L1557">		setC_DocType_ID(isReceipt());</span>
+<span class="nc" id="L1558">	}	//	setC_DocType_ID</span>
+
+	/**
+	 * 	Set Doc Type
+	 * 	@param isReceipt true for receipt, false for payment
+	 */
+	public void setC_DocType_ID (boolean isReceipt)
+	{
+<span class="nc" id="L1566">		setIsReceipt(isReceipt);</span>
+<span class="nc" id="L1567">		String sql = &quot;SELECT C_DocType_ID FROM C_DocType WHERE IsActive='Y' AND AD_Client_ID=? AND DocBaseType=? ORDER BY IsDefault DESC&quot;;</span>
+<span class="nc" id="L1568">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1569">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1572">			pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L1573">			pstmt.setInt(1, getAD_Client_ID());</span>
+<span class="nc bnc" id="L1574" title="All 2 branches missed.">			if (isReceipt)</span>
+<span class="nc" id="L1575">				pstmt.setString(2, X_C_DocType.DOCBASETYPE_ARReceipt);</span>
+			else
+<span class="nc" id="L1577">				pstmt.setString(2, X_C_DocType.DOCBASETYPE_APPayment);</span>
+<span class="nc" id="L1578">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1579" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L1580">				setC_DocType_ID(rs.getInt(1));</span>
+			else
+<span class="nc" id="L1582">				log.warning (&quot;setDocType - NOT found - isReceipt=&quot; + isReceipt);</span>
+<span class="nc" id="L1583">		}</span>
+<span class="nc" id="L1584">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L1586">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L1590">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1591">			rs = null;</span>
+<span class="nc" id="L1592">			pstmt = null;</span>
+		}
+<span class="nc" id="L1594">	}	//	setC_DocType_ID</span>
+
+	
+	/**
+	 * 	Set Document Type
+	 *	@param C_DocType_ID doc type
+	 */
+	public void setC_DocType_ID (int C_DocType_ID)
+	{
+<span class="nc" id="L1603">		super.setC_DocType_ID(C_DocType_ID);</span>
+<span class="nc" id="L1604">	}	//	setC_DocType_ID</span>
+	
+	/**
+	 * 	Verify Document Type with Invoice
+	 *  @param pAllocs 
+	 *	@return true if ok
+	 */
+	protected boolean verifyDocType(MPaymentAllocate[] pAllocs)
+	{
+<span class="nc bnc" id="L1613" title="All 2 branches missed.">		if (getC_DocType_ID() == 0)</span>
+<span class="nc" id="L1614">			return false;</span>
+		//
+<span class="nc" id="L1616">		Boolean documentSO = null;</span>
+		//	Check Invoice First
+<span class="nc bnc" id="L1618" title="All 2 branches missed.">		if (getC_Invoice_ID() &gt; 0)</span>
+		{
+<span class="nc" id="L1620">			String sql = &quot;SELECT idt.IsSOTrx &quot;</span>
+				+ &quot;FROM C_Invoice i&quot;
+				+ &quot; INNER JOIN C_DocType idt ON (CASE WHEN i.C_DocType_ID=0 THEN i.C_DocTypeTarget_ID ELSE i.C_DocType_ID END=idt.C_DocType_ID) &quot;
+				+ &quot;WHERE i.C_Invoice_ID=?&quot;;
+<span class="nc" id="L1624">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1625">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L1628">				pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L1629">				pstmt.setInt(1, getC_Invoice_ID());</span>
+<span class="nc" id="L1630">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1631" title="All 2 branches missed.">				if (rs.next())</span>
+<span class="nc" id="L1632">					documentSO = Boolean.valueOf(&quot;Y&quot;.equals(rs.getString(1)));</span>
+<span class="nc" id="L1633">			}</span>
+<span class="nc" id="L1634">			catch (Exception e)</span>
+			{
+<span class="nc" id="L1636">				log.log(Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L1640">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L1641">				rs = null;</span>
+<span class="nc" id="L1642">				pstmt = null;</span>
+			}
+		}	//	now Order - in Adempiere is allowed to pay PO or receive SO
+<span class="nc bnc" id="L1645" title="All 2 branches missed.">		else if (getC_Order_ID() &gt; 0)</span>
+		{
+<span class="nc" id="L1647">			String sql = &quot;SELECT odt.IsSOTrx &quot;</span>
+				+ &quot;FROM C_Order o&quot;
+				+ &quot; INNER JOIN C_DocType odt ON (o.C_DocType_ID=odt.C_DocType_ID) &quot;
+				+ &quot;WHERE o.C_Order_ID=?&quot;;
+<span class="nc" id="L1651">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1652">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L1655">				pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L1656">				pstmt.setInt(1, getC_Order_ID());</span>
+<span class="nc" id="L1657">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1658" title="All 2 branches missed.">				if (rs.next())</span>
+<span class="nc" id="L1659">					documentSO = Boolean.valueOf(&quot;Y&quot;.equals(rs.getString(1)));</span>
+<span class="nc" id="L1660">			}</span>
+<span class="nc" id="L1661">			catch (Exception e)</span>
+			{
+<span class="nc" id="L1663">				log.log(Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L1667">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L1668">				rs = null;</span>
+<span class="nc" id="L1669">				pstmt = null;</span>
+			}
+		}	//	now Charge
+<span class="nc bnc" id="L1672" title="All 2 branches missed.">		else if (getC_Charge_ID() &gt; 0) </span>
+		{
+			// do nothing about charge
+		} // now payment allocate
+		else
+		{
+<span class="nc bnc" id="L1678" title="All 2 branches missed.">			if (pAllocs.length &gt; 0) {</span>
+<span class="nc bnc" id="L1679" title="All 2 branches missed.">				for (MPaymentAllocate pAlloc : pAllocs) {</span>
+<span class="nc" id="L1680">					String sql = &quot;SELECT idt.IsSOTrx &quot;</span>
+						+ &quot;FROM C_Invoice i&quot;
+						+ &quot; INNER JOIN C_DocType idt ON (i.C_DocType_ID=idt.C_DocType_ID) &quot;
+						+ &quot;WHERE i.C_Invoice_ID=?&quot;;
+<span class="nc" id="L1684">					PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1685">					ResultSet rs = null;</span>
+					try
+					{
+<span class="nc" id="L1688">						pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L1689">						pstmt.setInt(1, pAlloc.getC_Invoice_ID());</span>
+<span class="nc" id="L1690">						rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1691" title="All 2 branches missed.">						if (rs.next()) {</span>
+<span class="nc bnc" id="L1692" title="All 2 branches missed.">							if (documentSO != null) { // already set, compare with current</span>
+<span class="nc bnc" id="L1693" title="All 2 branches missed.">								if (documentSO.booleanValue() != (&quot;Y&quot;.equals(rs.getString(1)))) {</span>
+<span class="nc" id="L1694">									return false;</span>
+								}
+							} else {
+<span class="nc" id="L1697">								documentSO = Boolean.valueOf(&quot;Y&quot;.equals(rs.getString(1)));</span>
+							}
+						}
+<span class="nc" id="L1700">					}</span>
+<span class="nc" id="L1701">					catch (Exception e)</span>
+					{
+<span class="nc" id="L1703">						log.log(Level.SEVERE, sql, e);</span>
+					}
+					finally
+					{
+<span class="nc" id="L1707">						DB.close(rs, pstmt);</span>
+<span class="nc" id="L1708">						rs = null;</span>
+<span class="nc" id="L1709">						pstmt = null;</span>
+					}
+				}
+			}
+		}
+		
+		//	DocumentType
+<span class="nc" id="L1716">		Boolean paymentSO = null;</span>
+<span class="nc" id="L1717">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1718">		ResultSet rs = null;</span>
+<span class="nc" id="L1719">		String sql = &quot;SELECT IsSOTrx &quot;</span>
+			+ &quot;FROM C_DocType &quot;
+			+ &quot;WHERE C_DocType_ID=?&quot;;
+		try
+		{
+<span class="nc" id="L1724">			pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L1725">			pstmt.setInt(1, getC_DocType_ID());</span>
+<span class="nc" id="L1726">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1727" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L1728">				paymentSO = Boolean.valueOf(&quot;Y&quot;.equals(rs.getString(1)));</span>
+<span class="nc" id="L1729">		}</span>
+<span class="nc" id="L1730">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1732">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L1736">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1737">			rs = null;</span>
+<span class="nc" id="L1738">			pstmt = null;</span>
+		}
+		//	No Payment info
+<span class="nc bnc" id="L1741" title="All 2 branches missed.">		if (paymentSO == null)</span>
+<span class="nc" id="L1742">			return false;</span>
+<span class="nc" id="L1743">		setIsReceipt(paymentSO.booleanValue());</span>
+			
+		//	We have an Invoice .. and it does not match
+<span class="nc bnc" id="L1746" title="All 2 branches missed.">		if (documentSO != null </span>
+<span class="nc bnc" id="L1747" title="All 2 branches missed.">				&amp;&amp; documentSO.booleanValue() != paymentSO.booleanValue())</span>
+<span class="nc" id="L1748">			return false;</span>
+		//	OK
+<span class="nc" id="L1750">		return true;</span>
+	}	//	verifyDocType
+
+	/**
+	 * 	Verify that payment has no Payment Allocate records if the payment header has charge/invoice/order.
+	 *  @param pAllocs 
+	 *	@return true if pAllocs is empty
+	 */
+	protected boolean verifyPaymentAllocateVsHeader(MPaymentAllocate[] pAllocs) {
+<span class="nc bnc" id="L1759" title="All 2 branches missed.">		if (pAllocs.length &gt; 0) {</span>
+<span class="nc bnc" id="L1760" title="All 6 branches missed.">			if (getC_Charge_ID() &gt; 0 || getC_Invoice_ID() &gt; 0 || getC_Order_ID() &gt; 0)</span>
+<span class="nc" id="L1761">				return false;</span>
+		}
+<span class="nc" id="L1763">		return true;</span>
+	}
+
+	/**
+	 * 	Verify Payment Allocate Sum must be equal to the Payment Amount
+	 *  @param pAllocs 
+	 *	@return true if ok
+	 */
+	protected boolean verifyPaymentAllocateSum(MPaymentAllocate[] pAllocs) {
+<span class="nc" id="L1772">		BigDecimal sumPaymentAllocates = Env.ZERO;</span>
+<span class="nc bnc" id="L1773" title="All 2 branches missed.">		if (pAllocs.length &gt; 0) {</span>
+<span class="nc bnc" id="L1774" title="All 2 branches missed.">			for (MPaymentAllocate pAlloc : pAllocs)</span>
+<span class="nc" id="L1775">				sumPaymentAllocates = sumPaymentAllocates.add(pAlloc.getAmount());</span>
+<span class="nc bnc" id="L1776" title="All 2 branches missed.">			if (getPayAmt().compareTo(sumPaymentAllocates) != 0) {</span>
+<span class="nc bnc" id="L1777" title="All 4 branches missed.">				if (isReceipt() &amp;&amp; getPayAmt().compareTo(sumPaymentAllocates) &lt; 0) {</span>
+<span class="nc bnc" id="L1778" title="All 2 branches missed.">					if (MSysConfig.getBooleanValue(MSysConfig.ALLOW_OVER_APPLIED_PAYMENT, false, Env.getAD_Client_ID(Env.getCtx()))) {</span>
+<span class="nc" id="L1779">						return true;</span>
+					}
+				}
+<span class="nc" id="L1782">				return false;</span>
+			}
+		}
+<span class="nc" id="L1785">		return true;</span>
+	}
+
+	/**
+	 *	Get ISO Code of Currency
+	 *	@return Currency ISO code
+	 */
+	public String getCurrencyISO()
+	{
+<span class="nc" id="L1794">		return MCurrency.getISO_Code (getCtx(), getC_Currency_ID());</span>
+	}	//	getCurrencyISO
+
+	/**
+	 * 	Get Document Status Name
+	 *	@return Document Status Name
+	 */
+	public String getDocStatusName()
+	{
+<span class="nc" id="L1803">		return MRefList.getListName(getCtx(), 131, getDocStatus());</span>
+	}	//	getDocStatusName
+
+	/**
+	 *	Get Name of Credit Card Type
+	 *	@return Name of Credit Card Type (Master, Visa, etc)
+	 */
+	public String getCreditCardName()
+	{
+<span class="nc" id="L1812">		return getCreditCardName(getCreditCardType());</span>
+	}	//	getCreditCardName
+
+	/**
+	 *	Get Name of Credit Card Type
+	 * 	@param CreditCardType credit card type
+	 *	@return Name of Credit Card Type (Master, Visa, etc)
+	 */
+	public String getCreditCardName(String CreditCardType)
+	{
+<span class="nc bnc" id="L1822" title="All 2 branches missed.">		if (CreditCardType == null)</span>
+<span class="nc" id="L1823">			return &quot;--&quot;;</span>
+<span class="nc bnc" id="L1824" title="All 2 branches missed.">		else if (CREDITCARDTYPE_MasterCard.equals(CreditCardType))</span>
+<span class="nc" id="L1825">			return &quot;MasterCard&quot;;</span>
+<span class="nc bnc" id="L1826" title="All 2 branches missed.">		else if (CREDITCARDTYPE_Visa.equals(CreditCardType))</span>
+<span class="nc" id="L1827">			return &quot;Visa&quot;;</span>
+<span class="nc bnc" id="L1828" title="All 2 branches missed.">		else if (CREDITCARDTYPE_Amex.equals(CreditCardType))</span>
+<span class="nc" id="L1829">			return &quot;Amex&quot;;</span>
+<span class="nc bnc" id="L1830" title="All 2 branches missed.">		else if (CREDITCARDTYPE_ATM.equals(CreditCardType))</span>
+<span class="nc" id="L1831">			return &quot;ATM&quot;;</span>
+<span class="nc bnc" id="L1832" title="All 2 branches missed.">		else if (CREDITCARDTYPE_Diners.equals(CreditCardType))</span>
+<span class="nc" id="L1833">			return &quot;Diners&quot;;</span>
+<span class="nc bnc" id="L1834" title="All 2 branches missed.">		else if (CREDITCARDTYPE_Discover.equals(CreditCardType))</span>
+<span class="nc" id="L1835">			return &quot;Discover&quot;;</span>
+<span class="nc bnc" id="L1836" title="All 2 branches missed.">		else if (CREDITCARDTYPE_PurchaseCard.equals(CreditCardType))</span>
+<span class="nc" id="L1837">			return &quot;PurchaseCard&quot;;</span>
+<span class="nc" id="L1838">		return &quot;?&quot; + CreditCardType + &quot;?&quot;;</span>
+	}	//	getCreditCardName
+
+	/**
+	 * 	Add to Description
+	 *	@param description text
+	 */
+	public void addDescription (String description)
+	{
+<span class="nc" id="L1847">		String desc = getDescription();</span>
+<span class="nc bnc" id="L1848" title="All 2 branches missed.">		if (desc == null)</span>
+<span class="nc" id="L1849">			setDescription(description);</span>
+		else
+<span class="nc" id="L1851">			setDescription(desc + &quot; | &quot; + description);</span>
+<span class="nc" id="L1852">	}	//	addDescription</span>
+		
+	/**
+	 * 	Get Pay Amt
+	 * 	@param absolute ignore
+	 *	@return pay amt if this is receipt, otherwise it return the negate of pay amt
+	 */
+	public BigDecimal getPayAmt (boolean absolute)
+	{
+<span class="nc bnc" id="L1861" title="All 2 branches missed.">		if (isReceipt())</span>
+<span class="nc" id="L1862">			return super.getPayAmt();</span>
+<span class="nc" id="L1863">		return super.getPayAmt().negate();</span>
+	}	//	getPayAmt
+	
+	/**
+	 * 	Get Pay Amt in cents
+	 *	@return amount in cents (multiply by 100 and truncate to integer)
+	 */
+	public int getPayAmtInCents ()
+	{
+<span class="nc" id="L1872">		BigDecimal bd = super.getPayAmt().multiply(Env.ONEHUNDRED);</span>
+<span class="nc" id="L1873">		return bd.intValue();</span>
+	}	//	getPayAmtInCents
+	
+	/**
+	 * 	Process document
+	 *	@param processAction document action
+	 *	@return true if performed
+	 */
+	@Override
+	public boolean processIt (String processAction)
+	{
+<span class="nc" id="L1884">		m_processMsg = null;</span>
+<span class="nc" id="L1885">		DocumentEngine engine = new DocumentEngine (this, getDocStatus());</span>
+<span class="nc" id="L1886">		return engine.processIt (processAction, getDocAction());</span>
+	}	//	process
+	
+	/**	Process Message 			*/
+<span class="nc" id="L1890">	protected String		m_processMsg = null;</span>
+	/**	Just Prepared Flag			*/
+<span class="nc" id="L1892">	protected boolean		m_justPrepared = false;</span>
+	protected IProcessUI m_processUI;
+
+	/**
+	 * 	Unlock Document.
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean unlockIt()
+	{
+<span class="nc bnc" id="L1902" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L1903">		setProcessing(false);</span>
+<span class="nc" id="L1904">		return true;</span>
+	}	//	unlockIt
+	
+	/**
+	 * 	Invalidate Document
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean invalidateIt()
+	{
+<span class="nc bnc" id="L1914" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L1915">		setDocAction(DOCACTION_Prepare);</span>
+<span class="nc" id="L1916">		return true;</span>
+	}	//	invalidateIt
+
+	/**
+	 *	Prepare Document
+	 * 	@return new status (In Progress or Invalid) 
+	 */
+	@Override
+	public String prepareIt()
+	{
+<span class="nc bnc" id="L1926" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L1927">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_BEFORE_PREPARE);</span>
+<span class="nc bnc" id="L1928" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L1929">			return DocAction.STATUS_Invalid;</span>
+
+<span class="nc bnc" id="L1931" title="All 2 branches missed.">		if (! MPaySelectionCheck.deleteGeneratedDraft(getCtx(), getC_Payment_ID(), get_TrxName())) {</span>
+<span class="nc" id="L1932">			m_processMsg = &quot;Could not delete draft generated payment selection lines&quot;;</span>
+<span class="nc" id="L1933">			return DocAction.STATUS_Invalid;</span>
+		}
+
+		//	Std Period open?
+<span class="nc" id="L1937">		if (!MPeriod.isOpen(getCtx(), getDateAcct(), </span>
+<span class="nc bnc" id="L1938" title="All 4 branches missed.">			isReceipt() ? X_C_DocType.DOCBASETYPE_ARReceipt : X_C_DocType.DOCBASETYPE_APPayment, getAD_Org_ID()))</span>
+		{
+<span class="nc" id="L1940">			m_processMsg = &quot;@PeriodClosed@&quot;;</span>
+<span class="nc" id="L1941">			return DocAction.STATUS_Invalid;</span>
+		}
+		
+		//	Unsuccessful Online Payment
+<span class="nc bnc" id="L1945" title="All 4 branches missed.">		if (isOnline() &amp;&amp; !isApproved())</span>
+		{
+<span class="nc bnc" id="L1947" title="All 2 branches missed.">			if (getR_Result() != null)</span>
+<span class="nc" id="L1948">				m_processMsg = &quot;@OnlinePaymentFailed@&quot;;</span>
+			else
+<span class="nc" id="L1950">				m_processMsg = &quot;@PaymentNotProcessed@&quot;;</span>
+<span class="nc" id="L1951">			return DocAction.STATUS_Invalid;</span>
+		}
+		
+		//	Waiting Payment - Need to create Invoice &amp; Shipment
+<span class="nc bnc" id="L1955" title="All 4 branches missed.">		if (getC_Order_ID() != 0 &amp;&amp; getC_Invoice_ID() == 0)</span>
+		{	//	see WebOrder.process
+<span class="nc" id="L1957">			MOrder order = new MOrder (getCtx(), getC_Order_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1958" title="All 2 branches missed.">			if (DOCSTATUS_WaitingPayment.equals(order.getDocStatus()))</span>
+			{
+<span class="nc" id="L1960">				order.setC_Payment_ID(getC_Payment_ID());</span>
+<span class="nc" id="L1961">				order.setDocAction(X_C_Order.DOCACTION_WaitComplete);</span>
+<span class="nc" id="L1962">				order.set_TrxName(get_TrxName());</span>
+				// added AdempiereException by zuhri 
+<span class="nc bnc" id="L1964" title="All 2 branches missed.">				if (!order.processIt (X_C_Order.DOCACTION_WaitComplete))</span>
+<span class="nc" id="L1965">					throw new AdempiereException(Msg.getMsg(getCtx(), &quot;FailedProcessingDocument&quot;) + &quot; - &quot; + order.getProcessMsg());</span>
+				// end added
+<span class="nc" id="L1967">				m_processMsg = order.getProcessMsg();</span>
+<span class="nc" id="L1968">				order.saveEx(get_TrxName());</span>
+				//	Set Invoice
+<span class="nc" id="L1970">				MInvoice[] invoices = order.getInvoices();</span>
+<span class="nc" id="L1971">				int length = invoices.length;</span>
+<span class="nc bnc" id="L1972" title="All 2 branches missed.">				if (length &gt; 0)		//	get last invoice</span>
+<span class="nc" id="L1973">					setC_Invoice_ID (invoices[length-1].getC_Invoice_ID());</span>
+				//
+<span class="nc" id="L1975">				MDocType orderDocType = MDocType.get(getCtx(), order.getC_DocType_ID());</span>
+<span class="nc bnc" id="L1976" title="All 4 branches missed.">				if (orderDocType.isAutoGenerateInvoice() &amp;&amp; getC_Invoice_ID() == 0)</span>
+				{
+<span class="nc" id="L1978">					m_processMsg = &quot;@NotFound@ @C_Invoice_ID@&quot;;</span>
+<span class="nc" id="L1979">					return DocAction.STATUS_Invalid;</span>
+				}
+			}	//	WaitingPayment
+		}
+		
+<span class="nc" id="L1984">		MPaymentAllocate[] pAllocs = MPaymentAllocate.get(this);</span>
+		
+		//	Consistency of Invoice / Document Type and IsReceipt
+<span class="nc bnc" id="L1987" title="All 2 branches missed.">		if (!verifyDocType(pAllocs))</span>
+		{
+<span class="nc" id="L1989">			m_processMsg = &quot;@PaymentDocTypeInvoiceInconsistent@&quot;;</span>
+<span class="nc" id="L1990">			return DocAction.STATUS_Invalid;</span>
+		}
+
+		//	Payment Allocate is ignored if charge/invoice/order exists in header
+<span class="nc bnc" id="L1994" title="All 2 branches missed.">		if (!verifyPaymentAllocateVsHeader(pAllocs))</span>
+		{
+<span class="nc" id="L1996">			m_processMsg = &quot;@PaymentAllocateIgnored@&quot;;</span>
+<span class="nc" id="L1997">			return DocAction.STATUS_Invalid;</span>
+		}
+
+		//	Payment Amount must be equal to sum of Allocate amounts
+<span class="nc bnc" id="L2001" title="All 2 branches missed.">		if (!verifyPaymentAllocateSum(pAllocs))</span>
+		{
+<span class="nc" id="L2003">			m_processMsg = &quot;@PaymentAllocateSumInconsistent@&quot;;</span>
+<span class="nc" id="L2004">			return DocAction.STATUS_Invalid;</span>
+		}
+
+<span class="nc" id="L2007">		ICreditManager creditManager = Core.getCreditManager(this);</span>
+<span class="nc bnc" id="L2008" title="All 2 branches missed.">		if (creditManager != null)</span>
+		{
+<span class="nc" id="L2010">			CreditStatus status = creditManager.checkCreditStatus(DOCACTION_Prepare);</span>
+<span class="nc bnc" id="L2011" title="All 2 branches missed.">			if (status.isError())</span>
+			{
+<span class="nc" id="L2013">				m_processMsg = status.getErrorMsg();</span>
+<span class="nc" id="L2014">				return DocAction.STATUS_Invalid;</span>
+			}
+		}
+		
+<span class="nc" id="L2018">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_AFTER_PREPARE);</span>
+<span class="nc bnc" id="L2019" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2020">			return DocAction.STATUS_Invalid;</span>
+
+<span class="nc" id="L2022">		m_justPrepared = true;</span>
+<span class="nc bnc" id="L2023" title="All 2 branches missed.">		if (!DOCACTION_Complete.equals(getDocAction()))</span>
+<span class="nc" id="L2024">			setDocAction(DOCACTION_Complete);</span>
+<span class="nc" id="L2025">		return DocAction.STATUS_InProgress;</span>
+	}	//	prepareIt
+	
+	/**
+	 * 	Approve Document
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean  approveIt()
+	{
+<span class="nc bnc" id="L2035" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L2036">		setIsApproved(true);</span>
+<span class="nc" id="L2037">		return true;</span>
+	}	//	approveIt
+	
+	/**
+	 * 	Reject Approval
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean rejectIt()
+	{
+<span class="nc bnc" id="L2047" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L2048">		setIsApproved(false);</span>
+<span class="nc" id="L2049">		return true;</span>
+	}	//	rejectIt
+	
+	/**
+	 * 	Complete Document
+	 * 	@return new status (Complete, In Progress, Invalid, Waiting ..)
+	 */
+	@Override
+	public String completeIt()
+	{
+		//	Re-Check
+<span class="nc bnc" id="L2060" title="All 2 branches missed.">		if (!m_justPrepared)</span>
+		{
+<span class="nc" id="L2062">			String status = prepareIt();</span>
+<span class="nc" id="L2063">			m_justPrepared = false;</span>
+<span class="nc bnc" id="L2064" title="All 2 branches missed.">			if (!DocAction.STATUS_InProgress.equals(status))</span>
+<span class="nc" id="L2065">				return status;</span>
+		}
+
+		// Set the definite document number after completed (if needed)
+<span class="nc" id="L2069">		setDefiniteDocumentNo();</span>
+
+<span class="nc" id="L2071">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_BEFORE_COMPLETE);</span>
+<span class="nc bnc" id="L2072" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2073">			return DocAction.STATUS_Invalid;</span>
+
+		//	Implicit Approval
+<span class="nc bnc" id="L2076" title="All 2 branches missed.">		if (!isApproved())</span>
+<span class="nc" id="L2077">			approveIt();</span>
+<span class="nc bnc" id="L2078" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+
+		//	Charge Handling
+<span class="nc bnc" id="L2081" title="All 2 branches missed.">		if (getC_Charge_ID() != 0)</span>
+		{
+<span class="nc" id="L2083">			setIsAllocated(true);</span>
+		}
+
+<span class="nc" id="L2086">		ICreditManager creditManager = Core.getCreditManager(this);</span>
+<span class="nc bnc" id="L2087" title="All 2 branches missed.">		if (creditManager != null)</span>
+		{
+<span class="nc" id="L2089">			CreditStatus status = creditManager.checkCreditStatus(DOCACTION_Complete);</span>
+<span class="nc bnc" id="L2090" title="All 2 branches missed.">			if (status.isError())</span>
+			{
+<span class="nc" id="L2092">				m_processMsg = status.getErrorMsg();</span>
+<span class="nc" id="L2093">				return DocAction.STATUS_Invalid;</span>
+			}
+		}
+		
+		//	Counter Doc
+<span class="nc" id="L2098">		MPayment counter = createCounterDoc();</span>
+<span class="nc bnc" id="L2099" title="All 2 branches missed.">		if (counter != null)</span>
+<span class="nc" id="L2100">			m_processMsg += &quot; @CounterDoc@: @C_Payment_ID@=&quot; + counter.getDocumentNo();</span>
+
+		// @Trifon - CashPayments
+<span class="nc bnc" id="L2103" title="All 2 branches missed.">		if ( isCashbookTrx()) {</span>
+			// Create Cash Book entry
+<span class="nc bnc" id="L2105" title="All 2 branches missed.">			if ( getC_CashBook_ID() &lt;= 0 ) {</span>
+<span class="nc" id="L2106">				log.saveError(&quot;Error&quot;, Msg.parseTranslation(getCtx(), &quot;@Mandatory@: @C_CashBook_ID@&quot;));</span>
+<span class="nc" id="L2107">				m_processMsg = &quot;@NoCashBook@&quot;;</span>
+<span class="nc" id="L2108">				return DocAction.STATUS_Invalid;</span>
+			}
+<span class="nc" id="L2110">			MCash cash = MCash.get (getCtx(), getAD_Org_ID(), getDateAcct(), getC_Currency_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2111" title="All 4 branches missed.">			if (cash == null || cash.get_ID() == 0)</span>
+			{
+<span class="nc" id="L2113">				m_processMsg = &quot;@NoCashBook@&quot;;</span>
+<span class="nc" id="L2114">				return DocAction.STATUS_Invalid;</span>
+			}
+<span class="nc" id="L2116">			MCashLine cl = new MCashLine( cash );</span>
+<span class="nc" id="L2117">			cl.setCashType( X_C_CashLine.CASHTYPE_GeneralReceipts );</span>
+<span class="nc" id="L2118">			cl.setDescription(&quot;Generated From Payment #&quot; + getDocumentNo());</span>
+<span class="nc" id="L2119">			cl.setC_Currency_ID( this.getC_Currency_ID() );</span>
+<span class="nc" id="L2120">			cl.setC_Payment_ID( getC_Payment_ID() ); // Set Reference to payment.</span>
+<span class="nc" id="L2121">			StringBuilder info=new StringBuilder();</span>
+<span class="nc" id="L2122">			info.append(&quot;Cash journal ( &quot;)</span>
+<span class="nc" id="L2123">				.append(cash.getDocumentNo()).append(&quot; )&quot;);				</span>
+<span class="nc" id="L2124">			m_processMsg = info.toString();</span>
+			//	Amount
+<span class="nc" id="L2126">			BigDecimal amt = this.getPayAmt();</span>
+<span class="nc" id="L2127">			cl.setAmount( amt );</span>
+			//
+<span class="nc" id="L2129">			cl.setDiscountAmt( Env.ZERO );</span>
+<span class="nc" id="L2130">			cl.setWriteOffAmt( Env.ZERO );</span>
+<span class="nc" id="L2131">			cl.setIsGenerated( true );</span>
+			
+<span class="nc bnc" id="L2133" title="All 2 branches missed.">			if (!cl.save(get_TrxName()))</span>
+			{
+<span class="nc" id="L2135">				m_processMsg = &quot;Could not save Cash Journal Line&quot;;</span>
+<span class="nc" id="L2136">				return DocAction.STATUS_Invalid;</span>
+			}
+		}
+		// End Trifon - CashPayments
+		
+		//	update C_Invoice.C_Payment_ID and C_Order.C_Payment_ID reference
+<span class="nc bnc" id="L2142" title="All 2 branches missed.">		if (getC_Invoice_ID() != 0)</span>
+		{
+<span class="nc" id="L2144">			MInvoice inv = new MInvoice(getCtx(), getC_Invoice_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2145" title="All 2 branches missed.">			if (inv.getC_Payment_ID() != getC_Payment_ID())</span>
+			{
+<span class="nc" id="L2147">				inv.setC_Payment_ID(getC_Payment_ID());</span>
+<span class="nc" id="L2148">				inv.saveEx();</span>
+			}
+		}		
+<span class="nc bnc" id="L2151" title="All 2 branches missed.">		if (getC_Order_ID() != 0)</span>
+		{
+<span class="nc" id="L2153">			MOrder ord = new MOrder(getCtx(), getC_Order_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2154" title="All 2 branches missed.">			if (ord.getC_Payment_ID() != getC_Payment_ID())</span>
+			{
+<span class="nc" id="L2156">				ord.setC_Payment_ID(getC_Payment_ID());</span>
+<span class="nc" id="L2157">				ord.saveEx();</span>
+			}
+		}
+		
+		//	User Validation
+<span class="nc" id="L2162">		String valid = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_AFTER_COMPLETE);</span>
+<span class="nc bnc" id="L2163" title="All 2 branches missed.">		if (valid != null)</span>
+		{
+<span class="nc" id="L2165">			m_processMsg = valid;</span>
+<span class="nc" id="L2166">			return DocAction.STATUS_Invalid;</span>
+		}
+
+		//
+<span class="nc" id="L2170">		setProcessed(true);</span>
+<span class="nc" id="L2171">		setDocAction(DOCACTION_Close);</span>
+<span class="nc" id="L2172">		return DocAction.STATUS_Completed;</span>
+	}	//	completeIt
+
+	/* Save array of documents to process AFTER completing this one */
+<span class="nc" id="L2176">	protected ArrayList&lt;PO&gt; docsPostProcess = new ArrayList&lt;PO&gt;();</span>
+
+	/**
+	 * Add document for processing after document action
+	 * @param doc
+	 */
+	protected void addDocsPostProcess(PO doc) {
+<span class="nc" id="L2183">		docsPostProcess.add(doc);</span>
+<span class="nc" id="L2184">	}</span>
+
+	@Override
+	public List&lt;PO&gt; getDocsPostProcess() {
+<span class="nc" id="L2188">		return docsPostProcess;</span>
+	}
+
+	/**
+	 * 	Set the definite document number after completed
+	 */
+	protected void setDefiniteDocumentNo() {
+<span class="nc" id="L2195">		MDocType dt = MDocType.get(getCtx(), getC_DocType_ID());</span>
+<span class="nc bnc" id="L2196" title="All 2 branches missed.">		if (dt.isOverwriteDateOnComplete()) {</span>
+<span class="nc" id="L2197">			setDateTrx(TimeUtil.getDay(0));</span>
+<span class="nc bnc" id="L2198" title="All 2 branches missed.">			if (getDateAcct().before(getDateTrx())) {</span>
+<span class="nc" id="L2199">				setDateAcct(getDateTrx());</span>
+<span class="nc" id="L2200">				MPeriod.testPeriodOpen(getCtx(), getDateAcct(), getC_DocType_ID(), getAD_Org_ID());</span>
+			}
+		}
+<span class="nc bnc" id="L2203" title="All 2 branches missed.">		if (dt.isOverwriteSeqOnComplete()) {</span>
+<span class="nc bnc" id="L2204" title="All 2 branches missed.">			if (this.getProcessedOn().signum() == 0) {</span>
+<span class="nc" id="L2205">				String value = DB.getDocumentNo(getC_DocType_ID(), get_TrxName(), true, this);</span>
+<span class="nc bnc" id="L2206" title="All 2 branches missed.">				if (value != null)</span>
+<span class="nc" id="L2207">					setDocumentNo(value);</span>
+			}
+		}
+<span class="nc" id="L2210">	}</span>
+
+	/**
+	 * 	Create Counter Document
+	 * 	@return payment
+	 */
+	protected MPayment createCounterDoc()
+	{
+		//	Is this a counter doc ?
+<span class="nc bnc" id="L2219" title="All 2 branches missed.">		if (getRef_Payment_ID() != 0)</span>
+<span class="nc" id="L2220">			return null;</span>
+
+		//	Org Must be linked to BPartner
+<span class="nc" id="L2223">		MOrg org = MOrg.get(getCtx(), getAD_Org_ID());</span>
+<span class="nc" id="L2224">		int counterC_BPartner_ID = org.getLinkedC_BPartner_ID(get_TrxName()); </span>
+<span class="nc bnc" id="L2225" title="All 2 branches missed.">		if (counterC_BPartner_ID == 0)</span>
+<span class="nc" id="L2226">			return null;</span>
+		//	Business Partner needs to be linked to Org
+<span class="nc" id="L2228">		MBPartner bp = new MBPartner (getCtx(), getC_BPartner_ID(), get_TrxName());</span>
+<span class="nc" id="L2229">		int counterAD_Org_ID = bp.getAD_OrgBP_ID(); </span>
+<span class="nc bnc" id="L2230" title="All 2 branches missed.">		if (counterAD_Org_ID == 0)</span>
+<span class="nc" id="L2231">			return null;</span>
+		
+<span class="nc" id="L2233">		MBPartner counterBP = new MBPartner (getCtx(), counterC_BPartner_ID, get_TrxName());</span>
+
+<span class="nc bnc" id="L2235" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Counter BP=&quot; + counterBP.getName());</span>
+
+		//	Document Type
+<span class="nc" id="L2238">		int C_DocTypeTarget_ID = 0;</span>
+<span class="nc" id="L2239">		MDocTypeCounter counterDT = MDocTypeCounter.getCounterDocType(getCtx(), getC_DocType_ID());</span>
+<span class="nc bnc" id="L2240" title="All 2 branches missed.">		if (counterDT != null)</span>
+		{
+<span class="nc bnc" id="L2242" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(counterDT.toString());</span>
+<span class="nc bnc" id="L2243" title="All 4 branches missed.">			if (!counterDT.isCreateCounter() || !counterDT.isValid())</span>
+<span class="nc" id="L2244">				return null;</span>
+<span class="nc" id="L2245">			C_DocTypeTarget_ID = counterDT.getCounter_C_DocType_ID();</span>
+<span class="nc" id="L2246">		}</span>
+		else	//	indirect
+		{
+<span class="nc" id="L2249">			C_DocTypeTarget_ID = MDocTypeCounter.getCounterDocType_ID(getCtx(), getC_DocType_ID());</span>
+<span class="nc bnc" id="L2250" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Indirect C_DocTypeTarget_ID=&quot; + C_DocTypeTarget_ID);</span>
+<span class="nc bnc" id="L2251" title="All 2 branches missed.">			if (C_DocTypeTarget_ID &lt;= 0)</span>
+<span class="nc" id="L2252">				return null;</span>
+		}
+
+		//	Deep Copy
+<span class="nc" id="L2256">		MPayment counter = new MPayment (getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L2257">		counter.setAD_Org_ID(counterAD_Org_ID);</span>
+<span class="nc" id="L2258">		counter.setC_BPartner_ID(counterBP.getC_BPartner_ID());</span>
+<span class="nc bnc" id="L2259" title="All 2 branches missed.">		counter.setIsReceipt(!isReceipt());</span>
+<span class="nc" id="L2260">		counter.setC_DocType_ID(C_DocTypeTarget_ID);</span>
+<span class="nc" id="L2261">		counter.setTrxType(getTrxType());</span>
+<span class="nc" id="L2262">		counter.setTenderType(getTenderType());</span>
+		//
+<span class="nc" id="L2264">		counter.setPayAmt(getPayAmt());</span>
+<span class="nc" id="L2265">		counter.setDiscountAmt(getDiscountAmt());</span>
+<span class="nc" id="L2266">		counter.setTaxAmt(getTaxAmt());</span>
+<span class="nc" id="L2267">		counter.setWriteOffAmt(getWriteOffAmt());</span>
+<span class="nc" id="L2268">		counter.setIsOverUnderPayment (isOverUnderPayment());</span>
+<span class="nc" id="L2269">		counter.setOverUnderAmt(getOverUnderAmt());</span>
+<span class="nc" id="L2270">		counter.setC_Currency_ID(getC_Currency_ID());</span>
+<span class="nc" id="L2271">		counter.setC_ConversionType_ID(getC_ConversionType_ID());</span>
+		//
+<span class="nc" id="L2273">		counter.setDateTrx (getDateTrx());</span>
+<span class="nc" id="L2274">		counter.setDateAcct (getDateAcct());</span>
+<span class="nc" id="L2275">		counter.setRef_Payment_ID(getC_Payment_ID());</span>
+		//
+<span class="nc" id="L2277">		String sql = &quot;SELECT C_BankAccount_ID FROM C_BankAccount &quot;</span>
+			+ &quot;WHERE C_Currency_ID=? AND AD_Org_ID IN (0,?) AND IsActive='Y' AND AD_Client_ID = ? &quot;
+			+ &quot;ORDER BY IsDefault DESC&quot;;
+<span class="nc" id="L2280">		int C_BankAccount_ID = DB.getSQLValue(get_TrxName(), sql, getC_Currency_ID(), counterAD_Org_ID,getAD_Client_ID());</span>
+<span class="nc" id="L2281">		counter.setC_BankAccount_ID(C_BankAccount_ID);</span>
+
+		//	References
+<span class="nc" id="L2284">		counter.setC_Activity_ID(getC_Activity_ID());</span>
+<span class="nc" id="L2285">		counter.setC_Campaign_ID(getC_Campaign_ID());</span>
+<span class="nc" id="L2286">		counter.setC_Project_ID(getC_Project_ID());</span>
+<span class="nc" id="L2287">		counter.setUser1_ID(getUser1_ID());</span>
+<span class="nc" id="L2288">		counter.setUser2_ID(getUser2_ID());</span>
+<span class="nc" id="L2289">		counter.setC_CostCenter_ID(getC_CostCenter_ID());</span>
+<span class="nc" id="L2290">		counter.setC_Department_ID(getC_Department_ID());</span>
+<span class="nc" id="L2291">		counter.saveEx(get_TrxName());</span>
+<span class="nc bnc" id="L2292" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(counter.toString());</span>
+<span class="nc" id="L2293">		setRef_Payment_ID(counter.getC_Payment_ID());</span>
+		
+		//	Document Action
+<span class="nc bnc" id="L2296" title="All 2 branches missed.">		if (counterDT != null)</span>
+		{
+<span class="nc bnc" id="L2298" title="All 2 branches missed.">			if (counterDT.getDocAction() != null)</span>
+			{
+<span class="nc" id="L2300">				counter.setDocAction(counterDT.getDocAction());</span>
+				// added AdempiereException by zuhri
+<span class="nc bnc" id="L2302" title="All 2 branches missed.">				if (!counter.processIt(counterDT.getDocAction()))</span>
+<span class="nc" id="L2303">					throw new AdempiereException(&quot;Failed when rocessing document - &quot; + counter.getProcessMsg());</span>
+				// end added
+<span class="nc" id="L2305">				counter.saveEx(get_TrxName());</span>
+			}
+		}
+<span class="nc" id="L2308">		return counter;</span>
+	}	//	createCounterDoc
+	
+	/**
+	 * 	Allocate this payment.&lt;br/&gt;
+	 * 	Only call this when there is NO allocations (MAllocationHdr and MAllocationLine) as it will create duplicates.&lt;br/&gt;
+	 * 	If an invoice exists, it will allocates that, otherwise it will allocates to Payment Selection.
+	 *	@return true if allocated
+	 */
+	public boolean allocateIt()
+	{
+		//	Create invoice Allocation
+<span class="nc bnc" id="L2320" title="All 2 branches missed.">		if (getC_Invoice_ID() != 0)</span>
+		{	
+<span class="nc" id="L2322">			return allocateInvoice();</span>
+		}	
+		//	Invoices of a AP Payment Selection
+<span class="nc bnc" id="L2325" title="All 2 branches missed.">		if (allocatePaySelection())</span>
+<span class="nc" id="L2326">			return true;</span>
+		
+<span class="nc bnc" id="L2328" title="All 2 branches missed.">		if (getC_Order_ID() != 0)</span>
+<span class="nc" id="L2329">			return false;</span>
+			
+		//	Allocate to multiple Payments based on entry
+<span class="nc" id="L2332">		MPaymentAllocate[] pAllocs = MPaymentAllocate.get(this);</span>
+<span class="nc bnc" id="L2333" title="All 2 branches missed.">		if (pAllocs.length == 0)</span>
+<span class="nc" id="L2334">			return false;</span>
+		
+<span class="nc" id="L2336">		MAllocationHdr alloc = new MAllocationHdr(getCtx(), false, </span>
+<span class="nc" id="L2337">			getDateTrx(), getC_Currency_ID(), </span>
+<span class="nc" id="L2338">				Msg.translate(getCtx(), &quot;C_Payment_ID&quot;)	+ &quot;: &quot; + getDocumentNo(), </span>
+<span class="nc" id="L2339">				get_TrxName());</span>
+<span class="nc" id="L2340">		alloc.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc" id="L2341">		alloc.setDateAcct(getDateAcct()); // in case date acct is different from datetrx in payment; IDEMPIERE-1532 tbayen</span>
+<span class="nc bnc" id="L2342" title="All 2 branches missed.">		if (!alloc.save())</span>
+		{
+<span class="nc" id="L2344">			log.severe(&quot;P.Allocations not created&quot;);</span>
+<span class="nc" id="L2345">			return false;</span>
+		}
+		//	Lines
+<span class="nc bnc" id="L2348" title="All 2 branches missed.">		for (int i = 0; i &lt; pAllocs.length; i++)</span>
+		{
+<span class="nc" id="L2350">			MPaymentAllocate pa = pAllocs[i];</span>
+
+<span class="nc" id="L2352">			BigDecimal allocationAmt = pa.getAmount();			//	underpayment</span>
+<span class="nc bnc" id="L2353" title="All 4 branches missed.">			if (pa.getOverUnderAmt().signum() &lt; 0 &amp;&amp; pa.getAmount().signum() &gt; 0)</span>
+<span class="nc" id="L2354">				allocationAmt = allocationAmt.add(pa.getOverUnderAmt());	//	overpayment (negative)</span>
+
+<span class="nc" id="L2356">			MAllocationLine aLine = null;</span>
+<span class="nc bnc" id="L2357" title="All 2 branches missed.">			if (isReceipt())</span>
+<span class="nc" id="L2358">				aLine = new MAllocationLine (alloc, allocationAmt,</span>
+<span class="nc" id="L2359">					pa.getDiscountAmt(), pa.getWriteOffAmt(), pa.getOverUnderAmt());</span>
+			else
+<span class="nc" id="L2361">				aLine = new MAllocationLine (alloc, allocationAmt.negate(),</span>
+<span class="nc" id="L2362">					pa.getDiscountAmt().negate(), pa.getWriteOffAmt().negate(), pa.getOverUnderAmt().negate());</span>
+<span class="nc" id="L2363">			aLine.setDocInfo(getC_BPartner_ID(), 0, pa.getC_Invoice_ID());</span>
+<span class="nc" id="L2364">			aLine.setPaymentInfo(getC_Payment_ID(), 0, getC_BankTransfer_ID());</span>
+<span class="nc bnc" id="L2365" title="All 2 branches missed.">			if (!aLine.save(get_TrxName()))</span>
+<span class="nc" id="L2366">				log.warning(&quot;P.Allocations - line not saved&quot;);</span>
+			else
+			{
+<span class="nc" id="L2369">				pa.setC_AllocationLine_ID(aLine.getC_AllocationLine_ID());</span>
+<span class="nc" id="L2370">				pa.saveEx();</span>
+			}
+		}
+		//do not post immediate alloc, alloc should post after payment
+<span class="nc" id="L2374">		alloc.set_Attribute(DocumentEngine.DOCUMENT_POST_IMMEDIATE_AFTER_COMPLETE, Boolean.FALSE);</span>
+		// added AdempiereException by zuhri
+<span class="nc bnc" id="L2376" title="All 2 branches missed.">		if (!alloc.processIt(DocAction.ACTION_Complete))</span>
+<span class="nc" id="L2377">			throw new AdempiereException(Msg.getMsg(getCtx(), &quot;FailedProcessingDocument&quot;) + &quot; - &quot; + alloc.getProcessMsg());</span>
+<span class="nc" id="L2378">		addDocsPostProcess(alloc);</span>
+		// end added
+<span class="nc" id="L2380">		m_processMsg = &quot;@C_AllocationHdr_ID@: &quot; + alloc.getDocumentNo();</span>
+<span class="nc" id="L2381">		return alloc.save(get_TrxName());</span>
+	}	//	allocateIt
+
+	/**
+	 * 	Allocate to single AP/AR Invoice
+	 * 	@return true if allocated
+	 */
+	protected boolean allocateInvoice()
+	{
+		//	calculate actual allocation
+<span class="nc" id="L2391">		BigDecimal allocationAmt = getPayAmt();			//	underpayment</span>
+<span class="nc bnc" id="L2392" title="All 4 branches missed.">		if (getOverUnderAmt().signum() &lt; 0 &amp;&amp; getPayAmt().signum() &gt; 0)</span>
+<span class="nc" id="L2393">			allocationAmt = allocationAmt.add(getOverUnderAmt());	//	overpayment (negative)</span>
+
+<span class="nc" id="L2395">		MAllocationHdr alloc = new MAllocationHdr(getCtx(), false, </span>
+<span class="nc" id="L2396">			getDateTrx(), getC_Currency_ID(),</span>
+<span class="nc" id="L2397">			Msg.translate(getCtx(), &quot;C_Payment_ID&quot;) + &quot;: &quot; + getDocumentNo() + &quot; [1]&quot;, get_TrxName());</span>
+<span class="nc" id="L2398">		alloc.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc" id="L2399">		alloc.setDateAcct(getDateAcct()); // in case date acct is different from datetrx in payment</span>
+<span class="nc" id="L2400">		MInvoice invoice = new MInvoice(getCtx(), getC_Invoice_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2401" title="All 2 branches missed.">		if (invoice.getDateAcct().after(alloc.getDateAcct())) {</span>
+<span class="nc" id="L2402">			alloc.setDateAcct(invoice.getDateAcct());</span>
+		}
+<span class="nc" id="L2404">		alloc.saveEx();</span>
+<span class="nc" id="L2405">		MAllocationLine aLine = null;</span>
+<span class="nc bnc" id="L2406" title="All 2 branches missed.">		if (isReceipt())</span>
+<span class="nc" id="L2407">			aLine = new MAllocationLine (alloc, allocationAmt, </span>
+<span class="nc" id="L2408">				getDiscountAmt(), getWriteOffAmt(), getOverUnderAmt());</span>
+		else
+<span class="nc" id="L2410">			aLine = new MAllocationLine (alloc, allocationAmt.negate(), </span>
+<span class="nc" id="L2411">				getDiscountAmt().negate(), getWriteOffAmt().negate(), getOverUnderAmt().negate());</span>
+<span class="nc" id="L2412">		aLine.setDocInfo(getC_BPartner_ID(), 0, getC_Invoice_ID());</span>
+<span class="nc" id="L2413">		aLine.setC_Payment_ID(getC_Payment_ID());</span>
+<span class="nc" id="L2414">		aLine.saveEx(get_TrxName());</span>
+		//do not post immediate alloc
+<span class="nc" id="L2416">		alloc.set_Attribute(DocumentEngine.DOCUMENT_POST_IMMEDIATE_AFTER_COMPLETE, Boolean.FALSE);</span>
+		// added AdempiereException by zuhri
+<span class="nc bnc" id="L2418" title="All 2 branches missed.">		if (!alloc.processIt(DocAction.ACTION_Complete))</span>
+<span class="nc" id="L2419">			throw new AdempiereException(Msg.getMsg(getCtx(), &quot;FailedProcessingDocument&quot;) + &quot; - &quot; + alloc.getProcessMsg());</span>
+<span class="nc" id="L2420">		addDocsPostProcess(alloc);</span>
+		// end added
+<span class="nc" id="L2422">		alloc.saveEx(get_TrxName());</span>
+<span class="nc" id="L2423">		m_justCreatedAllocInv = alloc;</span>
+<span class="nc" id="L2424">		m_processMsg = &quot;@C_AllocationHdr_ID@: &quot; + alloc.getDocumentNo();</span>
+			
+		//	Get Project from Invoice
+<span class="nc" id="L2427">		int C_Project_ID = DB.getSQLValue(get_TrxName(), </span>
+<span class="nc" id="L2428">			&quot;SELECT MAX(C_Project_ID) FROM C_Invoice WHERE C_Invoice_ID=?&quot;, getC_Invoice_ID());</span>
+<span class="nc bnc" id="L2429" title="All 4 branches missed.">		if (C_Project_ID &gt; 0 &amp;&amp; getC_Project_ID() == 0)</span>
+<span class="nc" id="L2430">			setC_Project_ID(C_Project_ID);</span>
+<span class="nc bnc" id="L2431" title="All 6 branches missed.">		else if (C_Project_ID &gt; 0 &amp;&amp; getC_Project_ID() &gt; 0 &amp;&amp; C_Project_ID != getC_Project_ID())</span>
+<span class="nc" id="L2432">			log.warning(&quot;Invoice C_Project_ID=&quot; + C_Project_ID </span>
+<span class="nc" id="L2433">				+ &quot; &lt;&gt; Payment C_Project_ID=&quot; + getC_Project_ID());</span>
+<span class="nc" id="L2434">		return true;</span>
+	}	//	allocateInvoice
+	
+	/**
+	 * 	Allocate to Payment Selection
+	 * 	@return true if allocated
+	 */
+	protected boolean allocatePaySelection()
+	{
+<span class="nc" id="L2443">		MAllocationHdr alloc = new MAllocationHdr(getCtx(), false, </span>
+<span class="nc" id="L2444">			getDateTrx(), getC_Currency_ID(),</span>
+<span class="nc" id="L2445">			Msg.translate(getCtx(), &quot;C_Payment_ID&quot;)	+ &quot;: &quot; + getDocumentNo() + &quot; [n]&quot;, get_TrxName());</span>
+<span class="nc" id="L2446">		alloc.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc" id="L2447">		alloc.setDateAcct(getDateAcct()); // in case date acct is different from datetrx in payment</span>
+		
+<span class="nc" id="L2449">		String sql = &quot;SELECT psc.C_BPartner_ID, psl.C_Invoice_ID, psl.IsSOTrx, &quot;	//	1..3</span>
+			+ &quot; psl.PayAmt, psl.DiscountAmt, psl.DifferenceAmt, psl.OpenAmt, psl.WriteOffAmt &quot;  // 4..8
+			+ &quot;FROM C_PaySelectionLine psl&quot;
+			+ &quot; INNER JOIN C_PaySelectionCheck psc ON (psl.C_PaySelectionCheck_ID=psc.C_PaySelectionCheck_ID) &quot;
+			+ &quot;WHERE psc.C_Payment_ID=?&quot;;
+<span class="nc" id="L2454">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2455">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L2458">			pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L2459">			pstmt.setInt(1, getC_Payment_ID());</span>
+<span class="nc" id="L2460">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L2461" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L2463">				int C_BPartner_ID = rs.getInt(1);</span>
+<span class="nc" id="L2464">				int C_Invoice_ID = rs.getInt(2);</span>
+<span class="nc bnc" id="L2465" title="All 4 branches missed.">				if (C_BPartner_ID == 0 &amp;&amp; C_Invoice_ID == 0)</span>
+<span class="nc" id="L2466">					continue;</span>
+<span class="nc" id="L2467">				boolean isSOTrx = &quot;Y&quot;.equals(rs.getString(3));</span>
+<span class="nc" id="L2468">				BigDecimal PayAmt = rs.getBigDecimal(4);</span>
+<span class="nc" id="L2469">				BigDecimal DiscountAmt = rs.getBigDecimal(5);</span>
+<span class="nc" id="L2470">				BigDecimal WriteOffAmt = rs.getBigDecimal(8);</span>
+<span class="nc" id="L2471">				BigDecimal OpenAmt = rs.getBigDecimal(7);</span>
+<span class="nc" id="L2472">				BigDecimal OverUnderAmt = OpenAmt.subtract(PayAmt)</span>
+<span class="nc" id="L2473">					.subtract(DiscountAmt).subtract(WriteOffAmt);</span>
+				//
+<span class="nc bnc" id="L2475" title="All 4 branches missed.">				if (alloc.get_ID() == 0 &amp;&amp; !alloc.save(get_TrxName()))</span>
+				{
+<span class="nc" id="L2477">					log.log(Level.SEVERE, &quot;Could not create Allocation Hdr&quot;);</span>
+<span class="nc" id="L2478">					return false;</span>
+				}
+<span class="nc" id="L2480">				MAllocationLine aLine = null;</span>
+<span class="nc bnc" id="L2481" title="All 2 branches missed.">				if (isSOTrx)</span>
+<span class="nc" id="L2482">					aLine = new MAllocationLine (alloc, PayAmt, </span>
+<span class="nc" id="L2483">						DiscountAmt, WriteOffAmt, OverUnderAmt);</span>
+				else
+<span class="nc" id="L2485">					aLine = new MAllocationLine (alloc, PayAmt.negate(), </span>
+<span class="nc" id="L2486">						DiscountAmt.negate(), WriteOffAmt.negate(), OverUnderAmt.negate());</span>
+<span class="nc" id="L2487">				aLine.setDocInfo(C_BPartner_ID, 0, C_Invoice_ID);</span>
+<span class="nc" id="L2488">				aLine.setC_Payment_ID(getC_Payment_ID());</span>
+<span class="nc bnc" id="L2489" title="All 2 branches missed.">				if (!aLine.save(get_TrxName()))</span>
+<span class="nc" id="L2490">					log.log(Level.SEVERE, &quot;Could not create Allocation Line&quot;);</span>
+			}
+<span class="nc" id="L2492">		}</span>
+<span class="nc" id="L2493">		catch (Exception e)</span>
+		{
+<span class="nc" id="L2495">			log.log(Level.SEVERE, &quot;allocatePaySelection&quot;, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L2499">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L2500">			rs = null;</span>
+<span class="nc" id="L2501">			pstmt = null;</span>
+		}
+		
+		//	Should start WF
+<span class="nc" id="L2505">		boolean ok = true;</span>
+<span class="nc bnc" id="L2506" title="All 2 branches missed.">		if (alloc.get_ID() == 0)</span>
+		{
+<span class="nc bnc" id="L2508" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;No Allocation created - C_Payment_ID=&quot; </span>
+<span class="nc" id="L2509">				+ getC_Payment_ID());</span>
+<span class="nc" id="L2510">			ok = false;</span>
+<span class="nc" id="L2511">		}</span>
+		else
+		{
+			//do not post immediate alloc
+<span class="nc" id="L2515">			alloc.set_Attribute(DocumentEngine.DOCUMENT_POST_IMMEDIATE_AFTER_COMPLETE, Boolean.FALSE);</span>
+			// added Adempiere Exception by zuhri
+<span class="nc bnc" id="L2517" title="All 2 branches missed.">			if (alloc.processIt(DocAction.ACTION_Complete)) {</span>
+<span class="nc" id="L2518">				addDocsPostProcess(alloc);</span>
+<span class="nc" id="L2519">				ok = alloc.save(get_TrxName());</span>
+<span class="nc" id="L2520">			} else {</span>
+<span class="nc" id="L2521">				throw new AdempiereException(Msg.getMsg(getCtx(), &quot;FailedProcessingDocument&quot;) + &quot; - &quot; + alloc.getProcessMsg());</span>
+			}
+			// end added by zuhri
+<span class="nc" id="L2524">			m_processMsg = &quot;@C_AllocationHdr_ID@: &quot; + alloc.getDocumentNo();</span>
+		}
+<span class="nc" id="L2526">		return ok;</span>
+	}	//	allocatePaySelection
+	
+	/**
+	 * 	Deallocate Payment.
+	 * 	Unlink Invoices and Orders and delete Allocations.
+	 *  @param accrual 
+	 */
+	protected void deAllocate(boolean accrual)
+	{
+<span class="nc" id="L2536">		MAllocationHdr[] allocations = MAllocationHdr.getOfPayment(getCtx(), </span>
+<span class="nc" id="L2537">			getC_Payment_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2538" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + allocations.length);</span>
+<span class="nc bnc" id="L2539" title="All 2 branches missed.">		for (int i = 0; i &lt; allocations.length; i++)</span>
+		{
+<span class="nc" id="L2541">			allocations[i].set_TrxName(get_TrxName());</span>
+<span class="nc bnc" id="L2542" title="All 2 branches missed.">			if (DOCSTATUS_Reversed.equals(allocations[i].getDocStatus())</span>
+<span class="nc bnc" id="L2543" title="All 2 branches missed.">				|| DOCSTATUS_Voided.equals(allocations[i].getDocStatus()))</span>
+			{
+<span class="nc" id="L2545">				continue;</span>
+			}
+			
+<span class="nc bnc" id="L2548" title="All 2 branches missed.">			if (accrual) </span>
+			{
+<span class="nc" id="L2550">				allocations[i].setDocAction(DocAction.ACTION_Reverse_Accrual);</span>
+<span class="nc bnc" id="L2551" title="All 2 branches missed.">				if (!allocations[i].processIt(DocAction.ACTION_Reverse_Accrual))</span>
+<span class="nc" id="L2552">					throw new AdempiereException(allocations[i].getProcessMsg());</span>
+			}
+			else
+			{
+<span class="nc" id="L2556">				allocations[i].setDocAction(DocAction.ACTION_Reverse_Correct);</span>
+<span class="nc bnc" id="L2557" title="All 2 branches missed.">				if (!allocations[i].processIt(DocAction.ACTION_Reverse_Correct))</span>
+<span class="nc" id="L2558">					throw new AdempiereException(allocations[i].getProcessMsg());</span>
+			}
+<span class="nc" id="L2560">			allocations[i].saveEx();</span>
+		}
+		
+		// 	Unlink (in case allocation did not get it)
+<span class="nc bnc" id="L2564" title="All 2 branches missed.">		if (getC_Invoice_ID() != 0)</span>
+		{
+			//	Invoice					
+<span class="nc" id="L2567">			String sql = &quot;UPDATE C_Invoice &quot;</span>
+				+ &quot;SET C_Payment_ID = NULL, IsPaid='N' &quot;
+<span class="nc" id="L2569">				+ &quot;WHERE C_Invoice_ID=&quot; + getC_Invoice_ID()</span>
+<span class="nc" id="L2570">				+ &quot; AND C_Payment_ID=&quot; + getC_Payment_ID();</span>
+<span class="nc" id="L2571">			int no = DB.executeUpdate(sql, get_TrxName());</span>
+<span class="nc bnc" id="L2572" title="All 2 branches missed.">			if (no != 0)</span>
+<span class="nc bnc" id="L2573" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Unlink Invoice #&quot; + no);</span>
+			//	Order
+<span class="nc" id="L2575">			sql = &quot;UPDATE C_Order o &quot;</span>
+				+ &quot;SET C_Payment_ID = NULL &quot;
+				+ &quot;WHERE EXISTS (SELECT * FROM C_Invoice i &quot;
+<span class="nc" id="L2578">					+ &quot;WHERE o.C_Order_ID=i.C_Order_ID AND i.C_Invoice_ID=&quot; + getC_Invoice_ID() + &quot;)&quot;</span>
+<span class="nc" id="L2579">				+ &quot; AND C_Payment_ID=&quot; + getC_Payment_ID();</span>
+<span class="nc" id="L2580">			no = DB.executeUpdate(sql, get_TrxName());</span>
+<span class="nc bnc" id="L2581" title="All 2 branches missed.">			if (no != 0)</span>
+<span class="nc bnc" id="L2582" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Unlink Order #&quot; + no);</span>
+		}
+		//
+<span class="nc" id="L2585">		setC_Invoice_ID(0);</span>
+<span class="nc" id="L2586">		setIsAllocated(false);</span>
+<span class="nc" id="L2587">	}	//	deallocate</span>
+
+	/**
+	 * 	Void Document.
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean voidIt()
+	{
+<span class="nc bnc" id="L2596" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());		</span>
+
+<span class="nc bnc" id="L2598" title="All 2 branches missed.">		if (getC_DepositBatch_ID() &gt; 0) {</span>
+<span class="nc" id="L2599">			MDepositBatch db = new MDepositBatch(getCtx(), getC_DepositBatch_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2600" title="All 2 branches missed.">			if (db.isProcessed()) {</span>
+<span class="nc" id="L2601">				m_processMsg = Msg.translate(getCtx(), &quot;DepositBatchProcessed&quot;) + db;</span>
+<span class="nc" id="L2602">				return false;</span>
+			}
+		}
+		
+<span class="nc bnc" id="L2606" title="All 2 branches missed.">		if (DOCSTATUS_Closed.equals(getDocStatus())</span>
+<span class="nc bnc" id="L2607" title="All 2 branches missed.">			|| DOCSTATUS_Reversed.equals(getDocStatus())</span>
+<span class="nc bnc" id="L2608" title="All 2 branches missed.">			|| DOCSTATUS_Voided.equals(getDocStatus()))</span>
+		{
+<span class="nc" id="L2610">			m_processMsg = &quot;Document Closed: &quot; + getDocStatus();</span>
+<span class="nc" id="L2611">			setDocAction(DOCACTION_None);</span>
+<span class="nc" id="L2612">			return false;</span>
+		}
+		//	If on Bank Statement, don't void it - reverse it
+<span class="nc bnc" id="L2615" title="All 2 branches missed.">		if (getC_BankStatementLine_ID() &gt; 0)</span>
+<span class="nc" id="L2616">			return reverseCorrectIt();</span>
+		
+		//	Not Processed
+<span class="nc bnc" id="L2619" title="All 2 branches missed.">		if (DOCSTATUS_Drafted.equals(getDocStatus())</span>
+<span class="nc bnc" id="L2620" title="All 2 branches missed.">			|| DOCSTATUS_Invalid.equals(getDocStatus())</span>
+<span class="nc bnc" id="L2621" title="All 2 branches missed.">			|| DOCSTATUS_InProgress.equals(getDocStatus())</span>
+<span class="nc bnc" id="L2622" title="All 2 branches missed.">			|| DOCSTATUS_Approved.equals(getDocStatus())</span>
+<span class="nc bnc" id="L2623" title="All 2 branches missed.">			|| DOCSTATUS_NotApproved.equals(getDocStatus()) )</span>
+		{
+			// Before Void
+<span class="nc" id="L2626">			m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_VOID);</span>
+<span class="nc bnc" id="L2627" title="All 2 branches missed.">			if (m_processMsg != null)</span>
+<span class="nc" id="L2628">				return false;</span>
+			
+<span class="nc bnc" id="L2630" title="All 2 branches missed.">			if (!voidOnlinePayment())</span>
+<span class="nc" id="L2631">				return false;</span>
+			
+<span class="nc" id="L2633">			addDescription(Msg.getMsg(getCtx(), &quot;Voided&quot;) + &quot; (&quot; + getPayAmt() + &quot;)&quot;);</span>
+<span class="nc" id="L2634">			setPayAmt(Env.ZERO);</span>
+<span class="nc" id="L2635">			setDiscountAmt(Env.ZERO);</span>
+<span class="nc" id="L2636">			setWriteOffAmt(Env.ZERO);</span>
+<span class="nc" id="L2637">			setOverUnderAmt(Env.ZERO);</span>
+<span class="nc" id="L2638">			setIsAllocated(false);</span>
+			//	Unlink &amp; De-Allocate
+<span class="nc" id="L2640">			deAllocate(false);</span>
+<span class="nc" id="L2641">		}</span>
+		else
+		{
+<span class="nc" id="L2644">			boolean accrual = false;</span>
+			try 
+			{
+<span class="nc" id="L2647">				MPeriod.testPeriodOpen(getCtx(), getDateAcct(), getC_DocType_ID(), getAD_Org_ID());</span>
+<span class="nc" id="L2648">			}</span>
+<span class="nc" id="L2649">			catch (PeriodClosedException e) </span>
+			{
+<span class="nc" id="L2651">				accrual = true;</span>
+			}
+			
+<span class="nc bnc" id="L2654" title="All 2 branches missed.">			if (accrual)</span>
+<span class="nc" id="L2655">				return reverseAccrualIt();</span>
+			else
+<span class="nc" id="L2657">				return reverseCorrectIt();</span>
+		}
+		
+		//
+		// After Void
+<span class="nc" id="L2662">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_VOID);</span>
+<span class="nc bnc" id="L2663" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2664">			return false;</span>
+		
+<span class="nc" id="L2666">		setProcessed(true);</span>
+<span class="nc" id="L2667">		setDocAction(DOCACTION_None);</span>
+<span class="nc" id="L2668">		return true;</span>
+	}	//	voidIt
+	
+	/**
+	 * 	Close Document.
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean closeIt()
+	{
+<span class="nc bnc" id="L2678" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		// Before Close
+<span class="nc" id="L2680">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_CLOSE);</span>
+<span class="nc bnc" id="L2681" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2682">			return false;</span>
+		
+<span class="nc" id="L2684">		setDocAction(DOCACTION_None);</span>
+		
+		// After Close
+<span class="nc" id="L2687">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_CLOSE);</span>
+<span class="nc bnc" id="L2688" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2689">			return false;		</span>
+<span class="nc" id="L2690">		return true;</span>
+	}	//	closeIt
+	
+	/**
+	 * 	Reverse Correction
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean reverseCorrectIt()
+	{
+<span class="nc bnc" id="L2700" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		
+<span class="nc bnc" id="L2702" title="All 2 branches missed.">		if (getC_DepositBatch_ID() &gt; 0) {</span>
+<span class="nc" id="L2703">			MDepositBatch db = new MDepositBatch(getCtx(), getC_DepositBatch_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2704" title="All 2 branches missed.">			if (db.isProcessed()) {</span>
+<span class="nc" id="L2705">				m_processMsg = Msg.translate(getCtx(), &quot;DepositBatchProcessed&quot;) + db;</span>
+<span class="nc" id="L2706">				return false;</span>
+			}
+		}
+		
+		// Before reverseCorrect
+<span class="nc" id="L2711">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_REVERSECORRECT);</span>
+<span class="nc bnc" id="L2712" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2713">			return false;</span>
+		
+<span class="nc" id="L2715">		StringBuilder info = reverse(false);</span>
+<span class="nc bnc" id="L2716" title="All 2 branches missed.">		if (info == null) {</span>
+<span class="nc" id="L2717">			return false;</span>
+		}
+		
+		// After reverseCorrect
+<span class="nc" id="L2721">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_REVERSECORRECT);</span>
+<span class="nc bnc" id="L2722" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2723">			return false;</span>
+
+<span class="nc" id="L2725">		m_processMsg = info.toString();</span>
+<span class="nc" id="L2726">		return true;</span>
+	}	//	reverseCorrectionIt
+
+	/**
+	 * Reverse this payment
+	 * @param accrual true to use current date, false to use this document's accounting date
+	 * @return process message or null if there's error
+	 */
+	protected StringBuilder reverse(boolean accrual) {
+<span class="nc bnc" id="L2735" title="All 2 branches missed.">		if (!voidOnlinePayment())</span>
+<span class="nc" id="L2736">			return null;</span>
+		
+		//	Std Period open?
+<span class="nc bnc" id="L2739" title="All 2 branches missed.">		Timestamp dateAcct = accrual ? Env.getContextAsDate(getCtx(), Env.DATE) : getDateAcct();</span>
+<span class="nc bnc" id="L2740" title="All 2 branches missed.">		if (dateAcct == null) {</span>
+<span class="nc" id="L2741">			dateAcct = new Timestamp(System.currentTimeMillis());</span>
+		}
+<span class="nc" id="L2743">		MPeriod.testPeriodOpen(getCtx(), dateAcct, getC_DocType_ID(), getAD_Org_ID());</span>
+		
+<span class="nc bnc" id="L2745" title="All 4 branches missed.">		if (getC_BankStatementLine_ID() &gt; 0 &amp;&amp; isReconciled()) {</span>
+<span class="nc" id="L2746">			boolean allow = MSysConfig.getBooleanValue(MSysConfig.ALLOW_REVERSAL_OF_RECONCILED_PAYMENT, true, Env.getAD_Client_ID(getCtx()));</span>
+<span class="nc bnc" id="L2747" title="All 2 branches missed.">			if (!allow) {</span>
+<span class="nc" id="L2748">				m_processMsg = Msg.getMsg(getCtx(), &quot;NotAllowReversalOfReconciledPayment&quot;);</span>
+<span class="nc" id="L2749">				return null;</span>
+			}
+		}
+		
+<span class="nc bnc" id="L2753" title="All 2 branches missed.">		if (getC_DepositBatch_ID() != 0) </span>
+		{
+<span class="nc" id="L2755">			MDepositBatchLine batchLine = new Query(getCtx(),</span>
+<span class="nc" id="L2756">					MDepositBatchLine.Table_Name, &quot;C_Payment_ID = ? AND C_DepositBatch_ID = ?&quot;, get_TrxName())</span>
+<span class="nc" id="L2757">							.setParameters(getC_Payment_ID(), getC_DepositBatch_ID()).first();</span>
+			
+<span class="nc bnc" id="L2759" title="All 2 branches missed.">			if (batchLine != null) {</span>
+<span class="nc" id="L2760">				batchLine.deleteEx(false, get_TrxName());</span>
+			}
+		}
+		
+		//	Create Reversal
+<span class="nc" id="L2765">		MPayment reversal = new MPayment (getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L2766">		copyValues(this, reversal);</span>
+<span class="nc" id="L2767">		reversal.setClientOrg(this);</span>
+		// reversal.setC_Order_ID(0); // IDEMPIERE-1764
+<span class="nc" id="L2769">		reversal.setC_Invoice_ID(0);</span>
+<span class="nc" id="L2770">		reversal.setDateAcct(dateAcct);</span>
+		//
+<span class="nc" id="L2772">		reversal.setDocumentNo(getDocumentNo() + REVERSE_INDICATOR);	//	indicate reversals</span>
+<span class="nc" id="L2773">		reversal.setDocStatus(DOCSTATUS_Drafted);</span>
+<span class="nc" id="L2774">		reversal.setDocAction(DOCACTION_Complete);</span>
+		//
+<span class="nc" id="L2776">		reversal.setPayAmt(getPayAmt().negate());</span>
+<span class="nc" id="L2777">		reversal.setDiscountAmt(getDiscountAmt().negate());</span>
+<span class="nc" id="L2778">		reversal.setWriteOffAmt(getWriteOffAmt().negate());</span>
+<span class="nc" id="L2779">		reversal.setOverUnderAmt(getOverUnderAmt().negate());</span>
+		//
+<span class="nc" id="L2781">		reversal.setIsAllocated(true);</span>
+<span class="nc" id="L2782">		reversal.setIsReconciled(false);</span>
+<span class="nc" id="L2783">		reversal.setIsOnline(false);</span>
+<span class="nc" id="L2784">		reversal.setIsApproved(true); </span>
+<span class="nc" id="L2785">		reversal.setR_PnRef(null);</span>
+<span class="nc" id="L2786">		reversal.setR_Result(null);</span>
+<span class="nc" id="L2787">		reversal.setR_RespMsg(null);</span>
+<span class="nc" id="L2788">		reversal.setR_AuthCode(null);</span>
+<span class="nc" id="L2789">		reversal.setR_Info(null);</span>
+<span class="nc" id="L2790">		reversal.setProcessing(false);</span>
+<span class="nc" id="L2791">		reversal.setOProcessing(&quot;N&quot;);</span>
+<span class="nc" id="L2792">		reversal.setProcessed(false);</span>
+<span class="nc" id="L2793">		reversal.setPosted(false);</span>
+<span class="nc" id="L2794">		reversal.setDescription(getDescription());</span>
+<span class="nc" id="L2795">		reversal.addDescription(&quot;{-&gt;&quot; + getDocumentNo() + &quot;)&quot;);</span>
+		//FR [ 1948157  ] 
+<span class="nc" id="L2797">		reversal.setReversal_ID(getC_Payment_ID());</span>
+<span class="nc" id="L2798">		reversal.saveEx(get_TrxName());</span>
+		//	Post Reversal
+<span class="nc bnc" id="L2800" title="All 2 branches missed.">		if (!reversal.processIt(DocAction.ACTION_Complete))</span>
+		{
+<span class="nc" id="L2802">			m_processMsg = &quot;Reversal ERROR: &quot; + reversal.getProcessMsg();</span>
+<span class="nc" id="L2803">			return null;</span>
+		}
+<span class="nc" id="L2805">		reversal.closeIt();</span>
+<span class="nc" id="L2806">		reversal.setDocStatus(DOCSTATUS_Reversed);</span>
+<span class="nc" id="L2807">		reversal.setDocAction(DOCACTION_None);</span>
+<span class="nc" id="L2808">		reversal.saveEx(get_TrxName());</span>
+
+		//	Unlink &amp; De-Allocate
+<span class="nc" id="L2811">		deAllocate(accrual);</span>
+<span class="nc" id="L2812">		setIsAllocated (true);	//	the allocation below is overwritten</span>
+		//	Set Status 
+<span class="nc" id="L2814">		addDescription(&quot;(&quot; + reversal.getDocumentNo() + &quot;&lt;-)&quot;);</span>
+<span class="nc" id="L2815">		setDocStatus(DOCSTATUS_Reversed);</span>
+<span class="nc" id="L2816">		setDocAction(DOCACTION_None);</span>
+<span class="nc" id="L2817">		setProcessed(true);</span>
+		//FR [ 1948157  ] 
+<span class="nc" id="L2819">		setReversal_ID(reversal.getC_Payment_ID());</span>
+		
+<span class="nc" id="L2821">		StringBuilder info = new StringBuilder(reversal.getDocumentNo());</span>
+
+		//	Create automatic Allocation
+<span class="nc" id="L2824">		MAllocationHdr alloc = new MAllocationHdr (getCtx(), false, </span>
+<span class="nc" id="L2825">			getDateTrx(), </span>
+<span class="nc" id="L2826">			getC_Currency_ID(),</span>
+<span class="nc" id="L2827">			Msg.translate(getCtx(), &quot;C_Payment_ID&quot;)	+ &quot;: &quot; + reversal.getDocumentNo(), get_TrxName());</span>
+<span class="nc" id="L2828">		alloc.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc" id="L2829">		alloc.setDateAcct(dateAcct); // dateAcct variable already take into account the accrual parameter</span>
+<span class="nc" id="L2830">		alloc.saveEx(get_TrxName());</span>
+
+		//	Original Allocation
+<span class="nc" id="L2833">		MAllocationLine aLine = new MAllocationLine (alloc, getPayAmt(true), </span>
+<span class="nc" id="L2834">			Env.ZERO, Env.ZERO, Env.ZERO);</span>
+<span class="nc" id="L2835">		aLine.setDocInfo(getC_BPartner_ID(), 0, 0);</span>
+<span class="nc" id="L2836">		aLine.setPaymentInfo(getC_Payment_ID(), 0);</span>
+<span class="nc bnc" id="L2837" title="All 2 branches missed.">		if (!aLine.save(get_TrxName()))</span>
+<span class="nc" id="L2838">			log.warning(&quot;Automatic allocation - line not saved&quot;);</span>
+		//	Reversal Allocation
+<span class="nc" id="L2840">		aLine = new MAllocationLine (alloc, reversal.getPayAmt(true), </span>
+<span class="nc" id="L2841">			Env.ZERO, Env.ZERO, Env.ZERO);</span>
+<span class="nc" id="L2842">		aLine.setDocInfo(reversal.getC_BPartner_ID(), 0, 0);</span>
+<span class="nc" id="L2843">		aLine.setPaymentInfo(reversal.getC_Payment_ID(), 0, reversal.getC_BankTransfer_ID());</span>
+<span class="nc bnc" id="L2844" title="All 2 branches missed.">		if (!aLine.save(get_TrxName()))</span>
+<span class="nc" id="L2845">			log.warning(&quot;Automatic allocation - reversal line not saved&quot;);</span>
+		
+		//do not post immediate alloc
+<span class="nc" id="L2848">		alloc.set_Attribute(DocumentEngine.DOCUMENT_POST_IMMEDIATE_AFTER_COMPLETE, Boolean.FALSE);</span>
+		// added AdempiereException by zuhri
+<span class="nc bnc" id="L2850" title="All 2 branches missed.">		if (!alloc.processIt(DocAction.ACTION_Complete))</span>
+<span class="nc" id="L2851">			throw new AdempiereException(Msg.getMsg(getCtx(), &quot;FailedProcessingDocument&quot;) + &quot; - &quot; + alloc.getProcessMsg());</span>
+<span class="nc" id="L2852">		addDocsPostProcess(alloc);</span>
+		// end added
+<span class="nc" id="L2854">		alloc.saveEx(get_TrxName());</span>
+		//			
+<span class="nc" id="L2856">		info.append(&quot; - @C_AllocationHdr_ID@: &quot;).append(alloc.getDocumentNo());</span>
+		
+<span class="nc" id="L2858">		ICreditManager creditManager = Core.getCreditManager(this);</span>
+		//	Update BPartner
+<span class="nc bnc" id="L2860" title="All 2 branches missed.">		if (creditManager != null)</span>
+<span class="nc bnc" id="L2861" title="All 2 branches missed.">			creditManager.checkCreditStatus(accrual ? DOCACTION_Reverse_Accrual : DOCACTION_Reverse_Correct);</span>
+		
+<span class="nc" id="L2863">		return info;</span>
+	}
+
+	/**
+	 * 	Get Bank Statement Line of payment or 0
+	 *	@return C_BankStatementLine_ID or 0
+	 */
+	protected int getC_BankStatementLine_ID()
+	{
+<span class="nc" id="L2872">		String sql = &quot;SELECT C_BankStatementLine_ID FROM C_BankStatementLine WHERE C_Payment_ID=?&quot;;</span>
+<span class="nc" id="L2873">		int id = DB.getSQLValue(get_TrxName(), sql, getC_Payment_ID());</span>
+<span class="nc bnc" id="L2874" title="All 2 branches missed.">		if (id &lt; 0)</span>
+<span class="nc" id="L2875">			return 0;</span>
+<span class="nc" id="L2876">		return id;</span>
+	}	//	getC_BankStatementLine_ID
+	
+	/**
+	 * 	Reverse Accrual
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean reverseAccrualIt()
+	{
+<span class="nc bnc" id="L2886" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+
+<span class="nc bnc" id="L2888" title="All 2 branches missed.">		if (getC_DepositBatch_ID() &gt; 0) {</span>
+<span class="nc" id="L2889">			MDepositBatch db = new MDepositBatch(getCtx(), getC_DepositBatch_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2890" title="All 2 branches missed.">			if (db.isProcessed()) {</span>
+<span class="nc" id="L2891">				m_processMsg = Msg.translate(getCtx(), &quot;DepositBatchProcessed&quot;) + db;</span>
+<span class="nc" id="L2892">				return false;</span>
+			}
+		}
+
+		// Before reverseAccrual
+<span class="nc" id="L2897">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_REVERSEACCRUAL);</span>
+<span class="nc bnc" id="L2898" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2899">			return false;</span>
+		
+<span class="nc" id="L2901">		StringBuilder info = reverse(true);</span>
+<span class="nc bnc" id="L2902" title="All 2 branches missed.">		if (info == null) {</span>
+<span class="nc" id="L2903">			return false;</span>
+		}
+		
+		// After reverseAccrual
+<span class="nc" id="L2907">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_REVERSEACCRUAL);</span>
+<span class="nc bnc" id="L2908" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2909">			return false;</span>
+				
+<span class="nc" id="L2911">		m_processMsg = info.toString();</span>
+<span class="nc" id="L2912">		return true;</span>
+	}	//	reverseAccrualIt
+	
+	/** 
+	 * 	Re-activate
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean reActivateIt()
+	{
+<span class="nc bnc" id="L2922" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		// Before reActivate
+<span class="nc" id="L2924">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_REACTIVATE);</span>
+<span class="nc bnc" id="L2925" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L2926">			return false;	</span>
+		
+<span class="nc" id="L2928">		MPeriod.testPeriodOpen(getCtx(), getDateAcct(), getC_DocType_ID(), getAD_Org_ID());</span>
+
+<span class="nc bnc" id="L2930" title="All 2 branches missed.">		if (!DocumentEngine.canReactivateThisDocType(getC_DocType_ID())) {</span>
+<span class="nc" id="L2931">			m_processMsg = Msg.getMsg(getCtx(), &quot;DocTypeCannotBeReactivated&quot;, new Object[] {MDocType.get(getC_DocType_ID()).getNameTrl()});</span>
+<span class="nc" id="L2932">			return false;</span>
+		}
+
+<span class="nc" id="L2935">		MAllocationHdr[] allocations = MAllocationHdr.getOfPayment(getCtx(), getC_Payment_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2936" title="All 2 branches missed.">		if (allocations.length &gt; 0) {</span>
+<span class="nc" id="L2937">			m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentReactivationFailedAllocationLine&quot;);</span>
+<span class="nc" id="L2938">			return false;</span>
+		}
+
+<span class="nc bnc" id="L2941" title="All 2 branches missed.">		if (DB.getSQLValueEx(get_TrxName(), &quot;SELECT 1 FROM C_BankStatementLine WHERE C_Payment_ID = ?&quot;, getC_Payment_ID()) == 1) {</span>
+<span class="nc" id="L2942">			m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentReactivationFailedBankStatementLine&quot;);</span>
+<span class="nc" id="L2943">			return false;</span>
+		}
+
+<span class="nc bnc" id="L2946" title="All 2 branches missed.">		if (getC_BankTransfer_ID() &gt; 0) {</span>
+<span class="nc" id="L2947">			m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentReactivationFailedBankTransfer&quot;);</span>
+<span class="nc" id="L2948">			return false;</span>
+		}
+
+<span class="nc bnc" id="L2951" title="All 2 branches missed.">		if (DB.getSQLValueEx(get_TrxName(), &quot;SELECT 1 FROM C_DunningRunLine WHERE C_Payment_ID = ?&quot;, getC_Payment_ID()) == 1) {</span>
+<span class="nc" id="L2952">			m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentReactivationFailedDunningLine&quot;);</span>
+<span class="nc" id="L2953">			return false;</span>
+		}
+
+<span class="nc bnc" id="L2956" title="All 2 branches missed.">		if (DB.getSQLValueEx(get_TrxName(), &quot;SELECT 1 FROM R_Request WHERE C_Payment_ID = ?&quot;, getC_Payment_ID()) == 1) {</span>
+<span class="nc" id="L2957">			m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentReactivationFailedRequest&quot;);</span>
+<span class="nc" id="L2958">			return false;</span>
+		}
+
+<span class="nc bnc" id="L2961" title="All 2 branches missed.">		if (getRef_Payment_ID() &gt; 0) {</span>
+<span class="nc" id="L2962">			m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentReactivationFailedCounterDocument&quot;);</span>
+<span class="nc" id="L2963">			return false;</span>
+		}
+
+<span class="nc bnc" id="L2966" title="All 4 branches missed.">		if (isCashbookTrx() &amp;&amp; DB.getSQLValueEx(get_TrxName(), &quot;SELECT 1 FROM C_CashLine WHERE C_Payment_ID = ?&quot;, getC_Payment_ID()) == 1) {</span>
+<span class="nc" id="L2967">			m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentReactivationFailedCashLine&quot;);</span>
+<span class="nc" id="L2968">			return false;			</span>
+		}
+
+<span class="nc" id="L2971">		MFactAcct.deleteEx(Table_ID, getC_Payment_ID(), get_TrxName());</span>
+<span class="nc" id="L2972">		setPosted(false);</span>
+<span class="nc" id="L2973">		setDocAction(DOCACTION_Complete);</span>
+<span class="nc" id="L2974">		setProcessed(false);</span>
+
+<span class="nc" id="L2976">		ICreditManager creditManager = Core.getCreditManager(this);</span>
+<span class="nc bnc" id="L2977" title="All 2 branches missed.">		if (creditManager != null)</span>
+<span class="nc" id="L2978">			creditManager.checkCreditStatus(DOCACTION_Re_Activate);</span>
+
+<span class="nc bnc" id="L2980" title="All 2 branches missed.">		if (getC_Charge_ID() != 0)</span>
+<span class="nc" id="L2981">			setIsAllocated(false);</span>
+
+<span class="nc bnc" id="L2983" title="All 2 branches missed.">		if (getC_Invoice_ID() != 0) {</span>
+<span class="nc" id="L2984">			MInvoice inv = new MInvoice(getCtx(), getC_Invoice_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2985" title="All 2 branches missed.">			if (inv.getC_Payment_ID() == getC_Payment_ID()) {</span>
+<span class="nc" id="L2986">				inv.setC_Payment_ID(0);</span>
+<span class="nc" id="L2987">				inv.saveEx();</span>
+			}
+		}
+
+<span class="nc bnc" id="L2991" title="All 2 branches missed.">		if (getC_Order_ID() != 0) {</span>
+<span class="nc" id="L2992">			MOrder ord = new MOrder(getCtx(), getC_Order_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L2993" title="All 2 branches missed.">			if (ord.getC_Payment_ID() == getC_Payment_ID()) {</span>
+<span class="nc" id="L2994">				ord.setC_Payment_ID(getC_Payment_ID());</span>
+<span class="nc" id="L2995">				ord.saveEx();</span>
+			}
+		}
+
+		// After reActivate
+<span class="nc" id="L3000">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_REACTIVATE);</span>
+<span class="nc bnc" id="L3001" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L3002">			return false;				</span>
+		
+<span class="nc" id="L3004">		return true;</span>
+	}	//	reActivateIt
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L3014">		StringBuilder sb = new StringBuilder (&quot;MPayment[&quot;);</span>
+<span class="nc" id="L3015">		sb.append(get_ID()).append(&quot;-&quot;).append(getDocumentNo())</span>
+<span class="nc" id="L3016">			.append(&quot;,Receipt=&quot;).append(isReceipt())</span>
+<span class="nc" id="L3017">			.append(&quot;,PayAmt=&quot;).append(getPayAmt())</span>
+<span class="nc" id="L3018">			.append(&quot;,Discount=&quot;).append(getDiscountAmt())</span>
+<span class="nc" id="L3019">			.append(&quot;,WriteOff=&quot;).append(getWriteOffAmt())</span>
+<span class="nc" id="L3020">			.append(&quot;,OverUnder=&quot;).append(getOverUnderAmt());</span>
+<span class="nc" id="L3021">		return sb.toString ();</span>
+	}	//	toString
+	
+	/**
+	 * 	Get Document Info
+	 *	@return document info (untranslated)
+	 */
+	@Override
+	public String getDocumentInfo()
+	{
+<span class="nc" id="L3031">		MDocType dt = MDocType.get(getCtx(), getC_DocType_ID());</span>
+<span class="nc" id="L3032">		return dt.getNameTrl() + &quot; &quot; + getDocumentNo();</span>
+	}	//	getDocumentInfo
+
+	/**
+	 * 	Create PDF
+	 *	@return File or null
+	 */
+	@Override
+	public File createPDF ()
+	{
+		try
+		{
+<span class="nc" id="L3044">			File temp = File.createTempFile(get_TableName()+get_ID()+&quot;_&quot;, &quot;.pdf&quot;);</span>
+<span class="nc" id="L3045">			return createPDF (temp);</span>
+		}
+<span class="nc" id="L3047">		catch (Exception e)</span>
+		{
+<span class="nc" id="L3049">			log.severe(&quot;Could not create PDF - &quot; + e.getMessage());</span>
+		}
+<span class="nc" id="L3051">		return null;</span>
+	}	//	getPDF
+
+	/**
+	 * 	Create PDF file
+	 *	@param file output file
+	 *	@return not implemented, always return null
+	 */
+	public File createPDF (File file)
+	{
+<span class="nc" id="L3061">		return null;</span>
+	}	//	createPDF
+
+	/**
+	 * 	Get Summary
+	 *	@return Summary of Document
+	 */
+	@Override
+	public String getSummary()
+	{
+<span class="nc" id="L3071">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L3072">		sb.append(getDocumentNo());</span>
+		//	: Total Lines = 123.00 (#1)
+<span class="nc" id="L3074">		sb.append(&quot;: &quot;)</span>
+<span class="nc" id="L3075">			.append(Msg.translate(getCtx(),&quot;PayAmt&quot;)).append(&quot;=&quot;).append(getPayAmt())</span>
+<span class="nc" id="L3076">			.append(&quot;,&quot;).append(Msg.translate(getCtx(),&quot;WriteOffAmt&quot;)).append(&quot;=&quot;).append(getWriteOffAmt());</span>
+		//	 - Description
+<span class="nc bnc" id="L3078" title="All 4 branches missed.">		if (getDescription() != null &amp;&amp; getDescription().length() &gt; 0)</span>
+<span class="nc" id="L3079">			sb.append(&quot; - &quot;).append(getDescription());</span>
+<span class="nc" id="L3080">		return sb.toString();</span>
+	}	//	getSummary
+	
+	/**
+	 * 	Get Process Message
+	 *	@return clear text error message
+	 */
+	@Override
+	public String getProcessMsg()
+	{
+<span class="nc" id="L3090">		return m_processMsg;</span>
+	}	//	getProcessMsg
+	
+	/**
+	 * 	Get Document Owner (Responsible)
+	 *	@return AD_User_ID
+	 */
+	@Override
+	public int getDoc_User_ID()
+	{
+<span class="nc" id="L3100">		return getCreatedBy();</span>
+	}	//	getDoc_User_ID
+
+	/**
+	 * 	Get Document Approval Amount
+	 *	@return amount payment(AP) or write-off(AR)
+	 */
+	@Override
+	public BigDecimal getApprovalAmt()
+	{
+<span class="nc bnc" id="L3110" title="All 2 branches missed.">		if (isReceipt())</span>
+<span class="nc" id="L3111">			return getWriteOffAmt();</span>
+<span class="nc" id="L3112">		return getPayAmt();</span>
+	}	//	getApprovalAmt
+
+
+	@Override
+	public void setProcessUI(IProcessUI processMonitor) {
+<span class="nc" id="L3118">		m_processUI = processMonitor;</span>
+<span class="nc" id="L3119">	}</span>
+	
+	/**
+	 * Create online payment transaction
+	 * @param trxName
+	 * @return MPaymentTransaction
+	 */
+	public MPaymentTransaction createPaymentTransaction(String trxName)
+	{
+<span class="nc" id="L3128">		MPaymentTransaction paymentTransaction = new MPaymentTransaction(getCtx(), 0, trxName);</span>
+<span class="nc" id="L3129">		paymentTransaction.setA_City(getA_City());</span>
+<span class="nc" id="L3130">		paymentTransaction.setA_Country(getA_Country());</span>
+<span class="nc" id="L3131">		paymentTransaction.setA_EMail(getA_EMail());</span>
+<span class="nc" id="L3132">		paymentTransaction.setA_Ident_DL(getA_Ident_DL());</span>
+<span class="nc" id="L3133">		paymentTransaction.setA_Ident_SSN(getA_Ident_SSN());</span>
+<span class="nc" id="L3134">		paymentTransaction.setA_Name(getA_Name());</span>
+<span class="nc" id="L3135">		paymentTransaction.setA_State(getA_State());</span>
+<span class="nc" id="L3136">		paymentTransaction.setA_Street(getA_Street());</span>
+<span class="nc" id="L3137">		paymentTransaction.setA_Zip(getA_Zip());</span>
+<span class="nc" id="L3138">		paymentTransaction.setAccountNo(getAccountNo());</span>
+<span class="nc" id="L3139">		paymentTransaction.setIBAN(getIBAN());</span>
+<span class="nc" id="L3140">		paymentTransaction.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc" id="L3141">		paymentTransaction.setC_BankAccount_ID(getC_BankAccount_ID());</span>
+<span class="nc" id="L3142">		paymentTransaction.setC_BP_BankAccount_ID(getC_BP_BankAccount_ID());</span>
+<span class="nc" id="L3143">		paymentTransaction.setC_BPartner_ID(getC_BPartner_ID());</span>
+<span class="nc" id="L3144">		paymentTransaction.setC_ConversionType_ID(getC_ConversionType_ID());</span>
+<span class="nc" id="L3145">		paymentTransaction.setC_Currency_ID(getC_Currency_ID());</span>
+<span class="nc" id="L3146">		paymentTransaction.setC_Invoice_ID(getC_Invoice_ID());</span>
+<span class="nc" id="L3147">		paymentTransaction.setC_Order_ID(getC_Order_ID());</span>
+<span class="nc" id="L3148">		paymentTransaction.setC_PaymentProcessor_ID(getC_PaymentProcessor_ID());</span>
+<span class="nc" id="L3149">		paymentTransaction.setC_POSTenderType_ID(getC_POSTenderType_ID());</span>
+<span class="nc" id="L3150">		paymentTransaction.setCheckNo(getCheckNo());</span>
+<span class="nc" id="L3151">		paymentTransaction.setCreditCardExpMM(getCreditCardExpMM());</span>
+<span class="nc" id="L3152">		paymentTransaction.setCreditCardExpYY(getCreditCardExpYY());</span>
+<span class="nc" id="L3153">		paymentTransaction.setCreditCardNumber(getCreditCardNumber());</span>
+<span class="nc" id="L3154">		paymentTransaction.setCreditCardType(getCreditCardType());</span>
+<span class="nc" id="L3155">		paymentTransaction.setCreditCardVV(getCreditCardVV());</span>
+<span class="nc" id="L3156">		paymentTransaction.setCustomerAddressID(getCustomerAddressID());</span>
+<span class="nc" id="L3157">		paymentTransaction.setCustomerPaymentProfileID(getCustomerPaymentProfileID());</span>
+<span class="nc" id="L3158">		paymentTransaction.setCustomerProfileID(getCustomerProfileID());</span>
+<span class="nc" id="L3159">		paymentTransaction.setDateTrx(getDateTrx());</span>
+<span class="nc" id="L3160">		paymentTransaction.setDescription(getDescription());</span>
+<span class="nc" id="L3161">		paymentTransaction.setIsActive(isActive());</span>
+<span class="nc" id="L3162">		paymentTransaction.setIsApproved(isApproved());</span>
+<span class="nc" id="L3163">		paymentTransaction.setIsDelayedCapture(isDelayedCapture());</span>
+<span class="nc" id="L3164">		paymentTransaction.setIsOnline(isOnline());</span>
+<span class="nc" id="L3165">		paymentTransaction.setIsReceipt(isReceipt());</span>
+<span class="nc" id="L3166">		paymentTransaction.setIsSelfService(isSelfService());</span>
+<span class="nc" id="L3167">		paymentTransaction.setIsVoided(isVoided());</span>
+<span class="nc" id="L3168">		paymentTransaction.setMicr(getMicr());</span>
+<span class="nc" id="L3169">		paymentTransaction.setOrig_TrxID(getOrig_TrxID());</span>
+<span class="nc" id="L3170">		paymentTransaction.setPayAmt(getPayAmt());</span>
+<span class="nc" id="L3171">		paymentTransaction.setPONum(getPONum());</span>
+<span class="nc" id="L3172">		paymentTransaction.setProcessed(isProcessed());</span>
+<span class="nc" id="L3173">		paymentTransaction.setR_AuthCode(getR_AuthCode());</span>
+<span class="nc" id="L3174">		paymentTransaction.setR_AvsAddr(getR_AvsAddr());</span>
+<span class="nc" id="L3175">		paymentTransaction.setR_AvsZip(getR_AvsZip());</span>
+<span class="nc" id="L3176">		paymentTransaction.setR_CVV2Match(isR_CVV2Match());</span>
+<span class="nc" id="L3177">		paymentTransaction.setR_Info(getR_Info());</span>
+<span class="nc" id="L3178">		paymentTransaction.setR_PnRef(getR_PnRef());</span>
+<span class="nc" id="L3179">		paymentTransaction.setR_RespMsg(getR_RespMsg());</span>
+<span class="nc" id="L3180">		paymentTransaction.setR_Result(getR_Result());</span>
+<span class="nc" id="L3181">		paymentTransaction.setR_VoidMsg(getR_VoidMsg());</span>
+<span class="nc" id="L3182">		paymentTransaction.setRoutingNo(getRoutingNo());</span>
+<span class="nc" id="L3183">		paymentTransaction.setSwiftCode(getSwiftCode());</span>
+<span class="nc" id="L3184">		paymentTransaction.setTaxAmt(getTaxAmt());</span>
+<span class="nc" id="L3185">		paymentTransaction.setTenderType(getTenderType());</span>
+<span class="nc" id="L3186">		paymentTransaction.setTrxType(getTrxType());</span>
+<span class="nc" id="L3187">		paymentTransaction.setVoiceAuthCode(getVoiceAuthCode());</span>
+		
+<span class="nc" id="L3189">		return paymentTransaction;</span>
+	}
+	
+	/**
+	 * @return true if success
+	 */
+	protected boolean voidOnlinePayment() 
+	{
+<span class="nc bnc" id="L3197" title="All 4 branches missed.">		if (getTenderType().equals(TENDERTYPE_CreditCard) &amp;&amp; isOnline())</span>
+		{
+<span class="nc" id="L3199">			setOrig_TrxID(getR_PnRef());</span>
+<span class="nc" id="L3200">			setTrxType(TRXTYPE_Void);</span>
+<span class="nc bnc" id="L3201" title="All 2 branches missed.">			if(!processOnline())</span>
+			{
+<span class="nc" id="L3203">				setTrxType(TRXTYPE_CreditPayment);</span>
+<span class="nc bnc" id="L3204" title="All 2 branches missed.">				if(!processOnline())</span>
+				{
+<span class="nc" id="L3206">					log.log(Level.SEVERE, &quot;Failed to cancel payment online&quot;);</span>
+<span class="nc" id="L3207">					m_processMsg = Msg.getMsg(getCtx(), &quot;PaymentNotCancelled&quot;);</span>
+<span class="nc" id="L3208">					return false;</span>
+				}
+			}
+		}
+
+<span class="nc bnc" id="L3213" title="All 2 branches missed.">		if (getC_Invoice_ID() != 0)</span>
+		{
+<span class="nc" id="L3215">			MInvoice inv = new MInvoice(getCtx(), getC_Invoice_ID(), get_TrxName());</span>
+<span class="nc" id="L3216">			inv.setC_Payment_ID(0);</span>
+<span class="nc" id="L3217">			inv.saveEx();</span>
+		}
+<span class="nc bnc" id="L3219" title="All 2 branches missed.">		if (getC_Order_ID() != 0)</span>
+		{
+<span class="nc" id="L3221">			MOrder ord = new MOrder(getCtx(), getC_Order_ID(), get_TrxName());</span>
+<span class="nc" id="L3222">			ord.setC_Payment_ID(0);</span>
+<span class="nc" id="L3223">			ord.saveEx();</span>
+		}
+		
+<span class="nc" id="L3226">		return true;</span>
+	}
+	
+	@Override
+	public PO getPO() {
+<span class="nc" id="L3231">		return this;</span>
+	}
+	
+	/**
+	 * Get ids of completed credit card payment
+	 * @param C_Order_ID
+	 * @param C_Invoice_ID
+	 * @param trxName
+	 * @return array of C_Payment_ID
+	 */
+	public static int[] getCompletedPaymentIDs(int C_Order_ID, int C_Invoice_ID, String trxName)
+	{
+<span class="nc" id="L3243">		StringBuilder whereClause = new StringBuilder();</span>
+<span class="nc" id="L3244">		whereClause.append(&quot;TenderType='&quot;).append(MPayment.TENDERTYPE_CreditCard).append(&quot;' &quot;);</span>
+<span class="nc" id="L3245">		whereClause.append(&quot;AND TrxType IN ('&quot;).append(MPayment.TRXTYPE_DelayedCapture).append(&quot;', &quot;);</span>
+<span class="nc" id="L3246">		whereClause.append(&quot;'&quot;).append(MPayment.TRXTYPE_Sales).append(&quot;', &quot;);</span>
+<span class="nc" id="L3247">		whereClause.append(&quot;'&quot;).append(MPayment.TRXTYPE_CreditPayment).append(&quot;') &quot;);</span>
+<span class="nc bnc" id="L3248" title="All 4 branches missed.">		if (C_Order_ID &gt; 0 &amp;&amp; C_Invoice_ID &gt; 0)</span>
+<span class="nc" id="L3249">			whereClause.append(&quot; AND (C_Order_ID=&quot;).append(C_Order_ID).append(&quot; OR C_Invoice_ID=&quot;).append(C_Invoice_ID).append(&quot;)&quot;);</span>
+<span class="nc bnc" id="L3250" title="All 2 branches missed.">		else if (C_Order_ID &gt; 0)</span>
+<span class="nc" id="L3251">			whereClause.append(&quot; AND C_Order_ID=&quot;).append(C_Order_ID);</span>
+<span class="nc bnc" id="L3252" title="All 2 branches missed.">		else if (C_Invoice_ID &gt; 0)</span>
+<span class="nc" id="L3253">			whereClause.append(&quot; AND C_Invoice_ID=&quot;).append(C_Invoice_ID);</span>
+<span class="nc" id="L3254">		whereClause.append(&quot; AND IsApproved='Y' AND DocStatus IN ('CO','CL') &quot;);</span>
+<span class="nc" id="L3255">		whereClause.append(&quot;ORDER BY DateTrx DESC&quot;);</span>
+
+<span class="nc" id="L3257">		return MPaymentTransaction.getAllIDs(Table_Name, whereClause.toString(), trxName);</span>
+	}
+
+	// IDEMPIERE-2588
+<span class="nc" id="L3261">	protected MAllocationHdr m_justCreatedAllocInv = null;</span>
+	
+	/**
+	 * @return just created invoice allocation (inside {@link #allocateInvoice()})
+	 */
+	public MAllocationHdr getJustCreatedAllocInv() {
+<span class="nc" id="L3267">		return m_justCreatedAllocInv;</span>
+	}
+	
+	/**
+	 * Index constants for Vector&lt;Object&gt; record return by getUnAllocatedPaymentData.
+	 * Use MULTI_CURRENCY index if isMultiCurrency=true.
+	 * Use SINGLE_CURRENCY index if isMultiCurrency=false;
+	 */
+	//selected row, boolean
+	public static final int UNALLOCATED_PAYMENT_SELECTED=0;
+	//transaction date, timestamp
+	public static final int UNALLOCATED_PAYMENT_TRX_DATE=1;
+	//KeyNamePair, DocumentNo and C_Payment_ID
+	public static final int UNALLOCATED_PAYMENT_DOCUMENT_KEY_NAME_PAIR=2;
+	//multi currency record, currency iso code
+	public static final int UNALLOCATED_PAYMENT_MULTI_CURRENCY_ISO=3;
+	//multi currency record, payment amount
+	public static final int UNALLOCATED_PAYMENT_MULTI_CURRENCY_PAYMENT_AMT=4;
+	//multi currency record, payment amount converted to base currency
+	public static final int UNALLOCATED_PAYMENT_MULTI_CURRENCY_CONVERTED_AMT=5;
+	//multi currency record, open payment amount
+	public static final int UNALLOCATED_PAYMENT_MULTI_CURRENCY_OPEN_AMT=6;
+	//multi currency record, payment applied amount
+	public static final int UNALLOCATED_PAYMENT_MULTI_CURRENCY_APPLIED_AMT=7;
+	//single currency record, payment amount
+	public static final int UNALLOCATED_PAYMENT_SINGLE_CURRENCY_AMT=3;
+	//single currency record, open payment amount
+	public static final int UNALLOCATED_PAYMENT_SINGLE_CURRENCY_OPEN_AMT=4;
+	//single currency record, payment applied amount
+<span class="nc" id="L3296">	public static final int UNALLOCATED_PAYMENT_SINGLE_CURRENCY_APPLIED_AMT=5;</span>
+	
+	/**
+	 * 
+	 * @param C_BPartner_ID mandatory bpartner filter
+	 * @param C_Currency_ID 0 to use login currency. use for payment filter if isMultiCurrency=false
+	 * @param isMultiCurrency false to apply currency filter
+	 * @param date payment allocation as at date
+	 * @param AD_Org_ID 0 for all org
+	 * @param trxName optional transaction name
+	 * @return list of unallocated payment records.&lt;br/&gt;
+	 * - Payment record: Boolean.False, DateTrx, KeyNamePair(C_Payment_ID,DocumentNo), Currency ISO_Code, PayAmt, Converted Amt,Open Amt, 0 &lt;br/&gt; 
+	 * - Without Currency ISO_Code and PayAmt if isMultiCurrency is false.
+	 */
+	public static Vector&lt;Vector&lt;Object&gt;&gt; getUnAllocatedPaymentData(int C_BPartner_ID, int C_Currency_ID, boolean isMultiCurrency, 
+			Timestamp date, int AD_Org_ID, String trxName)
+	{
+<span class="nc bnc" id="L3313" title="All 2 branches missed.">		if (C_Currency_ID==0)</span>
+<span class="nc" id="L3314">			C_Currency_ID = Env.getContextAsInt(Env.getCtx(), Env.C_CURRENCY_ID);   //  default</span>
+		
+		/********************************
+		 *  Load unallocated Payments
+		 *      1-TrxDate, 2-DocumentNo, (3-Currency, 4-PayAmt,)
+		 *      5-ConvAmt, 6-ConvOpen, 7-Allocated
+		 */
+<span class="nc" id="L3321">		Vector&lt;Vector&lt;Object&gt;&gt; data = new Vector&lt;Vector&lt;Object&gt;&gt;();</span>
+<span class="nc" id="L3322">		StringBuilder sql = new StringBuilder(&quot;SELECT p.DateTrx,p.DocumentNo,p.C_Payment_ID,&quot;  //  1..3</span>
+			+ &quot;c.ISO_Code,p.PayAmt,&quot;                            //  4..5
+			+ &quot;currencyConvertPayment(p.C_Payment_ID,?,null,?),&quot;//  6   #1, #2
+			+ &quot;currencyConvertPayment(p.C_Payment_ID,?,paymentAvailable(p.C_Payment_ID),?),&quot;  //  7   #3, #4
+			+ &quot;p.MultiplierAP &quot;
+			+ &quot;FROM C_Payment_v p&quot;		//	Corrected for AP/AR
+			+ &quot; INNER JOIN C_Currency c ON (p.C_Currency_ID=c.C_Currency_ID) &quot;
+			+ &quot;WHERE p.IsAllocated='N' AND p.Processed='Y'&quot;
+			+ &quot; AND p.C_Charge_ID IS NULL&quot;		//	Prepayments OK
+			+ &quot; AND p.C_BPartner_ID=?&quot;);                   		//      #5
+<span class="nc bnc" id="L3332" title="All 2 branches missed.">		if (!isMultiCurrency)</span>
+<span class="nc" id="L3333">			sql.append(&quot; AND p.C_Currency_ID=?&quot;);				//      #6</span>
+<span class="nc bnc" id="L3334" title="All 2 branches missed.">		if (AD_Org_ID != 0 )</span>
+<span class="nc" id="L3335">			sql.append(&quot; AND p.AD_Org_ID=&quot; + AD_Org_ID);</span>
+<span class="nc" id="L3336">		sql.append(&quot; ORDER BY p.DateTrx,p.DocumentNo&quot;);</span>
+		
+		// role security
+<span class="nc" id="L3339">		sql = new StringBuilder( MRole.getDefault(Env.getCtx(), false).addAccessSQL( sql.toString(), &quot;p&quot;, MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO ) );</span>
+		
+<span class="nc bnc" id="L3341" title="All 2 branches missed.">		if (s_log.isLoggable(Level.FINE)) s_log.fine(&quot;PaySQL=&quot; + sql.toString());</span>
+<span class="nc" id="L3342">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L3343">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L3346">			pstmt = DB.prepareStatement(sql.toString(), trxName);</span>
+<span class="nc" id="L3347">			pstmt.setInt(1, C_Currency_ID);</span>
+<span class="nc" id="L3348">			pstmt.setTimestamp(2, (Timestamp)date);</span>
+<span class="nc" id="L3349">			pstmt.setInt(3, C_Currency_ID);</span>
+<span class="nc" id="L3350">			pstmt.setTimestamp(4, (Timestamp)date);</span>
+<span class="nc" id="L3351">			pstmt.setInt(5, C_BPartner_ID);</span>
+<span class="nc bnc" id="L3352" title="All 2 branches missed.">			if (!isMultiCurrency)</span>
+<span class="nc" id="L3353">				pstmt.setInt(6, C_Currency_ID);</span>
+<span class="nc" id="L3354">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L3355" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L3357">				Vector&lt;Object&gt; line = new Vector&lt;Object&gt;();</span>
+<span class="nc" id="L3358">				line.add(Boolean.FALSE);       //  0-Selection</span>
+<span class="nc" id="L3359">				line.add(rs.getTimestamp(1));       //  1-TrxDate</span>
+<span class="nc" id="L3360">				KeyNamePair pp = new KeyNamePair(rs.getInt(3), rs.getString(2));</span>
+<span class="nc" id="L3361">				line.add(pp);                       //  2-DocumentNo</span>
+<span class="nc bnc" id="L3362" title="All 2 branches missed.">				if (isMultiCurrency)</span>
+				{
+<span class="nc" id="L3364">					line.add(rs.getString(4));      //  3-Currency</span>
+<span class="nc" id="L3365">					line.add(rs.getBigDecimal(5));  //  4-PayAmt</span>
+				}
+<span class="nc" id="L3367">				line.add(rs.getBigDecimal(6));      //  3/5-ConvAmt</span>
+<span class="nc" id="L3368">				BigDecimal available = rs.getBigDecimal(7);</span>
+<span class="nc bnc" id="L3369" title="All 4 branches missed.">				if (available == null || available.signum() == 0)	//	nothing available</span>
+<span class="nc" id="L3370">					continue;</span>
+<span class="nc" id="L3371">				line.add(available);				//  4/6-ConvOpen/Available</span>
+<span class="nc" id="L3372">				line.add(Env.ZERO);					//  5/7-Applied</span>
+				//
+<span class="nc" id="L3374">				data.add(line);</span>
+			}
+<span class="nc" id="L3376">		}</span>
+<span class="nc" id="L3377">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L3379">			s_log.log(Level.SEVERE, sql.toString(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L3383">			DB.close(rs, pstmt);</span>
+		}
+		
+<span class="nc" id="L3386">		return data;</span>
+	}
+}   //  MPayment
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

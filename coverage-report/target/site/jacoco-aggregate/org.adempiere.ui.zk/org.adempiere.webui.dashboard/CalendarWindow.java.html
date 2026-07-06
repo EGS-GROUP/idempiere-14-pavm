@@ -1,0 +1,550 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CalendarWindow.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.dashboard</a> &gt; <span class="el_source">CalendarWindow.java</span></div><h1>CalendarWindow.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2008 Elaine Tan                                              *
+ * Copyright (C) 2008 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.webui.dashboard;
+
+import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Enumeration;
+import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.TimeZone;
+
+import org.adempiere.webui.ClientInfo;
+import org.adempiere.webui.component.Tabpanel;
+import org.adempiere.webui.component.Window;
+import org.adempiere.webui.panel.ITabOnCloseHandler;
+import org.adempiere.webui.part.WindowContainer;
+import org.adempiere.webui.session.SessionManager;
+import org.adempiere.webui.theme.ThemeManager;
+import org.adempiere.webui.util.ZKUpdateUtil;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.X_R_RequestType;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.jfree.chart.ChartFactory;
+import org.jfree.chart.JFreeChart;
+import org.jfree.chart.encoders.EncoderUtil;
+import org.jfree.chart.encoders.ImageFormat;
+import org.jfree.chart.plot.PiePlot;
+import org.jfree.data.general.DefaultPieDataset;
+import org.zkoss.calendar.Calendars;
+import org.zkoss.calendar.api.CalendarItem;
+import org.zkoss.calendar.event.CalendarsEvent;
+import org.zkoss.calendar.impl.SimpleCalendarItem;
+import org.zkoss.calendar.impl.SimpleCalendarModel;
+import org.zkoss.image.AImage;
+import org.zkoss.zk.ui.Component;
+import org.zkoss.zk.ui.Executions;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.event.Events;
+import org.zkoss.zul.Borderlayout;
+import org.zkoss.zul.Button;
+import org.zkoss.zul.Image;
+import org.zkoss.zul.Label;
+import org.zkoss.zul.Listbox;
+import org.zkoss.zul.Listitem;
+import org.zkoss.zul.Popup;
+import org.zkoss.zul.Span;
+import org.zkoss.zul.Tab;
+import org.zkoss.zul.Timer;
+import org.zkoss.zul.Toolbarbutton;
+
+/**
+ * Calendar window
+ * @author Elaine
+ */
+public class CalendarWindow extends Window implements EventListener&lt;Event&gt;, ITabOnCloseHandler {	
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = 1576992746053720647L;
+	private static final String ON_MOBILE_SET_SELECTED_TAB_ECHO = &quot;onMobileSetSelectedTabEcho&quot;;
+	private static final String ON_DAY_CLICK_EVENT = &quot;onDayClick&quot;;
+	private static final String ON_MOVE_DATE_EVENT = &quot;onMoveDate&quot;;
+	private static final String ON_UPDATE_VIEW_EVENT = &quot;onUpdateView&quot;;
+	private static final String ON_MOUSE_OVER_EVENT = &quot;onMouseOver&quot;;
+	private static final String ON_ITEM_UPDATE_EVENT = CalendarsEvent.ON_ITEM_UPDATE;
+	private static final String ON_ITEM_EDIT_EVENT = CalendarsEvent.ON_ITEM_EDIT;
+	private static final String ON_ITEM_CREATE_EVENT = CalendarsEvent.ON_ITEM_CREATE;
+	
+	/** Zk Calendar instance. Center of window. */
+	private Calendars calendars;
+	/** Calendar model for {@link #calendars} */
+	private SimpleCalendarModel scm;
+	/** Re-query button */
+	private Toolbarbutton btnRefresh;
+	/** List of request types */
+	private Listbox lbxRequestTypes;
+	/** Pie chart for calendar events. South of window. */
+	private Image myChart;
+	private Button btnCurrentDate, btnSwitchTimeZone;
+	/** Label for start and end date of current Calendar view */
+	private Label lblDate;
+	/** button to move Calendar to previous or next page */
+	private Component divArrowLeft, divArrowRight;
+	private Span FDOW;
+	/** List to select first day of a week (monday, tuesday, etc). Visible for week and month view. */
+	private Listbox lbxFDOW;
+	/** Tab for Day, Week, 5Day and Month view */
+	private Component divTabDay, divTabWeek, divTabWeekdays, divTabMonth;
+	/** Message Popup */
+	private Popup updateMsg;
+	/** Content of {@link #updateMsg} */
+	private	Label popupLabel;
+	/** Timer to close {@link #updateMsg} */
+	private Timer timer;
+	
+	/** Window for event */
+	private EventWindow eventWin;
+	
+	/**
+	 * Create window content from &quot;zul/calendar/calendar.zul&quot;
+	 * @param scm SimpleCalendarModel
+	 */
+	public CalendarWindow(SimpleCalendarModel scm) {
+
+<span class="nc" id="L130">		super();</span>
+		
+<span class="nc" id="L132">		this.scm = scm;</span>
+<span class="nc" id="L133">		Properties ctx = Env.getCtx();</span>
+<span class="nc" id="L134">		setTitle(Msg.getMsg(ctx,&quot;Calendar&quot;));</span>
+<span class="nc" id="L135">		setAttribute(Window.MODE_KEY, Window.MODE_EMBEDDED);</span>
+		
+<span class="nc" id="L137">		Component component = Executions.createComponents(ThemeManager.getThemeResource(&quot;zul/calendar/calendar.zul&quot;), this, null);</span>
+
+<span class="nc" id="L139">		Borderlayout borderlayout = (Borderlayout) component.getFellow(&quot;main&quot;);</span>
+<span class="nc" id="L140">		borderlayout.setStyle(&quot;position: relative&quot;);</span>
+<span class="nc" id="L141">		ZKUpdateUtil.setWidth(borderlayout, &quot;100%&quot;);</span>
+<span class="nc" id="L142">		ZKUpdateUtil.setHeight(borderlayout, &quot;100%&quot;);</span>
+
+<span class="nc" id="L144">		calendars = (Calendars) component.getFellow(&quot;cal&quot;);</span>
+<span class="nc" id="L145">		calendars.setModel(scm);</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">		if (calendars.getCurrentDateTime() != null)</span>
+<span class="nc" id="L147">			calendars.setCurrentDateTime(calendars.getCurrentDateTime());</span>
+<span class="nc" id="L148">		setTimeZone();</span>
+
+<span class="nc" id="L150">		btnRefresh = (Toolbarbutton) component.getFellow(&quot;btnRefresh&quot;);</span>
+<span class="nc" id="L151">		btnRefresh.addEventListener(Events.ON_CLICK, this);</span>
+		
+<span class="nc" id="L153">		lbxRequestTypes = (Listbox) component.getFellow(&quot;lbxRequestTypes&quot;);</span>
+<span class="nc" id="L154">		lbxRequestTypes.addEventListener(Events.ON_SELECT, this);</span>
+		
+<span class="nc" id="L156">		lbxRequestTypes.appendItem(Msg.getMsg(ctx,&quot;ShowAll&quot;), &quot;0&quot;);</span>
+<span class="nc" id="L157">		ArrayList&lt;X_R_RequestType&gt; types = DPCalendar.getRequestTypes(Env.getCtx());</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		for(X_R_RequestType type : types)</span>
+<span class="nc" id="L159">			lbxRequestTypes.appendItem(type.getName(), type.getR_RequestType_ID() + &quot;&quot;);</span>
+<span class="nc" id="L160">		lbxRequestTypes.setSelectedIndex(0);</span>
+		
+<span class="nc" id="L162">		myChart = (Image) component.getFellow(&quot;mychart&quot;);</span>
+<span class="nc" id="L163">		myChart.addEventListener(Events.ON_CREATE, this);</span>
+		
+<span class="nc" id="L165">		btnCurrentDate = (Button) component.getFellow(&quot;btnCurrentDate&quot;);</span>
+<span class="nc" id="L166">		btnCurrentDate.addEventListener(Events.ON_CLICK, this);</span>
+		
+<span class="nc" id="L168">		btnSwitchTimeZone = (Button) component.getFellow(&quot;btnSwitchTimeZone&quot;);</span>
+<span class="nc" id="L169">		btnSwitchTimeZone.addEventListener(Events.ON_CLICK, this);</span>
+<span class="nc" id="L170">		String alternateTimeZone = MSysConfig.getValue(MSysConfig.CALENDAR_ALTERNATE_TIMEZONE, &quot;Pacific Time=PST&quot;, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if (Util.isEmpty(alternateTimeZone, true))</span>
+<span class="nc" id="L172">			btnSwitchTimeZone.setVisible(false);</span>
+
+		
+<span class="nc" id="L175">		lblDate = (Label) component.getFellow(&quot;lblDate&quot;);</span>
+<span class="nc" id="L176">		lblDate.addEventListener(Events.ON_CREATE, this);</span>
+		
+<span class="nc" id="L178">		divArrowLeft = component.getFellow(&quot;divArrowLeft&quot;);</span>
+<span class="nc" id="L179">		divArrowLeft.addEventListener(ON_MOVE_DATE_EVENT, this);</span>
+		
+<span class="nc" id="L181">		divArrowRight = component.getFellow(&quot;divArrowRight&quot;);</span>
+<span class="nc" id="L182">		divArrowRight.addEventListener(ON_MOVE_DATE_EVENT, this);</span>
+		
+<span class="nc" id="L184">		FDOW = (Span) component.getFellow(&quot;FDOW&quot;);</span>
+<span class="nc" id="L185">		FDOW.addEventListener(Events.ON_CREATE, this);</span>
+
+<span class="nc" id="L187">		lbxFDOW = (Listbox) component.getFellow(&quot;lbxFDOW&quot;);</span>
+<span class="nc" id="L188">		lbxFDOW.addEventListener(Events.ON_SELECT, this);</span>
+<span class="nc" id="L189">		lbxFDOW.addEventListener(Events.ON_CREATE, this);</span>
+		
+<span class="nc" id="L191">		String[] days = {&quot;Monday&quot;,&quot;Tuesday&quot;,&quot;Wednesday&quot;,&quot;Thursday&quot;,&quot;Friday&quot;,&quot;Saturday&quot;,&quot;Sunday&quot;};</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">		for (String day : days) {</span>
+<span class="nc" id="L193">			lbxFDOW.appendItem(Msg.getMsg(Env.getCtx(),day), day);</span>
+		}
+		
+<span class="nc" id="L196">		divTabDay = component.getFellow(&quot;divTabDay&quot;);</span>
+<span class="nc" id="L197">		divTabDay.addEventListener(ON_UPDATE_VIEW_EVENT, this);</span>
+		
+<span class="nc" id="L199">		divTabWeek = component.getFellow(&quot;divTabWeek&quot;);</span>
+<span class="nc" id="L200">		divTabWeek.addEventListener(ON_UPDATE_VIEW_EVENT, this);</span>
+		
+<span class="nc" id="L202">		divTabWeekdays = component.getFellow(&quot;divTabWeekdays&quot;);</span>
+<span class="nc" id="L203">		divTabWeekdays.addEventListener(ON_UPDATE_VIEW_EVENT, this);</span>
+		
+<span class="nc" id="L205">		divTabMonth = component.getFellow(&quot;divTabMonth&quot;);</span>
+<span class="nc" id="L206">		divTabMonth.addEventListener(ON_UPDATE_VIEW_EVENT, this);</span>
+		
+<span class="nc" id="L208">		updateMsg = (Popup) component.getFellow(&quot;updateMsg&quot;);</span>
+		
+<span class="nc" id="L210">		popupLabel = (Label) component.getFellow(&quot;popupLabel&quot;);</span>
+		
+<span class="nc" id="L212">		timer = (Timer) component.getFellow(&quot;timer&quot;);</span>
+		
+<span class="nc" id="L214">		this.appendChild(component);</span>
+
+<span class="nc" id="L216">		calendars.addEventListener(ON_ITEM_CREATE_EVENT, this);</span>
+<span class="nc" id="L217">		calendars.addEventListener(ON_ITEM_EDIT_EVENT, this);</span>
+<span class="nc" id="L218">		calendars.addEventListener(ON_ITEM_UPDATE_EVENT, this);</span>
+<span class="nc" id="L219">		calendars.addEventListener(ON_MOUSE_OVER_EVENT, this);</span>
+<span class="nc" id="L220">		calendars.addEventListener(ON_DAY_CLICK_EVENT, this);</span>
+
+<span class="nc bnc" id="L222" title="All 2 branches missed.">		if (ClientInfo.isMobile()) {</span>
+<span class="nc" id="L223">			addCallback(AFTER_PAGE_ATTACHED, t -&gt; afterPageAttached());</span>
+<span class="nc" id="L224">			addEventListener(ON_MOBILE_SET_SELECTED_TAB_ECHO, evt -&gt; calendars.invalidate());</span>
+		}
+		
+<span class="nc" id="L227">		SessionManager.getAppDesktop().showWindow(this);</span>
+
+		// IDEMPIERE-1457: when show this window on tab, handle event close to remove calendars away scm
+<span class="nc" id="L230">		Component parentTab = this.getParent();</span>
+<span class="nc bnc" id="L231" title="All 4 branches missed.">		if (parentTab != null &amp;&amp; parentTab.getClass().equals(Tabpanel.class)) {</span>
+<span class="nc" id="L232">			((Tabpanel)parentTab).setOnCloseHandler(this);</span>
+		}				
+<span class="nc" id="L234">	}</span>
+
+	/**
+	 * After page attached callback for mobile client. &lt;br/&gt;
+	 * Setup listener for {@link WindowContainer#ON_MOBILE_SET_SELECTED_TAB} event.
+	 */
+	private void afterPageAttached() {
+<span class="nc" id="L241">		Component p = getParent();</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">		while (p != null) {</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">			if (p instanceof Tabpanel) {</span>
+<span class="nc" id="L244">				p.addEventListener(WindowContainer.ON_MOBILE_SET_SELECTED_TAB, evt -&gt; onMobileSelected());</span>
+<span class="nc" id="L245">				break;</span>
+			}
+<span class="nc" id="L247">			p = p.getParent();</span>
+		}
+<span class="nc" id="L249">	}</span>
+
+	/**
+	 * {@link WindowContainer#ON_MOBILE_SET_SELECTED_TAB} event.&lt;br/&gt;
+	 * Echo {@link #ON_MOBILE_SET_SELECTED_TAB_ECHO} event to redraw {@link #calendars}.
+	 */
+	private void onMobileSelected() {
+<span class="nc" id="L256">		Events.echoEvent(ON_MOBILE_SET_SELECTED_TAB_ECHO, this, null);</span>
+<span class="nc" id="L257">	}</span>
+
+	@Override
+	public void onClose(Tabpanel tabPanel){
+		//IDEMPIERE-1457: On close, remove calendars away scm			
+<span class="nc" id="L262">		calendars.setModel(null);</span>
+<span class="nc" id="L263">		Tab tab = tabPanel.getLinkedTab();</span>
+<span class="nc" id="L264">		tab.close();</span>
+<span class="nc" id="L265">	}</span>
+
+	@Override
+	public void onEvent(Event e) throws Exception {
+<span class="nc" id="L269">		String type = e.getName();</span>
+
+<span class="nc bnc" id="L271" title="All 2 branches missed.">		if (type.equals(Events.ON_CLICK)) {</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">			if (e.getTarget() == btnRefresh)</span>
+<span class="nc" id="L273">				btnRefreshClicked();</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">			else if (e.getTarget() == btnCurrentDate)</span>
+<span class="nc" id="L275">				btnCurrentDateClicked();</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">			else if (e.getTarget() == btnSwitchTimeZone)</span>
+<span class="nc" id="L277">				btnSwitchTimeZoneClicked();</span>
+<span class="nc" id="L278">		}</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">		else if (type.equals(Events.ON_CREATE)) {</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">			if (e.getTarget() == lblDate)</span>
+<span class="nc" id="L281">				updateDateLabel();</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">			else if (e.getTarget() == FDOW)</span>
+<span class="nc bnc" id="L283" title="All 4 branches missed.">				FDOW.setVisible(&quot;month&quot;.equals(calendars.getMold()) || calendars.getDays() == 7);</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">			else if (e.getTarget() == myChart)</span>
+<span class="nc" id="L285">				syncModel();</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">			else if (e.getTarget() == lbxFDOW)</span>
+<span class="nc" id="L287">				lbxFDOW.setSelectedIndex(0);</span>
+<span class="nc" id="L288">		}</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">		else if (type.equals(ON_MOVE_DATE_EVENT)) {</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">			if (e.getTarget() == divArrowLeft)</span>
+<span class="nc" id="L291">				divArrowClicked(false);</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">			else if (e.getTarget() == divArrowRight)</span>
+<span class="nc" id="L293">				divArrowClicked(true);</span>
+<span class="nc" id="L294">		}</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">		else if (type.equals(ON_UPDATE_VIEW_EVENT)) {</span>
+<span class="nc" id="L296">			String text = String.valueOf(e.getData());</span>
+<span class="nc bnc" id="L297" title="All 6 branches missed.">			int days = Msg.getMsg(Env.getCtx(),&quot;Day&quot;).equals(text) ? 1: Msg.getMsg(Env.getCtx(),&quot;5Days&quot;).equals(text) ? 5: Msg.getMsg(Env.getCtx(),&quot;Week&quot;).equals(text) ? 7: 0;</span>
+<span class="nc" id="L298">			divTabClicked(days);</span>
+<span class="nc" id="L299">		}</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">		else if (type.equals(Events.ON_SELECT)) {</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">			if (e.getTarget() == lbxRequestTypes) {</span>
+<span class="nc" id="L302">				Listitem li = lbxRequestTypes.getSelectedItem();</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">				if(li == null) return;</span>
+				
+<span class="nc bnc" id="L305" title="All 2 branches missed.">				if(li.getValue() == null) return;</span>
+<span class="nc" id="L306">				int R_RequestType_ID = Integer.parseInt(li.getValue().toString());</span>
+				
+<span class="nc" id="L308">				scm.clear();</span>
+<span class="nc" id="L309">				ArrayList&lt;ADCalendarEvent&gt; events = DPCalendar.getEvents(R_RequestType_ID, Env.getCtx());</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">				for (ADCalendarEvent event : events)</span>
+<span class="nc" id="L311">					scm.add(event);</span>
+
+<span class="nc" id="L313">				calendars.invalidate();</span>
+<span class="nc" id="L314">				syncModel();</span>
+<span class="nc" id="L315">			}</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">			else if (e.getTarget() == lbxFDOW) {</span>
+<span class="nc" id="L317">				calendars.setFirstDayOfWeek(lbxFDOW.getSelectedItem().getValue().toString());</span>
+<span class="nc" id="L318">				syncModel();</span>
+			}
+<span class="nc" id="L320">		}</span>
+<span class="nc bnc" id="L321" title="All 4 branches missed.">		else if (type.equals(ON_ITEM_CREATE_EVENT) &amp;&amp; !Env.isReadOnlySession()) {</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">			if (e instanceof CalendarsEvent) {</span>
+<span class="nc" id="L323">				CalendarsEvent calendarsEvent = (CalendarsEvent) e;</span>
+<span class="nc" id="L324">				RequestWindow requestWin = new RequestWindow(calendarsEvent, this);</span>
+<span class="nc" id="L325">				SessionManager.getAppDesktop().showWindow(requestWin);</span>
+			}
+<span class="nc" id="L327">		}	</span>
+<span class="nc bnc" id="L328" title="All 4 branches missed.">		else if (type.equals(ON_DAY_CLICK_EVENT) &amp;&amp; ! Env.isReadOnlySession()) {</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">			if (e.getData() instanceof Date date) {</span>
+<span class="nc" id="L330">				CalendarsEvent calendarsEvent = new CalendarsEvent(ON_ITEM_CREATE_EVENT, e.getTarget(), null, date, date, 0, 0, 0, 0);</span>
+<span class="nc" id="L331">				RequestWindow requestWin = new RequestWindow(calendarsEvent, this);</span>
+<span class="nc" id="L332">				SessionManager.getAppDesktop().showWindow(requestWin);</span>
+			}
+<span class="nc" id="L334">		}</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">		else if (type.equals(ON_ITEM_EDIT_EVENT)) {</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">			if (e instanceof CalendarsEvent) {</span>
+<span class="nc" id="L337">				CalendarsEvent calendarsEvent = (CalendarsEvent) e;</span>
+<span class="nc" id="L338">				CalendarItem calendarEvent = calendarsEvent.getCalendarItem();</span>
+
+<span class="nc bnc" id="L340" title="All 2 branches missed.">				if (calendarEvent instanceof ADCalendarEvent) {</span>
+<span class="nc" id="L341">					ADCalendarEvent ce = (ADCalendarEvent) calendarEvent;</span>
+					
+<span class="nc bnc" id="L343" title="All 2 branches missed.">					if(eventWin == null)</span>
+<span class="nc" id="L344">						eventWin = new EventWindow();</span>
+<span class="nc" id="L345">					eventWin.setData(ce);</span>
+<span class="nc" id="L346">					SessionManager.getAppDesktop().showWindow(eventWin);</span>
+				}
+			}
+<span class="nc" id="L349">		}</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">		else if (type.equals(ON_ITEM_UPDATE_EVENT)) {</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">			if (e instanceof CalendarsEvent)</span>
+			{
+<span class="nc" id="L353">				CalendarsEvent evt = (CalendarsEvent) e;</span>
+<span class="nc" id="L354">				DateTimeFormatter dtf = DateTimeFormatter.ofPattern(&quot;yyyy/MM/d&quot;)</span>
+<span class="nc" id="L355">						.withZone(calendars.getDefaultTimeZone().toZoneId());</span>
+<span class="nc" id="L356">				StringBuilder sb = new StringBuilder(&quot;Update... from &quot;);</span>
+<span class="nc" id="L357">				sb.append(dtf.format(evt.getCalendarItem().getBegin()));</span>
+<span class="nc" id="L358">				sb.append(&quot; to &quot;);</span>
+<span class="nc" id="L359">				sb.append(dtf.format(evt.getBeginDate().toInstant()));</span>
+<span class="nc" id="L360">				popupLabel.setValue(sb.toString());</span>
+<span class="nc" id="L361">				int left = evt.getX();</span>
+<span class="nc" id="L362">				int top = evt.getY();</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">				if (top + 100 &gt; evt.getDesktopHeight())</span>
+<span class="nc" id="L364">					top = evt.getDesktopHeight() - 100;</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">				if (left + 330 &gt; evt.getDesktopWidth())</span>
+<span class="nc" id="L366">					left = evt.getDesktopWidth() - 330;</span>
+<span class="nc" id="L367">				updateMsg.open(left, top);</span>
+<span class="nc" id="L368">				timer.start();</span>
+<span class="nc" id="L369">				org.zkoss.calendar.Calendars cal = (org.zkoss.calendar.Calendars) evt.getTarget();</span>
+<span class="nc" id="L370">				SimpleCalendarModel m = (SimpleCalendarModel) cal.getModel();</span>
+<span class="nc" id="L371">				SimpleCalendarItem sce = (SimpleCalendarItem) evt.getCalendarItem();</span>
+<span class="nc" id="L372">				sce.setBeginDate(evt.getBeginDate());</span>
+<span class="nc" id="L373">				sce.setEndDate(evt.getEndDate());</span>
+<span class="nc" id="L374">				m.update(sce);</span>
+			}
+		}
+<span class="nc" id="L377">	}</span>
+	
+	/**
+	 * Update {@link #myChart}
+	 */
+	private void syncModel() {
+<span class="nc" id="L383">		Hashtable&lt;String,BigDecimal&gt; ht = new Hashtable&lt;String,BigDecimal&gt;();</span>
+
+<span class="nc" id="L385">		List&lt;?&gt; list = calendars.getModel().get(calendars.getBeginDateTime(), calendars.getEndDateTime(),</span>
+<span class="nc" id="L386">				() -&gt; calendars.getDefaultTimeZone());</span>
+<span class="nc" id="L387">		int size = list.size();</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		for (Iterator&lt;?&gt; it = list.iterator(); it.hasNext();) {</span>
+<span class="nc" id="L389">			String key = ((ADCalendarEvent)it.next()).getR_RequestType_ID() + &quot;&quot;;</span>
+					
+<span class="nc bnc" id="L391" title="All 2 branches missed.">			if (!ht.containsKey(key))</span>
+<span class="nc" id="L392">				ht.put(key, BigDecimal.ONE);</span>
+			else {
+<span class="nc" id="L394">				BigDecimal value = ht.get(key);</span>
+<span class="nc" id="L395">				ht.put(key, value.add(BigDecimal.ONE));</span>
+			}
+		}
+		
+<span class="nc" id="L399">		Hashtable&lt;Object, String&gt; htTypes = new Hashtable&lt;Object, String&gt;();</span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">		for(int i = 0; i &lt; lbxRequestTypes.getItemCount(); i++)</span>
+		{
+<span class="nc" id="L402">			Listitem li = lbxRequestTypes.getItemAtIndex(i);</span>
+<span class="nc bnc" id="L403" title="All 4 branches missed.">			if(li != null &amp;&amp; li.getValue() != null)</span>
+<span class="nc" id="L404">				htTypes.put(li.getValue(), li.getLabel());</span>
+		}
+		
+<span class="nc" id="L407">		DefaultPieDataset pieDataset = new DefaultPieDataset();</span>
+<span class="nc" id="L408">		Enumeration&lt;?&gt; keys = ht.keys();</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">		while(keys.hasMoreElements()) {</span>
+<span class="nc" id="L410">			String key = (String) keys.nextElement();</span>
+<span class="nc" id="L411">			BigDecimal value = ht.get(key);</span>
+<span class="nc" id="L412">			String name = (String) htTypes.get(key);</span>
+<span class="nc bnc" id="L413" title="All 4 branches missed.">			pieDataset.setValue(name == null ? &quot;&quot; : name, Double.valueOf(size &gt; 0 ? value.doubleValue()/size*100 : 0));</span>
+		}
+		
+		//TODO replace with billboard chart
+<span class="nc" id="L417">		JFreeChart chart = ChartFactory.createPieChart(Msg.getMsg(Env.getCtx(),&quot;EventsAnalysis&quot;), pieDataset, true, true, true);</span>
+<span class="nc" id="L418">		PiePlot plot = (PiePlot) chart.getPlot(); </span>
+<span class="nc" id="L419">		plot.setForegroundAlpha(0.5f);</span>
+<span class="nc" id="L420">		BufferedImage bi = chart.createBufferedImage(600, 250);</span>
+		try {
+<span class="nc" id="L422">			byte[] bytes = EncoderUtil.encode(bi, ImageFormat.PNG, true);</span>
+<span class="nc" id="L423">			AImage image = new AImage(&quot;Pie Chart&quot;, bytes);</span>
+<span class="nc" id="L424">			myChart.setContent(image);</span>
+<span class="nc" id="L425">		} catch (IOException e) {</span>
+<span class="nc" id="L426">			e.printStackTrace();</span>
+		}		
+<span class="nc" id="L428">		htTypes = null;</span>
+<span class="nc" id="L429">		ht = null;</span>
+<span class="nc" id="L430">	}</span>
+	
+	/**
+	 * Refresh model and UI
+	 */
+	public void onRefresh() {
+<span class="nc" id="L436">		btnRefreshClicked();</span>
+<span class="nc" id="L437">	}</span>
+	
+	/**
+	 * Refresh model and UI
+	 */
+	private void btnRefreshClicked() {
+<span class="nc" id="L443">		int R_RequestType_ID = 0;</span>
+<span class="nc" id="L444">		Listitem li = lbxRequestTypes.getSelectedItem();</span>
+<span class="nc bnc" id="L445" title="All 4 branches missed.">		if(li != null &amp;&amp; li.getValue() != null)</span>
+<span class="nc" id="L446">			R_RequestType_ID = Integer.parseInt(li.getValue().toString());</span>
+		
+<span class="nc" id="L448">		int cnt = lbxRequestTypes.getItemCount();</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">		for (int i = cnt - 1; i &gt;=0; i--)</span>
+<span class="nc" id="L450">			lbxRequestTypes.removeItemAt(i);</span>
+		
+<span class="nc" id="L452">		lbxRequestTypes.appendItem(Msg.getMsg(Env.getCtx(),&quot;ShowAll&quot;), &quot;0&quot;);</span>
+<span class="nc" id="L453">		ArrayList&lt;X_R_RequestType&gt; types = DPCalendar.getRequestTypes(Env.getCtx());</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">		for(X_R_RequestType requestType : types)</span>
+		{
+<span class="nc" id="L456">			Listitem item = lbxRequestTypes.appendItem(requestType.getName(), requestType.getR_RequestType_ID() + &quot;&quot;);</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">			if(R_RequestType_ID == requestType.getR_RequestType_ID())</span>
+<span class="nc" id="L458">				lbxRequestTypes.setSelectedItem(item);</span>
+		}
+<span class="nc bnc" id="L460" title="All 2 branches missed.">		if(lbxRequestTypes.getSelectedIndex() &lt; 0)</span>
+<span class="nc" id="L461">			lbxRequestTypes.setSelectedIndex(0);</span>
+		
+<span class="nc" id="L463">		scm.clear();</span>
+<span class="nc" id="L464">		ArrayList&lt;ADCalendarEvent&gt; events = DPCalendar.getEvents(R_RequestType_ID, Env.getCtx());</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">		for (ADCalendarEvent event : events)</span>
+<span class="nc" id="L466">			scm.add(event);</span>
+
+<span class="nc" id="L468">		calendars.invalidate();</span>
+<span class="nc" id="L469">		syncModel();</span>
+<span class="nc" id="L470">	}</span>
+	
+	/**
+	 * Set time zone of {@link #calendars}
+	 */
+	private void setTimeZone()
+	{
+<span class="nc" id="L477">		String alternateTimeZone = MSysConfig.getValue(MSysConfig.CALENDAR_ALTERNATE_TIMEZONE, &quot;Pacific Time=PST&quot;, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc" id="L478">		TimeZone defaultTimeZone = TimeZone.getDefault();</span>
+<span class="nc" id="L479">		calendars.addTimeZone (defaultTimeZone.getDisplayName(), defaultTimeZone);</span>
+<span class="nc bnc" id="L480" title="All 2 branches missed.">		if (!Util.isEmpty(alternateTimeZone, true)) {</span>
+<span class="nc bnc" id="L481" title="All 2 branches missed.">			if (!alternateTimeZone.equalsIgnoreCase(defaultTimeZone.getDisplayName())) {</span>
+<span class="nc" id="L482">				String[] pair = alternateTimeZone.split(&quot;=&quot;);</span>
+<span class="nc" id="L483">				calendars.addTimeZone(pair[0].trim(), pair[1].trim());</span>
+			}
+		}
+<span class="nc" id="L486">	}</span>
+	
+	/**
+	 * Update {@link #lblDate}
+	 */
+	private void updateDateLabel() {
+<span class="nc" id="L492">		LocalDateTime b = calendars.getBeginDateTime();</span>
+<span class="nc" id="L493">		LocalDateTime e = calendars.getEndDateTime();</span>
+<span class="nc" id="L494">		SimpleDateFormat sdfV = DisplayType.getDateFormat();</span>
+<span class="nc" id="L495">		DateTimeFormatter dtf = DateTimeFormatter.ofPattern(sdfV.toPattern());</span>
+<span class="nc" id="L496">		lblDate.setValue(dtf.format(b) + &quot; - &quot; + dtf.format(e));</span>
+<span class="nc" id="L497">	}</span>
+	
+	/**
+	 * Set {@link #calendars} to current date
+	 */
+	private void btnCurrentDateClicked() {
+<span class="nc" id="L503">		calendars.setCurrentDateTime(LocalDateTime.ofInstant(</span>
+<span class="nc" id="L504">				Calendar.getInstance(calendars.getDefaultTimeZone()).toInstant(),</span>
+<span class="nc" id="L505">				calendars.getDefaultTimeZone().toZoneId()));</span>
+<span class="nc" id="L506">		updateDateLabel();</span>
+<span class="nc" id="L507">		syncModel();</span>
+<span class="nc" id="L508">	}</span>
+	
+	/**
+	 * Change {@link #calendars} time zone
+	 */
+	private void btnSwitchTimeZoneClicked() {
+<span class="nc" id="L514">		Map&lt;?, ?&gt; zone = calendars.getTimeZones();</span>
+<span class="nc bnc" id="L515" title="All 2 branches missed.">		if (!zone.isEmpty()) {</span>
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L517">			Map.Entry&lt;TimeZone, String&gt; me = (Map.Entry&lt;TimeZone, String&gt;) zone.entrySet().iterator().next();</span>
+<span class="nc" id="L518">			calendars.removeTimeZone((TimeZone) me.getKey());</span>
+<span class="nc" id="L519">			calendars.addTimeZone((String) me.getValue(), (TimeZone) me.getKey());</span>
+		}
+<span class="nc" id="L521">		syncModel();</span>
+<span class="nc" id="L522">	}</span>
+
+	/**
+	 * Move {@link #calendars} to next or previous page
+	 * @param isNext true for next page, false for previous page
+	 */
+	private void divArrowClicked(boolean isNext) {
+<span class="nc bnc" id="L529" title="All 2 branches missed.">		if (isNext)</span>
+<span class="nc" id="L530">			calendars.nextPage();</span>
+		else
+<span class="nc" id="L532">			calendars.previousPage();</span>
+<span class="nc" id="L533">		updateDateLabel();</span>
+<span class="nc" id="L534">		syncModel();</span>
+<span class="nc" id="L535">	}</span>
+	
+	/**
+	 * On switching of calendar view (Days, Weeks, etc)
+	 * @param days
+	 */
+	private void divTabClicked(int days) {		
+<span class="nc bnc" id="L542" title="All 2 branches missed.">		if (days &gt; 0) {</span>
+<span class="nc" id="L543">			calendars.setMold(&quot;default&quot;);</span>
+<span class="nc" id="L544">			calendars.setDays(days);</span>
+<span class="nc" id="L545">		} else calendars.setMold(&quot;month&quot;);</span>
+<span class="nc" id="L546">		updateDateLabel();</span>
+<span class="nc bnc" id="L547" title="All 4 branches missed.">		FDOW.setVisible(&quot;month&quot;.equals(calendars.getMold()) || calendars.getDays() == 7);</span>
+<span class="nc" id="L548">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

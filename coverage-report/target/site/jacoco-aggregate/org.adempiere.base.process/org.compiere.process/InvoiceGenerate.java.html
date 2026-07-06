@@ -1,0 +1,601 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>InvoiceGenerate.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">InvoiceGenerate.java</span></div><h1>InvoiceGenerate.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Savepoint;
+import java.sql.Timestamp;
+import java.text.DecimalFormat;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MBPartner;
+import org.compiere.model.MClient;
+import org.compiere.model.MCurrency;
+import org.compiere.model.MDocType;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInOutLine;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MInvoiceLine;
+import org.compiere.model.MInvoicePaySchedule;
+import org.compiere.model.MInvoiceSchedule;
+import org.compiere.model.MLocation;
+import org.compiere.model.MOrder;
+import org.compiere.model.MOrderLine;
+import org.compiere.model.MOrderPaySchedule;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.PO;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Language;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+
+/**
+ *	Generate Invoices
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: InvoiceGenerate.java,v 1.2 2006/07/30 00:51:01 jjanke Exp $
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L60">public class InvoiceGenerate extends SvrProcess</span>
+{
+	/**	Manual Selection		*/
+<span class="nc" id="L63">	private boolean 	p_Selection = false;</span>
+	/**	Date Invoiced			*/
+<span class="nc" id="L65">	private Timestamp	p_DateInvoiced = null;</span>
+	/**	Org						*/
+<span class="nc" id="L67">	private int			p_AD_Org_ID = 0;</span>
+	/** BPartner				*/
+<span class="nc" id="L69">	private int			p_C_BPartner_ID = 0;</span>
+	/** Order					*/
+<span class="nc" id="L71">	private int			p_C_Order_ID = 0;</span>
+	/** Shipment				*/
+<span class="nc" id="L73">	private int			p_M_InOut_ID = 0;</span>
+	/** Consolidate				*/
+<span class="nc" id="L75">	private boolean		p_ConsolidateDocument = true;</span>
+	/** Invoice Document Action	*/
+<span class="nc" id="L77">	private String		p_docAction = DocAction.ACTION_Complete;</span>
+	
+	/**	The current Invoice	*/
+<span class="nc" id="L80">	private MInvoice 	m_invoice = null;</span>
+	/**	The current Shipment	*/
+<span class="nc" id="L82">	private MInOut	 	m_ship = null;</span>
+	/** Numner of Invoices		*/
+<span class="nc" id="L84">	private int			m_created = 0;</span>
+	/**	Line Number				*/
+<span class="nc" id="L86">	private int			m_line = 0;</span>
+	/**	Business Partner		*/
+<span class="nc" id="L88">	private MBPartner	m_bp = null;</span>
+	/**	Minimum Amount to Invoice */
+<span class="nc" id="L90">	private BigDecimal p_MinimumAmt = null;</span>
+	/**	Minimum Amount to Invoice according to Invoice Schedule */
+<span class="nc" id="L92">	private BigDecimal p_MinimumAmtInvSched = null;</span>
+	/**	Per Invoice Savepoint */
+<span class="nc" id="L94">	private Savepoint m_savepoint = null;</span>
+	/** BPartner on the last order processed */
+<span class="nc" id="L96">	private int m_bpartnerID = 0;</span>
+
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L103">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L106">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			if (para[i].getParameter() == null)</span>
+<span class="nc" id="L108">				;</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">			else if (name.equals(&quot;Selection&quot;))</span>
+<span class="nc" id="L110">				p_Selection = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">			else if (name.equals(&quot;DateInvoiced&quot;))</span>
+<span class="nc" id="L112">				p_DateInvoiced = (Timestamp)para[i].getParameter();</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">			else if (name.equals(&quot;AD_Org_ID&quot;))</span>
+<span class="nc" id="L114">				p_AD_Org_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			else if (name.equals(&quot;C_BPartner_ID&quot;))</span>
+<span class="nc" id="L116">				p_C_BPartner_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">			else if (name.equals(&quot;C_Order_ID&quot;))</span>
+<span class="nc" id="L118">				p_C_Order_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">			else if (name.equals(&quot;M_InOut_ID&quot;))</span>
+<span class="nc" id="L120">				p_M_InOut_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			else if (name.equals(&quot;ConsolidateDocument&quot;))</span>
+<span class="nc" id="L122">				p_ConsolidateDocument = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">			else if (name.equals(&quot;DocAction&quot;))</span>
+<span class="nc" id="L124">				p_docAction = (String)para[i].getParameter();</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			else if (name.equals(&quot;MinimumAmt&quot;))</span>
+<span class="nc" id="L126">				p_MinimumAmt = para[i].getParameterAsBigDecimal();</span>
+			else
+<span class="nc" id="L128">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+
+		//	Login Date
+<span class="nc bnc" id="L132" title="All 2 branches missed.">		if (p_DateInvoiced == null)</span>
+<span class="nc" id="L133">			p_DateInvoiced = Env.getContextAsDate(getCtx(), Env.DATE);</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		if (p_DateInvoiced == null)</span>
+<span class="nc" id="L135">			p_DateInvoiced = new Timestamp(System.currentTimeMillis());</span>
+
+		//	DocAction check
+<span class="nc bnc" id="L138" title="All 2 branches missed.">		if (!DocAction.ACTION_Complete.equals(p_docAction))</span>
+<span class="nc" id="L139">			p_docAction = DocAction.ACTION_Prepare;</span>
+<span class="nc" id="L140">	}	//	prepare</span>
+
+	/**
+	 * 	Generate Invoices
+	 *	@return info
+	 *	@throws Exception
+	 */
+	protected String doIt () throws Exception
+	{
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Selection=&quot; + p_Selection + &quot;, DateInvoiced=&quot; + p_DateInvoiced</span>
+<span class="nc" id="L150">			+ &quot;, AD_Org_ID=&quot; + p_AD_Org_ID + &quot;, C_BPartner_ID=&quot; + p_C_BPartner_ID</span>
+<span class="nc" id="L151">			+ &quot;, C_Order_ID=&quot; + p_C_Order_ID + &quot;, DocAction=&quot; + p_docAction </span>
+<span class="nc" id="L152">			+ &quot;, Consolidate=&quot; + p_ConsolidateDocument);</span>
+		//
+<span class="nc" id="L154">		StringBuilder sql = null;</span>
+<span class="nc bnc" id="L155" title="All 6 branches missed.">		if ((getProcessInfo().getAD_InfoWindow_ID() &gt; 0) || (getProcessInfo().getAD_InfoWindow_ID()==0 &amp;&amp; p_Selection))</span>
+		{
+<span class="nc" id="L157">			p_Selection = true;</span>
+<span class="nc" id="L158">			sql = new StringBuilder(&quot;SELECT C_Order.* FROM C_Order, T_Selection &quot;)</span>
+<span class="nc" id="L159">				.append(&quot;WHERE C_Order.DocStatus='CO' AND C_Order.IsSOTrx='Y' &quot;)</span>
+<span class="nc" id="L160">				.append(&quot;AND C_Order.C_Order_ID = T_Selection.T_Selection_ID &quot;)</span>
+<span class="nc" id="L161">				.append(&quot;AND T_Selection.AD_PInstance_ID=? &quot;)</span>
+<span class="nc" id="L162">				.append(&quot;ORDER BY C_Order.AD_Org_ID, C_Order.M_Warehouse_ID, C_Order.PriorityRule, C_Order.C_BPartner_ID, C_Order.Bill_Location_ID, C_Order.C_Order_ID&quot;);</span>
+<span class="nc" id="L163">		}</span>
+		else
+		{
+<span class="nc" id="L166">			sql = new StringBuilder(&quot;SELECT o.* FROM C_Invoice_Candidate_v ic JOIN C_Order o ON o.C_Order_ID = ic.C_Order_ID &quot;)</span>
+<span class="nc" id="L167">				.append(&quot;WHERE DocStatus IN('CO','CL') AND IsSOTrx='Y' &quot;);</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">			if (p_AD_Org_ID != 0)</span>
+<span class="nc" id="L169">				sql.append(&quot; AND ic.AD_Org_ID=?&quot;);</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">			if (p_C_BPartner_ID != 0)</span>
+<span class="nc" id="L171">				sql.append(&quot; AND ic.C_BPartner_ID=?&quot;);</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">			if (p_C_Order_ID != 0)</span>
+<span class="nc" id="L173">				sql.append(&quot; AND ic.C_Order_ID=?&quot;);</span>
+			//
+<span class="nc" id="L175">			sql.append(&quot; AND EXISTS (SELECT 1 FROM C_OrderLine ol &quot;)</span>
+<span class="nc" id="L176">					.append(&quot;WHERE o.C_Order_ID=ol.C_Order_ID AND ol.QtyOrdered&lt;&gt;ol.QtyInvoiced AND ic.DocSource = 'O' &quot;);</span>
+			//
+<span class="nc bnc" id="L178" title="All 2 branches missed.">			if (p_M_InOut_ID != 0)</span>
+<span class="nc" id="L179">				sql.append(&quot; AND EXISTS (SELECT '1' FROM M_InOutLine iol WHERE iol.C_OrderLine_ID=ol.C_OrderLine_ID AND iol.M_InOut_ID=?) &quot;);</span>
+			//
+<span class="nc" id="L181">			sql.append(&quot;) AND o.C_DocType_ID IN (SELECT C_DocType_ID FROM C_DocType &quot;)</span>
+<span class="nc" id="L182">					.append(&quot;WHERE DocBaseType='SOO' AND DocSubTypeSO NOT IN ('ON','OB','WR')) &quot;)</span>
+<span class="nc" id="L183">				.append(&quot;ORDER BY o.AD_Org_ID, o.M_Warehouse_ID, o.PriorityRule, o.C_BPartner_ID, o.Bill_Location_ID, o.Bill_User_ID, o.C_Order_ID&quot;);</span>
+		}
+	//	sql += &quot; FOR UPDATE&quot;;
+		
+<span class="nc" id="L187">		PreparedStatement pstmt = null;</span>
+		try
+		{
+<span class="nc" id="L190">			pstmt = DB.prepareStatement (sql.toString(), get_TrxName());</span>
+<span class="nc" id="L191">			int index = 1;</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">			if (p_Selection) </span>
+			{
+<span class="nc" id="L194">				pstmt.setInt(index, getAD_PInstance_ID());</span>
+<span class="nc" id="L195">			}</span>
+			else
+			{
+<span class="nc bnc" id="L198" title="All 2 branches missed.">				if (p_AD_Org_ID != 0)</span>
+<span class="nc" id="L199">					pstmt.setInt(index++, p_AD_Org_ID);</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">				if (p_C_BPartner_ID != 0)</span>
+<span class="nc" id="L201">					pstmt.setInt(index++, p_C_BPartner_ID);</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">				if (p_C_Order_ID != 0)</span>
+<span class="nc" id="L203">					pstmt.setInt(index++, p_C_Order_ID);</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">				if (p_M_InOut_ID != 0)</span>
+<span class="nc" id="L205">					pstmt.setInt(index++, p_M_InOut_ID);</span>
+			}
+<span class="nc" id="L207">		}</span>
+<span class="nc" id="L208">		catch (Exception e)</span>
+		{
+<span class="nc" id="L210">			DB.close(pstmt);</span>
+<span class="nc" id="L211">			throw new AdempiereException(e);</span>
+		}
+<span class="nc" id="L213">		return generate(pstmt);</span>
+	}	//	doIt
+	
+	
+	/**
+	 * 	Generate Shipments
+	 * 	@param pstmt order query 
+	 *	@return info
+	 */
+	private String generate (PreparedStatement pstmt)
+	{
+<span class="nc" id="L224">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L227">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L230">				p_MinimumAmtInvSched = null;</span>
+<span class="nc" id="L231">				MOrder order = new MOrder (getCtx(), rs, get_TrxName());</span>
+<span class="nc" id="L232">				StringBuilder msgsup = new StringBuilder(Msg.getMsg(getCtx(), &quot;Processing&quot;)).append(&quot; &quot;).append(order.getDocumentInfo());</span>
+<span class="nc" id="L233">				statusUpdate(msgsup.toString());</span>
+				
+				//	New BPartner, or new Invoice Location, or new Invoice Contact
+<span class="nc bnc" id="L236" title="All 2 branches missed.">				if (!p_ConsolidateDocument</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">						|| (m_bpartnerID != 0</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">						&amp;&amp; m_bpartnerID != order.getC_BPartner_ID())</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">						|| (m_invoice != null </span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">						&amp;&amp; (m_invoice.getC_BPartner_Location_ID() != order.getBill_Location_ID() ||</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">							m_invoice.getAD_User_ID() != order.getBill_User_ID() ||</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">							m_invoice.getAD_Org_ID() != order.getAD_Org_ID()) ) )</span>
+<span class="nc" id="L243">					completeInvoice();</span>
+<span class="nc" id="L244">				boolean completeOrder = MOrder.INVOICERULE_AfterOrderDelivered.equals(order.getInvoiceRule());</span>
+				
+				//	Schedule After Delivery
+<span class="nc" id="L247">				boolean doInvoice = false;</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">				if (MOrder.INVOICERULE_CustomerScheduleAfterDelivery.equals(order.getInvoiceRule()))</span>
+				{
+<span class="nc" id="L250">					m_bp = new MBPartner (getCtx(), order.getBill_BPartner_ID(), null);</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">					if (m_bp.getC_InvoiceSchedule_ID() == 0)</span>
+					{
+<span class="nc" id="L253">						log.warning(&quot;BPartner has no Schedule - set to After Delivery&quot;);</span>
+<span class="nc" id="L254">						order.setInvoiceRule(MOrder.INVOICERULE_AfterDelivery);</span>
+<span class="nc" id="L255">						order.saveEx();</span>
+<span class="nc" id="L256">					}</span>
+					else
+					{
+<span class="nc" id="L259">						MInvoiceSchedule is = MInvoiceSchedule.get(getCtx(), m_bp.getC_InvoiceSchedule_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">						if (is.canInvoice(order.getDateOrdered())) {</span>
+<span class="nc bnc" id="L261" title="All 4 branches missed.">							if (is.isAmount() &amp;&amp; is.getAmt() != null)</span>
+<span class="nc" id="L262">							p_MinimumAmtInvSched = is.getAmt();</span>
+<span class="nc" id="L263">							doInvoice = true;</span>
+						} else {
+							continue;
+						}
+					}
+				}	//	Schedule
+				
+				//	After Delivery
+<span class="nc bnc" id="L271" title="All 4 branches missed.">				if (doInvoice || MOrder.INVOICERULE_AfterDelivery.equals(order.getInvoiceRule()))</span>
+				{
+<span class="nc" id="L273">					MInOut[] shipments = order.getShipments();</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">					for (int i = 0; i &lt; shipments.length; i++)</span>
+					{
+<span class="nc" id="L276">						MInOut ship = shipments[i];</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">						if (!ship.isComplete()		//	ignore incomplete or reversals </span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">							|| ship.getDocStatus().equals(MInOut.DOCSTATUS_Reversed))</span>
+<span class="nc" id="L279">							continue;</span>
+<span class="nc" id="L280">						MInOutLine[] shipLines = ship.getLines(false);</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">						for (int j = 0; j &lt; shipLines.length; j++)</span>
+						{
+<span class="nc" id="L283">							MInOutLine shipLine = shipLines[j];</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">							if (!order.isOrderLine(shipLine.getC_OrderLine_ID()))</span>
+<span class="nc" id="L285">								continue;</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">							if (!shipLine.isInvoiced())</span>
+<span class="nc" id="L287">								createLine (order, ship, shipLine);</span>
+						}
+<span class="nc" id="L289">						m_line += 1000;</span>
+					}
+<span class="nc" id="L291">				}</span>
+				//	After Order Delivered, Immediate
+				else
+				{
+<span class="nc" id="L295">					MOrderLine[] oLines = order.getLines(true, null);</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">					for (int i = 0; i &lt; oLines.length; i++)</span>
+					{
+<span class="nc" id="L298">						MOrderLine oLine = oLines[i];</span>
+<span class="nc" id="L299">						BigDecimal toInvoice = oLine.getQtyOrdered().subtract(oLine.getQtyInvoiced());</span>
+<span class="nc bnc" id="L300" title="All 4 branches missed.">						if (toInvoice.compareTo(Env.ZERO) == 0 &amp;&amp; oLine.getM_Product_ID() != 0)</span>
+<span class="nc" id="L301">							continue;</span>
+						@SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L303">						BigDecimal notInvoicedShipment = oLine.getQtyDelivered().subtract(oLine.getQtyInvoiced());</span>
+						//
+<span class="nc bnc" id="L305" title="All 2 branches missed.">						boolean fullyDelivered = oLine.getQtyOrdered().compareTo(oLine.getQtyDelivered()) == 0;</span>
+					
+						//	Complete Order
+<span class="nc bnc" id="L308" title="All 4 branches missed.">						if (completeOrder &amp;&amp; !fullyDelivered)</span>
+						{
+<span class="nc bnc" id="L310" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(&quot;Failed CompleteOrder - &quot; + oLine);</span>
+<span class="nc" id="L311">							addBufferLog(0, null, null,&quot;Failed CompleteOrder - &quot; + oLine,oLine.get_Table_ID(),oLine.getC_OrderLine_ID()); // Elaine 2008/11/25</span>
+<span class="nc" id="L312">							completeOrder = false;</span>
+<span class="nc" id="L313">							break;</span>
+						}
+						//	Immediate
+<span class="nc bnc" id="L316" title="All 2 branches missed.">						else if (MOrder.INVOICERULE_Immediate.equals(order.getInvoiceRule()))</span>
+						{
+<span class="nc bnc" id="L318" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(&quot;Immediate - ToInvoice=&quot; + toInvoice + &quot; - &quot; + oLine);</span>
+<span class="nc" id="L319">							BigDecimal qtyEntered = toInvoice;</span>
+							//	Correct UOM for QtyEntered
+<span class="nc bnc" id="L321" title="All 2 branches missed.">							if (oLine.getQtyEntered().compareTo(oLine.getQtyOrdered()) != 0)</span>
+<span class="nc" id="L322">								qtyEntered = toInvoice</span>
+<span class="nc" id="L323">									.multiply(oLine.getQtyEntered())</span>
+<span class="nc" id="L324">									.divide(oLine.getQtyOrdered(), 12, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L325">							createLine (order, oLine, toInvoice, qtyEntered);</span>
+<span class="nc" id="L326">						}</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">						else if (!completeOrder)</span>
+						{
+<span class="nc bnc" id="L329" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(&quot;Failed: &quot; + order.getInvoiceRule() </span>
+<span class="nc" id="L330">								+ &quot; - ToInvoice=&quot; + toInvoice + &quot; - &quot; + oLine);</span>
+<span class="nc" id="L331">							addBufferLog(0, null, null,&quot;Failed: &quot; + order.getInvoiceRule() </span>
+<span class="nc" id="L332">								+ &quot; - ToInvoice=&quot; + toInvoice + &quot; - &quot; + oLine,oLine.get_Table_ID(),oLine.getC_OrderLine_ID());</span>
+						}
+					}	//	for all order lines
+<span class="nc bnc" id="L335" title="All 2 branches missed.">					if (MOrder.INVOICERULE_Immediate.equals(order.getInvoiceRule()))</span>
+<span class="nc" id="L336">						m_line += 1000;</span>
+				}
+				
+				//	Complete Order successful
+<span class="nc bnc" id="L340" title="All 4 branches missed.">				if (completeOrder &amp;&amp; MOrder.INVOICERULE_AfterOrderDelivered.equals(order.getInvoiceRule()))</span>
+				{
+<span class="nc" id="L342">					MInOut[] shipments = order.getShipments();</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">					for (int i = 0; i &lt; shipments.length; i++)</span>
+					{
+<span class="nc" id="L345">						MInOut ship = shipments[i];</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">						if (!ship.isComplete()		//	ignore incomplete or reversals </span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">							|| ship.getDocStatus().equals(MInOut.DOCSTATUS_Reversed))</span>
+<span class="nc" id="L348">							continue;</span>
+<span class="nc" id="L349">						MInOutLine[] shipLines = ship.getLines(false);</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">						for (int j = 0; j &lt; shipLines.length; j++)</span>
+						{
+<span class="nc" id="L352">							MInOutLine shipLine = shipLines[j];</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">							if (!order.isOrderLine(shipLine.getC_OrderLine_ID()))</span>
+<span class="nc" id="L354">								continue;</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">							if (!shipLine.isInvoiced())</span>
+<span class="nc" id="L356">								createLine (order, ship, shipLine);</span>
+						}
+<span class="nc" id="L358">						m_line += 1000;</span>
+					}
+				}	//	complete Order
+<span class="nc" id="L361">				m_bpartnerID = order.getC_BPartner_ID();</span>
+			}	//	for all orders
+<span class="nc" id="L363">		}</span>
+<span class="nc" id="L364">		catch (Exception e)</span>
+		{
+<span class="nc" id="L366">			throw new AdempiereException(e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L370">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L371">			rs = null;</span>
+<span class="nc" id="L372">			pstmt = null;</span>
+		}
+<span class="nc" id="L374">		completeInvoice();</span>
+<span class="nc" id="L375">		StringBuilder msgreturn = new StringBuilder(&quot;@Created@ = &quot;).append(m_created);</span>
+<span class="nc" id="L376">		return msgreturn.toString();</span>
+	}	//	generate
+	
+	
+	
+	/**************************************************************************
+	 * 	Create Invoice Line from Order Line
+	 *	@param order order
+	 *	@param orderLine line
+	 *	@param qtyInvoiced qty
+	 *	@param qtyEntered qty
+	 */
+	private void createLine (MOrder order, MOrderLine orderLine, 
+		BigDecimal qtyInvoiced, BigDecimal qtyEntered)
+	{
+<span class="nc bnc" id="L391" title="All 2 branches missed.">		if (m_invoice == null)</span>
+		{
+			try {
+<span class="nc bnc" id="L394" title="All 2 branches missed.">				if (m_savepoint != null)</span>
+<span class="nc" id="L395">					Trx.get(get_TrxName(), false).releaseSavepoint(m_savepoint);</span>
+<span class="nc" id="L396">				m_savepoint = Trx.get(get_TrxName(), false).setSavepoint(null);</span>
+<span class="nc" id="L397">			} catch (SQLException e) {</span>
+<span class="nc" id="L398">				throw new AdempiereException(e);</span>
+			}
+<span class="nc" id="L400">			m_invoice = new MInvoice (order, 0, p_DateInvoiced);</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">			if (!m_invoice.save())</span>
+<span class="nc" id="L402">				throw new IllegalStateException(&quot;Could not create Invoice (o)&quot;);</span>
+		}
+		//	
+<span class="nc" id="L405">		MInvoiceLine line = new MInvoiceLine (m_invoice);</span>
+<span class="nc" id="L406">		line.setOrderLine(orderLine);</span>
+<span class="nc" id="L407">		line.setQtyInvoiced(qtyInvoiced);</span>
+<span class="nc" id="L408">		line.setQtyEntered(qtyEntered);</span>
+<span class="nc" id="L409">		line.setLine(m_line + orderLine.getLine());</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">		if (!line.save())</span>
+<span class="nc" id="L411">			throw new IllegalStateException(&quot;Could not create Invoice Line (o)&quot;);</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(line.toString());</span>
+<span class="nc" id="L413">	}	//	createLine</span>
+
+	/**
+	 * 	Create Invoice Line from Shipment
+	 *	@param order order
+	 *	@param ship shipment header
+	 *	@param sLine shipment line
+	 */
+	private void createLine (MOrder order, MInOut ship, MInOutLine sLine)
+	{
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (m_invoice == null)</span>
+		{
+			try {
+<span class="nc bnc" id="L426" title="All 2 branches missed.">				if (m_savepoint != null)</span>
+<span class="nc" id="L427">					Trx.get(get_TrxName(), false).releaseSavepoint(m_savepoint);</span>
+<span class="nc" id="L428">				m_savepoint = Trx.get(get_TrxName(), false).setSavepoint(null);</span>
+<span class="nc" id="L429">			} catch (SQLException e) {</span>
+<span class="nc" id="L430">				throw new AdempiereException(e);</span>
+			}
+<span class="nc" id="L432">			m_invoice = new MInvoice (order, 0, p_DateInvoiced);</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">			if (!m_invoice.save())</span>
+<span class="nc" id="L434">				throw new IllegalStateException(&quot;Could not create Invoice (s)&quot;);</span>
+		}
+		//	Create Shipment Comment Line
+<span class="nc bnc" id="L437" title="All 2 branches missed.">		if (m_ship == null </span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">			|| m_ship.getM_InOut_ID() != ship.getM_InOut_ID())</span>
+		{
+<span class="nc" id="L440">			MDocType dt = MDocType.get(getCtx(), ship.getC_DocType_ID());</span>
+<span class="nc bnc" id="L441" title="All 4 branches missed.">			if (m_bp == null || m_bp.getC_BPartner_ID() != ship.getC_BPartner_ID())</span>
+<span class="nc" id="L442">				m_bp = new MBPartner (getCtx(), ship.getC_BPartner_ID(), get_TrxName());</span>
+			
+			//	Reference: Delivery: 12345 - 12.12.12
+<span class="nc" id="L445">			MClient client = MClient.get(getCtx(), order.getAD_Client_ID ());</span>
+<span class="nc" id="L446">			String AD_Language = client.getAD_Language();</span>
+<span class="nc bnc" id="L447" title="All 4 branches missed.">			if (client.isMultiLingualDocument() &amp;&amp; m_bp.getAD_Language() != null)</span>
+<span class="nc" id="L448">				AD_Language = m_bp.getAD_Language();</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">			if (AD_Language == null)</span>
+<span class="nc" id="L450">				AD_Language = Language.getBaseAD_Language();</span>
+<span class="nc" id="L451">			java.text.SimpleDateFormat format = DisplayType.getDateFormat </span>
+<span class="nc" id="L452">				(DisplayType.Date, Language.getLanguage(AD_Language));</span>
+<span class="nc" id="L453">			StringBuilder reference = new StringBuilder().append(dt.getPrintName(m_bp.getAD_Language()))</span>
+<span class="nc" id="L454">				.append(&quot;: &quot;).append(ship.getDocumentNo()) </span>
+<span class="nc" id="L455">				.append(&quot; - &quot;).append(format.format(ship.getMovementDate()));</span>
+<span class="nc" id="L456">			m_ship = ship;</span>
+			//
+<span class="nc" id="L458">			MInvoiceLine line = new MInvoiceLine (m_invoice);</span>
+<span class="nc" id="L459">			line.setIsDescription(true);</span>
+<span class="nc" id="L460">			line.setDescription(reference.toString());</span>
+<span class="nc" id="L461">			line.setLine(m_line + sLine.getLine() - 2);</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">			if (!line.save())</span>
+<span class="nc" id="L463">				throw new IllegalStateException(&quot;Could not create Invoice Comment Line (sh)&quot;);</span>
+			//	Optional Ship Address if not Bill Address
+<span class="nc bnc" id="L465" title="All 2 branches missed.">			if (order.getBill_Location_ID() != ship.getC_BPartner_Location_ID())</span>
+			{
+<span class="nc" id="L467">				MLocation addr = MLocation.getBPLocation(getCtx(), ship.getC_BPartner_Location_ID(), null);</span>
+<span class="nc" id="L468">				line = new MInvoiceLine (m_invoice);</span>
+<span class="nc" id="L469">				line.setIsDescription(true);</span>
+<span class="nc" id="L470">				line.setDescription(addr.toString());</span>
+<span class="nc" id="L471">				line.setLine(m_line + sLine.getLine() - 1);</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">				if (!line.save())</span>
+<span class="nc" id="L473">					throw new IllegalStateException(&quot;Could not create Invoice Comment Line 2 (sh)&quot;);</span>
+			}
+		}
+		//	
+<span class="nc" id="L477">		MInvoiceLine line = new MInvoiceLine (m_invoice);</span>
+<span class="nc" id="L478">		line.setShipLine(sLine);</span>
+<span class="nc bnc" id="L479" title="All 2 branches missed.">		if (sLine.sameOrderLineUOM())</span>
+		{
+<span class="nc" id="L481">			MDocType docType = MDocType.get(ship.getC_DocType_ID());</span>
+<span class="nc bnc" id="L482" title="All 2 branches missed.">			if (docType.isShipConfirm() </span>
+<span class="nc bnc" id="L483" title="All 2 branches missed.">				&amp;&amp; (order.getInvoiceRule().equals(MOrder.INVOICERULE_AfterDelivery) </span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">					|| order.getInvoiceRule().equals(MOrder.INVOICERULE_AfterOrderDelivered) </span>
+<span class="nc bnc" id="L485" title="All 2 branches missed.">					|| order.getInvoiceRule().equals(MOrder.INVOICERULE_CustomerScheduleAfterDelivery)) </span>
+<span class="nc bnc" id="L486" title="All 4 branches missed.">				&amp;&amp; sLine.getTargetQty() != null &amp;&amp; sLine.getTargetQty().signum() != 0)</span>
+			{
+<span class="nc bnc" id="L488" title="All 2 branches missed.">				if (sLine.getQtyEntered().compareTo(sLine.getTargetQty()) == 0)</span>
+<span class="nc" id="L489">					line.setQtyEntered(sLine.getMovementQty());</span>
+				else
+<span class="nc" id="L491">					line.setQtyEntered(sLine.getMovementQty()</span>
+<span class="nc" id="L492">							.multiply(sLine.getQtyEntered())</span>
+<span class="nc" id="L493">							.divide(sLine.getTargetQty(), 12, RoundingMode.HALF_UP));</span>
+<span class="nc" id="L494">			}</span>
+			else
+<span class="nc" id="L496">				line.setQtyEntered(sLine.getQtyEntered());</span>
+<span class="nc" id="L497">		}</span>
+		else
+<span class="nc" id="L499">			line.setQtyEntered(sLine.getMovementQty());</span>
+<span class="nc" id="L500">		line.setQtyInvoiced(sLine.getMovementQty());</span>
+<span class="nc" id="L501">		line.setLine(m_line + sLine.getLine());</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">		if (!line.save())</span>
+<span class="nc" id="L503">			throw new IllegalStateException(&quot;Could not create Invoice Line (s)&quot;);</span>
+		//	Link
+<span class="nc" id="L505">		sLine.setIsInvoiced(true);</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">		if (!sLine.save())</span>
+<span class="nc" id="L507">			throw new IllegalStateException(&quot;Could not update Shipment Line&quot;);</span>
+		
+<span class="nc bnc" id="L509" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(line.toString());</span>
+<span class="nc" id="L510">	}	//	createLine</span>
+
+	
+	/**
+	 * 	Complete Invoice
+	 */
+	private void completeInvoice()
+	{
+<span class="nc bnc" id="L518" title="All 2 branches missed.">		if (m_invoice != null)</span>
+		{
+<span class="nc" id="L520">			MOrder order = new MOrder(getCtx(), m_invoice.getC_Order_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">			if (order != null) {</span>
+<span class="nc" id="L522">				m_invoice.setPaymentRule(order.getPaymentRule());</span>
+<span class="nc" id="L523">				m_invoice.setC_PaymentTerm_ID(order.getC_PaymentTerm_ID());</span>
+<span class="nc" id="L524">				m_invoice.saveEx();</span>
+<span class="nc" id="L525">				m_invoice.load(m_invoice.get_TrxName()); // refresh from DB</span>
+				// copy payment schedule from order if invoice doesn't have a current payment schedule
+<span class="nc" id="L527">				MOrderPaySchedule[] opss = MOrderPaySchedule.getOrderPaySchedule(getCtx(), order.getC_Order_ID(), 0, get_TrxName());</span>
+<span class="nc" id="L528">				MInvoicePaySchedule[] ipss = MInvoicePaySchedule.getInvoicePaySchedule(getCtx(), m_invoice.getC_Invoice_ID(), 0, get_TrxName());</span>
+<span class="nc bnc" id="L529" title="All 4 branches missed.">				if (ipss.length == 0 &amp;&amp; opss.length &gt; 0) {</span>
+<span class="nc" id="L530">					BigDecimal ogt = order.getGrandTotal();</span>
+<span class="nc" id="L531">					BigDecimal igt = m_invoice.getGrandTotal();</span>
+<span class="nc" id="L532">					BigDecimal percent = Env.ONE;</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">					if (ogt.compareTo(igt) != 0)</span>
+<span class="nc" id="L534">						percent = igt.divide(ogt, 10, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L535">					MCurrency cur = MCurrency.get(order.getCtx(), order.getC_Currency_ID());</span>
+<span class="nc" id="L536">					int scale = cur.getStdPrecision();</span>
+				
+<span class="nc bnc" id="L538" title="All 2 branches missed.">					for (MOrderPaySchedule ops : opss) {</span>
+<span class="nc" id="L539">						MInvoicePaySchedule ips = new MInvoicePaySchedule(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L540">						PO.copyValues(ops, ips);</span>
+<span class="nc bnc" id="L541" title="All 2 branches missed.">						if (percent != Env.ONE) {</span>
+<span class="nc" id="L542">							BigDecimal propDueAmt = ops.getDueAmt().multiply(percent);</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">							if (propDueAmt.scale() &gt; scale)</span>
+<span class="nc" id="L544">								propDueAmt = propDueAmt.setScale(scale, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L545">							ips.setDueAmt(propDueAmt);</span>
+						}
+<span class="nc" id="L547">						ips.setC_Invoice_ID(m_invoice.getC_Invoice_ID());</span>
+<span class="nc" id="L548">						ips.setAD_Org_ID(ops.getAD_Org_ID());</span>
+<span class="nc" id="L549">						ips.setProcessing(ops.isProcessing());</span>
+<span class="nc" id="L550">						ips.setIsActive(ops.isActive());</span>
+<span class="nc" id="L551">						ips.saveEx();</span>
+					}
+<span class="nc" id="L553">					m_invoice.validatePaySchedule();</span>
+<span class="nc" id="L554">					m_invoice.saveEx();</span>
+				}
+			}
+
+<span class="nc bnc" id="L558" title="All 4 branches missed.">			if (     (p_MinimumAmt != null &amp;&amp; p_MinimumAmt.signum() != 0</span>
+<span class="nc bnc" id="L559" title="All 2 branches missed.">				   &amp;&amp; m_invoice.getGrandTotal().compareTo(p_MinimumAmt) &lt; 0)</span>
+<span class="nc bnc" id="L560" title="All 2 branches missed.">			    ||   (p_MinimumAmtInvSched != null</span>
+<span class="nc bnc" id="L561" title="All 2 branches missed.">				   &amp;&amp; m_invoice.getGrandTotal().compareTo(p_MinimumAmtInvSched) &lt; 0)) {</span>
+
+				// minimum amount not reached
+<span class="nc" id="L564">				DecimalFormat format = DisplayType.getNumberFormat(DisplayType.Amount);</span>
+<span class="nc" id="L565">				String amt = format.format(m_invoice.getGrandTotal().doubleValue());</span>
+<span class="nc" id="L566">				MBPartner bp = MBPartner.get(getCtx(), m_invoice.getC_BPartner_ID());</span>
+<span class="nc" id="L567">				String message = Msg.parseTranslation(getCtx(), &quot;@NotInvoicedAmt@ &quot; + amt + &quot; - &quot; + bp.getName());</span>
+<span class="nc" id="L568">				addLog(message);</span>
+<span class="nc bnc" id="L569" title="All 2 branches missed.">				if (m_savepoint != null) {</span>
+					try {
+<span class="nc" id="L571">						Trx.get(get_TrxName(), false).rollback(m_savepoint);</span>
+<span class="nc" id="L572">					} catch (SQLException e) {</span>
+<span class="nc" id="L573">						throw new AdempiereException(e);</span>
+					}
+				} else {
+<span class="nc" id="L576">					throw new AdempiereException(&quot;No savepoint&quot;);</span>
+				}
+
+			} else {
+
+<span class="nc bnc" id="L581" title="All 2 branches missed.">				if (!m_invoice.processIt(p_docAction))</span>
+				{
+<span class="nc" id="L583">					log.warning(&quot;completeInvoice - failed: &quot; + m_invoice);</span>
+<span class="nc" id="L584">					addBufferLog(0, null, null,&quot;completeInvoice - failed: &quot; + m_invoice,m_invoice.get_Table_ID(),m_invoice.getC_Invoice_ID()); // Elaine 2008/11/25</span>
+<span class="nc" id="L585">					throw new IllegalStateException(&quot;Invoice Process Failed: &quot; + m_invoice + &quot; - &quot; + m_invoice.getProcessMsg());</span>
+					
+				}
+<span class="nc" id="L588">				m_invoice.saveEx();</span>
+
+<span class="nc" id="L590">				String message = Msg.parseTranslation(getCtx(), &quot;@InvoiceProcessed@ &quot; + m_invoice.getDocumentNo());</span>
+<span class="nc" id="L591">				addBufferLog(m_invoice.getC_Invoice_ID(), m_invoice.getDateInvoiced(), null, message, m_invoice.get_Table_ID(), m_invoice.getC_Invoice_ID());</span>
+<span class="nc" id="L592">				m_created++;</span>
+			}
+		}
+<span class="nc" id="L595">		m_invoice = null;</span>
+<span class="nc" id="L596">		m_ship = null;</span>
+<span class="nc" id="L597">		m_line = 0;</span>
+<span class="nc" id="L598">	}	//	completeInvoice</span>
+	
+}	//	InvoiceGenerate
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

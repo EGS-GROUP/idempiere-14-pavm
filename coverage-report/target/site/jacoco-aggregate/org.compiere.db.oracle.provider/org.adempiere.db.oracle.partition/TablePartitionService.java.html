@@ -1,0 +1,953 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>TablePartitionService.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.compiere.db.oracle.provider</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.db.oracle.partition</a> &gt; <span class="el_source">TablePartitionService.java</span></div><h1>TablePartitionService.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ **********************************************************************/
+package org.adempiere.db.oracle.partition;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.db.partition.ITablePartitionService;
+import org.compiere.db.partition.RangePartitionColumn;
+import org.compiere.db.partition.RangePartitionInterval;
+import org.compiere.model.MColumn;
+import org.compiere.model.MTable;
+import org.compiere.model.Query;
+import org.compiere.model.X_AD_Column;
+import org.compiere.model.X_AD_TablePartition;
+import org.compiere.process.ProcessInfo;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+public class TablePartitionService implements ITablePartitionService {
+	//make the following 2 potentially configurable in future (just in case this is needed)
+<span class="nc" id="L54">	private boolean useAutomaticListPartition = true;</span>
+<span class="nc" id="L55">	private boolean useIntervalPartition = true;</span>
+	
+<span class="nc" id="L57">	public TablePartitionService() {</span>
+<span class="nc" id="L58">	}</span>
+
+	@Override
+	public boolean isPartitionedTable(MTable table, String trxName) {
+<span class="nc" id="L62">		String sql =</span>
+<span class="nc" id="L63">			&quot;&quot;&quot;</span>
+				SELECT 1 FROM USER_TAB_PARTITIONS
+				WHERE TABLE_NAME = ?
+			&quot;&quot;&quot;;
+<span class="nc bnc" id="L67" title="All 2 branches missed.">		return DB.getSQLValueEx(trxName, sql, table.getTableName().toUpperCase()) == 1;</span>
+	}
+
+	@Override
+	public boolean createPartitionedTable(MTable table, String trxName, ProcessInfo processInfo) {
+<span class="nc" id="L72">		StringBuilder alterStmt = new StringBuilder(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L73">				.append(table.getTableName())</span>
+<span class="nc" id="L74">				.append(&quot; MODIFY PARTITION BY &quot;);</span>
+<span class="nc" id="L75">		List&lt;MColumn&gt; partitionKeyColumns = table.getPartitionKeyColumns(false);</span>
+<span class="nc" id="L76">		MColumn partitionKeyColumn = partitionKeyColumns.get(0);</span>
+<span class="nc" id="L77">		MColumn subPartitionColumn = null;</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">		if (partitionKeyColumns.size() &gt; 1)</span>
+<span class="nc" id="L79">			subPartitionColumn = partitionKeyColumns.get(1);</span>
+<span class="nc" id="L80">		String partitioningMethod = partitionKeyColumn.getPartitioningMethod();</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">		if (partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_List))</span>
+<span class="nc" id="L82">			alterStmt.append(&quot;List&quot;);</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">		else if (partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_Range))</span>
+<span class="nc" id="L84">			alterStmt.append(&quot;Range&quot;);</span>
+		else
+<span class="nc" id="L86">			throw new IllegalArgumentException(Msg.getMsg(Env.getCtx(), &quot;PartitioningMethodNotSupported&quot;, new Object[]{partitioningMethod}));</span>
+		
+<span class="nc" id="L88">		alterStmt.append(&quot; (&quot;).append(partitionKeyColumn.getColumnName()).append(&quot;)&quot;);</span>
+		
+<span class="nc bnc" id="L90" title="All 4 branches missed.">		if (partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_List) &amp;&amp; useAutomaticListPartition) {</span>
+			//with automatic, we still need to create at least one partition and we will create a null partition to fulfill the requirement 
+<span class="nc" id="L92">			alterStmt.append(&quot; AUTOMATIC &quot;);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">		} else if (useIntervalPartition) {</span>
+<span class="nc" id="L94">			alterStmt.append(&quot; INTERVAL(&quot;);</span>
+<span class="nc" id="L95">			alterStmt.append(getIntervalExpression(partitionKeyColumn));</span>
+<span class="nc" id="L96">			alterStmt.append(&quot;) &quot;);			</span>
+		}
+		//oracle will auto create default partition for sub-partition
+<span class="nc bnc" id="L99" title="All 2 branches missed.">		if (subPartitionColumn != null) {</span>
+<span class="nc" id="L100">			alterStmt.append(&quot;SUBPARTITION BY &quot;);</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			if (subPartitionColumn.getPartitioningMethod().equals(MColumn.PARTITIONINGMETHOD_List))</span>
+<span class="nc" id="L102">				alterStmt.append(&quot;List&quot;);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">			else if (subPartitionColumn.getPartitioningMethod().equals(MColumn.PARTITIONINGMETHOD_Range))</span>
+<span class="nc" id="L104">				alterStmt.append(&quot;Range&quot;);</span>
+			else
+<span class="nc" id="L106">				throw new IllegalArgumentException(Msg.getMsg(Env.getCtx(), &quot;PartitioningMethodNotSupported&quot;, new Object[]{subPartitionColumn.getPartitioningMethod()}));</span>
+<span class="nc" id="L107">			alterStmt.append(&quot; (&quot;).append(subPartitionColumn.getColumnName()).append(&quot;)&quot;);</span>
+		}
+<span class="nc" id="L109">		alterStmt.append(&quot; (PARTITION default_partition &quot;);</span>
+<span class="nc" id="L110">		StringBuilder defaultExpression = new StringBuilder();		</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">		if (partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_List)) {</span>
+<span class="nc" id="L112">			defaultExpression.append(&quot;VALUES (&quot;);</span>
+<span class="nc bnc" id="L113" title="All 4 branches missed.">			if (partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_List) &amp;&amp; useAutomaticListPartition) </span>
+<span class="nc" id="L114">				defaultExpression.append(&quot;NULL&quot;);</span>
+			else
+<span class="nc" id="L116">				defaultExpression.append(&quot;DEFAULT&quot;);</span>
+<span class="nc" id="L117">			defaultExpression.append(&quot;)&quot;);</span>
+<span class="nc" id="L118">		} else {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">			if (useIntervalPartition) {</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">				if (alterStmt.indexOf(&quot;NUMTOYMINTERVAL(&quot;) &gt; 0)</span>
+<span class="nc" id="L121">					defaultExpression.append(&quot;VALUES LESS THAN (TO_DATE('1970-01-01','YYYY-MM-DD')&quot;);</span>
+				else
+<span class="nc" id="L123">					defaultExpression.append(&quot;VALUES LESS THAN (&quot;).append(&quot;0&quot;);</span>
+<span class="nc" id="L124">			} else {</span>
+<span class="nc" id="L125">				defaultExpression.append(&quot;VALUES LESS THAN (&quot;);</span>
+<span class="nc" id="L126">				defaultExpression.append(&quot;MAXVALUE&quot;);</span>
+			}
+<span class="nc" id="L128">			defaultExpression.append(&quot;)&quot;);</span>
+		}
+<span class="nc" id="L130">		alterStmt.append(defaultExpression.toString());</span>
+<span class="nc" id="L131">		alterStmt.append(&quot; ) &quot;);</span>
+		
+<span class="nc" id="L133">		int no = DB.executeUpdateEx(alterStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		if (processInfo != null)</span>
+<span class="nc" id="L135">			processInfo.addLog(0, null, null, no + &quot; &quot; + alterStmt.toString());</span>
+		
+<span class="nc bnc" id="L137" title="All 4 branches missed.">		if (!(partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_List) &amp;&amp; useAutomaticListPartition))</span>
+<span class="nc" id="L138">			table.createTablePartition(&quot;default_partition&quot;, defaultExpression.toString(), trxName, partitionKeyColumn);</span>
+		
+<span class="nc" id="L140">		return true;</span>
+	}
+
+	/**
+	 * @param partitionKeyColumn
+	 * @return Oracle year/month interval expression (using NUMTOYMINTERVAL) for column range interval 
+	 */
+	private String getIntervalExpression(MColumn partitionKeyColumn) {
+<span class="nc bnc" id="L148" title="All 4 branches missed.">		if (DisplayType.isDate(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.isTimestampWithTimeZone(partitionKeyColumn.getAD_Reference_ID())) {</span>
+<span class="nc" id="L149">			RangePartitionInterval.Interval interval = RangePartitionInterval.getInterval(partitionKeyColumn);</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">			if (interval.years() &gt; 0) {</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">				if (interval.months() == 0) {</span>
+<span class="nc" id="L152">					return &quot;NUMTOYMINTERVAL(&quot;+interval.years()+&quot;,'YEAR')&quot;;</span>
+				} else {
+<span class="nc" id="L154">					int months = interval.months() + (interval.years() * 12);</span>
+<span class="nc" id="L155">					return &quot;NUMTOYMINTERVAL(&quot;+months+&quot;,'MONTH')&quot;;</span>
+				}
+			} else {
+<span class="nc" id="L158">				return &quot;NUMTOYMINTERVAL(&quot;+interval.months()+&quot;,'MONTH')&quot;;</span>
+			}
+<span class="nc bnc" id="L160" title="All 4 branches missed.">		} else if (DisplayType.isNumeric(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.isID(partitionKeyColumn.getAD_Reference_ID())) {</span>
+<span class="nc" id="L161">			Pattern pattern = Pattern.compile(&quot;^[1-9]\\d*$&quot;);</span>
+<span class="nc" id="L162">			Matcher matcher = pattern.matcher(partitionKeyColumn.getRangePartitionInterval());</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">			if (!matcher.matches())</span>
+<span class="nc" id="L164">				throw new IllegalArgumentException(Msg.getMsg(Env.getCtx(), &quot;InvalidRangePartitionInterval&quot;) + &quot; [&quot; + partitionKeyColumn + &quot;]&quot;);</span>
+			
+<span class="nc" id="L166">			BigDecimal interval = new BigDecimal(partitionKeyColumn.getRangePartitionInterval());</span>
+<span class="nc" id="L167">			return interval.toPlainString();</span>
+		} else {
+<span class="nc" id="L169">			throw new IllegalArgumentException(Msg.getMsg(Env.getCtx(), &quot;RangePartitionKeyTypeNotSupported&quot;) + &quot; [&quot; + partitionKeyColumn + &quot;]&quot;);</span>
+		}
+	}
+	
+	@Override
+	public boolean addPartitionAndMigrateData(MTable table, String trxName, ProcessInfo processInfo) {
+<span class="nc" id="L175">		boolean isUpdated = false;</span>
+		
+<span class="nc" id="L177">		List&lt;MColumn&gt; partitionKeyColumns = table.getPartitionKeyColumns(false);</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">		if (partitionKeyColumns.size() == 0)</span>
+<span class="nc" id="L179">			return false;</span>
+<span class="nc" id="L180">		MColumn partitionKeyColumn = partitionKeyColumns.get(0);		</span>
+<span class="nc" id="L181">		String sql = &quot;SELECT Column_Name FROM User_Part_Key_Columns WHERE Name=? ORDER BY Column_Position&quot;;</span>
+<span class="nc" id="L182">		String partKeyColumn = DB.getSQLValueString(trxName, sql, table.getTableName().toUpperCase());</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">		if (!partitionKeyColumn.getColumnName().equalsIgnoreCase(partKeyColumn))</span>
+<span class="nc" id="L184">			return false;</span>
+<span class="nc" id="L185">		MColumn subPartitionColumn = null;</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">		if (partitionKeyColumns.size() &gt; 1)</span>
+<span class="nc" id="L187">			subPartitionColumn = partitionKeyColumns.get(1);</span>
+<span class="nc" id="L188">		String partitioningMethod = partitionKeyColumn.getPartitioningMethod();		</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">		if (partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_List))</span>
+		{
+<span class="nc bnc" id="L191" title="All 2 branches missed.">			if (isAutoList(table, trxName))</span>
+			{
+<span class="nc" id="L193">				syncAutoList(table, partitionKeyColumn, trxName, processInfo);</span>
+<span class="nc" id="L194">				syncPartition(table, trxName, processInfo, false);</span>
+<span class="nc" id="L195">			}</span>
+			else
+			{
+<span class="nc" id="L198">				isUpdated = addListPartition(table, partitionKeyColumn, trxName, processInfo, &quot;default_partition&quot;, null, null);</span>
+			}
+<span class="nc" id="L200">		}</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">		else if (partitioningMethod.equals(MColumn.PARTITIONINGMETHOD_Range))</span>
+		{
+<span class="nc bnc" id="L203" title="All 2 branches missed.">			if (!isRangePartitionedTable(table, trxName)) </span>
+			{
+<span class="nc" id="L205">				fromListToRange(table, trxName, processInfo, partitionKeyColumn);				</span>
+<span class="nc" id="L206">				syncPartition(table, trxName, processInfo, true);</span>
+<span class="nc" id="L207">			}</span>
+			else
+			{
+<span class="nc" id="L210">				String interval = getInterval(table, trxName);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">				if (!Util.isEmpty(interval, true))</span>
+				{
+<span class="nc" id="L213">					syncInterval(table, partitionKeyColumn, trxName, interval, processInfo);</span>
+<span class="nc" id="L214">					syncPartition(table, trxName, processInfo, true);</span>
+<span class="nc" id="L215">				}</span>
+				else
+				{
+<span class="nc" id="L218">					syncRange(table, partitionKeyColumn, trxName, interval, processInfo);</span>
+<span class="nc" id="L219">					isUpdated = addRangePartition(table, partitionKeyColumn, trxName, processInfo, &quot;default_partition&quot;, null, null);</span>
+				}
+			}
+<span class="nc" id="L222">		}</span>
+		else
+<span class="nc" id="L224">			throw new IllegalArgumentException(Msg.getMsg(Env.getCtx(), &quot;PartitioningMethodNotSupported&quot;, new Object[]{partitioningMethod}));</span>
+		
+<span class="nc bnc" id="L226" title="All 2 branches missed.">		if (subPartitionColumn != null) {</span>
+<span class="nc" id="L227">			List&lt;X_AD_TablePartition&gt; primaryPartitions = getPrimaryPartitions(table, partitionKeyColumn, trxName);</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">			if (subPartitionColumn.getPartitioningMethod().equals(MColumn.PARTITIONINGMETHOD_List))</span>
+			{
+<span class="nc bnc" id="L230" title="All 2 branches missed.">				for(X_AD_TablePartition primaryPartition : primaryPartitions)</span>
+				{
+<span class="nc" id="L232">					String defaultSubPartition = getDefaultSubPartitionName(table, primaryPartition, false, trxName);</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">					if (defaultSubPartition == null)</span>
+<span class="nc" id="L234">						continue;</span>
+<span class="nc" id="L235">					isUpdated = addListPartition(table, subPartitionColumn, trxName, processInfo, defaultSubPartition, primaryPartition.getName(), primaryPartition);</span>
+				}
+<span class="nc" id="L237">			}</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">			else if (subPartitionColumn.getPartitioningMethod().equals(MColumn.PARTITIONINGMETHOD_Range))</span>
+			{
+<span class="nc bnc" id="L240" title="All 2 branches missed.">				for(X_AD_TablePartition primaryPartition : primaryPartitions)</span>
+				{
+<span class="nc" id="L242">					String defaultSubPartition = getDefaultSubPartitionName(table, primaryPartition, true, trxName);</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">					if (defaultSubPartition == null)</span>
+<span class="nc" id="L244">						continue;</span>
+<span class="nc" id="L245">					isUpdated = addRangePartition(table, subPartitionColumn, trxName, processInfo, defaultSubPartition, primaryPartition.getName(), primaryPartition);</span>
+				}
+<span class="nc" id="L247">			}</span>
+			else
+<span class="nc" id="L249">				throw new IllegalArgumentException(Msg.getMsg(Env.getCtx(), &quot;PartitioningMethodNotSupported&quot;, new Object[]{subPartitionColumn.getPartitioningMethod()}));</span>
+		}
+<span class="nc" id="L251">		return isUpdated;</span>
+	}
+
+	/**
+	 * Find name of default sub-partition auto created by Oracle 
+	 * @param table
+	 * @param primaryPartition
+	 * @param range true if sub-partition is range, false for list
+	 * @param trxName
+	 * @return name of default sub-partition
+	 */
+	private String getDefaultSubPartitionName(MTable table, X_AD_TablePartition primaryPartition, boolean range, String trxName) {
+<span class="nc" id="L263">		String sql = </span>
+<span class="nc" id="L264">				&quot;&quot;&quot;</span>
+					SELECT High_Value, SubPartition_Name
+					FROM User_Tab_SubPartitions
+					WHERE Table_Name=? AND Partition_Name=?
+				&quot;&quot;&quot;;
+<span class="nc" id="L269">		try(PreparedStatement stmt = DB.prepareStatement(sql, trxName)) {</span>
+<span class="nc" id="L270">			stmt.setString(1, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L271">			stmt.setString(2, primaryPartition.getName().toUpperCase());</span>
+<span class="nc" id="L272">			ResultSet rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">			while(rs.next()) {</span>
+<span class="nc" id="L274">				String expression = rs.getString(1);</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">				if (range) {</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">					if (&quot;MAXVALUE&quot;.equals(expression))</span>
+<span class="nc" id="L277">						return rs.getString(2);	</span>
+				} else {
+<span class="nc bnc" id="L279" title="All 2 branches missed.">					if (&quot;DEFAULT&quot;.equals(expression)) {</span>
+<span class="nc" id="L280">						return rs.getString(2);</span>
+					}
+				}
+			}
+<span class="nc" id="L284">		} catch (SQLException e) {</span>
+<span class="nc" id="L285">			throw new DBException(e);</span>
+		}
+<span class="nc" id="L287">		return null;</span>
+	}
+
+	/**
+	 * Find the list of partition for partitionKeyColumn
+	 * @param table
+	 * @param partitionKeyColumn
+	 * @param trxName
+	 * @return list of partition for column
+	 */
+	private List&lt;X_AD_TablePartition&gt; getPrimaryPartitions(MTable table, MColumn partitionKeyColumn, String trxName) {
+<span class="nc" id="L298">		String whereClause = &quot;AD_Table_ID=? AND AD_Column_ID=? And Name != 'DEFAULT_PARTITION' AND IsPartitionAttached='Y' AND IsActive='Y'&quot;;</span>
+<span class="nc" id="L299">		Query query = new Query(Env.getCtx(), MTable.get(Env.getCtx(), X_AD_TablePartition.Table_ID), whereClause, trxName);		</span>
+<span class="nc" id="L300">		return query.setParameters(table.getAD_Table_ID(), partitionKeyColumn.getAD_Column_ID()).list();</span>
+	}
+
+	/**
+	 * Change partition method from list to range
+	 * @param table
+	 * @param trxName
+	 * @param processInfo
+	 * @param partitionKeyColumn
+	 */
+	private void fromListToRange(MTable table, String trxName, ProcessInfo processInfo, MColumn partitionKeyColumn) {
+<span class="nc" id="L311">		DB.executeUpdateEx(&quot;DELETE FROM AD_TablePartition WHERE AD_Table_ID=? AND Name=?&quot;, new Object[] {table.getAD_Table_ID(), &quot;DEFAULT_PARTITION&quot;}, trxName);</span>
+<span class="nc" id="L312">		StringBuilder alterStmt = new StringBuilder(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L313">				.append(table.getTableName())</span>
+<span class="nc" id="L314">				.append(&quot; MODIFY PARTITION BY RANGE &quot;)</span>
+<span class="nc" id="L315">				.append(&quot; (&quot;).append(partitionKeyColumn.getColumnName()).append(&quot;)&quot;);</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">		if (useIntervalPartition) {</span>
+<span class="nc" id="L317">			alterStmt.append(&quot; INTERVAL(&quot;);</span>
+<span class="nc" id="L318">			alterStmt.append(getIntervalExpression(partitionKeyColumn));</span>
+<span class="nc" id="L319">			alterStmt.append(&quot;) (PARTITION default_partition &quot;);</span>
+<span class="nc" id="L320">		} else {</span>
+<span class="nc" id="L321">			alterStmt.append(&quot; (PARTITION default_partition &quot;);</span>
+		}
+<span class="nc" id="L323">		StringBuilder defaultExpression = new StringBuilder();		</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">		if (useIntervalPartition) {</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">			if (alterStmt.indexOf(&quot;NUMTOYMINTERVAL(&quot;) &gt; 0)</span>
+<span class="nc" id="L326">				defaultExpression.append(&quot;VALUES LESS THAN (TO_DATE('1970-01-01','YYYY-MM-DD')&quot;);</span>
+			else
+<span class="nc" id="L328">				defaultExpression.append(&quot;VALUES LESS THAN (&quot;).append(&quot;0&quot;);</span>
+<span class="nc" id="L329">		} else {</span>
+<span class="nc" id="L330">			defaultExpression.append(&quot;VALUES LESS THAN (&quot;);</span>
+<span class="nc" id="L331">			defaultExpression.append(&quot;MAXVALUE&quot;);</span>
+		}
+<span class="nc" id="L333">		defaultExpression.append(&quot;)&quot;);				</span>
+<span class="nc" id="L334">		alterStmt.append(defaultExpression.toString());</span>
+<span class="nc" id="L335">		alterStmt.append(&quot; ) &quot;);</span>
+		
+<span class="nc" id="L337">		int no = DB.executeUpdateEx(alterStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		if (processInfo != null)</span>
+<span class="nc" id="L339">			processInfo.addLog(0, null, null, no + &quot; &quot; + alterStmt.toString());</span>
+<span class="nc" id="L340">	}</span>
+
+	/**
+	 * Update automatic list partitioning of table if the DB column list is different from current AD_Column values 
+	 * @param table
+	 * @param partitionKeyColumn 
+	 * @param trxName
+	 * @param pi
+	 */
+	private void syncAutoList(MTable table, MColumn partitionKeyColumn, String trxName, ProcessInfo pi) {
+<span class="nc" id="L350">		String keyColumn = partitionKeyColumn.getColumnName();</span>
+<span class="nc" id="L351">		String sql = &quot;SELECT Column_Name FROM User_Part_Key_Columns WHERE Name=? ORDER BY Column_Position&quot;;</span>
+<span class="nc" id="L352">		List&lt;List&lt;Object&gt;&gt; columnNames = DB.getSQLArrayObjectsEx(trxName, sql, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L353">		boolean notSync = false;</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">		if (columnNames.size() != 1) {</span>
+<span class="nc" id="L355">			notSync = true;</span>
+<span class="nc" id="L356">		} else {</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">			if (!keyColumn.equalsIgnoreCase(columnNames.get(0).get(0).toString()))</span>
+<span class="nc" id="L358">				notSync = true;</span>
+		}
+<span class="nc bnc" id="L360" title="All 2 branches missed.">		if (notSync) {</span>
+<span class="nc" id="L361">			StringBuilder alterStmt = new StringBuilder(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L362">					.append(table.getTableName())</span>
+<span class="nc" id="L363">					.append(&quot; MODIFY PARTITION BY List &quot;);</span>
+<span class="nc" id="L364">			alterStmt.append(&quot; (&quot;).append(keyColumn).append(&quot;)&quot;);</span>
+<span class="nc" id="L365">			alterStmt.append(&quot; AUTOMATIC (PARTITION default_partition VALUES (&quot;);</span>
+<span class="nc" id="L366">			alterStmt.append(&quot;NULL&quot;);</span>
+<span class="nc" id="L367">			alterStmt.append(&quot;))&quot;);</span>
+<span class="nc" id="L368">			int no = DB.executeUpdateEx(alterStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">			if (pi != null)</span>
+<span class="nc" id="L370">				pi.addLog(0, null, null, no + &quot; &quot; + alterStmt.toString());</span>
+		}
+<span class="nc" id="L372">	}</span>
+
+	/**
+	 * Update partition interval of table if it is not in sync with current AD_Column.RangePartitionInterval value
+	 * @param table
+	 * @param partitionKeyColumn
+	 * @param trxName
+	 * @param interval
+	 * @param pi
+	 */
+	private void syncInterval(MTable table, MColumn partitionKeyColumn, String trxName, String interval, ProcessInfo pi) {
+<span class="nc" id="L383">		String sql = &quot;SELECT Column_Name FROM User_Part_Key_Columns WHERE Name=? ORDER BY Column_Position&quot;;</span>
+<span class="nc" id="L384">		String intervalColumn = DB.getSQLValueString(trxName, sql, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L385">		String expression = getIntervalExpression(partitionKeyColumn);</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">		if (partitionKeyColumn.getColumnName().toUpperCase().equals(intervalColumn)) {</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">			if (!interval.toUpperCase().equals(expression)) {</span>
+				//note that this only effect new data inserted into table and will not change existing partition
+<span class="nc" id="L389">				sql = &quot;ALTER TABLE &quot; + table.getTableName() + &quot; SET INTERVAL (&quot; + expression + &quot;)&quot;;</span>
+<span class="nc" id="L390">				int no = DB.executeUpdateEx(sql, trxName);</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">				if (pi != null)</span>
+<span class="nc" id="L392">					pi.addLog(0, null, null, no + &quot; &quot; + sql);</span>
+			}
+<span class="nc" id="L394">		} else {</span>
+<span class="nc" id="L395">			throw new AdempiereException(&quot;PartitionConfigurationChanged&quot;);</span>
+		}
+<span class="nc" id="L397">	}</span>
+
+	/**
+	 * Update partition range of table if it is not in sync with current AD_Column.RangePartitionInterval value
+	 * @param table
+	 * @param partitionKeyColumn 
+	 * @param trxName
+	 * @param interval
+	 * @param pi
+	 */
+	private void syncRange(MTable table, MColumn partitionKeyColumn, String trxName, String interval, ProcessInfo pi) {
+<span class="nc" id="L408">		String sql = &quot;SELECT Column_Name FROM User_Part_Key_Columns WHERE Name=? ORDER BY Column_Position&quot;;</span>
+<span class="nc" id="L409">		List&lt;List&lt;Object&gt;&gt; columnNames = DB.getSQLArrayObjectsEx(trxName, sql, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L410">		boolean notSync = false;</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">		if (columnNames.size() != 1) {</span>
+<span class="nc" id="L412">			notSync = true;</span>
+<span class="nc" id="L413">		} else {</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">			if (!partitionKeyColumn.getColumnName().equalsIgnoreCase(columnNames.get(0).get(0).toString())) </span>
+<span class="nc" id="L415">				notSync = true;</span>
+		}
+<span class="nc bnc" id="L417" title="All 2 branches missed.">		if (notSync) {</span>
+<span class="nc" id="L418">			StringBuilder alterStmt = new StringBuilder(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L419">					.append(table.getTableName())</span>
+<span class="nc" id="L420">					.append(&quot; MODIFY PARTITION BY Range &quot;);</span>
+<span class="nc" id="L421">			alterStmt.append(&quot; (&quot;).append(partitionKeyColumn.getColumnName()).append(&quot;)&quot;);</span>
+<span class="nc" id="L422">			alterStmt.append(&quot; (PARTITION default_partition VALUES LESS THAN (&quot;);</span>
+<span class="nc" id="L423">			alterStmt.append(&quot;MAXVALUE&quot;);</span>
+<span class="nc" id="L424">			alterStmt.append(&quot;))&quot;);</span>
+<span class="nc" id="L425">			int no = DB.executeUpdateEx(alterStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">			if (pi != null)</span>
+<span class="nc" id="L427">				pi.addLog(0, null, null, no + &quot; &quot; + alterStmt.toString());</span>
+		}
+<span class="nc" id="L429">	}</span>
+	
+	/**
+	 * Read list or interval partition details from DB and update X_AD_TablePartition
+	 * @param table
+	 * @param trxName
+	 * @param processInfo
+	 * @param interval
+	 */
+	private void syncPartition(MTable table, String trxName, ProcessInfo processInfo, boolean interval) {
+<span class="nc" id="L439">		String sql = </span>
+<span class="nc" id="L440">			&quot;&quot;&quot;</span>
+				SELECT Partition_Name, High_Value
+				FROM User_Tab_Partitions
+				WHERE Table_Name=?
+			&quot;&quot;&quot;;
+<span class="nc" id="L445">		Query query = new Query(Env.getCtx(), X_AD_TablePartition.Table_Name, &quot;AD_Table_ID=? AND Parent_TablePartition_ID IS NULL&quot;, trxName);</span>
+<span class="nc" id="L446">		List&lt;X_AD_TablePartition&gt; existingList = query.setParameters(table.getAD_Table_ID()).list();</span>
+<span class="nc" id="L447">		List&lt;Integer&gt; matchedIds = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc" id="L448">		List&lt;MColumn&gt; partitionKeyColumns = table.getPartitionKeyColumns(false);</span>
+<span class="nc" id="L449">		try(PreparedStatement stmt = DB.prepareStatement(sql, trxName)) {</span>
+<span class="nc" id="L450">			stmt.setString(1, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L451">			ResultSet rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">			while (rs.next()) {</span>
+<span class="nc" id="L453">				String partitionName = rs.getString(1);</span>
+<span class="nc" id="L454">				String values = rs.getString(2);</span>
+<span class="nc" id="L455">				int id = DB.getSQLValueEx(trxName, &quot;SELECT AD_TablePartition_ID FROM AD_TablePartition WHERE AD_Table_ID=? AND Name=?&quot;, table.getAD_Table_ID(), partitionName);</span>
+<span class="nc bnc" id="L456" title="All 2 branches missed.">				if (id &gt; 0) {</span>
+<span class="nc" id="L457">					matchedIds.add(id);</span>
+<span class="nc" id="L458">				} else {</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">					String expression = interval ? &quot;VALUES LESS THAN &quot; + values  : &quot;VALUES &quot; + values;</span>
+<span class="nc" id="L460">					table.createTablePartition(partitionName, expression, trxName, partitionKeyColumns.get(0));</span>
+				}
+			}
+<span class="nc" id="L463">		} catch (SQLException e) {</span>
+<span class="nc" id="L464">			throw new DBException(e);</span>
+		}
+		
+		//remove X_AD_TablePartition that doesn't exists in DB
+<span class="nc bnc" id="L468" title="All 2 branches missed.">		if (existingList.size() &gt; 0) {</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">			for (X_AD_TablePartition tablePartition : existingList) {</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">				if (!matchedIds.contains(tablePartition.getAD_TablePartition_ID()))</span>
+<span class="nc" id="L471">					tablePartition.deleteEx(true);</span>
+			}
+		}
+<span class="nc" id="L474">	}</span>
+
+	/**
+	 * @param table
+	 * @param trxName 
+	 * @return true if table is using automatic list partitioning
+	 */
+	private boolean isAutoList(MTable table, String trxName) {
+<span class="nc" id="L482">		String sql =</span>
+<span class="nc" id="L483">			&quot;&quot;&quot;</span>
+				SELECT AutoList
+				FROM User_Part_Tables
+				WHERE Table_Name = ?
+			&quot;&quot;&quot;;
+<span class="nc" id="L488">		String autoList = DB.getSQLValueStringEx(trxName, sql, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L489">		return &quot;YES&quot;.equals(autoList);</span>
+	}
+
+	/**
+	 * @param table
+	 * @param trxName 
+	 * @return interval for partitioning
+	 */
+	private String getInterval(MTable table, String trxName) {
+<span class="nc" id="L498">		String sql =</span>
+<span class="nc" id="L499">			&quot;&quot;&quot;</span>
+				SELECT Interval
+				FROM User_Part_Tables
+				WHERE Table_Name = ?
+			&quot;&quot;&quot;;
+<span class="nc" id="L504">		String interval = DB.getSQLValueStringEx(trxName, sql, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L505">		return interval;</span>
+	}
+	
+	/**
+	 * @param table
+	 * @param trxName
+	 * @return true if table is partition by range in DB
+	 */
+	private boolean isRangePartitionedTable(MTable table, String trxName) {
+<span class="nc" id="L514">		String sql =</span>
+<span class="nc" id="L515">				&quot;&quot;&quot;</span>
+					SELECT Partitioning_Type
+					FROM User_Part_Tables
+					WHERE Table_Name = ?
+				&quot;&quot;&quot;;
+<span class="nc" id="L520">		String type = DB.getSQLValueStringEx(trxName, sql, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L521">		return &quot;RANGE&quot;.equals(type);</span>
+	}
+	/**
+	 * Add new list partition
+	 * @param table
+	 * @param partitionKeyColumn 
+	 * @param trxName
+	 * @param pi
+	 * @param fromPartition name of default partition to select from
+	 * @param partitionNamePrefix
+	 * @param parentPartition
+	 * @return true if new list partition added
+	 */
+	private boolean addListPartition(MTable table, MColumn partitionKeyColumn, String trxName, ProcessInfo pi, String fromPartition, String partitionNamePrefix, X_AD_TablePartition parentPartition) {
+<span class="nc" id="L535">		boolean isUpdated = false;</span>
+<span class="nc" id="L536">		List&lt;X_AD_TablePartition&gt; partitions = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">		boolean subPartition = parentPartition != null;</span>
+		
+<span class="nc" id="L539">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc" id="L540">		sql.append(&quot;SELECT DISTINCT &quot;).append(partitionKeyColumn.getColumnName());</span>
+<span class="nc bnc" id="L541" title="All 2 branches missed.">		sql.append(&quot; FROM &quot;).append(table.getTableName()).append(&quot; &quot;).append(subPartition ? &quot;SubPartition(&quot; : &quot;Partition(&quot;).append(fromPartition).append(&quot;) &quot;);</span>
+<span class="nc" id="L542">		sql.append(&quot;ORDER BY &quot;).append(partitionKeyColumn.getColumnName());</span>
+
+<span class="nc" id="L544">		try (PreparedStatement pstmt = DB.prepareStatement(sql.toString(), trxName))</span>
+		{				
+<span class="nc" id="L546">			ResultSet rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">			while (rs.next()) </span>
+			{
+<span class="nc" id="L549">				StringBuilder name = new StringBuilder();</span>
+<span class="nc" id="L550">				StringBuilder expression = new StringBuilder(&quot;VALUES (&quot;);</span>
+<span class="nc bnc" id="L551" title="All 2 branches missed.">				if (!Util.isEmpty(partitionNamePrefix, true))</span>
+<span class="nc" id="L552">					name.append(partitionNamePrefix).append(&quot;_&quot;);</span>
+<span class="nc" id="L553">				String s = rs.getString(partitionKeyColumn.getColumnName());</span>
+<span class="nc" id="L554">				name.append(s);</span>
+<span class="nc bnc" id="L555" title="All 4 branches missed.">				if (DisplayType.isText(partitionKeyColumn.getAD_Reference_ID()) || partitionKeyColumn.getAD_Reference_ID() == DisplayType.YesNo</span>
+<span class="nc bnc" id="L556" title="All 2 branches missed.">					|| DisplayType.isList(partitionKeyColumn.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L557" title="All 2 branches missed.">					|| &quot;EntityType&quot;.equals(partitionKeyColumn.getColumnName())</span>
+<span class="nc bnc" id="L558" title="All 2 branches missed.">					|| &quot;AD_Language&quot;.equals(partitionKeyColumn.getColumnName()))</span>
+<span class="nc" id="L559">					expression.append(DB.TO_STRING(s));</span>
+<span class="nc bnc" id="L560" title="All 2 branches missed.">				else if (partitionKeyColumn.getAD_Reference_ID() == DisplayType.Date)</span>
+<span class="nc" id="L561">					expression.append(DB.TO_DATE(rs.getTimestamp(partitionKeyColumn.getColumnName())));</span>
+<span class="nc bnc" id="L562" title="All 2 branches missed.">				else if (DisplayType.isDate(partitionKeyColumn.getAD_Reference_ID()))</span>
+<span class="nc" id="L563">					expression.append(DB.TO_DATE(rs.getTimestamp(partitionKeyColumn.getColumnName()), false));</span>
+<span class="nc bnc" id="L564" title="All 4 branches missed.">				else if (DisplayType.isID(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.Integer == partitionKeyColumn.getAD_Reference_ID())</span>
+<span class="nc" id="L565">					expression.append(rs.getInt(partitionKeyColumn.getColumnName()));</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">				else if (DisplayType.isNumeric(partitionKeyColumn.getAD_Reference_ID()))</span>
+<span class="nc" id="L567">					expression.append(rs.getBigDecimal(partitionKeyColumn.getColumnName()).toPlainString());</span>
+										
+<span class="nc" id="L569">				expression.append(&quot;)&quot;);</span>
+<span class="nc bnc" id="L570" title="All 2 branches missed.">				if (Character.isDigit(name.charAt(0))) {</span>
+<span class="nc" id="L571">					name.insert(0, &quot;p&quot;);</span>
+				}
+<span class="nc" id="L573">				X_AD_TablePartition partition = table.createTablePartition(name.toString(), expression.toString(), trxName, partitionKeyColumn, parentPartition);</span>
+<span class="nc" id="L574">				partitions.add(partition);</span>
+			}
+		}
+<span class="nc" id="L577">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L579">			throw new DBException(e);</span>
+		}
+		
+<span class="nc bnc" id="L582" title="All 2 branches missed.">		for(X_AD_TablePartition partition : partitions)</span>
+		{
+<span class="nc" id="L584">			StringBuilder alterStmt = new StringBuilder();</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">			alterStmt.append(&quot;ALTER TABLE &quot;).append(table.getTableName()).append(&quot; SPLIT &quot;).append(subPartition ? &quot;SubPartition &quot; : &quot;Partition &quot;).append(fromPartition).append(&quot; &quot;);</span>
+<span class="nc" id="L586">			alterStmt.append(partition.getExpressionPartition());</span>
+<span class="nc bnc" id="L587" title="All 2 branches missed.">			alterStmt.append(&quot; INTO ( &quot;).append(subPartition ? &quot;SUBPARTITION &quot; : &quot;PARTITION &quot;).append(partition.getName()).append(&quot;, &quot;);</span>
+<span class="nc bnc" id="L588" title="All 2 branches missed.">			alterStmt.append(subPartition ? &quot;SubPartition &quot; : &quot;Partition &quot;).append(fromPartition).append(&quot; )&quot;);</span>
+<span class="nc" id="L589">			int no = DB.executeUpdateEx(alterStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">			if (pi != null)</span>
+<span class="nc" id="L591">				pi.addLog(0, null, null, no + &quot; &quot; + alterStmt.toString());</span>
+			
+<span class="nc" id="L593">			isUpdated = true;</span>
+		}
+<span class="nc" id="L595">		return isUpdated;</span>
+	}
+	
+	/**
+	 * Add new range partition
+	 * @param table
+	 * @param partitionKeyColumn 
+	 * @param trxName
+	 * @param pi
+	 * @param fromPartition name of default partition to select from
+	 * @param partitionNamePrefix
+	 * @param parentPartition
+	 * @return true if new range partition added
+	 */
+	private boolean addRangePartition(MTable table, MColumn partitionKeyColumn, String trxName, ProcessInfo pi, String fromPartition, String partitionNamePrefix, X_AD_TablePartition parentPartition) {
+<span class="nc" id="L610">		boolean isUpdated = false;</span>
+<span class="nc" id="L611">		X_AD_TablePartition partition = null;</span>
+<span class="nc" id="L612">		RangePartitionColumn rangePartitionColumn = null;</span>
+<span class="nc bnc" id="L613" title="All 2 branches missed.">		boolean subPartition = parentPartition != null;</span>
+
+<span class="nc" id="L615">		String partitionKeyColumnName = partitionKeyColumn.getColumnName();</span>
+<span class="nc" id="L616">		String partitionKeyColumnRangeIntervalPattern = partitionKeyColumn.getRangePartitionInterval();</span>
+		
+<span class="nc" id="L618">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc" id="L619">		sql.append(&quot;SELECT MIN(&quot;).append(partitionKeyColumnName).append(&quot;) AS min_value, &quot;);</span>
+<span class="nc" id="L620">		sql.append(&quot;MAX(&quot;).append(partitionKeyColumnName).append(&quot;) AS max_value &quot;);</span>
+<span class="nc bnc" id="L621" title="All 2 branches missed.">		sql.append(&quot;FROM &quot;).append(table.getTableName()).append(&quot; &quot;).append(subPartition ? &quot;SubPartition(&quot; : &quot;Partition(&quot;).append(fromPartition).append(&quot;)&quot;);</span>
+		
+<span class="nc" id="L623">		List&lt;Object&gt; values = DB.getSQLValueObjectsEx(trxName, sql.toString());</span>
+<span class="nc bnc" id="L624" title="All 4 branches missed.">		if (values.get(0) != null &amp;&amp; values.get(1) != null)</span>
+		{
+<span class="nc" id="L626">			rangePartitionColumn = new RangePartitionColumn(</span>
+<span class="nc" id="L627">					partitionKeyColumnName, partitionKeyColumnRangeIntervalPattern, </span>
+<span class="nc" id="L628">					values.get(0), values.get(1)</span>
+			);
+		}
+		
+<span class="nc bnc" id="L632" title="All 2 branches missed.">		if (rangePartitionColumn == null)</span>
+<span class="nc" id="L633">			return false;</span>
+		
+<span class="nc" id="L635">		List&lt;RangePartitionInterval&gt; rangePartitionIntervals = RangePartitionInterval.createInterval(table, rangePartitionColumn, trxName);</span>
+<span class="nc" id="L636">		List&lt;String&gt; tablePartitionNames = table.getTablePartitionNames(trxName);</span>
+		
+<span class="nc bnc" id="L638" title="All 2 branches missed.">		for(RangePartitionInterval rangePartitionInterval : rangePartitionIntervals)</span>
+		{
+<span class="nc" id="L640">			StringBuilder name = new StringBuilder();</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">			if (!Util.isEmpty(partitionNamePrefix, true))</span>
+<span class="nc" id="L642">				name.append(partitionNamePrefix).append(&quot;_&quot;);</span>
+<span class="nc" id="L643">			name.append(rangePartitionInterval.getName());</span>
+			
+<span class="nc" id="L645">			StringBuilder countStmt = new StringBuilder(&quot;SELECT Count(*) FROM &quot;)</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">					.append(table.getTableName()).append(&quot; &quot;).append(subPartition ? &quot;SubPartition(&quot; : &quot;Partition(&quot;).append(fromPartition).append(&quot;) &quot;)</span>
+<span class="nc" id="L647">					.append(&quot;WHERE &quot;).append(&quot; &quot;)</span>
+<span class="nc" id="L648">					.append(partitionKeyColumn.getColumnName()).append(&quot; &gt;= &quot;);</span>
+<span class="nc bnc" id="L649" title="All 4 branches missed.">			if (DisplayType.isDate(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.isTimestampWithTimeZone(partitionKeyColumn.getAD_Reference_ID()))</span>
+<span class="nc" id="L650">				countStmt.append(&quot;TO_DATE(&quot;).append(rangePartitionInterval.getFrom()).append(&quot;,'YYYY-MM-DD') &quot;);</span>
+			else
+<span class="nc" id="L652">				countStmt.append(rangePartitionInterval.getFrom()).append(&quot; &quot;);</span>
+<span class="nc" id="L653">			countStmt.append(&quot;AND &quot;).append(partitionKeyColumn.getColumnName()).append(&quot; &lt; &quot;);</span>
+<span class="nc bnc" id="L654" title="All 4 branches missed.">			if (DisplayType.isDate(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.isTimestampWithTimeZone(partitionKeyColumn.getAD_Reference_ID()))</span>
+<span class="nc" id="L655">				countStmt.append(&quot;TO_DATE(&quot;).append(rangePartitionInterval.getTo()).append(&quot;,'YYYY-MM-DD') &quot;);</span>
+			else
+<span class="nc" id="L657">				countStmt.append(rangePartitionInterval.getTo()).append(&quot; &quot;);</span>
+<span class="nc" id="L658">			int recordCount = DB.getSQLValueEx(trxName, countStmt.toString());</span>
+			
+<span class="nc bnc" id="L660" title="All 2 branches missed.">			if (recordCount == 0) {</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">				if (tablePartitionNames.contains(name.toString())) {</span>
+<span class="nc" id="L662">					Query query = new Query(Env.getCtx(), X_AD_TablePartition.Table_Name, &quot;AD_Table_ID=? AND Name=?&quot;, trxName);</span>
+<span class="nc" id="L663">					X_AD_TablePartition toDelete = query.setParameters(table.getAD_Table_ID(), name.toString()).first();</span>
+<span class="nc bnc" id="L664" title="All 2 branches missed.">					if (toDelete != null)</span>
+<span class="nc" id="L665">						toDelete.deleteEx(true);</span>
+				}
+<span class="nc" id="L667">				continue;</span>
+			}
+			
+<span class="nc" id="L670">			StringBuilder expression = new StringBuilder();</span>
+<span class="nc" id="L671">			expression.append(&quot;VALUES LESS THAN (&quot;);</span>
+<span class="nc" id="L672">			Object toValue = rangePartitionInterval.getTo();</span>
+<span class="nc bnc" id="L673" title="All 4 branches missed.">			if (DisplayType.isDate(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.isTimestampWithTimeZone(partitionKeyColumn.getAD_Reference_ID())) {</span>
+<span class="nc" id="L674">				expression.append(&quot;TO_Date(&quot;).append(toValue.toString()).append(&quot;,'YYYY-MM-DD')&quot;);</span>
+<span class="nc bnc" id="L675" title="All 4 branches missed.">			} else if (DisplayType.isNumeric(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.isID(partitionKeyColumn.getAD_Reference_ID())) {</span>
+<span class="nc" id="L676">				BigDecimal bd = new BigDecimal(toValue.toString());</span>
+<span class="nc bnc" id="L677" title="All 4 branches missed.">				if (DisplayType.isID(partitionKeyColumn.getAD_Reference_ID()) || DisplayType.Integer == partitionKeyColumn.getAD_Reference_ID())</span>
+<span class="nc" id="L678">					expression.append(bd.intValue());</span>
+				else
+<span class="nc" id="L680">					expression.append(bd.toPlainString());</span>
+			}
+<span class="nc" id="L682">			expression.append(&quot;)&quot;);</span>
+				
+<span class="nc bnc" id="L684" title="All 2 branches missed.">			if (Character.isDigit(name.charAt(0))) {</span>
+<span class="nc" id="L685">				name.insert(0, &quot;p&quot;);</span>
+			}			
+<span class="nc bnc" id="L687" title="All 2 branches missed.">			if (!tablePartitionNames.contains(name.toString()))</span>
+<span class="nc" id="L688">				partition = table.createTablePartition(name.toString(), expression.toString(), trxName, partitionKeyColumn, parentPartition);</span>
+			
+<span class="nc bnc" id="L690" title="All 2 branches missed.">			if (partition != null)</span>
+			{				
+<span class="nc" id="L692">				StringBuilder alterStmt = new StringBuilder();</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">				alterStmt.append(&quot;ALTER TABLE &quot;).append(table.getTableName()).append(&quot; SPLIT &quot;).append(subPartition ? &quot;SubPartition &quot; : &quot;Partition &quot;).append(fromPartition);</span>
+<span class="nc bnc" id="L694" title="All 2 branches missed.">				alterStmt.append(&quot; INTO ( &quot;).append(subPartition ? &quot;SUBPARTITION &quot; : &quot;PARTITION &quot;).append(partition.getName()).append(&quot; &quot;).append(partition.getExpressionPartition()).append(&quot;, &quot;);</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">				alterStmt.append(subPartition ? &quot;SubPartition &quot; : &quot;Partition &quot;).append(fromPartition).append(&quot; )&quot;);</span>
+<span class="nc" id="L696">				int no = DB.executeUpdateEx(alterStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L697" title="All 2 branches missed.">				if (pi != null)</span>
+<span class="nc" id="L698">					pi.addLog(0, null, null, no + &quot; &quot; + alterStmt.toString());</span>
+				
+<span class="nc" id="L700">				isUpdated = true;</span>
+			}
+		}
+<span class="nc" id="L703">		return isUpdated;</span>
+	}
+	
+	@Override
+	public boolean runPostPartitionProcess(MTable table, String trxName, ProcessInfo processInfo) {
+<span class="nc" id="L708">		String sql =</span>
+<span class="nc" id="L709">			&quot;&quot;&quot;</span>
+				 select index_name, partition_name, 'partition' ddl_type
+			     from user_ind_partitions
+			     where (index_name) in 
+			           ( select index_name
+			             from   user_indexes
+			             where table_name  = ?
+			           )
+			     and status = 'UNUSABLE'
+			     union all
+			     select index_name, subpartition_name, 'subpartition' ddl_type
+			     from user_ind_subpartitions
+			     where (index_name) in 
+			           ( select index_name
+			             from   user_indexes
+			             where table_name  = ?
+			           )
+			     and status = 'UNUSABLE'
+			     union all
+			     select index_name, null, null
+			     from user_indexes
+			     where table_name  = ?
+			     and status = 'UNUSABLE'
+			&quot;&quot;&quot;;
+		
+<span class="nc" id="L734">		try (PreparedStatement stmt = DB.prepareStatement(sql, trxName)) {</span>
+<span class="nc" id="L735">			stmt.setString(1, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L736">			stmt.setString(2, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L737">			stmt.setString(3, table.getTableName().toUpperCase());</span>
+<span class="nc" id="L738">			ResultSet rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L739" title="All 2 branches missed.">			while(rs.next()) {</span>
+<span class="nc" id="L740">				StringBuilder alter = new StringBuilder(&quot;ALTER INDEX &quot;)</span>
+<span class="nc" id="L741">						.append(rs.getString(1))</span>
+<span class="nc" id="L742">						.append(&quot; REBUILD &quot;);</span>
+<span class="nc" id="L743">				String ddlType = rs.getString(3);</span>
+<span class="nc bnc" id="L744" title="All 2 branches missed.">				if (!Util.isEmpty(ddlType, true) ) {</span>
+<span class="nc" id="L745">					alter.append(ddlType).append(&quot; &quot;).append(rs.getString(2));</span>
+				}
+<span class="nc" id="L747">				int no = DB.executeUpdateEx(alter.toString(), trxName);</span>
+<span class="nc bnc" id="L748" title="All 2 branches missed.">				if (processInfo != null)</span>
+<span class="nc" id="L749">					processInfo.addLog(0, null, null, no + &quot; &quot; + alter.toString());</span>
+			}
+<span class="nc" id="L751">		} catch (SQLException e) {</span>
+<span class="nc" id="L752">			CLogger.getCLogger(getClass()).log(Level.SEVERE, e.getMessage(), e);</span>
+		}
+		
+<span class="nc" id="L755">		return true;</span>
+	}
+
+	@Override
+	public String isValidConfiguration(MTable table) {
+<span class="nc" id="L760">		String trxName = table.get_TrxName();</span>
+<span class="nc bnc" id="L761" title="All 2 branches missed.">		if (!isPartitionedTable(table, trxName))</span>
+<span class="nc" id="L762">			return null;</span>
+<span class="nc bnc" id="L763" title="All 2 branches missed.">		if (!table.isPartition())</span>
+<span class="nc" id="L764">			return Msg.getMsg(Env.getCtx(), &quot;PartitionConfigurationChanged&quot;) + &quot; [&quot; + MTable.COLUMNNAME_IsPartition + &quot;]&quot;;</span>
+<span class="nc" id="L765">		return null;</span>
+	}
+
+	@Override
+	public String isValidConfiguration(MColumn column) {
+<span class="nc" id="L770">		String trxName = column.get_TrxName();</span>
+<span class="nc" id="L771">		MTable table = MTable.get(Env.getCtx(), column.getAD_Table_ID(), trxName);</span>
+		
+<span class="nc" id="L773">		List&lt;MColumn&gt; partitionKeyColumns = table.getPartitionKeyColumns(true);	// re-query the partition key columns</span>
+<span class="nc bnc" id="L774" title="All 4 branches missed.">		if (column.isActive() &amp;&amp; column.isPartitionKey()) {</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">			if (!partitionKeyColumns.contains(column))</span>
+<span class="nc" id="L776">				partitionKeyColumns.add(column);</span>
+<span class="nc" id="L777">		} else {</span>
+<span class="nc bnc" id="L778" title="All 2 branches missed.">			if (partitionKeyColumns.contains(column))</span>
+<span class="nc" id="L779">				partitionKeyColumns.remove(column);</span>
+		}
+		
+<span class="nc bnc" id="L782" title="All 2 branches missed.">		if (partitionKeyColumns.size() &gt; 2)</span>
+<span class="nc" id="L783">			return Msg.getMsg(Env.getCtx(), &quot;OnlyTwoPartitionKeyAllowed&quot;);</span>
+
+<span class="nc bnc" id="L785" title="All 6 branches missed.">		if (column.isActive() &amp;&amp; column.isPartitionKey() &amp;&amp; column.getPartitioningMethod().equals(MColumn.PARTITIONINGMETHOD_Range)) {</span>
+<span class="nc" id="L786">			String error = RangePartitionInterval.validateIntervalPattern(column);</span>
+<span class="nc bnc" id="L787" title="All 2 branches missed.">			if (!Util.isEmpty(error))</span>
+<span class="nc" id="L788">				return error;</span>
+		}
+		
+<span class="nc bnc" id="L791" title="All 2 branches missed.">		if (!isPartitionedTable(table, trxName))</span>
+<span class="nc" id="L792">			return null;</span>
+		
+		//can't change partition key column for range partition
+<span class="nc bnc" id="L795" title="All 6 branches missed.">		if ((!column.isPartitionKey() || !column.isActive()) &amp;&amp; Boolean.TRUE.equals(column.get_ValueOld(&quot;IsPartitionKey&quot;))) {</span>
+<span class="nc bnc" id="L796" title="All 2 branches missed.">			if (partitionKeyColumns.size() == 2</span>
+<span class="nc bnc" id="L797" title="All 4 branches missed.">					|| (partitionKeyColumns.size() == 1 &amp;&amp; !column.isPartitionKey())</span>
+<span class="nc bnc" id="L798" title="All 2 branches missed.">					|| isRangePartitionedTable(table, trxName))</span>
+<span class="nc" id="L799">				return Msg.getMsg(Env.getCtx(), &quot;PartitionConfigurationChanged&quot;);</span>
+		}
+		
+<span class="nc bnc" id="L802" title="All 6 branches missed.">		if (column.isActive() &amp;&amp; column.isPartitionKey() &amp;&amp; partitionKeyColumns.size() == 2) {</span>
+<span class="nc bnc" id="L803" title="All 2 branches missed.">			if (column.is_ValueChanged(MColumn.COLUMNNAME_PartitioningMethod)) {</span>
+<span class="nc" id="L804">				return Msg.getMsg(Env.getCtx(), &quot;PartitionConfigurationChanged&quot;);</span>
+<span class="nc bnc" id="L805" title="All 2 branches missed.">			} else if (column.is_ValueChanged(MColumn.COLUMNNAME_SeqNoPartition)) {</span>
+<span class="nc" id="L806">				int oldSeq = column.get_ValueOldAsInt(MColumn.COLUMNNAME_SeqNoPartition);</span>
+<span class="nc" id="L807">				int newSeq = column.getSeqNoPartition();</span>
+<span class="nc bnc" id="L808" title="All 2 branches missed.">				int otherSeq = partitionKeyColumns.get(0).getAD_Column_ID() == column.getAD_Column_ID() </span>
+<span class="nc" id="L809">									? partitionKeyColumns.get(1).getSeqNoPartition()</span>
+<span class="nc" id="L810">									: partitionKeyColumns.get(0).getSeqNoPartition();</span>
+<span class="nc bnc" id="L811" title="All 8 branches missed.">				if (!(((newSeq &lt; otherSeq) &amp;&amp; (oldSeq &lt; otherSeq)) || ((oldSeq &gt; otherSeq) &amp;&amp; (newSeq &gt; otherSeq))))</span>
+<span class="nc" id="L812">					return Msg.getMsg(Env.getCtx(), &quot;PartitionConfigurationChanged&quot;);</span>
+			}		
+		}
+		
+		//can't change partition type to list for range partition
+<span class="nc bnc" id="L817" title="All 6 branches missed.">		if (column.isActive() &amp;&amp; column.isPartitionKey() &amp;&amp; column.getPartitioningMethod().equals(MColumn.PARTITIONINGMETHOD_List)) {</span>
+<span class="nc bnc" id="L818" title="All 2 branches missed.">			if (isRangePartitionedTable(table, trxName))</span>
+<span class="nc" id="L819">				return Msg.getMsg(Env.getCtx(), &quot;PartitionConfigurationChanged&quot;);</span>
+		}
+		
+<span class="nc" id="L822">		return null;</span>
+	}
+
+	@Override
+	public void detachPartition(MTable table, X_AD_TablePartition partition, String trxName,
+			ProcessInfo processInfo) {
+<span class="nc bnc" id="L828" title="All 2 branches missed.">		if (partition.isPartitionAttached()) {</span>
+<span class="nc" id="L829">			String defaultPartitionName = &quot;default_partition&quot;;</span>
+<span class="nc bnc" id="L830" title="All 2 branches missed.">			if (partition.getParent_TablePartition_ID() &gt; 0) {</span>
+<span class="nc" id="L831">				X_AD_TablePartition parentPartition = new X_AD_TablePartition(Env.getCtx(), partition.getParent_TablePartition_ID(), trxName);</span>
+<span class="nc" id="L832">				MColumn partitionKeyColumn = MColumn.get(partition.getAD_Column_ID());</span>
+<span class="nc" id="L833">				defaultPartitionName = getDefaultSubPartitionName(table, parentPartition, X_AD_Column.PARTITIONINGMETHOD_Range.equals(partitionKeyColumn.getPartitioningMethod()), trxName);</span>
+			}
+<span class="nc bnc" id="L835" title="All 2 branches missed.">			if (!defaultPartitionName.equalsIgnoreCase(partition.getName())) {</span>
+<span class="nc" id="L836">				StringBuilder exchangeTableName = new StringBuilder(table.getTableName())</span>
+<span class="nc" id="L837">						.append(&quot;_&quot;)</span>
+<span class="nc" id="L838">						.append(partition.getName());</span>
+<span class="nc" id="L839">				StringBuilder alter = null;				</span>
+<span class="nc" id="L840">				Query query = new Query(Env.getCtx(), X_AD_TablePartition.Table_Name, &quot;Parent_TablePartition_ID=? And IsActive='Y' AND IsPartitionAttached='Y'&quot;, trxName);</span>
+<span class="nc" id="L841">				List&lt;X_AD_TablePartition&gt; subPartitions  = query.setParameters(partition.getAD_TablePartition_ID())</span>
+<span class="nc" id="L842">						.setOrderBy(&quot;Name&quot;)</span>
+<span class="nc" id="L843">						.list();</span>
+<span class="nc bnc" id="L844" title="All 2 branches missed.">				if (subPartitions.size() &gt; 0) {</span>
+<span class="nc" id="L845">					alter = new StringBuilder(&quot;CREATE TABLE &quot;)</span>
+<span class="nc" id="L846">							.append(exchangeTableName)</span>
+<span class="nc" id="L847">							.append(&quot; AS SELECT * FROM &quot;)</span>
+<span class="nc" id="L848">							.append(table.getTableName())</span>
+<span class="nc" id="L849">							.append(&quot; WHERE ROWNUM=-1 &quot;);</span>
+					
+<span class="nc" id="L851">					int no = DB.executeUpdateEx(alter.toString(), trxName);</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">					if (processInfo != null)</span>
+<span class="nc" id="L853">						processInfo.addLog(0, null, null, no + &quot; &quot; + alter.toString());</span>
+					
+<span class="nc" id="L855">					alter = new StringBuilder(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L856">							.append(exchangeTableName)</span>
+<span class="nc" id="L857">							.append(&quot; MODIFY PARTITION BY &quot;);</span>
+<span class="nc" id="L858">					MColumn subKeyColumn = MColumn.get(subPartitions.get(0).getAD_Column_ID());</span>
+<span class="nc bnc" id="L859" title="All 2 branches missed.">					if (MColumn.PARTITIONINGMETHOD_Range.equals(subKeyColumn.getPartitioningMethod()))</span>
+<span class="nc" id="L860">						alter.append(&quot;RANGE (&quot;).append(subKeyColumn.getColumnName()).append(&quot;) &quot;);</span>
+					else
+<span class="nc" id="L862">						alter.append(&quot;LIST (&quot;).append(subKeyColumn.getColumnName()).append(&quot;) &quot;);</span>
+<span class="nc" id="L863">					alter.append(&quot;(&quot;);</span>
+<span class="nc bnc" id="L864" title="All 2 branches missed.">					for(X_AD_TablePartition subPartition : subPartitions) {</span>
+<span class="nc" id="L865">						alter.append(&quot;PARTITION &quot;).append(subPartition.getExpressionPartition()).append(&quot;,&quot;);</span>
+					}
+<span class="nc bnc" id="L867" title="All 2 branches missed.">					if (MColumn.PARTITIONINGMETHOD_Range.equals(subKeyColumn.getPartitioningMethod()))</span>
+<span class="nc" id="L868">						alter.append(&quot;PARTITION VALUES LESS THAN (MAXVALUE))&quot;);</span>
+					else
+<span class="nc" id="L870">						alter.append(&quot;PARTITION VALUES (DEFAULT))&quot;);</span>
+<span class="nc" id="L871">					no = DB.executeUpdateEx(alter.toString(), trxName);</span>
+<span class="nc bnc" id="L872" title="All 2 branches missed.">					if (processInfo != null)</span>
+<span class="nc" id="L873">						processInfo.addLog(0, null, null, no + &quot; &quot; + alter.toString());</span>
+<span class="nc" id="L874">				} else {</span>
+<span class="nc" id="L875">					alter = new StringBuilder(&quot;CREATE TABLE &quot;)</span>
+<span class="nc" id="L876">							.append(exchangeTableName)</span>
+<span class="nc" id="L877">							.append(&quot; FOR EXCHANGE WITH TABLE &quot;)</span>
+<span class="nc" id="L878">							.append(table.getTableName());</span>
+					
+<span class="nc" id="L880">					int no = DB.executeUpdateEx(alter.toString(), trxName);</span>
+<span class="nc bnc" id="L881" title="All 2 branches missed.">					if (processInfo != null)</span>
+<span class="nc" id="L882">						processInfo.addLog(0, null, null, no + &quot; &quot; + alter.toString());</span>
+				}
+												
+<span class="nc" id="L885">				alter = new StringBuilder(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L886">						.append(table.getTableName());</span>
+<span class="nc bnc" id="L887" title="All 2 branches missed.">				if (partition.getParent_TablePartition_ID() &gt; 0) </span>
+<span class="nc" id="L888">					alter.append(&quot; EXCHANGE SUBPARTITION &quot;);</span>
+				else
+<span class="nc" id="L890">					alter.append(&quot; EXCHANGE PARTITION &quot;);</span>
+<span class="nc" id="L891">				alter.append(partition.getName())</span>
+<span class="nc" id="L892">					 .append(&quot; WITH TABLE &quot;)</span>
+<span class="nc" id="L893">					 .append(exchangeTableName);</span>
+<span class="nc" id="L894">				int no = DB.executeUpdateEx(alter.toString(), trxName);</span>
+<span class="nc bnc" id="L895" title="All 2 branches missed.">				if (processInfo != null)</span>
+<span class="nc" id="L896">					processInfo.addLog(0, null, null, no + &quot; &quot; + alter.toString());</span>
+<span class="nc" id="L897">				partition.setIsPartitionAttached(false);</span>
+<span class="nc" id="L898">				partition.saveEx();</span>
+<span class="nc" id="L899">			} else {</span>
+<span class="nc" id="L900">				throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;CantDetachReattachDefaultPartition&quot;));</span>
+			}
+		}
+<span class="nc" id="L903">	}</span>
+
+	@Override
+	public void reattachPartition(MTable table, X_AD_TablePartition partition, String trxName,
+			ProcessInfo processInfo) {
+<span class="nc bnc" id="L908" title="All 2 branches missed.">		if (!partition.isPartitionAttached()) {</span>
+<span class="nc" id="L909">			String defaultPartitionName = &quot;default_partition&quot;;</span>
+<span class="nc bnc" id="L910" title="All 2 branches missed.">			if (partition.getParent_TablePartition_ID() &gt; 0) {</span>
+<span class="nc" id="L911">				X_AD_TablePartition parentPartition = new X_AD_TablePartition(Env.getCtx(), partition.getParent_TablePartition_ID(), trxName);</span>
+<span class="nc" id="L912">				MColumn partitionKeyColumn = MColumn.get(partition.getAD_Column_ID());</span>
+<span class="nc" id="L913">				defaultPartitionName = getDefaultSubPartitionName(table, parentPartition, X_AD_Column.PARTITIONINGMETHOD_Range.equals(partitionKeyColumn.getPartitioningMethod()), trxName);</span>
+			}
+<span class="nc bnc" id="L915" title="All 2 branches missed.">			if (!defaultPartitionName.equalsIgnoreCase(partition.getName())) {</span>
+<span class="nc" id="L916">				StringBuilder exchangeTableName = new StringBuilder(table.getTableName())</span>
+<span class="nc" id="L917">						.append(&quot;_&quot;)</span>
+<span class="nc" id="L918">						.append(partition.getName());</span>
+<span class="nc" id="L919">				StringBuilder updateStmt = new StringBuilder();</span>
+<span class="nc" id="L920">				updateStmt.append(&quot;INSERT INTO &quot;).append(table.getTableName()).append(&quot; &quot;);</span>
+<span class="nc" id="L921">				updateStmt.append(&quot;SELECT * FROM &quot;).append(exchangeTableName);				</span>
+<span class="nc" id="L922">				int no = DB.executeUpdateEx(updateStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L923" title="All 2 branches missed.">				if (processInfo != null)</span>
+<span class="nc" id="L924">					processInfo.addLog(0, null, null, no + &quot; &quot; + updateStmt.toString());</span>
+				
+<span class="nc" id="L926">				updateStmt = new StringBuilder(&quot;DELETE FROM &quot;).append(exchangeTableName);</span>
+<span class="nc" id="L927">				no = DB.executeUpdateEx(updateStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L928" title="All 2 branches missed.">				if (processInfo != null)</span>
+<span class="nc" id="L929">					processInfo.addLog(0, null, null, no + &quot; &quot; + updateStmt.toString());</span>
+				
+<span class="nc" id="L931">				Query query = new Query(Env.getCtx(), X_AD_TablePartition.Table_Name, &quot;Parent_TablePartition_ID=?&quot;, trxName);</span>
+<span class="nc" id="L932">				List&lt;X_AD_TablePartition&gt; subPartitions  = query.setParameters(partition.getAD_TablePartition_ID()).list();</span>
+<span class="nc bnc" id="L933" title="All 2 branches missed.">				for(X_AD_TablePartition subPartition : subPartitions) {</span>
+<span class="nc" id="L934">					subPartition.deleteEx(true);</span>
+				}
+				
+<span class="nc" id="L937">				partition.deleteEx(true);</span>
+<span class="nc" id="L938">				table.getTablePartitions(true, trxName);				</span>
+<span class="nc" id="L939">				addPartitionAndMigrateData(table, trxName, processInfo);</span>
+				
+<span class="nc" id="L941">				updateStmt = new StringBuilder(&quot;DROP TABLE &quot;)</span>
+<span class="nc" id="L942">						.append(exchangeTableName);</span>
+<span class="nc" id="L943">				no = DB.executeUpdateEx(updateStmt.toString(), trxName);</span>
+<span class="nc bnc" id="L944" title="All 2 branches missed.">				if (processInfo != null)</span>
+<span class="nc" id="L945">					processInfo.addLog(0, null, null, no + &quot; &quot; + updateStmt.toString());</span>
+<span class="nc" id="L946">			} else {</span>
+<span class="nc" id="L947">				throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;CantDetachReattachDefaultPartition&quot;));</span>
+			}
+		}
+<span class="nc" id="L950">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

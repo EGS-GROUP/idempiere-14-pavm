@@ -1,0 +1,469 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Match.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.apps.form</a> &gt; <span class="el_source">Match.java</span></div><h1>Match.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2009 Low Heng Sin                                            *
+ * Copyright (C) 2009 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.apps.form;
+
+import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.util.Vector;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.minigrid.ColumnInfo;
+import org.compiere.minigrid.IDColumn;
+import org.compiere.minigrid.IMiniTable;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInOutLine;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MOrder;
+import org.compiere.model.MRole;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+
+/**
+ * Form to perform Matching between Purchase Order, Vendor Invoice and Material Receipt.
+ */
+<span class="nc" id="L43">public class Match</span>
+{
+
+	/**	Logger			*/
+<span class="nc" id="L47">	private static final CLogger log = CLogger.getCLogger(Match.class);</span>
+
+	/** Match Options           */
+<span class="nc" id="L50">	private String[] m_matchOptions = new String[] {</span>
+<span class="nc" id="L51">		Msg.getElement(Env.getCtx(), &quot;C_Invoice_ID&quot;, false),</span>
+<span class="nc" id="L52">		Msg.getElement(Env.getCtx(), &quot;M_InOut_ID&quot;, false),</span>
+<span class="nc" id="L53">		Msg.getElement(Env.getCtx(), &quot;C_Order_ID&quot;, false) };</span>
+	
+	public static final int		MATCH_INVOICE = 0;
+	public static final int		MATCH_SHIPMENT = 1;
+	public static final int		MATCH_ORDER = 2;
+
+	public static final int		MODE_NOTMATCHED = 0;
+	public static final int		MODE_MATCHED = 1;
+
+	/**	Indexes in Table			*/
+	public static final int		I_ID = 0;
+	public static final int		I_DocumentNo = 1;
+	public static final int		I_DocumentDate = 2;
+	public static final int		I_BPartner = 3;
+	public static final int		I_Line = 4;
+	public static final int		I_Product = 5;
+	public static final int		I_QTY = 6;
+<span class="nc" id="L70">	public static final int		I_MATCHED = 7;</span>
+	
+<span class="nc" id="L72">	private StringBuffer    m_sql = null;</span>
+<span class="nc" id="L73">	private String          m_dateColumn = &quot;&quot;;</span>
+<span class="nc" id="L74">	private String          m_qtyColumn = &quot;&quot;;</span>
+<span class="nc" id="L75">	private String          m_groupBy = &quot;&quot;;</span>
+<span class="nc" id="L76">	private String 			m_trxName = null;</span>
+	
+	/**
+	 * Get applicable match to options for match from
+	 * @param selection match from
+	 * @return list of applicable match to options
+	 */
+	protected Vector&lt;String&gt; cmd_matchFrom(String selection)
+	{
+<span class="nc" id="L85">		Vector&lt;String&gt; vector = new Vector&lt;String&gt;(2);</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">		if (selection.equals(m_matchOptions[MATCH_INVOICE]))</span>
+<span class="nc" id="L87">			vector.add(m_matchOptions[MATCH_SHIPMENT]);</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">		else if (selection.equals(m_matchOptions[MATCH_ORDER]))</span>
+<span class="nc" id="L89">			vector.add(m_matchOptions[MATCH_SHIPMENT]);</span>
+		else    //  shipment
+		{
+<span class="nc" id="L92">			vector.add(m_matchOptions[MATCH_INVOICE]);</span>
+<span class="nc" id="L93">			vector.add(m_matchOptions[MATCH_ORDER]);</span>
+		}
+<span class="nc" id="L95">		return vector;</span>
+	}   //  cmd_matchFrom
+	
+	/**
+	 *  Retrieve available match from records
+	 *  @param xMatchedTable table to fill with retrieved records
+	 *  @param display match from (MATCH_* constant), to popular xMatchedTable.
+	 *  @param matchToString match to (invoice, material receipt or purchase order)
+	 *  @param Product optional M_Product_ID
+	 *  @param Vendor optional C_BPartner_ID
+	 *  @param from optional from date
+	 *  @param to optional to date
+	 *  @param matched true for partial or fully match, false for not matched
+	 */
+	public IMiniTable cmd_search(IMiniTable xMatchedTable, int display, String matchToString, Integer Product, Integer Vendor, Timestamp from, Timestamp to, boolean matched)
+	{
+		//  ** Create SQL **
+<span class="nc" id="L112">		int matchToType = MATCH_INVOICE;</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">		if (matchToString.equals(m_matchOptions[MATCH_SHIPMENT]))</span>
+<span class="nc" id="L114">			matchToType = MATCH_SHIPMENT;</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		else if (matchToString.equals(m_matchOptions[MATCH_ORDER]))</span>
+<span class="nc" id="L116">			matchToType = MATCH_ORDER;</span>
+		//
+<span class="nc" id="L118">		tableInit(display, matchToType, matched,null);	//	sets m_sql</span>
+
+		//  ** Add Where Clause **
+		//  Product
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		if (Product != null)</span>
+		{
+			//Integer Product = (Integer)onlyProduct.getValue();
+<span class="nc" id="L125">			m_sql.append(&quot; AND lin.M_Product_ID=&quot;).append(Product);</span>
+		}
+		//  BPartner
+<span class="nc bnc" id="L128" title="All 2 branches missed.">		if (Vendor != null)</span>
+		{
+			//Integer Vendor = (Integer)onlyVendor.getValue();
+<span class="nc" id="L131">			m_sql.append(&quot; AND hdr.C_BPartner_ID=&quot;).append(Vendor);</span>
+		}
+		//  Date
+<span class="nc bnc" id="L134" title="All 4 branches missed.">		if (from != null &amp;&amp; to != null)</span>
+<span class="nc" id="L135">			m_sql.append(&quot; AND &quot;).append(m_dateColumn).append(&quot; BETWEEN &quot;)</span>
+<span class="nc" id="L136">				.append(DB.TO_DATE(from)).append(&quot; AND &quot;).append(DB.TO_DATE(to));</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">		else if (from != null)</span>
+<span class="nc" id="L138">			m_sql.append(&quot; AND &quot;).append(m_dateColumn).append(&quot; &gt;= &quot;).append(DB.TO_DATE(from));</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">		else if (to != null)</span>
+<span class="nc" id="L140">			m_sql.append(&quot; AND &quot;).append(m_dateColumn).append(&quot; &lt;= &quot;).append(DB.TO_DATE(to));</span>
+		
+		//  ** Load Table **
+<span class="nc" id="L143">		tableLoad (xMatchedTable);</span>
+<span class="nc" id="L144">		return xMatchedTable;</span>
+
+	}   //  cmd_search
+
+	/**
+	 * Process Matching
+	 * @param xMatchedTable Match from table
+	 * @param xMatchedToTable Match to table
+	 * @param matchMode {@link #MODE_NOTMATCHED} or {@link #MODE_MATCHED}
+	 * @param matchFrom Match from document type
+	 * @param matchTo Match to document type
+	 * @param m_xMatched Difference to match
+	 */
+	public void cmd_process(IMiniTable xMatchedTable, IMiniTable xMatchedToTable, int matchMode, int matchFrom, String matchTo, BigDecimal m_xMatched)
+	{
+		//  Matched From
+<span class="nc" id="L160">		int matchedRow = xMatchedTable.getSelectedRow();</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">		if (matchedRow &lt; 0)</span>
+<span class="nc" id="L162">			return;</span>
+<span class="nc" id="L163">		KeyNamePair lineMatched = (KeyNamePair)xMatchedTable.getValueAt(matchedRow, I_Line);</span>
+<span class="nc" id="L164">		KeyNamePair Product = (KeyNamePair)xMatchedTable.getValueAt(matchedRow, I_Product);</span>
+
+<span class="nc" id="L166">		double totalQty = m_xMatched.doubleValue();</span>
+
+		//  Matched To
+<span class="nc bnc" id="L169" title="All 2 branches missed.">		for (int row = 0; row &lt; xMatchedToTable.getRowCount(); row++)</span>
+		{
+<span class="nc" id="L171">			IDColumn id = (IDColumn)xMatchedToTable.getValueAt(row, 0);</span>
+<span class="nc bnc" id="L172" title="All 4 branches missed.">			if (id != null &amp;&amp; id.isSelected())</span>
+			{
+				//  need to be the same product
+<span class="nc" id="L175">				KeyNamePair ProductCompare = (KeyNamePair)xMatchedToTable.getValueAt(row, I_Product);</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">				if (Product.getKey() != ProductCompare.getKey())</span>
+<span class="nc" id="L177">					continue;</span>
+
+<span class="nc" id="L179">				KeyNamePair lineMatchedTo = (KeyNamePair)xMatchedToTable.getValueAt(row, I_Line);</span>
+
+				//	Qty
+<span class="nc" id="L182">				double qty = 0.0;</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">				if (matchMode == MODE_NOTMATCHED)</span>
+<span class="nc" id="L184">					qty = ((Double)xMatchedToTable.getValueAt(row, I_QTY)).doubleValue();	//  doc</span>
+<span class="nc" id="L185">				qty -= ((Double)xMatchedToTable.getValueAt(row, I_MATCHED)).doubleValue();  //  matched</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">				if (qty &gt; totalQty)</span>
+<span class="nc" id="L187">					qty = totalQty;</span>
+<span class="nc" id="L188">				totalQty -= qty;</span>
+
+				//  Invoice or PO
+<span class="nc" id="L191">				boolean invoice = true;</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">				if (matchFrom == MATCH_ORDER ||</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">						matchTo.equals(m_matchOptions[MATCH_ORDER]))</span>
+<span class="nc" id="L194">					invoice = false;</span>
+				//  Get Shipment_ID
+<span class="nc" id="L196">				int M_InOutLine_ID = 0;</span>
+<span class="nc" id="L197">				int Line_ID = 0;</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">				if (matchFrom == MATCH_SHIPMENT)</span>
+				{
+<span class="nc" id="L200">					M_InOutLine_ID = lineMatched.getKey();      //  upper table</span>
+<span class="nc" id="L201">					Line_ID = lineMatchedTo.getKey();</span>
+<span class="nc" id="L202">				}</span>
+				else
+				{
+<span class="nc" id="L205">					M_InOutLine_ID = lineMatchedTo.getKey();    //  lower table</span>
+<span class="nc" id="L206">					Line_ID = lineMatched.getKey();</span>
+				}
+
+				//  Create it
+<span class="nc bnc" id="L210" title="All 2 branches missed.">				String innerTrxName = m_trxName == null ? Trx.createTrxName(&quot;Match&quot;) : null;</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">				Trx innerTrx = innerTrxName != null ? Trx.get(innerTrxName, true) : null;</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">				if (innerTrx != null)</span>
+<span class="nc" id="L213">					innerTrx.setDisplayName(getClass().getName()+&quot;_cmd_process&quot;);</span>
+				
+				try {
+<span class="nc bnc" id="L216" title="All 4 branches missed.">					if (createMatchRecord(invoice, M_InOutLine_ID, Line_ID, BigDecimal.valueOf(qty),  m_trxName != null ? m_trxName : innerTrxName)) {</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">						if (innerTrx != null)</span>
+<span class="nc" id="L218">							innerTrx.commit();</span>
+<span class="nc" id="L219">					} else {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">						if (innerTrx != null)</span>
+<span class="nc" id="L221">							innerTrx.rollback();</span>
+						else
+<span class="nc" id="L223">							Trx.get(m_trxName, false).rollback();</span>
+					}
+<span class="nc" id="L225">				} catch(Exception ex) {</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">					if (innerTrx != null)</span>
+<span class="nc" id="L227">						innerTrx.rollback();</span>
+<span class="nc" id="L228">					throw new AdempiereException(ex);</span>
+				} finally {
+<span class="nc bnc" id="L230" title="All 2 branches missed.">					if (innerTrx != null) {</span>
+<span class="nc" id="L231">						innerTrx.close();</span>
+<span class="nc" id="L232">						innerTrx = null;</span>
+					}
+				}
+			}
+		}
+<span class="nc" id="L237">	}   //  cmd_process</span>
+	
+
+	/**
+	 * Retrieve available match to records
+	 * @param xMatchedTable Match from table, to get line id from selected row
+	 * @param xMatchedToTable Match to table, to fill with retrieved records
+	 * @param displayString Match from, to populate xMatchedToTable
+	 * @param matchToType Document to match with displayString (MATCH_* constant)
+	 * @param sameBPartner
+	 * @param sameProduct
+	 * @param sameQty
+	 * @param matched true for partial or fully match, false for not matched
+	 */
+	public IMiniTable cmd_searchTo(IMiniTable xMatchedTable, IMiniTable xMatchedToTable, String displayString, int matchToType, boolean sameBPartner, boolean sameProduct, boolean sameQty, boolean matched)
+	{
+<span class="nc" id="L253">		int row = xMatchedTable.getSelectedRow();</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;Row=&quot; + row);</span>
+
+		//  ** Create SQL **
+<span class="nc" id="L257">		int display = MATCH_INVOICE;</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">		if (displayString.equals(m_matchOptions[MATCH_SHIPMENT]))</span>
+<span class="nc" id="L259">			display = MATCH_SHIPMENT;</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		else if (displayString.equals(m_matchOptions[MATCH_ORDER]))</span>
+<span class="nc" id="L261">			display = MATCH_ORDER;</span>
+		
+<span class="nc" id="L263">		KeyNamePair lineMatched = (KeyNamePair)xMatchedTable.getValueAt(row, I_Line);</span>
+		
+<span class="nc" id="L265">		tableInit (display, matchToType, matched, lineMatched);	//	sets m_sql</span>
+		//  ** Add Where Clause **
+<span class="nc" id="L267">		KeyNamePair BPartner = (KeyNamePair)xMatchedTable.getValueAt(row, I_BPartner);</span>
+<span class="nc" id="L268">		KeyNamePair Product = (KeyNamePair)xMatchedTable.getValueAt(row, I_Product);</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;BPartner=&quot; + BPartner + &quot; - Product=&quot; + Product);</span>
+		//
+<span class="nc bnc" id="L271" title="All 2 branches missed.">		if (sameBPartner)</span>
+<span class="nc" id="L272">			m_sql.append(&quot; AND hdr.C_BPartner_ID=&quot;).append(BPartner.getKey());</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">		if (sameProduct)</span>
+<span class="nc" id="L274">			m_sql.append(&quot; AND lin.M_Product_ID=&quot;).append(Product.getKey());</span>
+
+		//  calculate qty
+<span class="nc" id="L277">		double docQty = ((Double)xMatchedTable.getValueAt(row, I_QTY)).doubleValue();</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">		if (sameQty)</span>
+<span class="nc" id="L279">			m_sql.append(&quot; AND &quot;).append(m_qtyColumn).append(&quot;=&quot;).append(docQty);</span>
+		//  ** Load Table **
+<span class="nc" id="L281">		tableLoad (xMatchedToTable);</span>
+
+<span class="nc" id="L283">		return xMatchedToTable;</span>
+	}   //  cmd_seachTo
+	
+	/**
+	 *  Initialize Table - build SQL, set dateColumn and qtyColumn.
+	 *  &lt;br&gt;
+	 *  The driving table is &quot;hdr&quot;, e.g. for hdr.C_BPartner_ID=..&lt;br/&gt;
+	 *  The line table is &quot;lin&quot;, e.g. for lin.M_Product_ID=..&lt;br/&gt;
+	 *  You use the dateColumn/qtyColumn variable directly as it is table specific.
+	 *  &lt;br&gt;
+	 *  The sql is dependent on MatchMode:&lt;br/&gt;
+	 *  - If Matched - all (fully or partially) matched records are listed&lt;br/&gt;
+	 *  - If Not Matched - all not fully matched records are listed
+	 *  @param display (Match from - Invoice, Material Receipt, Order) see MATCH_*
+	 *  @param matchToType (Match to - Invoice, Material Receipt, Order) see MATCH_*
+	 *  @param matched false for not matched, true for full/partially matched
+	 *  @param lineMatched
+	 */
+	protected void tableInit (int display, int matchToType, boolean matched, KeyNamePair lineMatched)
+	{
+<span class="nc bnc" id="L303" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;Display=&quot; + m_matchOptions[display]</span>
+<span class="nc" id="L304">			+ &quot;, MatchTo=&quot; + m_matchOptions[matchToType]</span>
+<span class="nc" id="L305">			+ &quot;, Matched=&quot; + matched);</span>
+
+<span class="nc" id="L307">		m_sql = new StringBuffer ();</span>
+<span class="nc" id="L308">		int Line_ID = 0;</span>
+<span class="nc bnc" id="L309" title="All 4 branches missed.">		if (matched &amp;&amp; lineMatched != null )</span>
+		{
+<span class="nc" id="L311">			Line_ID = lineMatched.getKey();</span>
+		}
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		if (display == MATCH_INVOICE)</span>
+		{
+			//invoice matched with material receipt (m_matchinv)
+<span class="nc" id="L316">			m_dateColumn = &quot;hdr.DateInvoiced&quot;;</span>
+<span class="nc" id="L317">			m_qtyColumn = &quot;lin.QtyInvoiced&quot;;</span>
+<span class="nc" id="L318">			m_sql.append(MInvoice.MATCH_TO_RECEIPT_SQL);</span>
+<span class="nc bnc" id="L319" title="All 4 branches missed.">			if (lineMatched!= null &amp;&amp; Line_ID &gt; 0 )</span>
+<span class="nc" id="L320">				m_sql.append(&quot; AND mi.M_InOutLine_ID  = &quot;).append(Line_ID);</span>
+			
+<span class="nc bnc" id="L322" title="All 2 branches missed.">			m_groupBy = matched ? MInvoice.FULL_OR_PARTIALLY_MATCHED_TO_RECEIPT_GROUP_BY : MInvoice.NOT_FULLY_MATCHED_TO_RECEIPT_GROUP_BY;</span>
+<span class="nc" id="L323">		}</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">		else if (display == MATCH_ORDER)</span>
+		{
+			//order match with receipt or invoice (m_matchpo) 
+			//note that only matchToType == MATCH_SHIPMENT is implemented in UI
+<span class="nc" id="L328">			m_dateColumn = &quot;hdr.DateOrdered&quot;;</span>
+<span class="nc" id="L329">			m_qtyColumn = &quot;lin.QtyOrdered&quot;;</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">			if (matchToType == MATCH_SHIPMENT)</span>
+			{
+<span class="nc bnc" id="L332" title="All 2 branches missed.">				m_sql.append(matched ? MOrder.FULL_OR_PARTIALLY_MATCHED_TO_RECEIPT : MOrder.NOT_FULLY_MATCHED_TO_RECEIPT);</span>
+<span class="nc bnc" id="L333" title="All 4 branches missed.">				if (lineMatched!= null &amp;&amp; Line_ID &gt; 0 )</span>
+<span class="nc" id="L334">					m_sql.append( &quot; AND mo.M_InOutLine_ID = &quot; + Line_ID) ;</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">				m_groupBy = matched ? MOrder.FULL_OR_PARTIALLY_MATCHED_TO_RECEIPT_GROUP_BY : MOrder.NOT_FULLY_MATCHED_TO_RECEIPT_GROUP_BY;</span>
+<span class="nc" id="L336">			}</span>
+			else
+			{
+<span class="nc bnc" id="L339" title="All 2 branches missed.">				m_sql.append(matched ? MOrder.FULL_OR_PARTIALLY_MATCHED_TO_INVOICE : MOrder.NOT_FULLY_MATCHED_TO_INVOICE);</span>
+<span class="nc bnc" id="L340" title="All 4 branches missed.">				if (lineMatched!= null &amp;&amp; Line_ID &gt; 0 )</span>
+<span class="nc" id="L341">					m_sql.append( &quot; AND mo.C_InvoiceLine_ID = &quot; + Line_ID) ;</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">				m_groupBy = matched ? MOrder.FULL_OR_PARTIALLY_MATCHED_TO_INVOICE_GROUP_BY : MOrder.NOT_FULLY_MATCHED_TO_INVOICE_GROUP_BY;</span>
+			}			
+<span class="nc" id="L344">		}</span>
+		else    //  Shipment
+		{
+			//receipt match with order (m_matchpo) or invoice (m_matchinv)
+<span class="nc" id="L348">			m_dateColumn = &quot;hdr.MovementDate&quot;;</span>
+<span class="nc" id="L349">			m_qtyColumn = &quot;lin.MovementQty&quot;;</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">			if (matchToType == MATCH_ORDER)</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">				m_sql.append(matched ? MInOut.FULL_OR_PARTIALLY_MATCHED_TO_ORDER : MInOut.NOT_FULLY_MATCHED_TO_ORDER);</span>
+			else
+<span class="nc bnc" id="L353" title="All 2 branches missed.">				m_sql.append(matched ? MInOut.FULL_OR_PARTIALLY_MATCHED_TO_INVOICE : MInOut.NOT_FULLY_MATCHED_TO_INVOICE);</span>
+<span class="nc bnc" id="L354" title="All 6 branches missed.">			if ( matchToType == MATCH_INVOICE &amp;&amp; lineMatched != null &amp;&amp; Line_ID &gt; 0 )</span>
+<span class="nc" id="L355">				m_sql.append(&quot; AND m.C_InvoiceLine_ID  = &quot;).append(Line_ID);</span>
+<span class="nc bnc" id="L356" title="All 6 branches missed.">			if ( matchToType == MATCH_ORDER &amp;&amp; lineMatched != null &amp;&amp; Line_ID &gt; 0 )</span>
+<span class="nc" id="L357">				m_sql.append(&quot; AND m.C_OrderLine_ID  = &quot;).append(Line_ID);</span>
+
+<span class="nc bnc" id="L359" title="All 2 branches missed.">			if (matchToType == MATCH_ORDER)</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">				m_groupBy = matched ? MInOut.FULL_OR_PARTIALLY_MATCHED_TO_ORDER_GROUP_BY : MInOut.NOT_FULLY_MATCHED_TO_ORDER_GROUP_BY;</span>
+			else
+<span class="nc bnc" id="L362" title="All 2 branches missed.">				m_groupBy = matched ? MInOut.FULL_OR_PARTIALLY_MATCHED_TO_INVOICE_GROUP_BY : MInOut.NOT_FULLY_MATCHED_TO_INVOICE_GROUP_BY;</span>
+		}
+<span class="nc" id="L364">	}   //  tableInit</span>
+
+	/**
+	 *  Fill table with records retrieve using m_sql
+	 *  @param table table
+	 */
+	protected void tableLoad (IMiniTable table)
+	{
+<span class="nc" id="L372">		String sql = MRole.getDefault().addAccessSQL(</span>
+<span class="nc" id="L373">			m_sql.toString(), &quot;hdr&quot;, MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO)</span>
+<span class="nc" id="L374">			+ m_groupBy;</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">		if (log.isLoggable(Level.FINEST)) log.finest(sql);</span>
+<span class="nc" id="L376">		Statement stmt = null;</span>
+<span class="nc" id="L377">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L380">			stmt = DB.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, m_trxName);</span>
+<span class="nc" id="L381">			rs = stmt.executeQuery(sql);</span>
+<span class="nc" id="L382">			table.loadTable(rs);</span>
+<span class="nc" id="L383">		}</span>
+<span class="nc" id="L384">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L386">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L390">			DB.close(rs,stmt);</span>
+<span class="nc" id="L391">			rs = null;stmt = null;</span>
+		}
+<span class="nc" id="L393">	}   //  tableLoad</span>
+
+	/**
+	 *  Create Matching Record
+	 *  @param invoice true if matching invoice false if matching PO
+	 *  @param M_InOutLine_ID shipment line
+	 *  @param Line_ID C_InvoiceLine_ID or C_OrderLine_ID
+	 *  @param qty quantity
+	 *  @param trxName 
+	 *  @return true if created
+	 */
+	protected boolean createMatchRecord (boolean invoice, int M_InOutLine_ID, int Line_ID,
+		BigDecimal qty, String trxName)
+	{
+<span class="nc bnc" id="L407" title="All 2 branches missed.">		if (qty.compareTo(Env.ZERO) == 0)</span>
+<span class="nc" id="L408">			return true;</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;IsInvoice=&quot; + invoice</span>
+<span class="nc" id="L410">			+ &quot;, M_InOutLine_ID=&quot; + M_InOutLine_ID + &quot;, Line_ID=&quot; + Line_ID</span>
+<span class="nc" id="L411">			+ &quot;, Qty=&quot; + qty);</span>
+		//
+<span class="nc" id="L413">		boolean success = false;</span>
+<span class="nc" id="L414">		MInOutLine sLine = new MInOutLine (Env.getCtx(), M_InOutLine_ID, trxName);</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">		if (invoice)	//	Shipment - Invoice</span>
+		{
+<span class="nc" id="L417">			success = sLine.matchToInvoiceLine(Line_ID, qty);</span>
+<span class="nc" id="L418">		}</span>
+		else	//	Shipment - Order
+		{
+<span class="nc" id="L421">			success = sLine.matchToOrderLine(Line_ID, qty);</span>
+		}
+<span class="nc" id="L423">		return success;</span>
+	}   //  createMatchRecord
+
+	/**
+	 * @param trxName
+	 */
+	public void setTrxName(String trxName) {
+<span class="nc" id="L430">		m_trxName = trxName;</span>
+<span class="nc" id="L431">	}</span>
+
+	/**
+	 * @return trxName
+	 */
+	public String getTrxName() {
+<span class="nc" id="L437">		return m_trxName;</span>
+	}
+	
+	/**
+	 * Get display text for matching type
+	 * @param matchType MATCH_INVOICE, MATCH_SHIPMENT or MATCH_ORDER
+	 * @return display text for match type
+	 */
+	public String getMatchTypeText(int matchType) {
+<span class="nc bnc" id="L446" title="All 4 branches missed.">		if (matchType &gt;= 0 &amp;&amp; matchType &lt; m_matchOptions.length)</span>
+<span class="nc" id="L447">			return m_matchOptions[matchType];</span>
+<span class="nc" id="L448">		return null;</span>
+	}
+	
+	/**
+	 * Get column names for table
+	 * @return {@link ColumnInfo} array
+	 */
+	public ColumnInfo[] getColumnLayout() {
+<span class="nc" id="L456">		ColumnInfo[] layout = new ColumnInfo[] {</span>
+<span class="nc" id="L457">				new ColumnInfo(&quot; &quot;,                                         &quot;.&quot;, IDColumn.class, false, false, &quot;&quot;),</span>
+<span class="nc" id="L458">				new ColumnInfo(Msg.translate(Env.getCtx(), &quot;DocumentNo&quot;),   &quot;.&quot;, String.class),             //  1</span>
+<span class="nc" id="L459">				new ColumnInfo(Msg.translate(Env.getCtx(), &quot;Date&quot;),         &quot;.&quot;, Timestamp.class),</span>
+<span class="nc" id="L460">				new ColumnInfo(Msg.translate(Env.getCtx(), &quot;C_BPartner_ID&quot;),&quot;.&quot;, KeyNamePair.class, &quot;.&quot;),   //  3</span>
+<span class="nc" id="L461">				new ColumnInfo(Msg.translate(Env.getCtx(), &quot;Line&quot;),         &quot;.&quot;, KeyNamePair.class, &quot;.&quot;),</span>
+<span class="nc" id="L462">				new ColumnInfo(Msg.translate(Env.getCtx(), &quot;M_Product_ID&quot;), &quot;.&quot;, KeyNamePair.class, &quot;.&quot;),   //  5</span>
+<span class="nc" id="L463">				new ColumnInfo(Msg.translate(Env.getCtx(), &quot;Qty&quot;),          &quot;.&quot;, Double.class),</span>
+<span class="nc" id="L464">				new ColumnInfo(Msg.translate(Env.getCtx(), &quot;Matched&quot;),      &quot;.&quot;, Double.class)</span>
+			};
+<span class="nc" id="L466">		return layout;</span>
+	}	
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

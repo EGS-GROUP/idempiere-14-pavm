@@ -1,0 +1,337 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CommonTranslationHandler.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.pipo.handlers</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.pipo2.handler</a> &gt; <span class="el_source">CommonTranslationHandler.java</span></div><h1>CommonTranslationHandler.java</h1><pre class="source lang-java linenums">package org.adempiere.pipo2.handler;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.logging.Level;
+
+import javax.xml.transform.sax.TransformerHandler;
+
+import org.adempiere.exceptions.DBException;
+import org.adempiere.pipo2.AbstractElementHandler;
+import org.adempiere.pipo2.Element;
+import org.adempiere.pipo2.ElementHandler;
+import org.adempiere.pipo2.PIPOContext;
+import org.adempiere.pipo2.PackOut;
+import org.adempiere.pipo2.PoExporter;
+import org.compiere.model.MColumn;
+import org.compiere.model.MLanguage;
+import org.compiere.model.MTable;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.AttributesImpl;
+
+<span class="nc" id="L28">public class CommonTranslationHandler extends AbstractElementHandler implements ElementHandler {</span>
+
+	public static final String CONTEXT_KEY_PARENT_TABLE = &quot;currentParentTableForTranslation&quot;;
+	public static final String CONTEXT_KEY_PARENT_RECORD_ID = &quot;currentParentTableRecordID_ForTranslation&quot;;
+	public static final String CONTEXT_KEY_PARENT_RECORD_UU = &quot;currentParentTableRecordUU_ForTranslation&quot;;
+
+<span class="nc" id="L34">	private HashMap&lt;String, ArrayList&lt;String&gt;&gt; cacheColumns = new HashMap&lt;String, ArrayList&lt;String&gt;&gt;();//Key: table name. Value: set of PIPO columns</span>
+
+
+	public void startElement(PIPOContext ctx, Element element) throws SAXException {
+
+<span class="nc bnc" id="L39" title="All 2 branches missed.">		if(! isHandleTranslations(ctx.ctx)){</span>
+<span class="nc" id="L40">			return;//translation import option is disabled</span>
+		}
+
+<span class="nc bnc" id="L43" title="All 2 branches missed.">		if(isParentSkip(element, null)){</span>
+<span class="nc" id="L44">			return;</span>
+		}
+
+<span class="nc bnc" id="L47" title="All 2 branches missed.">		if(isParentDefer(element, null)){</span>
+<span class="nc" id="L48">			element.defer = true;</span>
+<span class="nc" id="L49">			return;</span>
+		}
+
+<span class="nc" id="L52">		String elementValue = element.getElementValue();</span>
+<span class="nc" id="L53">		Object parentID = element.parent.recordId;</span>
+
+<span class="nc bnc" id="L55" title="All 8 branches missed.">		if((parentID instanceof Integer &amp;&amp; (Integer)parentID == 0) || (parentID instanceof String &amp;&amp; Util.isEmpty((String)parentID)))</span>
+<span class="nc" id="L56">			throw new SAXException();</span>
+
+<span class="nc" id="L58">		String language = getStringValue(element, &quot;AD_Language&quot;);</span>
+<span class="nc" id="L59">		MLanguage lang = MLanguage.get(ctx.ctx, language);</span>
+		// skip if not system installed language
+<span class="nc bnc" id="L61" title="All 4 branches missed.">		if (lang == null || ! lang.isSystemLanguage())</span>
+<span class="nc" id="L62">			return;</span>
+
+<span class="nc bnc" id="L64" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(elementValue+&quot; &quot;+getStringValue(element, &quot;Name&quot;));</span>
+
+<span class="nc bnc" id="L66" title="All 2 branches missed.">		if(isRecordExists(elementValue, parentID, language, ctx)){</span>
+<span class="nc" id="L67">			updateTranslation(elementValue, parentID, ctx, element);</span>
+<span class="nc" id="L68">		}else{</span>
+<span class="nc" id="L69">			insertTranslation(elementValue, parentID, ctx, element);</span>
+		}
+<span class="nc" id="L71">	}</span>
+
+
+	private boolean isRecordExists(String tableName, Object parentID,
+			String language, PIPOContext ctx) {
+
+<span class="nc" id="L77">		String parentTableName = tableName.substring(0, tableName.length()-4);</span>
+<span class="nc" id="L78">		MTable parentTable = MTable.get(ctx.ctx, parentTableName);</span>
+<span class="nc" id="L79">		StringBuilder sql = new StringBuilder()</span>
+<span class="nc" id="L80">				.append(&quot;SELECT AD_Client_ID FROM &quot;)</span>
+<span class="nc" id="L81">				.append(tableName)</span>
+<span class="nc" id="L82">				.append(&quot; WHERE &quot;)</span>
+<span class="nc" id="L83">				.append(parentTable.getKeyColumns()[0])</span>
+<span class="nc" id="L84">				.append(&quot; = ? AND AD_Language = ?&quot;);</span>
+
+<span class="nc bnc" id="L86" title="All 2 branches missed.">		if(DB.getSQLValue(getTrxName(ctx), sql.toString(), parentID, language) == -1){</span>
+<span class="nc" id="L87">			return false;</span>
+		}else{
+<span class="nc" id="L89">			return true;</span>
+		}
+	}
+
+
+	private void insertTranslation(String tableName, Object parentID,
+			PIPOContext ctx, Element element) throws SAXException{
+
+<span class="nc" id="L97">		String parentTableName = tableName.substring(0, tableName.length()-4);</span>
+<span class="nc" id="L98">		MTable parentTable = MTable.get(ctx.ctx, parentTableName);</span>
+<span class="nc" id="L99">		ArrayList&lt;String&gt; columns = getTranslatedColumns(ctx, parentTableName);</span>
+<span class="nc" id="L100">		StringBuilder sql = new StringBuilder(&quot;INSERT INTO &quot;)</span>
+<span class="nc" id="L101">			.append(tableName)</span>
+<span class="nc" id="L102">			.append(&quot; (&quot;)</span>
+<span class="nc" id="L103">			.append(parentTable.getKeyColumns()[0])</span>
+<span class="nc" id="L104">			.append(&quot;, &quot;)</span>
+<span class="nc" id="L105">			.append(&quot; AD_Client_ID, AD_Org_ID, CreatedBy, UpdatedBy, &quot;)</span>
+<span class="nc" id="L106">			.append(cast(columns))</span>
+<span class="nc" id="L107">			.append(&quot;) VALUES ( ?, ?, ?, ?, ? &quot;);</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">		for (int i = 0; i&lt;columns.size(); i++) {</span>
+<span class="nc" id="L109">			sql.append(&quot;,?&quot;);</span>
+		}
+
+<span class="nc" id="L112">		sql.append(&quot;)&quot;);</span>
+
+<span class="nc" id="L114">		PreparedStatement pstm = null;</span>
+		try {
+<span class="nc" id="L116">			pstm = DB.prepareStatement(sql.toString(), getTrxName(ctx));</span>
+<span class="nc" id="L117">			pstm.setObject(1, parentID);</span>
+<span class="nc" id="L118">			pstm.setInt(2, 0);</span>
+<span class="nc" id="L119">			pstm.setInt(3, 0);</span>
+<span class="nc" id="L120">			pstm.setInt(4, 0);</span>
+<span class="nc" id="L121">			pstm.setInt(5, 0);</span>
+
+<span class="nc" id="L123">			int i = 5;</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">			for (String columnName : columns) {</span>
+<span class="nc" id="L125">				i++;</span>
+
+<span class="nc" id="L127">				String value = getStringValue(element, columnName);</span>
+
+<span class="nc bnc" id="L129" title="All 2 branches missed.">				if(columnName.equalsIgnoreCase(&quot;IsActive&quot;) ||</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">						columnName.equalsIgnoreCase(&quot;IsTranslated&quot;)){</span>
+<span class="nc bnc" id="L131" title="All 4 branches missed.">					value = &quot;true&quot;.equals(value) || &quot;Y&quot;.equals(value) ? &quot;Y&quot; : &quot;N&quot;;</span>
+				}
+<span class="nc" id="L133">				pstm.setString(i, value);</span>
+			}
+
+<span class="nc bnc" id="L136" title="All 2 branches missed.">			if(pstm.executeUpdate()&lt;0){</span>
+<span class="nc" id="L137">				throw new SAXException();</span>
+			}
+<span class="nc" id="L139">		} catch (SQLException e) {</span>
+<span class="nc" id="L140">			throw new DBException(e);</span>
+		} finally {
+<span class="nc" id="L142">			DB.close(pstm);</span>
+		}
+<span class="nc" id="L144">	}</span>
+
+
+	private void updateTranslation(String tableName, Object parentID,
+			PIPOContext ctx, Element element) throws SAXException{
+<span class="nc" id="L149">		String parentTableName = tableName.substring(0, tableName.length()-4);</span>
+<span class="nc" id="L150">		MTable parentTable = MTable.get(ctx.ctx, parentTableName);</span>
+
+<span class="nc" id="L152">		ArrayList&lt;String&gt; columns = getTranslatedColumns(ctx, parentTableName);</span>
+<span class="nc" id="L153">		StringBuilder sql = new StringBuilder(&quot;UPDATE &quot;)</span>
+<span class="nc" id="L154">				.append(tableName)</span>
+<span class="nc" id="L155">				.append(&quot; SET &quot;);</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">		for (String columnName : columns) {</span>
+<span class="nc" id="L157">			sql.append(columnName).append(&quot;=?,&quot;);</span>
+		}
+<span class="nc" id="L159">		sql.deleteCharAt(sql.length() - 1); // remove last comma</span>
+<span class="nc" id="L160">		sql.append(&quot; WHERE AD_Language=&quot;)</span>
+<span class="nc" id="L161">			.append(DB.TO_STRING(getStringValue(element, &quot;AD_Language&quot;)))</span>
+<span class="nc" id="L162">			.append(&quot; AND &quot;)</span>
+<span class="nc" id="L163">			.append(parentTable.getKeyColumns()[0])</span>
+<span class="nc" id="L164">			.append(&quot;=&quot;);</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">		if (parentID instanceof Integer)</span>
+<span class="nc" id="L166">			sql.append((Integer)parentID);</span>
+		else
+<span class="nc" id="L168">			sql.append(DB.TO_STRING(parentID.toString()));</span>
+
+<span class="nc" id="L170">		PreparedStatement pstm = null;</span>
+		try {
+<span class="nc" id="L172">			pstm = DB.prepareStatement(sql.toString(), getTrxName(ctx));</span>
+<span class="nc" id="L173">			int i=0;</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">			for (String columnName : columns) {</span>
+<span class="nc" id="L175">				String value = getStringValue(element, columnName);</span>
+<span class="nc" id="L176">				i++;</span>
+
+<span class="nc bnc" id="L178" title="All 2 branches missed.">				if(columnName.equalsIgnoreCase(&quot;IsActive&quot;) ||</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">						columnName.equalsIgnoreCase(&quot;IsTranslated&quot;)){</span>
+
+<span class="nc bnc" id="L181" title="All 4 branches missed.">					value = &quot;true&quot;.equals(value) || &quot;Y&quot;.equals(value) ? &quot;Y&quot; : &quot;N&quot;;</span>
+				}
+
+<span class="nc" id="L184">				pstm.setString(i, value);</span>
+			}
+
+<span class="nc bnc" id="L187" title="All 2 branches missed.">			if(pstm.executeUpdate()&lt;0){</span>
+<span class="nc" id="L188">				throw new SAXException();</span>
+			}
+<span class="nc" id="L190">		} catch (Exception e) {</span>
+<span class="nc" id="L191">			throw new DBException(e);</span>
+		} finally {
+<span class="nc" id="L193">			DB.close(pstm);</span>
+		}
+<span class="nc" id="L195">	}</span>
+
+
+	public void endElement(PIPOContext ctx, Element element) throws SAXException {
+
+<span class="nc" id="L200">	}</span>
+
+
+	public void create(PIPOContext ctx, TransformerHandler document) throws SAXException {
+
+<span class="nc" id="L205">		String parenTableName = Env.getContext(ctx.ctx, CONTEXT_KEY_PARENT_TABLE);</span>
+
+<span class="nc" id="L207">		int parentRecordID = Env.getContextAsInt(ctx.ctx, CONTEXT_KEY_PARENT_RECORD_ID);</span>
+<span class="nc" id="L208">		String parentRecordUU = Env.getContext(ctx.ctx, CONTEXT_KEY_PARENT_RECORD_UU);</span>
+
+<span class="nc" id="L210">		createTranslationTags(ctx, parenTableName, parentRecordID, parentRecordUU, document);</span>
+<span class="nc" id="L211">	}</span>
+
+
+	private void createTranslationTags(PIPOContext ctx, String parentTableName,
+			int parentRecordID, String parentRecordUU, TransformerHandler document) throws SAXException {
+
+<span class="nc" id="L217">		ArrayList&lt;String&gt; translatedColumns = getTranslatedColumns(ctx, parentTableName);</span>
+<span class="nc" id="L218">		MTable parentTable = MTable.get(ctx.ctx, parentTableName);</span>
+
+<span class="nc" id="L220">		StringBuilder sql = new StringBuilder()</span>
+<span class="nc" id="L221">				.append(&quot;SELECT &quot;)</span>
+<span class="nc" id="L222">				.append(cast(translatedColumns))</span>
+<span class="nc" id="L223">				.append(&quot; FROM &quot;)</span>
+<span class="nc" id="L224">				.append(parentTableName)</span>
+<span class="nc" id="L225">				.append(&quot;_Trl WHERE &quot;)</span>
+<span class="nc" id="L226">				.append(parentTable.getKeyColumns()[0])</span>
+<span class="nc" id="L227">				.append(&quot;=?&quot;);</span>
+
+<span class="nc" id="L229">		PreparedStatement pstm = null;</span>
+<span class="nc" id="L230">		ResultSet rs = null;</span>
+		try {
+
+<span class="nc" id="L233">			pstm = DB.prepareStatement(sql.toString(), getTrxName(ctx));</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">			if (parentTable.isUUIDKeyTable())</span>
+<span class="nc" id="L235">				pstm.setString(1, parentRecordUU);</span>
+			else
+<span class="nc" id="L237">				pstm.setInt(1, parentRecordID);</span>
+<span class="nc" id="L238">			rs = pstm.executeQuery();</span>
+
+<span class="nc" id="L240">			String elementName = parentTableName + &quot;_Trl&quot;;</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">			while(rs.next()){</span>
+<span class="nc" id="L242">				AttributesImpl atts = new AttributesImpl();</span>
+<span class="nc" id="L243">				addTypeName(atts, &quot;translation&quot;);</span>
+<span class="nc" id="L244">				document.startElement(&quot;&quot;, &quot;&quot;, elementName, atts);</span>
+<span class="nc" id="L245">				exportRow(ctx, document, translatedColumns, rs);</span>
+<span class="nc" id="L246">				document.endElement(&quot;&quot;, &quot;&quot;, elementName);</span>
+			}
+
+<span class="nc" id="L249">		} catch (Exception e) {</span>
+<span class="nc" id="L250">			e.printStackTrace();</span>
+<span class="nc" id="L251">			throw new SAXException();</span>
+		} finally {
+<span class="nc" id="L253">			DB.close(rs, pstm);</span>
+		}
+<span class="nc" id="L255">	}</span>
+
+	private void exportRow(PIPOContext ctx, TransformerHandler document, ArrayList&lt;String&gt; columns,
+			ResultSet rs) throws Exception {
+
+<span class="nc" id="L260">		PoExporter af = new PoExporter(ctx, document, null);</span>
+
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		for (String columnName : columns) {</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">			if(columnName.equalsIgnoreCase(&quot;IsActive&quot;)||</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">					columnName.equalsIgnoreCase(&quot;IsTranslated&quot;)) {</span>
+<span class="nc" id="L265">				af.addBoolean(columnName, rs.getString(columnName).equalsIgnoreCase(&quot;Y&quot;), new AttributesImpl());</span>
+<span class="nc" id="L266">			} else{</span>
+<span class="nc" id="L267">				af.addString(columnName, rs.getString(columnName), new AttributesImpl());</span>
+			}
+		}
+<span class="nc" id="L270">	}</span>
+
+	/**
+	 *
+	 * @param ctx 
+	 * @param parentTable
+	 * @return
+	 * @throws SAXException
+	 */
+	private ArrayList&lt;String&gt; getTranslatedColumns(PIPOContext ctx, String parentTable) throws SAXException {
+
+
+<span class="nc" id="L282">		ArrayList&lt;String&gt; pipolColumns = cacheColumns.get(parentTable);</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">		if(pipolColumns != null){</span>
+<span class="nc" id="L284">			return pipolColumns;</span>
+		}
+
+<span class="nc" id="L287">		ArrayList&lt;String&gt; columns = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L288">		MTable table = MTable.get(ctx.ctx, parentTable);</span>
+<span class="nc" id="L289">		MColumn[] cols = table.getColumns(false);</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">		for (MColumn col : cols) {</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">			if (col.isTranslated()) {</span>
+<span class="nc" id="L292">				columns.add(col.getColumnName());</span>
+			}
+		}
+		
+<span class="nc" id="L296">		columns.add(&quot;AD_Language&quot;);</span>
+<span class="nc" id="L297">		columns.add(&quot;IsActive&quot;);</span>
+<span class="nc" id="L298">		columns.add(&quot;IsTranslated&quot;);</span>
+
+		//Putting in cache
+<span class="nc" id="L301">		cacheColumns.put(parentTable, columns);</span>
+
+<span class="nc" id="L303">		return columns;</span>
+	}
+
+	private String cast(ArrayList&lt;String&gt; arg){
+<span class="nc" id="L307">		String str = arg.toString();</span>
+<span class="nc" id="L308">		return str.substring(1,  str.length()-1);</span>
+	}
+
+	private boolean existTranslated(String Name)
+	{	
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		if (MTable.getTable_ID(Name+&quot;_Trl&quot;)&gt;0)</span>
+<span class="nc" id="L314">			return true;</span>
+		else
+<span class="nc" id="L316">			return false;</span>
+	}
+
+	public void packOut(PackOut packout, TransformerHandler packoutHandler, TransformerHandler docHandler, int recordId) throws Exception
+	{
+<span class="nc" id="L321">		packOut(packout, packoutHandler, docHandler, recordId, null);</span>
+<span class="nc" id="L322">	}</span>
+
+	public void packOut(PackOut packout, TransformerHandler packoutHandler, TransformerHandler docHandler, int recordId, String recordUU) throws Exception
+	{
+<span class="nc bnc" id="L326" title="All 4 branches missed.">		if(&quot;Y&quot;.equals(packout.getCtx().ctx.getProperty(&quot;isHandleTranslations&quot;)) &amp;&amp; existTranslated(packout.getCtx().ctx.getProperty(&quot;Table_Name&quot;))){</span>
+<span class="nc" id="L327">			Env.setContext(packout.getCtx().ctx, CommonTranslationHandler.CONTEXT_KEY_PARENT_TABLE,packout.getCtx().ctx.getProperty(&quot;Table_Name&quot;));</span>
+<span class="nc" id="L328">			Env.setContext(packout.getCtx().ctx, CommonTranslationHandler.CONTEXT_KEY_PARENT_RECORD_ID,recordId);</span>
+<span class="nc" id="L329">			Env.setContext(packout.getCtx().ctx, CommonTranslationHandler.CONTEXT_KEY_PARENT_RECORD_UU,recordUU);</span>
+<span class="nc" id="L330">			this.create(packout.getCtx(), packoutHandler);</span>
+<span class="nc" id="L331">			packout.getCtx().ctx.remove(CommonTranslationHandler.CONTEXT_KEY_PARENT_TABLE);</span>
+<span class="nc" id="L332">			packout.getCtx().ctx.remove(CommonTranslationHandler.CONTEXT_KEY_PARENT_RECORD_ID);</span>
+<span class="nc" id="L333">			packout.getCtx().ctx.remove(CommonTranslationHandler.CONTEXT_KEY_PARENT_RECORD_UU);</span>
+		}
+<span class="nc" id="L335">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

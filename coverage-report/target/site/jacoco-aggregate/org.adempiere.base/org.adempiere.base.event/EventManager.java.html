@@ -1,0 +1,403 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>EventManager.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.base.event</a> &gt; <span class="el_source">EventManager.java</span></div><h1>EventManager.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2010 Heng Sin Low                							  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.base.event;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Dictionary;
+import java.util.HashMap;
+import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.stream.Collectors;
+
+import org.adempiere.base.BaseActivator;
+import org.adempiere.base.event.annotations.BaseEventHandler;
+import org.compiere.model.PO;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.Ini;
+import org.compiere.util.Util;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceRegistration;
+import org.osgi.service.event.Event;
+import org.osgi.service.event.EventAdmin;
+import org.osgi.service.event.EventConstants;
+import org.osgi.service.event.EventHandler;
+
+/**
+ * Simple wrapper for the osgi event admin service.&lt;br/&gt;
+ * Usage: EventManager.getInstance().sendEvent/postEvent
+ * @author hengsin
+ *
+ */
+<span class="nc" id="L52">public class EventManager implements IEventManager {</span>
+
+	private EventAdmin eventAdmin;
+<span class="nc" id="L55">	private static IEventManager instance = null;</span>
+<span class="nc" id="L56">	private final static CLogger log = CLogger.getCLogger(EventManager.class);</span>
+
+<span class="nc" id="L58">	private final static Object mutex = new Object();</span>
+
+<span class="nc" id="L60">	private Map&lt;EventHandler, List&lt;ServiceRegistration&lt;?&gt;&gt;&gt; registrations = new HashMap&lt;EventHandler, List&lt;ServiceRegistration&lt;?&gt;&gt;&gt;();</span>
+
+<span class="nc" id="L62">	private List&lt;String&gt; blackListEventHandlers = null;</span>
+<span class="nc" id="L63">	private Map&lt;String, List&lt;String&gt;&gt; blackListTopicMap = null;</span>
+	
+	/**
+	 * @param eventAdmin
+	 */
+	public void bindEventAdmin(EventAdmin eventAdmin) {
+<span class="nc" id="L69">		synchronized (mutex) {</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">			if (instance == null) {</span>
+<span class="nc" id="L71">				instance  = this;</span>
+<span class="nc" id="L72">				retrieveBlacklistHandlers();</span>
+<span class="nc" id="L73">				mutex.notifyAll();</span>
+			}
+		}
+<span class="nc" id="L76">		this.eventAdmin = eventAdmin;</span>
+<span class="nc" id="L77">	}</span>
+
+	private void retrieveBlacklistHandlers() {
+<span class="nc" id="L80">		blackListEventHandlers = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L81">		blackListTopicMap = new HashMap&lt;String, List&lt;String&gt;&gt;();</span>
+<span class="nc" id="L82">		String path = Ini.getAdempiereHome();</span>
+<span class="nc" id="L83">		File file = new File(path, &quot;event.handlers.blacklist&quot;);</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">		if (file.exists()) {</span>
+<span class="nc" id="L85">			try (BufferedReader br = new BufferedReader(new FileReader(file))) {</span>
+<span class="nc" id="L86">				String s = null;</span>
+				do {
+<span class="nc" id="L88">					s = br.readLine();</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">					if (s != null)</span>
+<span class="nc" id="L90">						s = s.trim();</span>
+<span class="nc bnc" id="L91" title="All 4 branches missed.">					if (!Util.isEmpty(s) &amp;&amp; !s.startsWith(&quot;#&quot;)) {</span>
+<span class="nc" id="L92">						s = s.replace(&quot; &quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">						if (s.endsWith(&quot;[*]&quot;)) {</span>
+<span class="nc" id="L94">							blackListEventHandlers.add(s.substring(0, s.length()-3));</span>
+<span class="nc" id="L95">						} else {</span>
+<span class="nc" id="L96">							int topicStart = s.indexOf(&quot;[&quot;);</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">							if (topicStart &lt;= 0)</span>
+<span class="nc" id="L98">								continue;</span>
+<span class="nc" id="L99">							int topicEnd = s.indexOf(&quot;]&quot;, topicStart);</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">							if (topicEnd &lt;= 0)</span>
+<span class="nc" id="L101">								continue;</span>
+<span class="nc" id="L102">							String topicValue = s.substring(topicStart+1, topicEnd);</span>
+<span class="nc" id="L103">							String className = s.substring(0, topicStart);</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">							if (blackListEventHandlers.contains(className))</span>
+<span class="nc" id="L105">								continue;</span>
+<span class="nc" id="L106">							List&lt;String&gt; topicList = blackListTopicMap.get(className);</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">							if (topicList == null) {</span>
+<span class="nc" id="L108">								topicList = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L109">								blackListTopicMap.put(className, topicList);</span>
+							}
+<span class="nc" id="L111">							String[] topics = topicValue.split(&quot;[,]&quot;);</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">							for(String topic : topics) {</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">								if (!topicList.contains(topic)) {</span>
+<span class="nc" id="L114">									topicList.add(topic);</span>
+								}
+							}
+						}
+					}
+<span class="nc bnc" id="L119" title="All 2 branches missed.">				} while (s != null);</span>
+<span class="nc" id="L120">			} catch (FileNotFoundException e) {</span>
+<span class="nc" id="L121">				e.printStackTrace();</span>
+<span class="nc" id="L122">			} catch (IOException e) {</span>
+<span class="nc" id="L123">				e.printStackTrace();</span>
+			}
+		}
+		
+<span class="nc" id="L127">	}</span>
+	
+	/**
+	 * @param eventAdmin
+	 */
+	public void unbindEventAdmin(EventAdmin eventAdmin) {
+<span class="nc" id="L133">		this.eventAdmin = null;</span>
+<span class="nc" id="L134">	}</span>
+
+	/**
+	 * Get the singleton instance created by the osgi service framework
+	 * @return EventManager
+	 */
+	public static IEventManager getInstance() {
+<span class="nc" id="L141">		synchronized (mutex) {</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">			while (instance == null) {</span>
+				try {
+<span class="nc" id="L144">					mutex.wait(10000);</span>
+<span class="nc" id="L145">				} catch (InterruptedException e) {</span>
+				}
+			}
+		}
+<span class="nc" id="L149">		return instance;</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.adempiere.base.event.IEventManager#postEvent(org.osgi.service.event.Event)
+	 */
+	@Override
+	public boolean postEvent(Event event) {
+<span class="nc bnc" id="L157" title="All 2 branches missed.">		if (eventAdmin != null) {</span>
+			//copy current session context for restoration in asynchronous event thread
+<span class="nc bnc" id="L159" title="All 2 branches missed.">			if (!event.containsProperty(EVENT_CONTEXT)) {</span>
+<span class="nc" id="L160">				Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">				for (String key : event.getPropertyNames()) {</span>
+<span class="nc" id="L162">					properties.put(key, event.getProperty(key));</span>
+				}
+<span class="nc" id="L164">				properties.put(EVENT_CONTEXT, getCurrentSessionContext());</span>
+<span class="nc" id="L165">				event = newEvent(event.getTopic(), properties, true);</span>
+			}
+			
+<span class="nc" id="L168">			eventAdmin.postEvent(event);</span>
+<span class="nc" id="L169">			return true;</span>
+		}
+<span class="nc" id="L171">		return false;</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.adempiere.base.event.IEventManager#sendEvent(org.osgi.service.event.Event)
+	 */
+	@Override
+	public boolean sendEvent(Event event) {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">		if (eventAdmin != null) {</span>
+<span class="nc" id="L180">			eventAdmin.sendEvent(event);</span>
+<span class="nc" id="L181">			return true;</span>
+		}
+<span class="nc" id="L183">		return false;</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.adempiere.base.event.IEventManager#register(java.lang.String, org.osgi.service.event.EventHandler)
+	 */
+	@Override
+	public boolean register(String topic, EventHandler eventHandler) {
+<span class="nc" id="L191">		return register(topic, null, eventHandler);</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.adempiere.base.event.IEventManager#register(java.lang.String[], org.osgi.service.event.EventHandler)
+	 */
+	@Override
+	public boolean register(String[] topics, EventHandler eventHandler) {
+<span class="nc" id="L199">		return register(topics, null, eventHandler);</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.adempiere.base.event.IEventManager#register(java.lang.String, java.lang.String, org.osgi.service.event.EventHandler)
+	 */
+	@Override
+	public boolean register(String topic, String filter, EventHandler eventHandler) {
+<span class="nc" id="L207">		String[] topics = new String[] {topic};</span>
+<span class="nc" id="L208">		return register(topics, filter, eventHandler);</span>
+	}
+
+	/**
+	 * @param topics List of event topic. If only some of the event topic is black listed,
+	 * the method will return false and remove the black listed event topic from topics list.  
+	 * @param eventHandler
+	 * @return true if eventhandler is black listed (i.e don't register the service) for topics
+	 */
+	private boolean isBlackListed(List&lt;String&gt; topics, EventHandler eventHandler) {
+<span class="nc" id="L218">		String className = eventHandler.getClass().getName();</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">		if (eventHandler instanceof BaseEventHandler beh) {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">			if (beh.getDelegateClass() != null)</span>
+<span class="nc" id="L221">				className = beh.getDelegateClass().getName();</span>
+		}
+<span class="nc bnc" id="L223" title="All 4 branches missed.">		if (blackListEventHandlers != null &amp;&amp; blackListEventHandlers.contains(className))</span>
+<span class="nc" id="L224">			return true;</span>
+<span class="nc bnc" id="L225" title="All 4 branches missed.">		if (blackListTopicMap != null &amp;&amp; !blackListTopicMap.isEmpty()) {</span>
+<span class="nc" id="L226">			List&lt;String&gt; blackListed = blackListTopicMap.get(className);</span>
+<span class="nc bnc" id="L227" title="All 4 branches missed.">			if (blackListed != null &amp;&amp; !blackListed.isEmpty()) {</span>
+<span class="nc" id="L228">				Iterator&lt;String&gt; iterator = topics.iterator();</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">				while(iterator.hasNext()) {</span>
+<span class="nc" id="L230">					String topic = iterator.next();</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">					if (blackListed.contains(topic))</span>
+<span class="nc" id="L232">						iterator.remove();</span>
+				}
+			}
+		}
+		
+<span class="nc" id="L237">		return false;</span>
+	}
+	
+	/* (non-Javadoc)
+	 * @see org.adempiere.base.event.IEventManager#register(java.lang.String[], java.lang.String, org.osgi.service.event.EventHandler)
+	 */
+	@Override
+	public boolean register(String[] topics, String filter, EventHandler eventHandler) {
+<span class="nc" id="L245">		BundleContext bundleContext = BaseActivator.getBundleContext();</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">		if (bundleContext == null) {</span>
+<span class="nc" id="L247">			log.severe(&quot;No bundle context. Topic=&quot;+Arrays.toString(topics));</span>
+<span class="nc" id="L248">			return false;</span>
+		}
+		
+		//check black listed event topics
+<span class="nc" id="L252">		List&lt;String&gt; topicList = Arrays.stream(topics).collect(Collectors.toCollection(ArrayList::new));</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">		if (isBlackListed(topicList, eventHandler))</span>
+<span class="nc" id="L254">			return false;</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">		if (topicList.isEmpty())</span>
+<span class="nc" id="L256">			return false;		</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">		if (topicList.size() != topics.length)</span>
+<span class="nc" id="L258">			topics = topicList.toArray(new String[0]);</span>
+		
+<span class="nc" id="L260">		Dictionary&lt;String, Object&gt; d = new Hashtable&lt;String, Object&gt;();</span>
+<span class="nc" id="L261">		d.put(EventConstants.EVENT_TOPIC, topics);</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		if (filter != null)</span>
+<span class="nc" id="L263">			d.put(EventConstants.EVENT_FILTER, filter);</span>
+<span class="nc" id="L264">		ServiceRegistration&lt;?&gt; registration = bundleContext.registerService(EventHandler.class.getName(), eventHandler, d);</span>
+<span class="nc" id="L265">		synchronized(registrations) {</span>
+<span class="nc" id="L266">			List&lt;ServiceRegistration&lt;?&gt;&gt; list = registrations.get(eventHandler);</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">			if (list == null) {</span>
+<span class="nc" id="L268">				list = new ArrayList&lt;ServiceRegistration&lt;?&gt;&gt;();</span>
+<span class="nc" id="L269">				registrations.put(eventHandler, list);</span>
+			}
+<span class="nc" id="L271">			list.add(registration);</span>
+		}
+<span class="nc" id="L273">		return true;</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.adempiere.base.event.IEventManager#unregister(org.osgi.service.event.EventHandler)
+	 */
+	@Override
+	public boolean unregister(EventHandler eventHandler) {
+<span class="nc" id="L281">		List&lt;ServiceRegistration&lt;?&gt;&gt; serviceRegistrations = null;</span>
+<span class="nc" id="L282">		synchronized(registrations) {</span>
+<span class="nc" id="L283">			serviceRegistrations = registrations.remove(eventHandler);</span>
+		}
+<span class="nc bnc" id="L285" title="All 2 branches missed.">		if (serviceRegistrations == null)</span>
+<span class="nc" id="L286">			return false;</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		for (ServiceRegistration&lt;?&gt; registration : serviceRegistrations)</span>
+<span class="nc" id="L288">			registration.unregister();</span>
+<span class="nc" id="L289">		return true;</span>
+	}
+
+	/**
+	 * @param topic
+	 * @param data
+	 * @return new Event instance
+	 */
+	public static Event newEvent(String topic, Object data) {
+<span class="nc" id="L298">		return newEvent(topic, data, false);</span>
+	}
+	
+	/**
+	 * Create new event instance. If copySessionContext is true, a copy of current session context is added as EVENT_CONTEXT property to event data.
+	 * @param topic
+	 * @param data
+	 * @param copySessionContext true to copy current session context (usually for postEvent).
+	 * @return new Event instance
+	 */
+	@SuppressWarnings(&quot;unchecked&quot;)
+	public static Event newEvent(String topic, Object data, boolean copySessionContext) {
+<span class="nc" id="L310">		Event event = null;</span>
+<span class="nc bnc" id="L311" title="All 2 branches missed.">		if (data instanceof Dictionary&lt;?,?&gt;) {</span>
+<span class="nc" id="L312">			Dictionary&lt;String,Object&gt;dict = (Dictionary&lt;String,Object&gt;)data;</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">			if (dict.get(EVENT_ERROR_MESSAGES) == null)</span>
+<span class="nc" id="L314">				dict.put(EVENT_ERROR_MESSAGES, new ArrayList&lt;String&gt;());</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">			if (copySessionContext)</span>
+<span class="nc" id="L316">				dict.put(EVENT_CONTEXT, getCurrentSessionContext());</span>
+<span class="nc" id="L317">			event = new Event(topic, dict);</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">		} else if (data instanceof Map&lt;?, ?&gt;) {</span>
+<span class="nc" id="L319">			Map&lt;String, Object&gt; map = (Map&lt;String, Object&gt;)data;</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">			if (!map.containsKey(EVENT_ERROR_MESSAGES))</span>
+<span class="nc" id="L321">				map.put(EVENT_ERROR_MESSAGES, new ArrayList&lt;String&gt;());</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">			if (copySessionContext)</span>
+<span class="nc" id="L323">				map.put(EVENT_CONTEXT, getCurrentSessionContext());</span>
+<span class="nc" id="L324">			event = new Event(topic, map);</span>
+<span class="nc" id="L325">		} else {</span>
+<span class="nc" id="L326">			Map&lt;String, Object&gt; map = new HashMap&lt;String, Object&gt;(3);</span>
+<span class="nc" id="L327">			map.put(EventConstants.EVENT_TOPIC, topic);</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">			if (data != null) {</span>
+<span class="nc" id="L329">				map.put(EVENT_DATA, data);</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">				if (data instanceof PO po)</span>
+<span class="nc" id="L331">					map.put(TABLE_NAME_PROPERTY, po.get_TableName());</span>
+			}
+<span class="nc" id="L333">			map.put(EVENT_ERROR_MESSAGES, new ArrayList&lt;String&gt;());</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">			if (copySessionContext)</span>
+<span class="nc" id="L335">				map.put(EVENT_CONTEXT, getCurrentSessionContext());</span>
+<span class="nc" id="L336">			event = new Event(topic, map);</span>
+		}
+<span class="nc" id="L338">		return event;</span>
+	}
+
+	/**
+	 * @return copy of current session context
+	 */
+	private static Properties getCurrentSessionContext() {
+<span class="nc" id="L345">		Properties context = new Properties();</span>
+<span class="nc" id="L346">		Env.setContext(context, Env.AD_CLIENT_ID, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc" id="L347">		Env.setContext(context, Env.AD_ORG_ID, Env.getAD_Org_ID(Env.getCtx()));</span>
+<span class="nc" id="L348">		Env.setContext(context, Env.AD_USER_ID, Env.getAD_User_ID(Env.getCtx()));</span>
+<span class="nc" id="L349">		Env.setContext(context, Env.AD_ROLE_ID, Env.getAD_Role_ID(Env.getCtx()));</span>
+<span class="nc" id="L350">		Env.setContext(context, Env.M_WAREHOUSE_ID, Env.getContext(Env.getCtx(), Env.M_WAREHOUSE_ID));</span>
+<span class="nc" id="L351">		Env.setContext(context, Env.LANGUAGE, Env.getContext(Env.getCtx(), Env.LANGUAGE));</span>
+<span class="nc" id="L352">		return context;</span>
+	}
+
+	/**
+	 *
+	 * @param topic
+	 * @param properties
+	 * @return event object
+	 */
+	public static Event newEvent(String topic, EventProperty ...properties) {
+<span class="nc" id="L362">		Event event = null;</span>
+<span class="nc" id="L363">		Map&lt;String, Object&gt; map = new HashMap&lt;String, Object&gt;(3);</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">		if (properties != null) {</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">			for(int i = 0; i &lt; properties.length; i++) {</span>
+<span class="nc" id="L366">				map.put(properties[i].name, properties[i].value);</span>
+			}
+<span class="nc bnc" id="L368" title="All 2 branches missed.">			if (!map.containsKey(EventConstants.EVENT_TOPIC))</span>
+<span class="nc" id="L369">				map.put(EventConstants.EVENT_TOPIC, topic);</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">			if (!map.containsKey(EVENT_ERROR_MESSAGES))</span>
+<span class="nc" id="L371">				map.put(EVENT_ERROR_MESSAGES, new ArrayList&lt;String&gt;());</span>
+		}
+<span class="nc" id="L373">		event = new Event(topic, map);</span>
+<span class="nc" id="L374">		return event;</span>
+	}
+	
+	@Override	
+	public String[] getDisabledEventHandlers() {
+<span class="nc" id="L379">		List&lt;String&gt; disabledTopics = new ArrayList&lt;String&gt;();</span>
+<span class="nc bnc" id="L380" title="All 4 branches missed.">		if (blackListEventHandlers != null &amp;&amp; !blackListEventHandlers.isEmpty()) {</span>
+<span class="nc" id="L381">			blackListEventHandlers.forEach( e -&gt; disabledTopics.add(e+&quot;[*]&quot;));</span>
+		}
+<span class="nc bnc" id="L383" title="All 4 branches missed.">		if (blackListTopicMap != null &amp;&amp; !blackListTopicMap.isEmpty()) {</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">			for(Map.Entry&lt;String, List&lt;String&gt;&gt; entry : blackListTopicMap.entrySet()) {</span>
+<span class="nc" id="L385">				String className = entry.getKey();</span>
+<span class="nc" id="L386">				List&lt;String&gt; topics = entry.getValue();</span>
+<span class="nc bnc" id="L387" title="All 4 branches missed.">				if (topics != null &amp;&amp; !topics.isEmpty()) {</span>
+<span class="nc" id="L388">					StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L389">					sb.append(className).append(&quot;[&quot;);</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">					for(int i = 0; i &lt; topics.size(); i++) {</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">						if (i &gt; 0)</span>
+<span class="nc" id="L392">							sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L393">						sb.append(topics.get(i));</span>
+					}
+<span class="nc" id="L395">					sb.append(&quot;]&quot;);</span>
+<span class="nc" id="L396">					disabledTopics.add(sb.toString());</span>
+				}
+			}
+		}
+<span class="nc" id="L400">		return disabledTopics.toArray(new String[disabledTopics.size()]);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

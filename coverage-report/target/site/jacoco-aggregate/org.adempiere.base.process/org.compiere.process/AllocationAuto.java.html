@@ -1,0 +1,785 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AllocationAuto.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">AllocationAuto.java</span></div><h1>AllocationAuto.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.compiere.model.MAllocationHdr;
+import org.compiere.model.MAllocationLine;
+import org.compiere.model.MBPartner;
+import org.compiere.model.MClient;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MPaySelectionCheck;
+import org.compiere.model.MPaySelectionLine;
+import org.compiere.model.MPayment;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.Query;
+import org.compiere.util.AdempiereSystemError;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+
+/**
+ *	Automatic Allocation Process
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: AllocationAuto.java,v 1.2 2006/07/30 00:51:01 jjanke Exp $
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L46">public class AllocationAuto extends SvrProcess</span>
+{
+	/**	BP Group					*/
+<span class="nc" id="L49">	private int			p_C_BP_Group_ID = 0;</span>
+	/** BPartner					*/
+<span class="nc" id="L51">	private int			p_C_BPartner_ID = 0;</span>
+	/** Allocate Oldest Setting		*/
+<span class="nc" id="L53">	private boolean		p_AllocateOldest = true;</span>
+	/** Only AP/AR Transactions		*/
+<span class="nc" id="L55">	private String		p_APAR = &quot;A&quot;;</span>
+	
+<span class="nc" id="L57">	private static String	ONLY_AP = &quot;P&quot;;</span>
+<span class="nc" id="L58">	private static String	ONLY_AR = &quot;R&quot;;</span>
+	
+	/**	Payments				*/
+<span class="nc" id="L61">	private MPayment[] 		m_payments = null;</span>
+	/** Invoices				*/
+<span class="nc" id="L63">	private MInvoice[] 		m_invoices = null;</span>
+	/**	Allocation				*/
+<span class="nc" id="L65">	private MAllocationHdr	m_allocation = null;</span>
+	
+	
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L73">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L76">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">			if (para[i].getParameter() == null)</span>
+<span class="nc" id="L78">				;</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">			else if (name.equals(&quot;C_BP_Group_ID&quot;))</span>
+<span class="nc" id="L80">				p_C_BP_Group_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">			else if (name.equals(&quot;C_BPartner_ID&quot;))</span>
+<span class="nc" id="L82">				p_C_BPartner_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">			else if (name.equals(&quot;AllocateOldest&quot;))</span>
+<span class="nc" id="L84">				p_AllocateOldest = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">			else if (name.equals(&quot;APAR&quot;))</span>
+<span class="nc" id="L86">				p_APAR = (String)para[i].getParameter();</span>
+			else
+<span class="nc" id="L88">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+<span class="nc" id="L90">	}	//	prepare</span>
+
+	/**
+	 * 	Process
+	 *	@return message
+	 *	@throws Exception
+	 */
+	protected String doIt() throws Exception
+	{
+<span class="nc bnc" id="L99" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;C_BP_Group_ID=&quot; + p_C_BP_Group_ID </span>
+<span class="nc" id="L100">			+ &quot;, C_BPartner_ID=&quot; + p_C_BPartner_ID </span>
+<span class="nc" id="L101">			+ &quot;, Oldest=&quot; + p_AllocateOldest</span>
+<span class="nc" id="L102">			+ &quot;, AP/AR=&quot; + p_APAR);</span>
+<span class="nc" id="L103">		int countBP = 0;</span>
+<span class="nc" id="L104">		int countAlloc = 0;</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">		if (p_C_BPartner_ID != 0)</span>
+		{
+<span class="nc" id="L107">			countAlloc = allocateBP (p_C_BPartner_ID);</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">			if (countAlloc &gt; 0)</span>
+<span class="nc" id="L109">				countBP++;</span>
+<span class="nc" id="L110">		}</span>
+		else
+		{
+			String where;
+			int parameter;
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			if (p_C_BP_Group_ID != 0)</span>
+			{
+<span class="nc" id="L117">				where = &quot;C_BP_Group_ID=?&quot;;</span>
+<span class="nc" id="L118">				parameter = p_C_BP_Group_ID;</span>
+<span class="nc" id="L119">			}</span>
+			else
+			{
+<span class="nc" id="L122">				where = &quot;AD_Client_ID=?&quot;;</span>
+<span class="nc" id="L123">				parameter = Env.getAD_Client_ID(getCtx());</span>
+			}
+<span class="nc" id="L125">			int[] ids = new Query(getCtx(), MBPartner.Table_Name, where, get_TrxName())</span>
+<span class="nc" id="L126">					.setOrderBy(&quot;Value&quot;)</span>
+<span class="nc" id="L127">					.setParameters(parameter)</span>
+<span class="nc" id="L128">					.getIDs();</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">			for (int C_BPartner_ID : ids)</span>
+			{
+<span class="nc" id="L131">				int count = allocateBP (C_BPartner_ID);</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">				if (count &gt; 0)</span>
+				{
+<span class="nc" id="L134">					countBP++;</span>
+<span class="nc" id="L135">					countAlloc += count;</span>
+<span class="nc" id="L136">					commitEx();</span>
+				}
+			}
+		}
+		//
+<span class="nc" id="L141">		StringBuilder msgreturn = new StringBuilder(&quot;@Created@ #&quot;).append(countBP).append(&quot;/&quot;).append(countAlloc);</span>
+<span class="nc" id="L142">		return msgreturn.toString();</span>
+	}	//	doIt
+
+	/**
+	 * 	Allocate BP
+	 *	@param C_BPartner_ID
+	 *	@return number of allocations
+	 */
+	private int allocateBP (int C_BPartner_ID) throws Exception
+	{
+<span class="nc" id="L152">		getPayments(C_BPartner_ID);</span>
+<span class="nc" id="L153">		getInvoices(C_BPartner_ID);</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;(1) - C_BPartner_ID=&quot; + C_BPartner_ID </span>
+<span class="nc" id="L155">			+ &quot; - #Payments=&quot; + m_payments.length + &quot;, #Invoices=&quot; + m_invoices.length);</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">		if (m_payments.length + m_invoices.length &lt; 2)</span>
+<span class="nc" id="L157">			return 0;</span>
+		
+		//	Payment Info - Invoice or Pay Selection
+<span class="nc" id="L160">		int count = allocateBPPaymentWithInfo();</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">		if (count != 0)</span>
+		{
+<span class="nc" id="L163">			getPayments(C_BPartner_ID);		//	for next</span>
+<span class="nc" id="L164">			getInvoices(C_BPartner_ID);</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info (&quot;(2) - C_BPartner_ID=&quot; + C_BPartner_ID </span>
+<span class="nc" id="L166">				+ &quot; - #Payments=&quot; + m_payments.length + &quot;, #Invoices=&quot; + m_invoices.length);</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">			if (m_payments.length + m_invoices.length &lt; 2)</span>
+<span class="nc" id="L168">				return count;</span>
+		}
+				
+		//	All
+<span class="nc" id="L172">		int newCount = allocateBPartnerAll();</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">		if (newCount != 0)</span>
+		{
+<span class="nc" id="L175">			count += newCount;</span>
+<span class="nc" id="L176">			getPayments(C_BPartner_ID);		//	for next</span>
+<span class="nc" id="L177">			getInvoices(C_BPartner_ID);</span>
+<span class="nc" id="L178">			processAllocation();</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info (&quot;(3) - C_BPartner_ID=&quot; + C_BPartner_ID </span>
+<span class="nc" id="L180">				+ &quot; - #Payments=&quot; + m_payments.length + &quot;, #Invoices=&quot; + m_invoices.length);</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">			if (m_payments.length + m_invoices.length &lt; 2)</span>
+<span class="nc" id="L182">				return count;</span>
+		}
+		
+		//	One:One
+<span class="nc" id="L186">		newCount = allocateBPOneToOne();</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">		if (newCount != 0)</span>
+		{
+<span class="nc" id="L189">			count += newCount;</span>
+<span class="nc" id="L190">			getPayments(C_BPartner_ID);		//	for next</span>
+<span class="nc" id="L191">			getInvoices(C_BPartner_ID);</span>
+<span class="nc" id="L192">			processAllocation();</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info (&quot;(4) - C_BPartner_ID=&quot; + C_BPartner_ID </span>
+<span class="nc" id="L194">				+ &quot; - #Payments=&quot; + m_payments.length + &quot;, #Invoices=&quot; + m_invoices.length);</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">			if (m_payments.length + m_invoices.length &lt; 2)</span>
+<span class="nc" id="L196">				return count;</span>
+		}
+
+		//	Oldest First
+<span class="nc bnc" id="L200" title="All 2 branches missed.">		if (p_AllocateOldest)</span>
+		{
+<span class="nc" id="L202">			newCount = allocateBPOldestFirst();</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">			if (newCount != 0)</span>
+			{
+<span class="nc" id="L205">				count += newCount;</span>
+<span class="nc" id="L206">				getPayments(C_BPartner_ID);		//	for next</span>
+<span class="nc" id="L207">				getInvoices(C_BPartner_ID);</span>
+<span class="nc" id="L208">				processAllocation();</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info (&quot;(5) - C_BPartner_ID=&quot; + C_BPartner_ID </span>
+<span class="nc" id="L210">					+ &quot; - #Payments=&quot; + m_payments.length + &quot;, #Invoices=&quot; + m_invoices.length);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">				if (m_payments.length + m_invoices.length &lt; 2)</span>
+<span class="nc" id="L212">					return count;</span>
+			}
+		}
+		
+		//	Other, e.g.
+		//	Allocation if &quot;close&quot; % and $
+		
+<span class="nc" id="L219">		return count;</span>
+	}	//	alloc
+	
+	/**
+	 * 	Get Payments of BP
+	 *	@param C_BPartner_ID id
+	 *	@return unallocated payments
+	 */
+	private MPayment[] getPayments (int C_BPartner_ID)
+	{
+<span class="nc" id="L229">		StringBuilder where = new StringBuilder(&quot;IsAllocated='N' AND Processed='Y' AND C_BPartner_ID=?&quot;</span>
+				+ &quot; AND IsPrepayment='N' AND C_Charge_ID IS NULL &quot;);
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		if (ONLY_AP.equals(p_APAR))</span>
+<span class="nc" id="L232">			where.append(&quot;AND IsReceipt='N'&quot;);</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">		else if (ONLY_AR.equals(p_APAR))</span>
+<span class="nc" id="L234">			where.append(&quot;AND IsReceipt='Y'&quot;);</span>
+<span class="nc" id="L235">		List&lt;MPayment&gt; queryList = new Query(getCtx(), MPayment.Table_Name, where.toString(), get_TrxName())</span>
+<span class="nc" id="L236">				.setOrderBy(&quot;DateTrx, Created, C_Payment_ID&quot;)</span>
+<span class="nc" id="L237">				.setParameters(C_BPartner_ID)</span>
+<span class="nc" id="L238">				.list();</span>
+<span class="nc" id="L239">		ArrayList&lt;MPayment&gt; list = new ArrayList&lt;MPayment&gt;();</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">		for (MPayment payment : queryList)</span>
+		{
+<span class="nc" id="L242">			BigDecimal allocated = payment.getAllocatedAmt(); </span>
+<span class="nc bnc" id="L243" title="All 4 branches missed.">			if (allocated != null &amp;&amp; allocated.compareTo(payment.getPayAmt()) == 0)</span>
+			{
+<span class="nc" id="L245">				payment.setIsAllocated(true);</span>
+<span class="nc" id="L246">				payment.saveEx();</span>
+<span class="nc" id="L247">			}</span>
+			else
+<span class="nc" id="L249">				list.add (payment);</span>
+		}
+<span class="nc" id="L251">		m_payments = new MPayment[list.size ()];</span>
+<span class="nc" id="L252">		list.toArray (m_payments);</span>
+<span class="nc" id="L253">		return m_payments;</span>
+	}	//	getPayments
+	
+	/**
+	 * 	Get Invoices of BP
+	 *	@param C_BPartner_ID id
+	 *	@return unallocated Invoices
+	 */
+	private MInvoice[] getInvoices (int C_BPartner_ID)
+	{
+<span class="nc" id="L263">		StringBuilder where = new StringBuilder(&quot;IsPaid='N' AND Processed='Y' AND C_BPartner_ID=? &quot;);</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">		if (ONLY_AP.equals(p_APAR))</span>
+<span class="nc" id="L265">			where.append(&quot;AND IsSOTrx='N' &quot;);</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">		else if (ONLY_AR.equals(p_APAR))</span>
+<span class="nc" id="L267">			where.append(&quot;AND IsSOTrx='Y' &quot;);</span>
+<span class="nc" id="L268">		List&lt;MInvoice&gt; queryList = new Query(getCtx(), MInvoice.Table_Name, where.toString(), get_TrxName())</span>
+<span class="nc" id="L269">				.setOrderBy(&quot;DateInvoiced, Created, C_Invoice_ID&quot;)</span>
+<span class="nc" id="L270">				.setParameters(C_BPartner_ID)</span>
+<span class="nc" id="L271">				.list();</span>
+<span class="nc" id="L272">		ArrayList&lt;MInvoice&gt; list = new ArrayList&lt;MInvoice&gt;();</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">		for (MInvoice invoice : queryList)</span>
+		{
+<span class="nc bnc" id="L275" title="All 2 branches missed.">			if (invoice.getOpenAmt(false, null).signum() == 0)</span>
+			{
+<span class="nc" id="L277">				invoice.setIsPaid(true);</span>
+<span class="nc" id="L278">				invoice.saveEx();</span>
+<span class="nc" id="L279">			}</span>
+			else
+<span class="nc" id="L281">				list.add (invoice);</span>
+		}
+<span class="nc" id="L283">		m_invoices = new MInvoice[list.size ()];</span>
+<span class="nc" id="L284">		list.toArray (m_invoices);</span>
+<span class="nc" id="L285">		return m_invoices;</span>
+	}	//	getInvoices
+
+	
+	/**************************************************************************
+	 * 	Allocate Individual Payments with payment references
+	 *  Uses OverUnderAmt for calculation, fallback method allocateBPOldestFirst doesn't
+	 *	@return number of allocations
+	 */
+	private int allocateBPPaymentWithInfo ()
+	{
+<span class="nc" id="L296">		int count = 0;</span>
+		
+		//****	See if there is a direct link (Invoice or Pay Selection)
+<span class="nc bnc" id="L299" title="All 2 branches missed.">		for (int p = 0; p &lt; m_payments.length; p++)</span>
+		{
+<span class="nc" id="L301">			MPayment payment = m_payments[p];</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">			if (payment.isAllocated())</span>
+<span class="nc" id="L303">				continue;</span>
+<span class="nc" id="L304">			BigDecimal allocatedAmt = payment.getAllocatedAmt();</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(payment + &quot;, Allocated=&quot; + allocatedAmt);</span>
+<span class="nc bnc" id="L306" title="All 4 branches missed.">			if (allocatedAmt != null &amp;&amp; allocatedAmt.signum() != 0)</span>
+<span class="nc" id="L307">				continue;</span>
+<span class="nc" id="L308">			BigDecimal availableAmt = payment.getPayAmt()</span>
+<span class="nc" id="L309">				.add(payment.getDiscountAmt())</span>
+<span class="nc" id="L310">				.add(payment.getWriteOffAmt())</span>
+<span class="nc" id="L311">				.add(payment.getOverUnderAmt());</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">			if (!payment.isReceipt())</span>
+<span class="nc" id="L313">				availableAmt = availableAmt.negate();</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Available=&quot; + availableAmt);</span>
+			//
+<span class="nc bnc" id="L316" title="All 2 branches missed.">			if (payment.getC_Invoice_ID() != 0)</span>
+			{
+<span class="nc bnc" id="L318" title="All 2 branches missed.">				for (int i = 0; i &lt; m_invoices.length; i++)</span>
+				{
+<span class="nc" id="L320">					MInvoice invoice = m_invoices[i];</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">					if (invoice.isPaid())</span>
+<span class="nc" id="L322">						continue;</span>
+
+<span class="nc bnc" id="L324" title="All 2 branches missed.">					if (payment.getC_Invoice_ID() == invoice.getC_Invoice_ID())</span>
+					{
+<span class="nc bnc" id="L326" title="All 2 branches missed.">						if (payment.getC_Currency_ID() == invoice.getC_Currency_ID())</span>
+						{
+<span class="nc" id="L328">							BigDecimal openAmt = invoice.getOpenAmt(true, null);</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">							if (!invoice.isSOTrx())</span>
+<span class="nc" id="L330">								openAmt = openAmt.negate();</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(invoice + &quot;, Open=&quot; + openAmt);</span>
+							//	With Discount, etc.
+<span class="nc bnc" id="L333" title="All 2 branches missed.">							if (availableAmt.compareTo(openAmt) == 0)</span>
+							{
+<span class="nc bnc" id="L335" title="All 2 branches missed.">								if (payment.allocateIt())</span>
+								{
+<span class="nc" id="L337">									String message = Msg.parseTranslation(getCtx(), &quot;@PaymentAllocated@ &quot; + payment.getDocumentNo() + &quot; [1]&quot;);</span>
+<span class="nc" id="L338">									addBufferLog(0, payment.getDateAcct(), openAmt, message, payment.get_Table_ID(), payment.getC_Payment_ID());</span>
+<span class="nc" id="L339">									count++;</span>
+								}
+<span class="nc" id="L341">								break;</span>
+							}
+						}
+						else	//	Mixed Currency
+						{
+						}
+					}	//	invoice found
+				}	//	for all invoices
+<span class="nc" id="L349">			}	//	payment has invoice</span>
+			else	//	No direct invoice
+			{
+<span class="nc" id="L352">				MPaySelectionCheck psCheck = MPaySelectionCheck.getOfPayment(getCtx(), payment.getC_Payment_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">				if (psCheck == null)</span>
+<span class="nc" id="L354">					continue;</span>
+				//
+<span class="nc" id="L356">				BigDecimal totalInvoice = Env.ZERO;</span>
+<span class="nc" id="L357">				MPaySelectionLine[] psLines = psCheck.getPaySelectionLines(false);</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">				for (int i = 0; i &lt; psLines.length; i++)</span>
+				{
+<span class="nc" id="L360">					MPaySelectionLine line = psLines[i];</span>
+<span class="nc" id="L361">					MInvoice invoice = line.getInvoice();</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">					if (payment.getC_Currency_ID() == invoice.getC_Currency_ID())</span>
+					{
+<span class="nc" id="L364">						BigDecimal invoiceAmt = invoice.getOpenAmt(true, null);</span>
+<span class="nc" id="L365">						BigDecimal overUnder = line.getOpenAmt().subtract(line.getPayAmt())</span>
+<span class="nc" id="L366">							.subtract(line.getDiscountAmt()).subtract(line.getWriteOffAmt());</span>
+<span class="nc" id="L367">						invoiceAmt = invoiceAmt.subtract(line.getDiscountAmt()).subtract(line.getWriteOffAmt())</span>
+<span class="nc" id="L368">							.subtract(overUnder);</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">						if (!invoice.isSOTrx())</span>
+<span class="nc" id="L370">							invoiceAmt = invoiceAmt.negate();</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(invoice + &quot;, Invoice=&quot; + invoiceAmt);</span>
+<span class="nc" id="L372">						totalInvoice = totalInvoice.add(invoiceAmt);</span>
+					}
+					else	//	Multi-Currency
+					{
+					}
+				}
+<span class="nc bnc" id="L378" title="All 2 branches missed.">				if (availableAmt.compareTo(totalInvoice) == 0)</span>
+				{
+<span class="nc bnc" id="L380" title="All 2 branches missed.">					if (payment.allocateIt())</span>
+					{
+<span class="nc" id="L382">						String message = Msg.parseTranslation(getCtx(), &quot;@PaymentAllocated@ &quot; + payment.getDocumentNo() + &quot; [n]&quot;);</span>
+<span class="nc" id="L383">						addBufferLog(0, payment.getDateAcct(), availableAmt, message, payment.get_Table_ID(), payment.getC_Payment_ID());</span>
+<span class="nc" id="L384">						count++;</span>
+					}
+				}
+			}	//	No direct invoice
+		}
+		//****	See if there is a direct link
+		
+<span class="nc" id="L391">		return count;</span>
+	}	//	allocateIndividualPayments
+	
+	
+	/**
+	 * 	Allocate Payment:Invoice 1:1
+	 *  Uses OverUnderAmt for calculation, fallback method allocateBPOldestFirst doesn't
+	 *	@return allocations
+	 */
+	private int allocateBPOneToOne() throws Exception
+	{
+<span class="nc" id="L402">		int count = 0;</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">		for (int p = 0; p &lt; m_payments.length; p++)</span>
+		{
+<span class="nc" id="L405">			MPayment payment = m_payments[p];</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">			if (payment.isAllocated())</span>
+<span class="nc" id="L407">				continue;</span>
+<span class="nc" id="L408">			BigDecimal allocatedAmt = payment.getAllocatedAmt();</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(payment + &quot;, Allocated=&quot; + allocatedAmt);</span>
+<span class="nc bnc" id="L410" title="All 4 branches missed.">			if (allocatedAmt != null &amp;&amp; allocatedAmt.signum() != 0)</span>
+<span class="nc" id="L411">				continue;</span>
+<span class="nc" id="L412">			BigDecimal availableAmt = payment.getPayAmt()</span>
+<span class="nc" id="L413">				.add(payment.getDiscountAmt())</span>
+<span class="nc" id="L414">				.add(payment.getWriteOffAmt())</span>
+<span class="nc" id="L415">				.add(payment.getOverUnderAmt());</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">			if (!payment.isReceipt())</span>
+<span class="nc" id="L417">				availableAmt = availableAmt.negate();</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Available=&quot; + availableAmt);</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">			for (int i = 0; i &lt; m_invoices.length; i++)</span>
+			{
+<span class="nc" id="L421">				MInvoice invoice = m_invoices[i];</span>
+<span class="nc bnc" id="L422" title="All 4 branches missed.">				if (invoice == null || invoice.isPaid())</span>
+<span class="nc" id="L423">					continue;</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">				if (payment.getC_Currency_ID() == invoice.getC_Currency_ID())</span>
+				{
+					//	log.fine(&quot;allocateBPartnerAll - &quot; + invoice);
+<span class="nc" id="L427">					BigDecimal openAmt = invoice.getOpenAmt(true, null);</span>
+<span class="nc bnc" id="L428" title="All 2 branches missed.">					if (!invoice.isSOTrx())</span>
+<span class="nc" id="L429">						openAmt = openAmt.negate();</span>
+<span class="nc" id="L430">					BigDecimal difference = availableAmt.subtract(openAmt).abs();</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(invoice + &quot;, Open=&quot; + openAmt + &quot; - Difference=&quot; + difference);</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">					if (difference.signum() == 0)</span>
+					{
+<span class="nc" id="L434">						Timestamp dateAcct = payment.getDateAcct();</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">						if (invoice.getDateAcct().after(dateAcct))</span>
+<span class="nc" id="L436">							dateAcct = invoice.getDateAcct();</span>
+<span class="nc" id="L437">						if (!createAllocation(payment.getC_Currency_ID(), &quot;1:1 (&quot; + availableAmt + &quot;)&quot;, </span>
+<span class="nc" id="L438">							dateAcct, availableAmt, null, null, null, </span>
+<span class="nc" id="L439">							invoice.getC_BPartner_ID(), payment.getC_Payment_ID(), </span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">							invoice.getC_Invoice_ID(), invoice.getAD_Org_ID()))</span>
+						{
+<span class="nc" id="L442">							throw new AdempiereSystemError(&quot;Cannot create Allocation&quot;);</span>
+						}
+<span class="nc" id="L444">						processAllocation();</span>
+<span class="nc" id="L445">						count++;</span>
+<span class="nc" id="L446">						m_invoices[i] = null;		//	remove invoice</span>
+<span class="nc" id="L447">						m_payments[p] = null;</span>
+<span class="nc" id="L448">						payment = null;</span>
+<span class="nc" id="L449">						break;</span>
+					}
+				}
+				else	//	Multi-Currency
+				{
+				}
+			}	//	for all invoices
+		}	//	for all payments
+<span class="nc" id="L457">		return count;</span>
+	}	//	allocateOneToOne
+	
+	/**
+	 * 	Allocate all Payments/Invoices using Accounting currency
+	 *  Uses OverUnderAmt for calculation, fallback method allocateBPOldestFirst doesn't
+	 *	@return allocations
+	 */
+	private int allocateBPartnerAll() throws Exception
+	{
+<span class="nc" id="L467">		int C_Currency_ID = MClient.get(getCtx()).getC_Currency_ID();</span>
+<span class="nc" id="L468">		Timestamp dateAcct = null;</span>
+		//	Payments
+<span class="nc" id="L470">		BigDecimal totalPayments = Env.ZERO;</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">		for (int p = 0; p &lt; m_payments.length; p++)</span>
+		{
+<span class="nc" id="L473">			MPayment payment = m_payments[p];</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">			if (payment.isAllocated())</span>
+<span class="nc" id="L475">				continue;</span>
+<span class="nc" id="L476">			BigDecimal allocatedAmt = payment.getAllocatedAmt();</span>
+
+<span class="nc bnc" id="L478" title="All 4 branches missed.">			if (allocatedAmt != null &amp;&amp; allocatedAmt.signum() != 0)</span>
+<span class="nc" id="L479">				continue;</span>
+<span class="nc" id="L480">			BigDecimal availableAmt = payment.getPayAmt()</span>
+<span class="nc" id="L481">				.add(payment.getDiscountAmt())</span>
+<span class="nc" id="L482">				.add(payment.getWriteOffAmt())</span>
+<span class="nc" id="L483">				.add(payment.getOverUnderAmt());</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">			if (!payment.isReceipt())</span>
+<span class="nc" id="L485">				availableAmt = availableAmt.negate();</span>
+			//	Foreign currency
+<span class="nc bnc" id="L487" title="All 2 branches missed.">			if (payment.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L488">				continue;</span>
+<span class="nc bnc" id="L489" title="All 4 branches missed.">			if (dateAcct == null || payment.getDateAcct().after(dateAcct))</span>
+<span class="nc" id="L490">				dateAcct = payment.getDateAcct();</span>
+<span class="nc" id="L491">			totalPayments = totalPayments.add(availableAmt); </span>
+		}
+		//	Invoices
+<span class="nc" id="L494">		BigDecimal totalInvoices = Env.ZERO;</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">		for (int i = 0; i &lt; m_invoices.length; i++)</span>
+		{
+<span class="nc" id="L497">			MInvoice invoice = m_invoices[i];</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">			if (invoice.isPaid())</span>
+<span class="nc" id="L499">				continue;</span>
+<span class="nc" id="L500">			BigDecimal openAmt = invoice.getOpenAmt(true, null);</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">			if (!invoice.isSOTrx())</span>
+<span class="nc" id="L502">				openAmt = openAmt.negate();</span>
+			//	Foreign currency
+<span class="nc bnc" id="L504" title="All 2 branches missed.">			if (invoice.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L505">				continue;</span>
+<span class="nc bnc" id="L506" title="All 4 branches missed.">			if (dateAcct == null || invoice.getDateAcct().after(dateAcct))</span>
+<span class="nc" id="L507">				dateAcct = invoice.getDateAcct();</span>
+<span class="nc" id="L508">			totalInvoices = totalInvoices.add(openAmt);</span>
+		}
+		
+<span class="nc" id="L511">		BigDecimal difference = totalInvoices.subtract(totalPayments);</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;= Invoices=&quot; + totalInvoices </span>
+<span class="nc" id="L513">			+ &quot; - Payments=&quot; + totalPayments </span>
+<span class="nc" id="L514">			+ &quot; = Difference=&quot; + difference);</span>
+		
+<span class="nc bnc" id="L516" title="All 2 branches missed.">		if (difference.signum() == 0)</span>
+		{
+<span class="nc bnc" id="L518" title="All 2 branches missed.">			for (int p = 0; p &lt; m_payments.length; p++)</span>
+			{
+<span class="nc" id="L520">				MPayment payment = m_payments[p];</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">				if (payment.isAllocated())</span>
+<span class="nc" id="L522">					continue;</span>
+<span class="nc" id="L523">				BigDecimal allocatedAmt = payment.getAllocatedAmt();</span>
+<span class="nc bnc" id="L524" title="All 4 branches missed.">				if (allocatedAmt != null &amp;&amp; allocatedAmt.signum() != 0)</span>
+<span class="nc" id="L525">					continue;</span>
+<span class="nc" id="L526">				BigDecimal availableAmt = payment.getPayAmt()</span>
+<span class="nc" id="L527">					.add(payment.getDiscountAmt())</span>
+<span class="nc" id="L528">					.add(payment.getWriteOffAmt())</span>
+<span class="nc" id="L529">					.add(payment.getOverUnderAmt());</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">				if (!payment.isReceipt())</span>
+<span class="nc" id="L531">					availableAmt = availableAmt.negate();</span>
+				//	Foreign currency
+<span class="nc bnc" id="L533" title="All 2 branches missed.">				if (payment.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L534">					continue;</span>
+<span class="nc" id="L535">				if (!createAllocation(C_Currency_ID, &quot;BP All&quot;, </span>
+<span class="nc" id="L536">					dateAcct, availableAmt, null, null, null, </span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">					payment.getC_BPartner_ID(), payment.getC_Payment_ID(), 0, payment.getAD_Org_ID()))</span>
+				{
+<span class="nc" id="L539">					throw new AdempiereSystemError(&quot;Cannot create Allocation&quot;);</span>
+				}
+			}	//	for all payments
+			//
+<span class="nc bnc" id="L543" title="All 2 branches missed.">			for (int i = 0; i &lt; m_invoices.length; i++)</span>
+			{
+<span class="nc" id="L545">				MInvoice invoice = m_invoices[i];</span>
+<span class="nc bnc" id="L546" title="All 2 branches missed.">				if (invoice.isPaid())</span>
+<span class="nc" id="L547">					continue;</span>
+<span class="nc" id="L548">				BigDecimal openAmt = invoice.getOpenAmt(true, null);</span>
+<span class="nc bnc" id="L549" title="All 2 branches missed.">				if (!invoice.isSOTrx())</span>
+<span class="nc" id="L550">					openAmt = openAmt.negate();</span>
+				//	Foreign currency
+<span class="nc bnc" id="L552" title="All 2 branches missed.">				if (invoice.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L553">					continue;</span>
+<span class="nc" id="L554">				if (!createAllocation(C_Currency_ID, &quot;BP All&quot;, </span>
+<span class="nc" id="L555">					dateAcct, openAmt, null, null, null, </span>
+<span class="nc bnc" id="L556" title="All 2 branches missed.">					invoice.getC_BPartner_ID(), 0, invoice.getC_Invoice_ID(), invoice.getAD_Org_ID()))</span>
+				{
+<span class="nc" id="L558">					throw new AdempiereSystemError(&quot;Cannot create Allocation&quot;);</span>
+				}
+			}	//	for all invoices
+<span class="nc" id="L561">			processAllocation();</span>
+<span class="nc" id="L562">			return 1;</span>
+		}	//	Difference OK
+		
+<span class="nc" id="L565">		return 0;</span>
+	}	//	allocateBPartnerAll
+
+	
+	/**
+	 * 	Allocate Oldest First using Accounting currency
+	 *  on purpose this method doesn't use OverUnderAmt for calculation, fallback method
+	 *	@return allocations
+	 */
+	private int allocateBPOldestFirst() throws Exception
+	{
+<span class="nc" id="L576">		int C_Currency_ID = MClient.get(getCtx()).getC_Currency_ID();</span>
+<span class="nc" id="L577">		Timestamp dateAcct = null;</span>
+		//	Payments
+<span class="nc" id="L579">		BigDecimal totalPayments = Env.ZERO;</span>
+<span class="nc bnc" id="L580" title="All 2 branches missed.">		for (int p = 0; p &lt; m_payments.length; p++)</span>
+		{
+<span class="nc" id="L582">			MPayment payment = m_payments[p];</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">			if (payment.isAllocated())</span>
+<span class="nc" id="L584">				continue;</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">			if (payment.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L586">				continue;</span>
+<span class="nc" id="L587">			BigDecimal allocatedAmt = payment.getAllocatedAmt();</span>
+<span class="nc bnc" id="L588" title="All 2 branches missed.">			if (allocatedAmt == null)</span>
+<span class="nc" id="L589">				allocatedAmt = Env.ZERO;</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(payment + &quot;, Allocated=&quot; + allocatedAmt);</span>
+<span class="nc" id="L591">			BigDecimal availableAmt = payment.getPayAmt()</span>
+<span class="nc" id="L592">				.add(payment.getDiscountAmt())</span>
+<span class="nc" id="L593">				.add(payment.getWriteOffAmt());</span>
+<span class="nc" id="L594">			availableAmt = availableAmt.subtract(allocatedAmt);</span>
+<span class="nc bnc" id="L595" title="All 2 branches missed.">			if (!payment.isReceipt())</span>
+<span class="nc" id="L596">				availableAmt = availableAmt.negate();</span>
+<span class="nc bnc" id="L597" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Available=&quot; + availableAmt);</span>
+<span class="nc bnc" id="L598" title="All 4 branches missed.">			if (dateAcct == null || payment.getDateAcct().after(dateAcct))</span>
+<span class="nc" id="L599">				dateAcct = payment.getDateAcct();</span>
+<span class="nc" id="L600">			totalPayments = totalPayments.add(availableAmt); </span>
+		}
+		//	Invoices
+<span class="nc" id="L603">		BigDecimal totalInvoices = Env.ZERO;</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">		for (int i = 0; i &lt; m_invoices.length; i++)</span>
+		{
+<span class="nc" id="L606">			MInvoice invoice = m_invoices[i];</span>
+<span class="nc bnc" id="L607" title="All 2 branches missed.">			if (invoice.isPaid())</span>
+<span class="nc" id="L608">				continue;</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">			if (invoice.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L610">				continue;</span>
+<span class="nc" id="L611">			BigDecimal openAmt = invoice.getOpenAmt(true, null);</span>
+<span class="nc bnc" id="L612" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;&quot; + invoice);</span>
+<span class="nc bnc" id="L613" title="All 2 branches missed.">			if (!invoice.isSOTrx())</span>
+<span class="nc" id="L614">				openAmt = openAmt.negate();</span>
+			//	Foreign currency
+<span class="nc bnc" id="L616" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Open=&quot; + openAmt);</span>
+<span class="nc bnc" id="L617" title="All 4 branches missed.">			if (dateAcct == null || invoice.getDateAcct().after(dateAcct))</span>
+<span class="nc" id="L618">				dateAcct = invoice.getDateAcct();</span>
+<span class="nc" id="L619">			totalInvoices = totalInvoices.add(openAmt);</span>
+		}
+		
+		//	must be either AP or AR balance
+<span class="nc bnc" id="L623" title="All 2 branches missed.">		if (totalInvoices.signum() != totalPayments.signum())</span>
+		{
+<span class="nc bnc" id="L625" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Signum - Invoices=&quot; + totalInvoices.signum() </span>
+<span class="nc" id="L626">				+ &quot; &lt;&gt; Payments=&quot; + totalPayments.signum()); </span>
+<span class="nc" id="L627">			return 0;</span>
+		}
+
+<span class="nc" id="L630">		BigDecimal difference = totalInvoices.subtract(totalPayments);</span>
+<span class="nc" id="L631">		BigDecimal maxAmt = totalInvoices.abs().min(totalPayments.abs());</span>
+<span class="nc bnc" id="L632" title="All 2 branches missed.">		if (totalInvoices.signum() &lt; 0)</span>
+<span class="nc" id="L633">			maxAmt = maxAmt.negate();</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;= Invoices=&quot; + totalInvoices </span>
+<span class="nc" id="L635">			+ &quot; - Payments=&quot; + totalPayments </span>
+<span class="nc" id="L636">			+ &quot; = Difference=&quot; + difference + &quot; - Max=&quot; + maxAmt);</span>
+		
+		
+		//	Allocate Payments up to max
+<span class="nc" id="L640">		BigDecimal allocatedPayments = Env.ZERO;</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">		for (int p = 0; p &lt; m_payments.length; p++)</span>
+		{
+<span class="nc" id="L643">			MPayment payment = m_payments[p];</span>
+<span class="nc bnc" id="L644" title="All 2 branches missed.">			if (payment.isAllocated())</span>
+<span class="nc" id="L645">				continue;</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">			if (payment.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L647">				continue;</span>
+<span class="nc" id="L648">			BigDecimal allocatedAmt = payment.getAllocatedAmt();</span>
+<span class="nc bnc" id="L649" title="All 2 branches missed.">			if (allocatedAmt == null)</span>
+<span class="nc" id="L650">				allocatedAmt = Env.ZERO;</span>
+<span class="nc" id="L651">			BigDecimal availableAmt = payment.getPayAmt()</span>
+<span class="nc" id="L652">				.add(payment.getDiscountAmt())</span>
+<span class="nc" id="L653">				.add(payment.getWriteOffAmt());</span>
+<span class="nc" id="L654">			availableAmt = availableAmt.subtract(allocatedAmt);</span>
+<span class="nc bnc" id="L655" title="All 2 branches missed.">			if (!payment.isReceipt())</span>
+<span class="nc" id="L656">				availableAmt = availableAmt.negate();</span>
+<span class="nc" id="L657">			allocatedPayments = allocatedPayments.add(availableAmt);</span>
+<span class="nc bnc" id="L658" title="All 4 branches missed.">			if ((totalInvoices.signum() &gt; 0 &amp;&amp; allocatedPayments.compareTo(maxAmt) &gt; 0)</span>
+<span class="nc bnc" id="L659" title="All 4 branches missed.">				|| (totalInvoices.signum() &lt; 0 &amp;&amp; allocatedPayments.compareTo(maxAmt) &lt; 0))</span>
+			{
+<span class="nc" id="L661">				BigDecimal diff = allocatedPayments.subtract(maxAmt);</span>
+<span class="nc" id="L662">				availableAmt = availableAmt.subtract(diff);</span>
+<span class="nc" id="L663">				allocatedPayments = allocatedPayments.subtract(diff);</span>
+			}
+<span class="nc bnc" id="L665" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Payment Allocated=&quot; + availableAmt);</span>
+<span class="nc" id="L666">			if (!createAllocation(C_Currency_ID, &quot;BP Oldest (&quot; + difference.abs() + &quot;)&quot;, </span>
+<span class="nc" id="L667">				dateAcct, availableAmt, null, null, null, </span>
+<span class="nc bnc" id="L668" title="All 2 branches missed.">				payment.getC_BPartner_ID(), payment.getC_Payment_ID(), 0, payment.getAD_Org_ID()))</span>
+			{
+<span class="nc" id="L670">				throw new AdempiereSystemError(&quot;Cannot create Allocation&quot;);</span>
+			}
+<span class="nc bnc" id="L672" title="All 2 branches missed.">			if (allocatedPayments.compareTo(maxAmt) == 0)</span>
+<span class="nc" id="L673">				break;</span>
+		}	//	for all payments
+		//	Allocated Invoices up to max
+<span class="nc" id="L676">		BigDecimal allocatedInvoices = Env.ZERO;</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">		for (int i = 0; i &lt; m_invoices.length; i++)</span>
+		{
+<span class="nc" id="L679">			MInvoice invoice = m_invoices[i];</span>
+<span class="nc bnc" id="L680" title="All 2 branches missed.">			if (invoice.isPaid())</span>
+<span class="nc" id="L681">				continue;</span>
+<span class="nc bnc" id="L682" title="All 2 branches missed.">			if (invoice.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L683">				continue;</span>
+<span class="nc" id="L684">			BigDecimal openAmt = invoice.getOpenAmt(true, null);</span>
+<span class="nc bnc" id="L685" title="All 2 branches missed.">			if (!invoice.isSOTrx())</span>
+<span class="nc" id="L686">				openAmt = openAmt.negate();</span>
+<span class="nc" id="L687">			allocatedInvoices = allocatedInvoices.add(openAmt);</span>
+<span class="nc bnc" id="L688" title="All 4 branches missed.">			if ((totalInvoices.signum() &gt; 0 &amp;&amp; allocatedInvoices.compareTo(maxAmt) &gt; 0)</span>
+<span class="nc bnc" id="L689" title="All 4 branches missed.">				|| (totalInvoices.signum() &lt; 0 &amp;&amp; allocatedInvoices.compareTo(maxAmt) &lt; 0))</span>
+			{
+<span class="nc" id="L691">				BigDecimal diff = allocatedInvoices.subtract(maxAmt);</span>
+<span class="nc" id="L692">				openAmt = openAmt.subtract(diff);</span>
+<span class="nc" id="L693">				allocatedInvoices = allocatedInvoices.subtract(diff);</span>
+			}
+<span class="nc bnc" id="L695" title="All 2 branches missed.">			if (openAmt.signum() == 0)</span>
+<span class="nc" id="L696">				break;</span>
+<span class="nc bnc" id="L697" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Invoice Allocated=&quot; + openAmt);</span>
+<span class="nc" id="L698">			if (!createAllocation(C_Currency_ID, &quot;BP Oldest (&quot; + difference.abs() + &quot;)&quot;, </span>
+<span class="nc" id="L699">				dateAcct, openAmt, null, null, null, </span>
+<span class="nc bnc" id="L700" title="All 2 branches missed.">				invoice.getC_BPartner_ID(), 0, invoice.getC_Invoice_ID(), invoice.getAD_Org_ID()))</span>
+			{
+<span class="nc" id="L702">				throw new AdempiereSystemError(&quot;Cannot create Allocation&quot;);</span>
+			}
+<span class="nc bnc" id="L704" title="All 2 branches missed.">			if (allocatedInvoices.compareTo(maxAmt) == 0)</span>
+<span class="nc" id="L705">				break;</span>
+		}	//	for all invoices
+		
+<span class="nc bnc" id="L708" title="All 2 branches missed.">		if (allocatedPayments.compareTo(allocatedInvoices) != 0)</span>
+		{
+<span class="nc" id="L710">			StringBuilder msg = new StringBuilder(&quot;Allocated Payments=&quot;).append(allocatedPayments)</span>
+<span class="nc" id="L711">					.append(&quot; &lt;&gt; Invoices=&quot;).append(allocatedInvoices);</span>
+<span class="nc" id="L712">			throw new AdempiereSystemError(msg.toString());</span>
+		}
+<span class="nc" id="L714">		processAllocation();	</span>
+<span class="nc" id="L715">		return 1;</span>
+	}	//	allocateOldestFirst
+	
+	
+	
+	/**********************************************************************************************
+	 * 	Create Allocation allocation
+	 *	@param C_Currency_ID currency
+	 *	@param description description
+	 *	@param Amount amount
+	 *	@param DiscountAmt discount
+	 *	@param WriteOffAmt write off
+	 *	@param OverUnderAmt over under
+	 *	@param C_BPartner_ID partner
+	 *	@param C_Payment_ID payment
+	 *	@param C_Invoice_ID invoice
+	 *	@return true if created
+	 */
+	private boolean createAllocation (int C_Currency_ID, String description, 
+		Timestamp dateAcct, BigDecimal Amount, 
+		BigDecimal DiscountAmt, BigDecimal WriteOffAmt, BigDecimal OverUnderAmt,
+		int C_BPartner_ID, int C_Payment_ID, int C_Invoice_ID, int AD_Org_ID)
+	{
+		//	Process old Allocation 
+<span class="nc bnc" id="L739" title="All 2 branches missed.">		if (m_allocation != null </span>
+<span class="nc bnc" id="L740" title="All 2 branches missed.">			&amp;&amp; m_allocation.getC_Currency_ID() != C_Currency_ID)</span>
+<span class="nc" id="L741">			processAllocation();</span>
+		
+		//	New Allocation
+<span class="nc bnc" id="L744" title="All 2 branches missed.">		if (m_allocation == null)</span>
+		{
+<span class="nc" id="L746">			m_allocation = new MAllocationHdr (getCtx(), false, dateAcct,	//	automatic </span>
+<span class="nc" id="L747">				C_Currency_ID, &quot;Auto &quot; + description, get_TrxName());</span>
+<span class="nc" id="L748">			m_allocation.setAD_Org_ID(AD_Org_ID);</span>
+<span class="nc bnc" id="L749" title="All 2 branches missed.">			if (!m_allocation.save())</span>
+<span class="nc" id="L750">				return false;</span>
+		}
+		
+		//	New Allocation Line
+<span class="nc" id="L754">		MAllocationLine aLine = new MAllocationLine (m_allocation, Amount, </span>
+<span class="nc" id="L755">			DiscountAmt, WriteOffAmt, OverUnderAmt);</span>
+<span class="nc" id="L756">		aLine.setC_BPartner_ID(C_BPartner_ID);</span>
+<span class="nc" id="L757">		aLine.setC_Payment_ID(C_Payment_ID);</span>
+<span class="nc" id="L758">		aLine.setC_Invoice_ID(C_Invoice_ID);</span>
+<span class="nc" id="L759">		return aLine.save();</span>
+	}	//	createAllocation
+
+	/**
+	 * 	Process Allocation
+	 *	@return true if processes/saved or none
+	 */
+	private boolean processAllocation()
+	{
+<span class="nc bnc" id="L768" title="All 2 branches missed.">		if (m_allocation == null)</span>
+<span class="nc" id="L769">			return true;</span>
+<span class="nc" id="L770">		boolean success = m_allocation.processIt(MAllocationHdr.DOCACTION_Complete);</span>
+<span class="nc bnc" id="L771" title="All 2 branches missed.">		if (!success){</span>
+<span class="nc" id="L772">			StringBuilder msg = new StringBuilder(&quot;Allocation Process Failed &quot;).append(m_allocation.getDocumentNo())</span>
+<span class="nc" id="L773">					.append(&quot; &quot;).append( m_allocation.getProcessMsg());</span>
+<span class="nc" id="L774">			throw new IllegalStateException(msg.toString());</span>
+		}	
+		else
+<span class="nc" id="L777">			m_allocation.saveEx();</span>
+<span class="nc" id="L778">		String message = Msg.parseTranslation(getCtx(), &quot;@AllocationProcessed@ &quot; + m_allocation.getDescription());</span>
+<span class="nc" id="L779">		addLog(0, m_allocation.getDateAcct(), null, message, MAllocationHdr.Table_ID, m_allocation.getC_AllocationHdr_ID());</span>
+<span class="nc" id="L780">		m_allocation = null;</span>
+<span class="nc" id="L781">		return success;</span>
+	}	//	processAllocation
+	
+}	//	AllocationAuto
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,1884 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>TableElement.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.print.layout</a> &gt; <span class="el_source">TableElement.java</span></div><h1>TableElement.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.print.layout;
+
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.Image;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.font.FontRenderContext;
+import java.awt.font.LineBreakMeasurer;
+import java.awt.font.TextAttribute;
+import java.awt.font.TextLayout;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
+import java.io.Serializable;
+import java.text.AttributedCharacterIterator;
+import java.text.AttributedString;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map.Entry;
+import java.util.Properties;
+import java.util.logging.Level;
+import java.util.regex.Pattern;
+
+import org.compiere.model.MQuery;
+import org.compiere.model.MultiMap;
+import org.compiere.print.MPrintFormatItem;
+import org.compiere.print.MPrintTableFormat;
+import org.compiere.print.PrintData;
+import org.compiere.print.util.SerializableMatrix;
+import org.compiere.print.util.SerializableMatrixImpl;
+import org.compiere.report.MReportLine;
+import org.compiere.util.Evaluator;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.NamePair;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+
+/**
+ *	Table Print Element.&lt;br/&gt;
+ *  Maintains a logical cross page table, which is &quot;broken up&quot; when printing.
+ *  &lt;pre&gt;
+ *  The table is 3 pages wide, 2 pages high
+ *      +-----+-----+-----+
+ *      | 1.1 | 1.2 | 1.3 |
+ *      +-----+-----+-----+
+ *      | 2.1 | 2.2 | 2.3 |
+ *      +-----+-----+-----+
+ *  Printed
+ *      +-----+-----+-----+
+ *      |  1  |  2  |  3  |
+ *      +-----+-----+-----+
+ *      |  4  |  5  |  6  |
+ *      +-----+-----+-----+
+ *  &lt;/pre&gt;
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: TableElement.java,v 1.2 2006/07/30 00:53:02 jjanke Exp $
+ *
+ *  @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;FR [ 1803359 ] Migrate to barbecue 1.1
+ */
+public class TableElement extends PrintElement
+{
+    /**
+     * generated serial id
+     */
+    private static final long serialVersionUID = -4144554863262696285L;
+
+    /**
+     *	Constructor.&lt;br/&gt;
+     *	Created in LayoutEngine.&lt;br/&gt;
+     *  &lt;pre&gt;
+     *  The rowCol.. maps are organized as follows - Point (row,col)
+     *  	row    - data if 0..m - if -1 for the entire column
+     *  	column - data if 0..n - if -1 for the entire row
+     *  i.e. Point (-1, -1) is the default for the table
+     *  &lt;/pre&gt;
+     *  @param columnHeader array with column headers (Key=ColumnName)
+     *  @param columnMaxWidth array with column max width - 0=no restrictions - negative=suppress if null
+     *  @param columnMaxHeight array with row max height for a column - 0=no restrictions; -1=one row only
+     *  @param columnJustification field justification for column
+     *
+     *  @param fixedWidth array with column fixed width
+     *  @param functionRows list of function rows
+     *  @param multiLineHeader if true, the header is not truncated at maxWidth
+     *
+     *  @param data 2D array with data to be printed [row][col]
+     *  @param pk array of primary keys
+     *  @param pkColumnName primary key name
+     *
+     *  @param pageNoStart page number of starting page
+     *  @param firstPage bounds on first page
+     *  @param nextPages bounds on following pages
+     *  @param repeatedColumns repeat first x columns on - X Axis follow pages
+     *  @param additionalLines map of old column to below printed column
+     *
+     *  @param rowColFont HashMap with Point as key with Font overwrite
+     *  @param rowColColor HashMap with Point as key with foreground Color overwrite
+     *  @param rowColBackground HashMap with Point as key with background Color overwrite
+     *  @param tFormat table format
+     *  @param pageBreak Arraylist of rows with page break
+     *
+     *  @param colSuppressRepeats
+     *  @param rowColReportLine
+     *  @param finReportSumRows
+     */
+    public TableElement (ValueNamePair[] columnHeader,
+        int[] columnMaxWidth, int[] columnMaxHeight, String[] columnJustification,
+        boolean[] fixedWidth, ArrayList&lt;Integer&gt; functionRows, boolean multiLineHeader,
+        SerializableMatrix&lt;Serializable&gt; data, KeyNamePair[] pk, String pkColumnName,
+        int pageNoStart, Rectangle firstPage, Rectangle nextPages, int repeatedColumns, HashMap&lt;Integer,Integer&gt; additionalLines,
+        HashMap&lt;Point,Font&gt; rowColFont, HashMap&lt;Point,Color&gt; rowColColor, HashMap&lt;Point,Color&gt; rowColBackground,
+        MPrintTableFormat tFormat, ArrayList&lt;Integer&gt; pageBreak, Boolean[] colSuppressRepeats, HashMap&lt;Point, MReportLine&gt; rowColReportLine,
+        ArrayList&lt;Integer&gt; finReportSumRows)
+    {
+<span class="nc" id="L135">        super();</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE))</span>
+        {
+<span class="nc" id="L138">            log.fine(&quot;Cols=&quot; + columnHeader.length + &quot;, Rows=&quot; + data.getRowCount());</span>
+        }
+<span class="nc" id="L140">        m_colSuppressRepeats = colSuppressRepeats;</span>
+<span class="nc" id="L141">        m_columnHeader = columnHeader;</span>
+<span class="nc" id="L142">        m_columnMaxWidth = columnMaxWidth;</span>
+<span class="nc" id="L143">        m_columnMaxHeight = columnMaxHeight;</span>
+<span class="nc" id="L144">        m_columnJustification = columnJustification;</span>
+<span class="nc" id="L145">        m_functionRows = functionRows;</span>
+<span class="nc" id="L146">        m_fixedWidth = fixedWidth;</span>
+        //
+<span class="nc" id="L148">        m_multiLineHeader = multiLineHeader;</span>
+<span class="nc" id="L149">        m_data = data;</span>
+<span class="nc" id="L150">        m_pk = pk;</span>
+<span class="nc" id="L151">        m_pkColumnName = pkColumnName;</span>
+        //
+<span class="nc" id="L153">        m_pageNoStart = pageNoStart;</span>
+<span class="nc" id="L154">        m_firstPage = firstPage;</span>
+<span class="nc" id="L155">        m_nextPages = nextPages;</span>
+<span class="nc" id="L156">        m_repeatedColumns = repeatedColumns;</span>
+<span class="nc" id="L157">        m_additionalLines = additionalLines;</span>
+        //	Used Fonts,Colots
+<span class="nc" id="L159">        Point pAll = new Point (ALL, ALL);</span>
+<span class="nc" id="L160">        m_rowColFont = rowColFont;</span>
+<span class="nc" id="L161">        m_baseFont = (Font)m_rowColFont.get(pAll);</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        if (m_baseFont == null)</span>
+<span class="nc" id="L163">            m_baseFont = new Font(null);</span>
+<span class="nc" id="L164">        m_rowColColor = rowColColor;</span>
+<span class="nc" id="L165">        m_baseColor = (Color)m_rowColColor.get(pAll);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">        if (m_baseColor == null)</span>
+<span class="nc" id="L167">            m_baseColor = Color.black;</span>
+<span class="nc" id="L168">        m_rowColBackground = rowColBackground;</span>
+<span class="nc" id="L169">        m_baseBackground = (Color)m_rowColBackground.get(pAll);</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        if (m_baseBackground == null)</span>
+<span class="nc" id="L171">            m_baseBackground = Color.white;</span>
+<span class="nc" id="L172">        m_tFormat = tFormat;</span>
+<span class="nc" id="L173">        m_finReportSumRows = finReportSumRows;</span>
+<span class="nc" id="L174">        m_rowColReportLine = rowColReportLine;</span>
+
+        //	Page Break - not two after each other
+<span class="nc" id="L177">        m_pageBreak = pageBreak;</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        for (int i = 0; i &lt; m_pageBreak.size(); i++)</span>
+        {
+<span class="nc" id="L180">            Integer row = (Integer)m_pageBreak.get(i);</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">            while ((i + 1) &lt; m_pageBreak.size())</span>
+            {
+<span class="nc" id="L183">                Integer nextRow = (Integer)m_pageBreak.get(i+1);</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                if ((row.intValue()+1) == nextRow.intValue())</span>
+                {
+<span class="nc bnc" id="L186" title="All 2 branches missed.">                    if (log.isLoggable(Level.FINE)) log.fine(&quot;- removing PageBreak row=&quot; + row);</span>
+<span class="nc" id="L187">                    m_pageBreak.remove(i);</span>
+<span class="nc" id="L188">                    row = nextRow;</span>
+                }
+                else
+                    break;
+            }
+        }	//	for all page breaks
+
+        //	Load Image
+<span class="nc" id="L196">        waitForLoad(LayoutEngine.IMAGE_TRUE);</span>
+<span class="nc" id="L197">        waitForLoad(LayoutEngine.IMAGE_FALSE);</span>
+<span class="nc" id="L198">    }	//	TableElement</span>
+
+    /**	Column Headers				*/
+    private ValueNamePair[] 	m_columnHeader;
+    /** Max column widths			*/
+    private int[]				m_columnMaxWidth;
+    /** Max row height per column	*/
+    private int[]				m_columnMaxHeight;
+    /** Field Justification for Column	*/
+    private String[] 			m_columnJustification;
+    /** True if column fixed length		*/
+    private boolean[] 			m_fixedWidth;
+    /** Create multiple header lines if required	*/
+    private boolean 			m_multiLineHeader;
+    /** List of Function Rows			*/
+    private ArrayList&lt;Integer&gt;	m_functionRows;
+    /** The Data					*/
+    private SerializableMatrix&lt;Serializable&gt; m_data;
+    /** Primary Keys				*/
+    private KeyNamePair[]		m_pk;
+    /** Primary Key Column Name		*/
+    private String				m_pkColumnName;
+    /** Starting page Number		*/
+    private int 				m_pageNoStart;
+    /** Bounds of first Page		*/
+    private Rectangle 			m_firstPage;
+    /** Bounds of next Pages		*/
+    private Rectangle 			m_nextPages;
+
+    private Boolean[]			m_colSuppressRepeats;
+
+    /** repeat first x columns on - X Axis follow pages	*/
+    private int					m_repeatedColumns;
+
+    /** base font for table			*/
+    private Font				m_baseFont;
+    /** HashMap with Point as key with Font overwrite	*/
+    private HashMap&lt;Point,Font&gt;	m_rowColFont;
+    /** base foreground color for table		*/
+    private Color 				m_baseColor;
+    /** HashMap with Point as key with foreground Color overwrite	*/
+    private HashMap&lt;Point,Color&gt;	m_rowColColor;
+    /** base color for table		*/
+    private Color 				m_baseBackground;
+    /** HashMap with Point as key with background Color overwrite	*/
+    private HashMap&lt;Point,Color&gt;	m_rowColBackground;
+    /**	Format of Table				*/
+    private MPrintTableFormat	m_tFormat;
+    /**	Page Break Rows				*/
+    private ArrayList&lt;Integer&gt;	m_pageBreak;
+
+    /** width of columns (float)		*/
+<span class="nc" id="L250">    private ArrayList&lt;Float&gt;	m_columnWidths = new ArrayList&lt;Float&gt;();</span>
+    /** height of rows (float)			*/
+<span class="nc" id="L252">    private ArrayList&lt;Float&gt;	m_rowHeights = new ArrayList&lt;Float&gt;();</span>
+    /** height of header				*/
+<span class="nc" id="L254">    private int					m_headerHeight = 0;</span>
+
+    /** first data row number per page	*/
+<span class="nc" id="L257">    private ArrayList&lt;Integer&gt;	m_firstRowOnPage = new ArrayList&lt;Integer&gt;();</span>
+    /** first column number per -&amp;gt; page	*/
+<span class="nc" id="L259">    private ArrayList&lt;Integer&gt;	m_firstColumnOnPage = new ArrayList&lt;Integer&gt;();</span>
+    /** Height of page					*/
+<span class="nc" id="L261">    private ArrayList&lt;Float&gt;	m_pageHeight = new ArrayList&lt;Float&gt;();</span>
+
+    /**	Key: Point(row,col) - Value: NamePair	*/
+<span class="nc" id="L264">    private HashMap&lt;Point,NamePair&gt;	m_rowColDrillDown = new HashMap&lt;Point,NamePair&gt;();</span>
+
+
+    /**	Key: Integer (original Column) - Value: Integer (below column)	*/
+    private HashMap&lt;Integer,Integer&gt;	m_additionalLines;
+
+	/** Key: Integer (below column) - Value: Integer (original Column) */
+<span class="nc" id="L271">	private MultiMap&lt;Integer, Integer&gt; belowColumnMultiMap	= null;</span>
+
+    /** List of Fin Report Summary Rows */
+    private ArrayList&lt;Integer&gt;					m_finReportSumRows;
+    /** HashMap with Point as key with report line */
+    private HashMap&lt;Point, MReportLine&gt;			m_rowColReportLine;
+
+    /**	Header Row Indicator			*/
+    public static final int		HEADER_ROW = -2;
+    /**	Header Row Indicator			*/
+    public static final int		ALL = -1;
+
+    /**	Horizontal - GAP between text &amp; line	*/
+    private static final int	H_GAP = 2;
+    /**	Vertical | GAP between text &amp; line		*/
+    private static final int	V_GAP = 2;
+
+    /** Debug Print Paint						*/
+    private static final boolean	DEBUG_PRINT = false;
+
+    /**
+     * 	Layout and Calculate Size.&lt;br/&gt;
+     * 	Set p_width and p_height.
+     * 	@return true if calculated
+     */
+    @Override
+    protected boolean calculateSize()
+    {
+<span class="nc bnc" id="L299" title="All 2 branches missed.">        if (p_sizeCalculated)</span>
+<span class="nc" id="L300">            return true;</span>
+
+<span class="nc" id="L302">        p_width = 0;</span>
+<span class="nc" id="L303">        m_printRows = new SerializableMatrixImpl&lt;ArrayList&lt;Serializable&gt;&gt;(&quot;TableElementPrintRows&quot;);	//	reset</span>
+
+        //	Max Column Width = 50% of available width (used if maxWidth not set)
+<span class="nc" id="L306">        float dynMxColumnWidth = m_firstPage.width / (float)2;</span>
+
+        //	Width calculation
+<span class="nc" id="L309">        int rows = m_data.getRowCount();</span>
+<span class="nc" id="L310">        int cols = m_columnHeader.length;</span>
+        //	Data Sizes and Header Sizes
+<span class="nc" id="L312">        SerializableMatrix&lt;Dimension2DImpl&gt; dataSizes = new SerializableMatrixImpl&lt;Dimension2DImpl&gt;(&quot;TableElementDimensions&quot;);</span>
+<span class="nc" id="L313">        Dimension2DImpl[] headerSizes = new Dimension2DImpl[cols];</span>
+<span class="nc" id="L314">        FontRenderContext frc = new FontRenderContext(null, true, true);</span>
+
+        //	data columns - rows
+<span class="nc bnc" id="L317" title="All 2 branches missed.">        for (int dataCol = 0; dataCol &lt; cols; dataCol++)</span>
+        {
+<span class="nc" id="L319">            int col = dataCol;</span>
+            //	Print below existing column
+<span class="nc bnc" id="L321" title="All 2 branches missed.">            if (m_additionalLines.containsKey(Integer.valueOf(dataCol)))</span>
+            {
+<span class="nc" id="L323">                col = ((Integer)m_additionalLines.get(Integer.valueOf(dataCol))).intValue();</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">                if (log.isLoggable(Level.FINEST)) log.finest(&quot;DataColumn=&quot; + dataCol + &quot;, BelowColumn=&quot; + col);</span>
+            }
+<span class="nc" id="L326">            float colWidth = 0;</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">            for (int row = 0; row &lt; rows; row++)</span>
+            {
+<span class="nc" id="L329">                m_data.setRowIndex(row);</span>
+                // define if all the row is null
+<span class="nc" id="L331">                boolean isNullRow = true;</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">                for (Serializable element : m_data.getRowData()) {</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">                    if (element != null) {</span>
+<span class="nc" id="L334">                        isNullRow = false;</span>
+<span class="nc" id="L335">                        break;</span>
+                    }
+                }
+                //
+<span class="nc bnc" id="L339" title="All 2 branches missed.">                if (dataSizes.getRowCount() &lt;= row)</span>
+                {
+<span class="nc" id="L341">                    dataSizes.addRow(new ArrayList&lt;Dimension2DImpl&gt;());</span>
+<span class="nc" id="L342">                }</span>
+                else
+                {
+<span class="nc" id="L345">                    dataSizes.setRowIndex(row);</span>
+                }
+<span class="nc" id="L347">                List&lt;Dimension2DImpl&gt; dimensions = dataSizes.getRowData();</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">                if (dimensions.size() &lt;= dataCol)</span>
+                {
+<span class="nc" id="L350">                    dimensions.add(null);</span>
+                }
+
+<span class="nc" id="L353">                Font font = getFont(row, dataCol);</span>
+
+<span class="nc" id="L355">                Serializable dataItem = m_data.getRowData().get(dataCol);</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">                if (dataItem == null)</span>
+                {
+                    //ensure fixed column width respected even when data is null
+<span class="nc bnc" id="L359" title="All 2 branches missed.">                    if (   m_columnMaxWidth[dataCol] &gt;= 0  // the data column is not suppress null</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">                        &amp;&amp; m_fixedWidth[col]               // the print column (below column) has fixed width</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">                        &amp;&amp; !isNullRow)</span>
+                    {
+<span class="nc" id="L363">                        dataItem = &quot; &quot;;</span>
+<span class="nc" id="L364">                    }</span>
+                    else
+                    {
+                        // Set Blank line height
+<span class="nc bnc" id="L368" title="All 4 branches missed.">                        if (getReportLine(row, dataCol) != null &amp;&amp; getReportLine(row, dataCol).isLineTypeBlankLine())</span>
+                        {
+<span class="nc" id="L370">                            dimensions.set(dataCol, new Dimension2DImpl());</span>
+<span class="nc" id="L371">                            TextLayout layout = new TextLayout(&quot; &quot;, font, frc);</span>
+<span class="nc" id="L372">                            float height = layout.getAscent() + layout.getDescent() + layout.getLeading();</span>
+<span class="nc" id="L373">                            dimensions.get(dataCol).height = height;</span>
+<span class="nc" id="L374">                            dimensions.get(dataCol).roundUp();</span>
+<span class="nc" id="L375">                        }</span>
+                        else
+                        {
+                        	// set null data for below columns
+<span class="nc bnc" id="L379" title="All 2 branches missed.">    						if (col != dataCol)</span>
+    						{
+<span class="nc" id="L381">    							addPrintLines(row, col, dataItem);</span>
+    						}
+<span class="nc" id="L383">                            dimensions.set(dataCol, new Dimension2DImpl());</span>
+                        }
+<span class="nc" id="L385">                        continue;</span>
+                    }
+                }
+<span class="nc" id="L388">                String string = dataItem.toString();</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                if (string.length() == 0)</span>
+                {
+<span class="nc" id="L391">                    dimensions.set(dataCol, new Dimension2DImpl());</span>
+<span class="nc" id="L392">                    continue;</span>
+                }
+
+                //	Print below existing column = (col != dataCol)
+<span class="nc" id="L396">                addPrintLines(row, col, dataItem);</span>
+<span class="nc" id="L397">                dimensions.set(dataCol, new Dimension2DImpl());</span>
+
+<span class="nc bnc" id="L399" title="All 2 branches missed.">                if (dataItem instanceof Boolean)</span>
+                {
+<span class="nc" id="L401">                    dimensions.get(col).addBelow(LayoutEngine.IMAGE_SIZE);</span>
+<span class="nc" id="L402">                    continue;</span>
+                }
+<span class="nc bnc" id="L404" title="All 2 branches missed.">                else if (dataItem instanceof ImageElement)</span>
+                {
+<span class="nc" id="L406">                    dimensions.get(col).addBelow(</span>
+<span class="nc" id="L407">                        new Dimension((int)((ImageElement)dataItem).getWidth(),</span>
+<span class="nc" id="L408">                            (int)((ImageElement)dataItem).getHeight()));</span>
+                    // Adjust the column width - teo_sarca, [ 1673620 ]
+<span class="nc" id="L410">                    float width = (float)Math.ceil(dimensions.get(col).getWidth());</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">                    if (colWidth &lt; width)</span>
+<span class="nc" id="L412">                        colWidth = width;</span>
+<span class="nc" id="L413">                    continue;</span>
+                }
+<span class="nc bnc" id="L415" title="All 2 branches missed.">                else if (dataItem instanceof BarcodeElement)</span>
+                {
+<span class="nc" id="L417">                    dimensions.get(col).addBelow(</span>
+<span class="nc" id="L418">                        new Dimension((int)((BarcodeElement)dataItem).getWidth(),</span>
+<span class="nc" id="L419">                            (int)((BarcodeElement)dataItem).getHeight()));</span>
+                    // Check if the overflow is allowed - teo_sarca, [ 1673590 ]
+<span class="nc bnc" id="L421" title="All 2 branches missed.">                    if (!((BarcodeElement)dataItem).isAllowOverflow()) {</span>
+<span class="nc" id="L422">                        float width = (float)Math.ceil(dimensions.get(col).getWidth());</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">                        if (colWidth &lt; width)</span>
+<span class="nc" id="L424">                            colWidth = width;</span>
+                    }
+
+<span class="nc" id="L427">                    continue;</span>
+                }
+                //	No Width Limitations
+<span class="nc bnc" id="L430" title="All 4 branches missed.">                if (m_columnMaxWidth[col] == 0 || m_columnMaxWidth[col] == -1)</span>
+                {
+<span class="nc" id="L432">                    TextLayout layout = new TextLayout (string, font, frc);</span>
+<span class="nc" id="L433">                    float width = layout.getAdvance() + 2;	//	buffer</span>
+<span class="nc" id="L434">                    float height = layout.getAscent()</span>
+<span class="nc" id="L435">                        + layout.getDescent()</span>
+<span class="nc" id="L436">                        + layout.getLeading();</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">                    if (width &gt; dynMxColumnWidth)</span>
+<span class="nc" id="L438">                        m_columnMaxWidth[col] = (int)Math.ceil(dynMxColumnWidth);</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">                    else if (colWidth &lt; width)</span>
+<span class="nc" id="L440">                        colWidth = width;</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">                    if (dimensions.get(col) == null)</span>
+                    {
+<span class="nc" id="L443">                        dimensions.set(col, new Dimension2DImpl());</span>
+<span class="nc" id="L444">                        log.log(Level.WARNING, &quot;No Size for r=&quot; + row + &quot;,c=&quot; + col);</span>
+                    }
+<span class="nc" id="L446">                    dimensions.get(col).addBelow(width, height);</span>
+                }
+                //	Width limitations
+<span class="nc bnc" id="L449" title="All 4 branches missed.">                if (m_columnMaxWidth[col] != 0 &amp;&amp; m_columnMaxWidth[col] != -1)</span>
+                {
+<span class="nc" id="L451">                    float height = 0;</span>
+                    //
+<span class="nc bnc" id="L453" title="All 2 branches missed.">                    if (HTMLElement.isHTML(string))</span>
+                    {
+<span class="nc" id="L455">                        HTMLRenderer renderer = HTMLRenderer.get(string);</span>
+<span class="nc" id="L456">                        colWidth = renderer.getWidth();</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">                        if (m_columnMaxHeight[col] == -1)		//	one line only</span>
+<span class="nc" id="L458">                            height = renderer.getHeightOneLine();</span>
+                        else
+<span class="nc" id="L460">                            height = renderer.getHeight();</span>
+<span class="nc" id="L461">                        renderer.setAllocation((int)colWidth, (int)height);</span>
+<span class="nc" id="L462">                        m_data.getRowData().set(dataCol, renderer);</span>
+<span class="nc" id="L463">                    }</span>
+                    else
+                    {
+<span class="nc" id="L466">                        String[] lines = Pattern.compile(&quot;\n&quot;, Pattern.MULTILINE).split(string);</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">                        for (int lineNo = 0; lineNo &lt; lines.length; lineNo++)</span>
+                        {
+<span class="nc" id="L469">                            String str = lines[lineNo];</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">                            if (str.length() == 0)</span>
+<span class="nc" id="L471">                                str = &quot; &quot;;</span>
+<span class="nc" id="L472">                            AttributedString aString = new AttributedString(str);</span>
+<span class="nc" id="L473">                            aString.addAttribute(TextAttribute.FONT, font);</span>
+<span class="nc" id="L474">                            AttributedCharacterIterator iter = aString.getIterator();</span>
+<span class="nc" id="L475">                            LineBreakMeasurer measurer = new LineBreakMeasurer(iter, frc);</span>
+<span class="nc bnc" id="L476" title="All 2 branches missed.">                            while (measurer.getPosition() &lt; iter.getEndIndex())</span>
+                            {
+<span class="nc" id="L478">                                TextLayout layout = measurer.nextLayout(Math.abs(m_columnMaxWidth[col]));</span>
+<span class="nc" id="L479">                                float width = layout.getAdvance();</span>
+<span class="nc bnc" id="L480" title="All 2 branches missed.">                                if (colWidth &lt; width)</span>
+<span class="nc" id="L481">                                    colWidth = width;</span>
+<span class="nc" id="L482">                                float lineHeight = layout.getAscent() + layout.getDescent() + layout.getLeading();</span>
+<span class="nc bnc" id="L483" title="All 2 branches missed.">                                if (m_columnMaxHeight[col] == -1)		//	one line only</span>
+                                {
+<span class="nc" id="L485">                                    height = lineHeight;</span>
+<span class="nc" id="L486">                                    break;</span>
+                                }
+<span class="nc bnc" id="L488" title="All 4 branches missed.">                                else if (m_columnMaxHeight[col] == 0 || (height + lineHeight) &lt;= m_columnMaxHeight[col])</span>
+<span class="nc" id="L489">                                    height += lineHeight;</span>
+                            }
+                        }	//	for all lines
+                    }
+<span class="nc bnc" id="L493" title="All 2 branches missed.">                    if (m_fixedWidth[col])</span>
+<span class="nc" id="L494">                        colWidth = Math.abs(m_columnMaxWidth[col]);</span>
+<span class="nc" id="L495">                    dimensions.get(col).addBelow(colWidth, height);</span>
+                }
+<span class="nc" id="L497">                dimensions.get(col).roundUp();</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">                if (dataItem instanceof NamePair)</span>
+<span class="nc" id="L499">                    m_rowColDrillDown.put(new Point(row, col), (NamePair)dataItem);</span>
+                //
+<span class="nc bnc" id="L501" title="All 2 branches missed.">                if (log.isLoggable(Level.FINEST))</span>
+                {
+<span class="nc" id="L503">                    log.finest(&quot;Col=&quot; + col + &quot;, row=&quot; + row</span>
+<span class="nc" id="L504">                            + &quot; =&gt; &quot; + dimensions.get(col) + &quot; - ColWidth=&quot; + colWidth);</span>
+                }
+            }	//	for all data rows
+
+            //	Column Width  for Header
+<span class="nc" id="L509">            String string = &quot;&quot;;</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">            if (m_columnHeader[dataCol] != null)</span>
+<span class="nc" id="L511">                string = m_columnHeader[dataCol].toString();</span>
+
+            //	Print below existing column
+<span class="nc bnc" id="L514" title="All 2 branches missed.">            if (col != dataCol)</span>
+<span class="nc" id="L515">                headerSizes[dataCol] = new Dimension2DImpl();</span>
+<span class="nc bnc" id="L516" title="All 4 branches missed.">            else if (colWidth == 0 &amp;&amp; m_columnMaxWidth[dataCol] &lt; 0		//	suppress Null</span>
+<span class="nc bnc" id="L517" title="All 2 branches missed.">                    || string.length() == 0)</span>
+<span class="nc" id="L518">                headerSizes[dataCol] = new Dimension2DImpl();</span>
+            else
+            {
+<span class="nc" id="L521">                Font font = getFont(HEADER_ROW, dataCol);</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">                if (!font.isBold())</span>
+<span class="nc" id="L523">                    font = new Font(font.getName(), Font.BOLD, font.getSize());</span>
+                //	No Width Limitations
+<span class="nc bnc" id="L525" title="All 6 branches missed.">                if (m_columnMaxWidth[dataCol] == 0 || m_columnMaxWidth[dataCol] == -1 || !m_multiLineHeader)</span>
+                {
+<span class="nc" id="L527">                    TextLayout layout = new TextLayout (string, font, frc);</span>
+<span class="nc" id="L528">                    float width = layout.getAdvance() + 3;	//	buffer</span>
+<span class="nc" id="L529">                    float height = layout.getAscent() + layout.getDescent() + layout.getLeading();</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">                    if (width &gt; dynMxColumnWidth)</span>
+<span class="nc" id="L531">                        m_columnMaxWidth[dataCol] = (int)Math.ceil(dynMxColumnWidth);</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">                    else if (colWidth &lt; width)</span>
+<span class="nc" id="L533">                        colWidth = width;</span>
+<span class="nc" id="L534">                    headerSizes[dataCol] = new Dimension2DImpl(width, height);</span>
+                }
+                //	Width limitations
+<span class="nc bnc" id="L537" title="All 4 branches missed.">                if (m_columnMaxWidth[dataCol] != 0 &amp;&amp; m_columnMaxWidth[dataCol] != -1)</span>
+                {
+<span class="nc" id="L539">                    float height = 0;</span>
+                    //
+<span class="nc" id="L541">                    String[] lines = Pattern.compile(&quot;\n&quot;, Pattern.MULTILINE).split(string);</span>
+<span class="nc bnc" id="L542" title="All 2 branches missed.">                    for (int lineNo = 0; lineNo &lt; lines.length; lineNo++)</span>
+                    {
+<span class="nc" id="L544">                        AttributedString aString = new AttributedString(lines[lineNo]);</span>
+<span class="nc" id="L545">                        aString.addAttribute(TextAttribute.FONT, font);</span>
+<span class="nc" id="L546">                        AttributedCharacterIterator iter = aString.getIterator();</span>
+<span class="nc" id="L547">                        LineBreakMeasurer measurer = new LineBreakMeasurer(iter, frc);</span>
+<span class="nc" id="L548">                        colWidth = Math.abs(m_columnMaxWidth[dataCol]);</span>
+<span class="nc bnc" id="L549" title="All 2 branches missed.">                        while (measurer.getPosition() &lt; iter.getEndIndex())</span>
+                        {
+<span class="nc" id="L551">                            TextLayout layout = measurer.nextLayout(colWidth);</span>
+<span class="nc" id="L552">                            float lineHeight = layout.getAscent() + layout.getDescent() + layout.getLeading();</span>
+<span class="nc bnc" id="L553" title="All 2 branches missed.">                            if (!m_multiLineHeader)			//	one line only</span>
+                            {
+<span class="nc" id="L555">                                height = lineHeight;</span>
+<span class="nc" id="L556">                                break;</span>
+                            }
+                            else
+<span class="nc" id="L559">                                height += lineHeight;</span>
+                        }
+                    }	//	for all header lines
+<span class="nc" id="L562">                    headerSizes[dataCol] = new Dimension2DImpl(colWidth, height);</span>
+                }
+
+            }	//	headerSize
+<span class="nc" id="L566">            headerSizes[dataCol].roundUp();</span>
+<span class="nc" id="L567">            colWidth = (float)Math.ceil(colWidth);</span>
+
+            //	Round Column Width
+<span class="nc bnc" id="L570" title="All 2 branches missed.">            if (dataCol == 0)</span>
+<span class="nc" id="L571">                colWidth += m_tFormat.getVLineStroke().floatValue();</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">            if (colWidth != 0)</span>
+<span class="nc" id="L573">                colWidth += (2*H_GAP) + m_tFormat.getVLineStroke().floatValue();</span>
+
+            //	Print below existing column
+<span class="nc bnc" id="L576" title="All 2 branches missed.">            if (col != dataCol)</span>
+            {
+<span class="nc" id="L578">                m_columnWidths.add(Float.valueOf((float)0.0));		//	for the data column</span>
+<span class="nc" id="L579">                Float origWidth=null;</span>
+                try{
+<span class="nc" id="L581">                    origWidth = (Float)m_columnWidths.get(col);</span>
+<span class="nc" id="L582">                }catch(IndexOutOfBoundsException e){}</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">                if (origWidth == null)</span>
+<span class="nc" id="L584">                    log.log(Level.SEVERE, &quot;Column &quot; + dataCol + &quot; below &quot; + col + &quot; - no value for orig width&quot;);</span>
+                else
+                {
+<span class="nc bnc" id="L587" title="All 2 branches missed.">                    if (origWidth.compareTo(Float.valueOf(colWidth)) &gt;= 0)</span>
+                    {
+<span class="nc bnc" id="L589" title="All 2 branches missed.">                        if (log.isLoggable(Level.FINEST)) log.finest(&quot;Same Width - Col=&quot; + col</span>
+<span class="nc" id="L590">                                + &quot; - OrigWidth=&quot; + origWidth + &quot; - Width=&quot; + colWidth + &quot; - Total=&quot; + p_width);</span>
+<span class="nc" id="L591">                    }</span>
+                    else
+                    {
+<span class="nc" id="L594">                        m_columnWidths.set(col, Float.valueOf(colWidth));</span>
+<span class="nc" id="L595">                        p_width += (colWidth - origWidth.floatValue());</span>
+<span class="nc bnc" id="L596" title="All 2 branches missed.">                        if (log.isLoggable(Level.FINEST)) log.finest(&quot;New Width - Col=&quot; + col</span>
+<span class="nc" id="L597">                                + &quot; - OrigWidth=&quot; + origWidth + &quot; - Width=&quot; + colWidth + &quot; - Total=&quot; + p_width);</span>
+                    }
+                }
+<span class="nc" id="L600">            }</span>
+            //	Add new Column
+            else
+            {
+<span class="nc" id="L604">                m_columnWidths.add(Float.valueOf(colWidth));</span>
+<span class="nc" id="L605">                p_width += colWidth;</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">                if (log.isLoggable(Level.FINEST)) log.finest(&quot;Width - Col=&quot; + dataCol</span>
+<span class="nc" id="L607">                        + &quot; - Width=&quot; + colWidth + &quot; - Total=&quot; + p_width);</span>
+            }
+        }	//	for all columns
+
+        //	Height	**********
+<span class="nc" id="L612">        p_height = 0;</span>
+<span class="nc bnc" id="L613" title="All 2 branches missed.">        for (int row = 0; row &lt; rows; row++)</span>
+        {
+<span class="nc" id="L615">            float rowHeight = 0f;</span>
+<span class="nc" id="L616">            float over = 0f;</span>
+<span class="nc" id="L617">            float under = 0f;</span>
+<span class="nc" id="L618">            dataSizes.setRowIndex(row);</span>
+<span class="nc" id="L619">            List&lt;Dimension2DImpl&gt; dimensions = dataSizes.getRowData();</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">            for (int col = 0; col &lt; cols; col++)</span>
+            {
+<span class="nc bnc" id="L622" title="All 2 branches missed.">                if (dimensions.get(col).height &gt; rowHeight)	//	max</span>
+<span class="nc" id="L623">                    rowHeight = (float)dimensions.get(col).height;</span>
+
+<span class="nc bnc" id="L625" title="All 2 branches missed.">                if (getReportLine(row, col) != null)</span>
+                {
+<span class="nc bnc" id="L627" title="All 2 branches missed.">                    if (getReportLine(row, col).getOverline() &gt; over)</span>
+<span class="nc" id="L628">                        over = getReportLine(row, col).getOverline();</span>
+<span class="nc bnc" id="L629" title="All 2 branches missed.">                    if (getReportLine(row, col).getUnderline() &gt; under)</span>
+<span class="nc" id="L630">                        under = getReportLine(row, col).getUnderline();</span>
+                }
+            }	//	for all columns
+<span class="nc bnc" id="L633" title="All 2 branches missed.">            over = over == 2 ? over * m_tFormat.getLineStroke().floatValue() + V_GAP : over * m_tFormat.getLineStroke().floatValue();</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">            under = under == 2 ? under * m_tFormat.getLineStroke().floatValue() + V_GAP : under * m_tFormat.getLineStroke().floatValue();</span>
+<span class="nc" id="L635">            rowHeight += over + under;</span>
+<span class="nc" id="L636">            rowHeight += m_tFormat.getLineStroke().floatValue() + (2*V_GAP);</span>
+<span class="nc" id="L637">            m_rowHeights.add(Float.valueOf(rowHeight));</span>
+<span class="nc" id="L638">            p_height += rowHeight;</span>
+        }	//	for all rows
+        //	HeaderRow
+<span class="nc" id="L641">        m_headerHeight = 0;</span>
+<span class="nc bnc" id="L642" title="All 2 branches missed.">        for (int col = 0; col &lt; cols; col++)</span>
+        {
+<span class="nc bnc" id="L644" title="All 2 branches missed.">            if (headerSizes[col].height &gt; m_headerHeight)</span>
+<span class="nc" id="L645">                m_headerHeight = (int)headerSizes[col].height;</span>
+        }	//	for all columns
+<span class="nc" id="L647">        m_headerHeight += (4*m_tFormat.getLineStroke().floatValue()) + (2*V_GAP);	//	Thick lines</span>
+<span class="nc" id="L648">        p_height += m_headerHeight;</span>
+
+        //	Last row Lines
+<span class="nc" id="L651">        p_height += m_tFormat.getLineStroke().floatValue();			//	last fat line</span>
+
+        //	Page Layout	*******************************************************
+
+<span class="nc bnc" id="L655" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;FirstPage=&quot; + m_firstPage + &quot;, NextPages=&quot; + m_nextPages);</span>
+        //	One Page on Y | Axis
+<span class="nc bnc" id="L657" title="All 4 branches missed.">        if (m_firstPage.height &gt;= p_height &amp;&amp; m_pageBreak.size() == 0)</span>
+        {
+<span class="nc bnc" id="L659" title="All 2 branches missed.">            if (log.isLoggable(Level.FINEST)) log.finest(&quot;Page Y=1 - PageHeight=&quot; + m_firstPage.height + &quot; - TableHeight=&quot; + p_height);</span>
+<span class="nc" id="L660">            m_firstRowOnPage.add(Integer.valueOf(0));	//	Y</span>
+<span class="nc" id="L661">            m_pageHeight.add(Float.valueOf(p_height));	//	Y index only</span>
+<span class="nc" id="L662">        }</span>
+        //	multiple pages on Y | Axis
+        else
+        {
+<span class="nc" id="L666">            float availableHeight = 0f;</span>
+<span class="nc" id="L667">            float usedHeight = 0f;</span>
+<span class="nc" id="L668">            boolean firstPage = true;</span>
+<span class="nc" id="L669">            int addlRows = 0;</span>
+            //	for all rows
+<span class="nc bnc" id="L671" title="All 2 branches missed.">            for (int dataRow = 0; dataRow &lt; m_rowHeights.size(); dataRow++)</span>
+            {
+<span class="nc" id="L673">                float rowHeight = ((Float)m_rowHeights.get(dataRow)).floatValue();</span>
+                //	Y page break before
+<span class="nc" id="L675">                boolean pageBreak = isPageBreak(dataRow);</span>
+
+                //adjust for lastrow
+<span class="nc bnc" id="L678" title="All 2 branches missed.">                if (dataRow + 1 == m_rowHeights.size())</span>
+                {
+<span class="nc" id="L680">                    availableHeight -= m_tFormat.getLineStroke().floatValue();</span>
+                }
+
+<span class="nc bnc" id="L683" title="All 4 branches missed.">                if (!pageBreak &amp;&amp; availableHeight &lt; rowHeight)</span>
+                {
+<span class="nc bnc" id="L685" title="All 4 branches missed.">                    if (availableHeight &gt; 40 &amp;&amp; rowHeight &gt; 40)</span>
+                    {
+<span class="nc bnc" id="L687" title="All 2 branches missed.">                        if (log.isLoggable(Level.FINEST)) log.finest(&quot;- Split (leave on current) Row=&quot; + dataRow</span>
+<span class="nc" id="L688">                            + &quot; - Available=&quot; + availableHeight + &quot;, RowHeight=&quot; + rowHeight);</span>
+                    }
+<span class="nc" id="L690">                    pageBreak = true;</span>
+                }
+<span class="nc bnc" id="L692" title="All 2 branches missed.">                if (pageBreak)</span>
+                {
+<span class="nc bnc" id="L694" title="All 2 branches missed.">                    availableHeight = firstPage ? m_firstPage.height : m_nextPages.height;</span>
+<span class="nc" id="L695">                    m_firstRowOnPage.add(Integer.valueOf(dataRow+addlRows));	//	Y</span>
+<span class="nc bnc" id="L696" title="All 2 branches missed.">                    if (!firstPage)</span>
+                    {
+<span class="nc" id="L698">                        m_pageHeight.add(Float.valueOf(usedHeight));	//	Y index only</span>
+<span class="nc bnc" id="L699" title="All 2 branches missed.">                        if (log.isLoggable(Level.FINEST)) log.finest(&quot;Page Y=&quot; + m_pageHeight.size()</span>
+<span class="nc" id="L700">                                + &quot; - PageHeight=&quot; + usedHeight);</span>
+                    }
+<span class="nc bnc" id="L702" title="All 2 branches missed.">                    if (log.isLoggable(Level.FINEST)) log.finest(&quot;Page Y=&quot; + m_firstRowOnPage.size()</span>
+<span class="nc" id="L703">                        + &quot; - Row=&quot; + dataRow + &quot; - force=&quot; + isPageBreak(dataRow));</span>
+<span class="nc" id="L704">                    firstPage = false;</span>
+                    //
+<span class="nc" id="L706">                    availableHeight -= m_headerHeight;</span>
+<span class="nc" id="L707">                    usedHeight += m_headerHeight;</span>
+                }
+<span class="nc" id="L709">                availableHeight -= rowHeight;</span>
+<span class="nc" id="L710">                usedHeight += rowHeight;</span>
+<span class="nc bnc" id="L711" title="All 2 branches missed.">                if (availableHeight &lt; 0)</span>
+                {
+<span class="nc bnc" id="L713" title="All 2 branches missed.">                    if (log.isLoggable(Level.FINEST)) log.finest(&quot;- Split (move to next) Row=&quot; + dataRow</span>
+<span class="nc" id="L714">                        + &quot; - Available=&quot; + availableHeight + &quot;, RowHeight=&quot; + rowHeight);</span>
+
+                }
+<span class="nc bnc" id="L717" title="All 2 branches missed.">                if (log.isLoggable(Level.FINEST)) log.finest(&quot;Page Y=&quot; + m_pageHeight.size()</span>
+<span class="nc" id="L718">                    + &quot;, Row=&quot; + dataRow + &quot;,AddlRows=&quot; + addlRows + &quot;, Height=&quot; + rowHeight</span>
+<span class="nc" id="L719">                    + &quot; - Available=&quot; + availableHeight + &quot;, Used=&quot; + usedHeight);</span>
+            }	//	for all rows
+<span class="nc" id="L721">            m_pageHeight.add(Float.valueOf(usedHeight));			//	Y index only</span>
+<span class="nc bnc" id="L722" title="All 2 branches missed.">            if (log.isLoggable(Level.FINEST)) log.finest(&quot;Page Y=&quot; + m_pageHeight.size()</span>
+<span class="nc" id="L723">                    + &quot; - PageHeight=&quot; + usedHeight);</span>
+        }	//	multiple Y | pages
+
+        //	One page on - X Axis
+<span class="nc bnc" id="L727" title="All 2 branches missed.">        if (m_firstPage.width &gt;= p_width)</span>
+        {
+<span class="nc bnc" id="L729" title="All 2 branches missed.">            if (log.isLoggable(Level.FINEST)) log.finest(&quot;Page X=1 - PageWidth=&quot; + m_firstPage.width</span>
+<span class="nc" id="L730">                    + &quot; - TableWidth=&quot; + p_width);</span>
+<span class="nc" id="L731">            m_firstColumnOnPage.add(Integer.valueOf(0));	//	X</span>
+            //
+<span class="nc" id="L733">            distributeColumns (m_firstPage.width-(int)p_width, 0, m_columnWidths.size());</span>
+<span class="nc" id="L734">        }</span>
+        //	multiple pages on - X Axis
+        else
+        {
+<span class="nc" id="L738">            int availableWidth = 0;</span>
+<span class="nc" id="L739">            int lastStart = 0;</span>
+<span class="nc bnc" id="L740" title="All 2 branches missed.">            for (int col = 0; col &lt; m_columnWidths.size(); col++)</span>
+            {
+<span class="nc" id="L742">                int columnWidth = ((Float)m_columnWidths.get(col)).intValue();</span>
+                //	X page preak
+<span class="nc bnc" id="L744" title="All 2 branches missed.">                if (availableWidth &lt; columnWidth)</span>
+                {
+<span class="nc bnc" id="L746" title="All 2 branches missed.">                    if (col != 0)</span>
+<span class="nc" id="L747">                        distributeColumns (availableWidth, lastStart, col);</span>
+                    //
+<span class="nc" id="L749">                    m_firstColumnOnPage.add(Integer.valueOf(col));	//	X</span>
+<span class="nc bnc" id="L750" title="All 2 branches missed.">                    if (log.isLoggable(Level.FINEST)) log.finest(&quot;Page X=&quot; + m_firstColumnOnPage.size()</span>
+<span class="nc" id="L751">                            + &quot; - Col=&quot; + col);</span>
+<span class="nc" id="L752">                    lastStart = col;</span>
+<span class="nc" id="L753">                    availableWidth = m_firstPage.width; 		//	Width is the same on all pages</span>
+                    //
+<span class="nc bnc" id="L755" title="All 4 branches missed.">                    for (int repCol = 0; repCol &lt; m_repeatedColumns &amp;&amp; col &gt; repCol; repCol++)</span>
+                    {
+<span class="nc" id="L757">                        float repColumnWidth = ((Float)m_columnWidths.get(repCol)).floatValue();</span>
+                        //	leave 50% of space available for non repeated columns
+<span class="nc bnc" id="L759" title="All 2 branches missed.">                        if (availableWidth &lt; m_firstPage.width * 0.5)</span>
+<span class="nc" id="L760">                            break;</span>
+<span class="nc" id="L761">                        availableWidth -= repColumnWidth;</span>
+                    }
+                }	//	pageBreak
+<span class="nc" id="L764">                availableWidth -= columnWidth;</span>
+            }	//	for acc columns
+        }	//	multiple - X pages
+
+<span class="nc bnc" id="L768" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;Pages=&quot; + getPageCount()</span>
+<span class="nc" id="L769">            + &quot; X=&quot; + m_firstColumnOnPage.size() + &quot;/Y=&quot; + m_firstRowOnPage.size()</span>
+<span class="nc" id="L770">            + &quot; - Width=&quot; + p_width + &quot;, Height=&quot; + p_height);</span>
+<span class="nc" id="L771">        return true;</span>
+    }	//	calculateSize
+
+    /**
+     * 	Distribute Columns to fill page
+     * 	@param availableWidth width to distribute
+     * 	@param fromCol start column
+     * 	@param toCol end column (not included)
+     */
+    private void distributeColumns (int availableWidth, int fromCol, int toCol)
+    {
+<span class="nc bnc" id="L782" title="All 2 branches missed.">        if (log.isLoggable(Level.FINEST)) log.finest(&quot;Available=&quot; + availableWidth + &quot;, Columns &quot; + fromCol + &quot;-&gt;&quot; + toCol);</span>
+<span class="nc" id="L783">        int start = fromCol;</span>
+<span class="nc bnc" id="L784" title="All 4 branches missed.">        if (fromCol == 0 &amp;&amp; m_repeatedColumns &gt; 0)</span>
+<span class="nc" id="L785">            start = m_repeatedColumns;</span>
+        //	calculate total Width
+<span class="nc" id="L787">        int totalWidth = availableWidth;</span>
+<span class="nc bnc" id="L788" title="All 2 branches missed.">        for (int col = start; col &lt; toCol; col++)</span>
+<span class="nc" id="L789">            totalWidth += ((Float)m_columnWidths.get(col)).floatValue();</span>
+<span class="nc" id="L790">        int remainingWidth = availableWidth;</span>
+        //	distribute proportionally (does not increase zero width columns)
+<span class="nc bnc" id="L792" title="All 4 branches missed.">        for (int x = 0; remainingWidth &gt; 0 &amp;&amp; x &lt; 5; x++)	//	max 4 iterations</span>
+        {
+<span class="nc bnc" id="L794" title="All 2 branches missed.">            if (log.isLoggable(Level.FINEST)) log.finest(&quot;TotalWidth=&quot; + totalWidth + &quot;, Remaining=&quot; + remainingWidth);</span>
+<span class="nc bnc" id="L795" title="All 4 branches missed.">            for (int col = start; col &lt; toCol &amp;&amp; remainingWidth != 0; col++)</span>
+            {
+<span class="nc" id="L797">                int columnWidth = ((Float)m_columnWidths.get(col)).intValue();</span>
+<span class="nc bnc" id="L798" title="All 2 branches missed.">                if (columnWidth != 0)</span>
+                {
+<span class="nc" id="L800">                    int additionalPart = columnWidth * availableWidth / totalWidth;</span>
+<span class="nc bnc" id="L801" title="All 2 branches missed.">                    if (remainingWidth &lt; additionalPart)</span>
+                    {
+<span class="nc" id="L803">                        m_columnWidths.set(col, Float.valueOf(columnWidth+remainingWidth));</span>
+<span class="nc" id="L804">                        remainingWidth = 0;</span>
+<span class="nc" id="L805">                    }</span>
+                    else
+                    {
+<span class="nc" id="L808">                        m_columnWidths.set(col, Float.valueOf(columnWidth+additionalPart));</span>
+<span class="nc" id="L809">                        remainingWidth -= additionalPart;</span>
+                    }
+<span class="nc bnc" id="L811" title="All 2 branches missed.">                    if (log.isLoggable(Level.FINEST)) log.finest(&quot;  col=&quot; + col + &quot; - From &quot; + columnWidth + &quot; to &quot; + m_columnWidths.get(col));</span>
+                }
+            }
+        }
+        //	add remainder to last non 0 width column
+<span class="nc bnc" id="L816" title="All 4 branches missed.">        for (int c = toCol-1; remainingWidth != 0 &amp;&amp; c &gt;=0; c--)</span>
+        {
+<span class="nc" id="L818">            int columnWidth = ((Float)m_columnWidths.get(c)).intValue();</span>
+<span class="nc bnc" id="L819" title="All 2 branches missed.">            if (columnWidth &gt; 0)</span>
+            {
+<span class="nc" id="L821">                m_columnWidths.set(c, Float.valueOf(columnWidth+remainingWidth));</span>
+<span class="nc bnc" id="L822" title="All 2 branches missed.">                if (log.isLoggable(Level.FINEST)) log.finest(&quot;Final col=&quot; + c + &quot; - From &quot; + columnWidth + &quot; to &quot; + m_columnWidths.get(c));</span>
+<span class="nc" id="L823">                remainingWidth = 0;</span>
+            }
+        }
+<span class="nc" id="L826">    }	//	distribute Columns</span>
+
+    /**
+     * 	Check for for PageBreak
+     * 	@param row current row
+     * 	@return true if row should be on new page
+     */
+    private boolean isPageBreak (int row)
+    {
+<span class="nc bnc" id="L835" title="All 2 branches missed.">        for (int i = 0; i &lt; m_pageBreak.size(); i++)</span>
+        {
+<span class="nc" id="L837">            Integer rr = (Integer)m_pageBreak.get(i);</span>
+<span class="nc bnc" id="L838" title="All 2 branches missed.">            if (rr.intValue()+1 == row)</span>
+<span class="nc" id="L839">                return true;</span>
+<span class="nc bnc" id="L840" title="All 2 branches missed.">            else if (rr.intValue() &gt; row)</span>
+<span class="nc" id="L841">                return false;</span>
+        }
+<span class="nc" id="L843">        return false;</span>
+    }	//	isPageBreak
+
+    /**
+     * 	For Multi-Page Tables, set Height to Height of last Page
+     */
+    public void setHeightToLastPage()
+    {
+<span class="nc" id="L851">        int lastLayoutPage = getPageCount() + m_pageNoStart - 1;</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;PageCount - Table=&quot; + getPageCount()</span>
+<span class="nc" id="L853">            + &quot;(Start=&quot; + m_pageNoStart</span>
+<span class="nc" id="L854">            + &quot;) Layout=&quot; + lastLayoutPage</span>
+<span class="nc" id="L855">            + &quot; - Old Height=&quot; + p_height);</span>
+<span class="nc" id="L856">        p_height = getHeight(lastLayoutPage);</span>
+<span class="nc bnc" id="L857" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;New Height=&quot; + p_height);</span>
+<span class="nc" id="L858">    }	//	setHeightToLastPage</span>
+
+    /**
+     * 	Get Font.&lt;br/&gt;
+     *  Based on Point (row,col).
+     *  &lt;pre&gt;
+     *  Examples:
+     *    From general to specific:
+     *      (-1,-1) =&gt; for entire table
+     *      (-1, c) =&gt; for entire column c
+     *      (r, -1) =&gt; for entire row r (overwrites column)
+     *      (r, c)  =&gt; for specific cell (highest priority)
+     *    Header is row -2
+     *      (-2,-1) =&gt; for all header columns
+     *      (-2, c) =&gt; for header column c
+     *  &lt;/pre&gt;
+     * 	@param row row
+     * 	@param col column
+     * 	@return Font for row/col
+     */
+    private Font getFont (int row, int col)
+    {
+        //	First specific position
+<span class="nc" id="L881">        Font font = (Font)m_rowColFont.get(new Point(row, col));</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">        if (font != null)</span>
+<span class="nc" id="L883">            return font;</span>
+        //	Row Next
+<span class="nc" id="L885">        font = (Font)m_rowColFont.get(new Point (row, ALL));</span>
+<span class="nc bnc" id="L886" title="All 2 branches missed.">        if (font != null)</span>
+<span class="nc" id="L887">            return font;</span>
+        //	Column then
+<span class="nc" id="L889">        font = (Font)m_rowColFont.get(new Point (ALL, col));</span>
+<span class="nc bnc" id="L890" title="All 2 branches missed.">        if (font != null)</span>
+<span class="nc" id="L891">            return font;</span>
+        //	default
+<span class="nc" id="L893">        return m_baseFont;</span>
+    }	//	getFont
+
+    /**
+     * 	Get Foreground Color.
+     * 	@param row row
+     * 	@param col column
+     * 	@return Foreground Color for row/col
+     */
+    private Color getColor (int row, int col)
+    {
+        //	First specific position
+<span class="nc" id="L905">        Color color = (Color)m_rowColColor.get(new Point(row, col));</span>
+<span class="nc bnc" id="L906" title="All 2 branches missed.">        if (color != null)</span>
+<span class="nc" id="L907">            return color;</span>
+        //	Row Next
+<span class="nc" id="L909">        color = (Color)m_rowColColor.get(new Point (row, ALL));</span>
+<span class="nc bnc" id="L910" title="All 2 branches missed.">        if (color != null)</span>
+<span class="nc" id="L911">            return color;</span>
+        //	Column then
+<span class="nc" id="L913">        color = (Color)m_rowColColor.get(new Point (ALL, col));</span>
+<span class="nc bnc" id="L914" title="All 2 branches missed.">        if (color != null)</span>
+<span class="nc" id="L915">            return color;</span>
+        //	default
+<span class="nc" id="L917">        return m_baseColor;</span>
+    }	//	getFont
+
+    /**
+     * 	Get Background Color.
+     * 	@param row row
+     * 	@param col column
+     * 	@return Background Color for row/col
+     */
+    private Color getBackground (int row, int col)
+    {
+        //	First specific position
+<span class="nc" id="L929">        Color color = (Color)m_rowColBackground.get(new Point(row, col));</span>
+<span class="nc bnc" id="L930" title="All 2 branches missed.">        if (color != null)</span>
+<span class="nc" id="L931">            return color;</span>
+        //	Row Next
+<span class="nc" id="L933">        color = (Color)m_rowColBackground.get(new Point (row, ALL));</span>
+<span class="nc bnc" id="L934" title="All 2 branches missed.">        if (color != null)</span>
+<span class="nc" id="L935">            return color;</span>
+        //	Column then
+<span class="nc" id="L937">        color = (Color)m_rowColBackground.get(new Point (ALL, col));</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">        if (color != null)</span>
+<span class="nc" id="L939">            return color;</span>
+        //	default
+<span class="nc" id="L941">        return m_baseBackground;</span>
+    }	//	getFont
+
+    /**
+     * 	Get Calculated Height on page
+     *  @param pageNo page number
+     * 	@return Height
+     */
+    public float getHeight (int pageNo)
+    {
+<span class="nc" id="L951">        int pageIndex = getPageIndex(pageNo);</span>
+<span class="nc" id="L952">        int pageYindex = getPageYIndex(pageIndex);</span>
+<span class="nc bnc" id="L953" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;Page=&quot; + pageNo + &quot; - PageIndex=&quot; + pageIndex</span>
+<span class="nc" id="L954">            + &quot;, PageYindex=&quot; +  pageYindex);</span>
+<span class="nc" id="L955">        float pageHeight = ((Float)m_pageHeight.get(pageYindex)).floatValue();</span>
+<span class="nc" id="L956">        float pageHeightPrevious = 0f;</span>
+<span class="nc bnc" id="L957" title="All 2 branches missed.">        if (pageYindex &gt; 0)</span>
+<span class="nc" id="L958">            pageHeightPrevious = ((Float)m_pageHeight.get(pageYindex-1)).floatValue();</span>
+<span class="nc" id="L959">        float retValue = pageHeight - pageHeightPrevious;</span>
+<span class="nc bnc" id="L960" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;Page=&quot; + pageNo + &quot; - PageIndex=&quot; + pageIndex + &quot;, PageYindex=&quot; +  pageYindex + &quot;, Height=&quot; + String.valueOf(retValue));</span>
+<span class="nc" id="L961">        return retValue;</span>
+    }	//	getHeight
+
+    /**
+     * 	Get Calculated Width on page
+     *  @param pageNo page number
+     * 	@return Width
+     */
+    public float getWidth (int pageNo)
+    {
+<span class="nc" id="L971">        int pageIndex = getPageIndex(pageNo);</span>
+<span class="nc bnc" id="L972" title="All 2 branches missed.">        if (pageIndex == 0)</span>
+<span class="nc" id="L973">            return m_firstPage.width;</span>
+<span class="nc" id="L974">        return m_nextPages.width;</span>
+    }	//	getHeight
+
+    /**
+     * 	Get number of &quot;real&quot; pages.
+     * 	@return page count
+     */
+    public int getPageCount()
+    {
+<span class="nc" id="L983">        return m_firstRowOnPage.size() * m_firstColumnOnPage.size();</span>
+    }	//	getPageCount
+
+    /**
+     * 	Get zero based Page Index within Layout
+     * 	@param pageNo real page no
+     * 	@return page index
+     */
+    protected int getPageIndex (int pageNo)
+    {
+<span class="nc" id="L993">        int index = pageNo - m_pageNoStart;</span>
+<span class="nc bnc" id="L994" title="All 2 branches missed.">        if (index &lt; 0)</span>
+<span class="nc" id="L995">            log.log(Level.SEVERE, &quot;index=&quot; + index, new Exception());</span>
+<span class="nc" id="L996">        return index;</span>
+    }	//	getPageIndex
+
+    /**
+     * 	Get X - Page Index.&lt;br/&gt;
+     *  Zero Based; Page No is the &quot;real&quot; page No.
+     *  &lt;pre&gt;
+     *  The table is 3 pages wide, 2 pages high - index
+     *      +-----+-----+-----+
+     *      | 0.0 | 0.1 | 0.2 |
+     *      +-----+-----+-----+
+     *      | 1.0 | 1.1 | 1.2 |
+     *      +-----+-----+-----+
+     *  Page Index
+     *      +-----+-----+-----+
+     *      |  0  |  1  |  2  |
+     *      +-----+-----+-----+
+     *      |  3  |  4  |  5  |
+     *      +-----+-----+-----+
+     *  &lt;/pre&gt;
+     * 	@param pageIndex zero based page index
+     * 	@return page index on X axis
+     */
+    protected int getPageXIndex (int pageIndex)
+    {
+<span class="nc" id="L1021">        int noXpages = m_firstColumnOnPage.size();</span>
+<span class="nc" id="L1022">        int x = pageIndex % noXpages;</span>
+<span class="nc" id="L1023">        return x;</span>
+    }	//	getPageXIndex
+
+    /**
+     * 	Get X - Page Count
+     * 	@return X page count
+     */
+    protected int getPageXCount ()
+    {
+<span class="nc" id="L1032">        return m_firstColumnOnPage.size();</span>
+    }	//	getPageXCount
+
+    /**
+     * 	Get Y | Page Index.&lt;br/&gt;
+     *  Zero Based; Page No is the &quot;real&quot; page No.
+     *  &lt;pre&gt;
+     *  The table is 3 pages wide, 2 pages high - index
+     *      +-----+-----+-----+
+     *      | 0.0 | 0.1 | 0.2 |
+     *      +-----+-----+-----+
+     *      | 1.0 | 1.1 | 1.2 |
+     *      +-----+-----+-----+
+     *  Page Index
+     *      +-----+-----+-----+
+     *      |  0  |  1  |  2  |
+     *      +-----+-----+-----+
+     *      |  3  |  4  |  5  |
+     *      +-----+-----+-----+
+     *  &lt;/pre&gt;
+     * 	@param pageIndex zero based page index
+     * 	@return page index on Y axis
+     */
+    protected int getPageYIndex (int pageIndex)
+    {
+<span class="nc" id="L1057">        int noXpages = m_firstColumnOnPage.size();</span>
+<span class="nc" id="L1058">        int y = (pageIndex - (pageIndex % noXpages)) / noXpages;</span>
+<span class="nc" id="L1059">        return y;</span>
+    }	//	getPageYIndex
+
+    /**
+     * 	Get Y | Page Count
+     * 	@return Y page count
+     */
+    protected int getPageYCount ()
+    {
+<span class="nc" id="L1068">        return m_firstRowOnPage.size();</span>
+    }	//	getPageYCount
+
+    /**
+     * 	Get Drill Down Query
+     * 	@param relativePoint point to find print element
+     *  @param pageNo page number
+     * 	@return drill down query of print element or null
+     */
+    @Override
+    public MQuery getDrillDown (Point relativePoint, int pageNo)
+    {
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">        if (m_rowColDrillDown.size() == 0)</span>
+<span class="nc" id="L1081">            return null;</span>
+<span class="nc bnc" id="L1082" title="All 2 branches missed.">        if (!getBounds(pageNo).contains(relativePoint))</span>
+<span class="nc" id="L1083">            return null;</span>
+<span class="nc" id="L1084">        int row = getRow (relativePoint.y, pageNo);</span>
+<span class="nc bnc" id="L1085" title="All 2 branches missed.">        if (row == -1)</span>
+<span class="nc" id="L1086">            return null;</span>
+<span class="nc" id="L1087">        int col = getCol (relativePoint.x, pageNo);</span>
+<span class="nc bnc" id="L1088" title="All 2 branches missed.">        if (col == -1)</span>
+<span class="nc" id="L1089">            return null;</span>
+<span class="nc bnc" id="L1090" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;Row=&quot; + row + &quot;, Col=&quot; + col + &quot;, PageNo=&quot; + pageNo);</span>
+        //
+<span class="nc" id="L1092">        NamePair pp = (NamePair)m_rowColDrillDown.get(new Point(row,col));</span>
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">        if (pp == null)</span>
+<span class="nc" id="L1094">            return null;</span>
+<span class="nc" id="L1095">        String columnName = MQuery.getZoomColumnName(m_columnHeader[col].getID());</span>
+<span class="nc" id="L1096">        String tableName = MQuery.getZoomTableName(columnName);</span>
+<span class="nc" id="L1097">        Object code = pp.getID();</span>
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">        if (pp instanceof KeyNamePair)</span>
+<span class="nc" id="L1099">            code = Integer.valueOf(((KeyNamePair)pp).getKey());</span>
+        //
+<span class="nc" id="L1101">        MQuery query = new MQuery(tableName);</span>
+<span class="nc" id="L1102">        query.addRestriction(columnName, MQuery.EQUAL, code, null, pp.toString());</span>
+<span class="nc" id="L1103">        return query;</span>
+    }	//	getDrillDown
+
+    /**
+     * 	Get Drill Across Query
+     * 	@param relativePoint point to find print element
+     *  @param pageNo page number
+     * 	@return drill across query of print element or null
+     */
+    @Override
+    public MQuery getDrillAcross (Point relativePoint, int pageNo)
+    {
+<span class="nc bnc" id="L1115" title="All 2 branches missed.">        if (!getBounds(pageNo).contains(relativePoint))</span>
+<span class="nc" id="L1116">            return null;</span>
+<span class="nc" id="L1117">        int row = getRow (relativePoint.y, pageNo);</span>
+<span class="nc bnc" id="L1118" title="All 2 branches missed.">        if (row == -1)</span>
+<span class="nc" id="L1119">            return null;</span>
+<span class="nc bnc" id="L1120" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE)) log.fine(&quot;Row=&quot; + row  + &quot;, PageNo=&quot; + pageNo);</span>
+        //
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">        if (m_pk[row] == null)	//	FunctionRows</span>
+<span class="nc" id="L1123">            return null;</span>
+<span class="nc" id="L1124">        return MQuery.getEqualQuery(m_pkColumnName, m_pk[row].getKey());</span>
+    }	//	getDrillAcross
+
+    /**
+     * 	Get relative Bounds of Element.
+     *  (entire page, not just used portion)
+     *  @param pageNo pageNo
+     * 	@return bounds
+     */
+    public Rectangle getBounds(int pageNo)
+    {
+<span class="nc" id="L1135">        int pageIndex = getPageIndex(pageNo);</span>
+<span class="nc" id="L1136">        int pageYindex = getPageYIndex(pageIndex);</span>
+<span class="nc bnc" id="L1137" title="All 2 branches missed.">        if (pageYindex == 0)</span>
+<span class="nc" id="L1138">            return m_firstPage;</span>
+        else
+<span class="nc" id="L1140">            return m_nextPages;</span>
+    }	//	getBounds
+
+    /**
+     * 	Get Row for yPos
+     * 	@param yPos y position (page relative)
+     *  @param pageNo page number
+     * 	@return row index or -1
+     */
+    private int getRow (int yPos, int pageNo)
+    {
+<span class="nc" id="L1151">        int pageIndex = getPageIndex(pageNo);</span>
+<span class="nc" id="L1152">        int pageYindex = getPageYIndex(pageIndex);</span>
+        //
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">        int curY = (pageYindex == 0 ? m_firstPage.y : m_nextPages.y) + m_headerHeight;</span>
+<span class="nc bnc" id="L1155" title="All 2 branches missed.">        if (yPos &lt; curY)</span>
+<span class="nc" id="L1156">            return -1;		//	above</span>
+        //
+<span class="nc" id="L1158">        int firstRow = ((Integer)m_firstRowOnPage.get(pageYindex)).intValue();</span>
+<span class="nc" id="L1159">        int nextPageRow = m_data.getRowCount();				//	no of rows</span>
+<span class="nc bnc" id="L1160" title="All 2 branches missed.">        if (pageYindex+1 &lt; m_firstRowOnPage.size())</span>
+<span class="nc" id="L1161">            nextPageRow = ((Integer)m_firstRowOnPage.get(pageYindex+1)).intValue();</span>
+        //
+<span class="nc bnc" id="L1163" title="All 2 branches missed.">        for (int row = firstRow; row &lt; nextPageRow; row++)</span>
+        {
+<span class="nc" id="L1165">            int rowHeight = ((Float)m_rowHeights.get(row)).intValue();	//	includes 2*Gaps+Line</span>
+<span class="nc bnc" id="L1166" title="All 4 branches missed.">            if (yPos &gt;= curY &amp;&amp; yPos &lt; (curY + rowHeight))</span>
+<span class="nc" id="L1167">                return row;</span>
+<span class="nc" id="L1168">            curY += rowHeight;</span>
+        }
+        //	below
+<span class="nc" id="L1171">        return -1;</span>
+    }	//	getRow
+
+    /**
+     * 	Get Column for xPos
+     * 	@param xPos x position (page relative)
+     *  @param pageNo page number
+     * 	@return column index or -1
+     */
+    private int getCol (int xPos, int pageNo)
+    {
+<span class="nc" id="L1182">        int pageIndex = getPageIndex(pageNo);</span>
+<span class="nc" id="L1183">        int pageXindex = getPageXIndex(pageIndex);</span>
+        //
+<span class="nc bnc" id="L1185" title="All 2 branches missed.">        int curX = pageXindex == 0 ? m_firstPage.x : m_nextPages.x;</span>
+<span class="nc bnc" id="L1186" title="All 2 branches missed.">        if (xPos &lt; curX)</span>
+<span class="nc" id="L1187">            return -1;		//	too left</span>
+
+<span class="nc" id="L1189">        int firstColumn = ((Integer)m_firstColumnOnPage.get(pageXindex)).intValue();</span>
+<span class="nc" id="L1190">        int nextPageColumn = m_columnHeader.length;		// no of cols</span>
+<span class="nc bnc" id="L1191" title="All 2 branches missed.">        if (pageXindex+1 &lt; m_firstColumnOnPage.size())</span>
+<span class="nc" id="L1192">            nextPageColumn = ((Integer)m_firstColumnOnPage.get(pageXindex+1)).intValue();</span>
+
+        //	fixed volumns
+<span class="nc" id="L1195">        int regularColumnStart = firstColumn;</span>
+<span class="nc bnc" id="L1196" title="All 2 branches missed.">        for (int col = 0; col &lt; m_repeatedColumns; col++)</span>
+        {
+<span class="nc" id="L1198">            int colWidth = ((Float)m_columnWidths.get(col)).intValue();		//	includes 2*Gaps+Line</span>
+<span class="nc bnc" id="L1199" title="All 4 branches missed.">            if (xPos &gt;= curX &amp;&amp; xPos &lt; (curX + colWidth))</span>
+<span class="nc" id="L1200">                return col;</span>
+<span class="nc" id="L1201">            curX += colWidth;</span>
+<span class="nc bnc" id="L1202" title="All 2 branches missed.">            if (regularColumnStart == col)</span>
+<span class="nc" id="L1203">                regularColumnStart++;</span>
+        }
+        //	regular columns
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">        for (int col = regularColumnStart; col &lt; nextPageColumn; col++)</span>
+        {
+<span class="nc" id="L1208">            int colWidth = ((Float)m_columnWidths.get(col)).intValue();		//	includes 2*Gaps+Line</span>
+<span class="nc bnc" id="L1209" title="All 4 branches missed.">            if (xPos &gt;= curX &amp;&amp; xPos &lt; (curX + colWidth))</span>
+<span class="nc" id="L1210">                return col;</span>
+<span class="nc" id="L1211">            curX += colWidth;</span>
+        }	//	for all columns
+        //	too right
+<span class="nc" id="L1214">        return -1;</span>
+    }	//	getCol
+
+    /**
+     * 	Paint/Print.
+     *
+     * 	@param g2D Graphics
+     *  @param pageNo page number for multi page support (0 = header/footer)
+     *  @param pageStart top left Location of page
+     *  @param ctx context
+     *  @param isView true if online view (IDs are links)
+     */
+    @Override
+    public void paint (Graphics2D g2D, int pageNo, Point2D pageStart, Properties ctx, boolean isView)
+    {
+<span class="nc" id="L1229">        int pageIndex = getPageIndex(pageNo);</span>
+<span class="nc" id="L1230">        int pageXindex = getPageXIndex(pageIndex);</span>
+<span class="nc" id="L1231">        int pageYindex = getPageYIndex(pageIndex);</span>
+        if (DEBUG_PRINT)
+            if (log.isLoggable(Level.CONFIG)) log.config(&quot;Page=&quot; + pageNo + &quot; [x=&quot; + pageXindex + &quot;, y=&quot; + pageYindex + &quot;]&quot;);
+        //
+<span class="nc" id="L1235">        int firstColumn = ((Integer)m_firstColumnOnPage.get(pageXindex)).intValue();</span>
+<span class="nc" id="L1236">        int nextPageColumn = m_columnHeader.length;		// no of cols</span>
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">        if (pageXindex+1 &lt; m_firstColumnOnPage.size())</span>
+<span class="nc" id="L1238">            nextPageColumn = ((Integer)m_firstColumnOnPage.get(pageXindex+1)).intValue();</span>
+        //
+<span class="nc bnc" id="L1240" title="All 2 branches missed.">        if (pageYindex &gt;= m_firstRowOnPage.size())  {</span>
+<span class="nc" id="L1241">            pageYindex = m_firstRowOnPage.size() - 1;</span>
+        }
+<span class="nc bnc" id="L1243" title="All 2 branches missed.">        if (pageYindex&lt;0)</span>
+<span class="nc" id="L1244">            return;</span>
+<span class="nc" id="L1245">        int firstRow = ((Integer)m_firstRowOnPage.get(pageYindex)).intValue();</span>
+<span class="nc" id="L1246">        int nextPageRow = m_data.getRowCount();				//	no of rows</span>
+<span class="nc bnc" id="L1247" title="All 2 branches missed.">        if (pageYindex+1 &lt; m_firstRowOnPage.size())</span>
+<span class="nc" id="L1248">            nextPageRow = ((Integer)m_firstRowOnPage.get(pageYindex+1)).intValue();</span>
+        if (DEBUG_PRINT)
+            if (log.isLoggable(Level.FINEST)) log.finest(&quot;Col=&quot; + firstColumn + &quot;-&quot; + (nextPageColumn-1)
+                + &quot;, Row=&quot; + firstRow + &quot;-&quot; + (nextPageRow-1));
+
+        //	Top Left
+<span class="nc" id="L1254">        int startX = (int)pageStart.getX();</span>
+<span class="nc" id="L1255">        int startY = (int)pageStart.getY();</span>
+        //	Table Start
+<span class="nc bnc" id="L1257" title="All 2 branches missed.">        startX += pageIndex == 0 ? m_firstPage.x : m_nextPages.x;</span>
+<span class="nc bnc" id="L1258" title="All 2 branches missed.">        startY += pageIndex == 0 ? m_firstPage.y : m_nextPages.y;</span>
+        if (DEBUG_PRINT)
+            if (log.isLoggable(Level.FINEST)) log.finest(&quot;PageStart=&quot; + pageStart + &quot;, StartTable x=&quot; + startX + &quot;, y=&quot; + startY);
+
+        //	paint first fixed volumns
+<span class="nc" id="L1263">        boolean firstColumnPrint = true;</span>
+<span class="nc" id="L1264">        int regularColumnStart = firstColumn;</span>
+<span class="nc bnc" id="L1265" title="All 4 branches missed.">        for (int col = 0; col &lt; m_repeatedColumns &amp;&amp; col &lt; m_columnWidths.size(); col++)</span>
+        {
+<span class="nc" id="L1267">            int colWidth = ((Float)m_columnWidths.get(col)).intValue();		//	includes 2*Gaps+Line</span>
+<span class="nc bnc" id="L1268" title="All 2 branches missed.">            if (colWidth != 0)</span>
+            {
+<span class="nc" id="L1270">                printColumn (g2D, col, startX, startY, firstColumnPrint, firstRow, nextPageRow, isView, getBelowColumns(col));</span>
+<span class="nc" id="L1271">                startX += colWidth;</span>
+<span class="nc" id="L1272">                firstColumnPrint = false;</span>
+            }
+<span class="nc bnc" id="L1274" title="All 2 branches missed.">            if (regularColumnStart == col)</span>
+<span class="nc" id="L1275">                regularColumnStart++;</span>
+        }
+
+        //	paint columns
+<span class="nc bnc" id="L1279" title="All 2 branches missed.">        for (int col = regularColumnStart; col &lt; nextPageColumn; col++)</span>
+        {
+<span class="nc" id="L1281">            int colWidth = ((Float)m_columnWidths.get(col)).intValue();		//	includes 2*Gaps+Line</span>
+<span class="nc bnc" id="L1282" title="All 2 branches missed.">            if (colWidth != 0)</span>
+            {
+<span class="nc" id="L1284">                printColumn (g2D, col, startX, startY, firstColumnPrint, firstRow, nextPageRow, isView, getBelowColumns(col));</span>
+<span class="nc" id="L1285">                startX += colWidth;</span>
+<span class="nc" id="L1286">                firstColumnPrint = false;</span>
+            }
+        }	//	for all columns
+
+<span class="nc" id="L1290">    }	//	paint</span>
+    
+    /**
+	 * List the below columns for the current column
+	 * 
+	 * @param col - Header column no
+	 * @return - list of columns as a below column
+	 */
+	private ArrayList&lt;Integer&gt; getBelowColumns(Integer col)
+	{
+		// Defensive: if col is null or there are no additional lines, return null
+<span class="nc bnc" id="L1301" title="All 6 branches missed.">		if (col == null || m_additionalLines == null || m_additionalLines.isEmpty())</span>
+		{
+<span class="nc" id="L1303">			return null;</span>
+		}
+<span class="nc bnc" id="L1305" title="All 2 branches missed.">		if (belowColumnMultiMap == null)</span>
+		{
+<span class="nc" id="L1307">			belowColumnMultiMap = new MultiMap&lt;Integer, Integer&gt;();</span>
+<span class="nc bnc" id="L1308" title="All 2 branches missed.">			for (Entry&lt;Integer, Integer&gt; entry : m_additionalLines.entrySet())</span>
+			{
+<span class="nc bnc" id="L1310" title="All 2 branches missed.">				if (entry == null)</span>
+<span class="nc" id="L1311">					continue;</span>
+<span class="nc" id="L1312">				Integer key = entry.getKey();</span>
+<span class="nc" id="L1313">				Integer value = entry.getValue();</span>
+				// guard against null keys/values
+<span class="nc bnc" id="L1315" title="All 4 branches missed.">				if (key == null || value == null)</span>
+<span class="nc" id="L1316">					continue;</span>
+<span class="nc" id="L1317">				belowColumnMultiMap.put(value, key);</span>
+			}
+		}
+
+<span class="nc" id="L1321">		ArrayList&lt;Integer&gt; belowCols = null;</span>
+<span class="nc bnc" id="L1322" title="All 2 branches missed.">		if (belowColumnMultiMap.containsKey(col))</span>
+		{
+<span class="nc" id="L1324">			belowCols = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc" id="L1325">			belowCols.add(col);</span>
+<span class="nc" id="L1326">			belowCols.addAll(belowColumnMultiMap.getValues(col));</span>
+		}
+
+<span class="nc" id="L1329">		return belowCols;</span>
+	}
+
+    /**
+     * 	Print non zero width Column
+     * 	@param g2D graphics
+     * 	@param col column index
+     * 	@param origX start X
+     * 	@param origY start Y
+     *  @param leftVline if true print left vertical line (for first column)
+     * 	@param firstRow first row index
+     * 	@param nextPageRow row index of next page
+     *  @param isView true if online view (IDs are links)
+     *  @param belowCols 
+     */
+    private void printColumn (Graphics2D g2D, int col,
+        final int origX, final int origY, boolean leftVline,
+        final int firstRow, final int nextPageRow, boolean isView, ArrayList&lt;Integer&gt; belowCols)
+    {
+<span class="nc" id="L1348">        int curX = origX;</span>
+<span class="nc" id="L1349">        int curY = origY;	//	start from top</span>
+        //
+<span class="nc" id="L1351">        float colWidth = ((Float)m_columnWidths.get(col)).floatValue();		//	includes 2*Gaps+Line</span>
+<span class="nc" id="L1352">        float netWidth = colWidth - (2*H_GAP) - m_tFormat.getVLineStroke().floatValue();</span>
+<span class="nc bnc" id="L1353" title="All 2 branches missed.">        if (leftVline)</span>
+<span class="nc" id="L1354">            netWidth -= m_tFormat.getVLineStroke().floatValue();</span>
+<span class="nc" id="L1355">        float rowHeight = m_headerHeight;</span>
+<span class="nc" id="L1356">        float netHeight = rowHeight - (4*m_tFormat.getLineStroke().floatValue()) + (2*V_GAP);</span>
+
+        if (DEBUG_PRINT)
+            if (log.isLoggable(Level.FINER)) log.finer(&quot;#&quot; + col + &quot; - x=&quot; + curX + &quot;, y=&quot; + curY
+                + &quot;, width=&quot; + colWidth + &quot;/&quot; + netWidth + &quot;, HeaderHeight=&quot; + rowHeight + &quot;/&quot; + netHeight);
+<span class="nc" id="L1361">        String alignment = m_columnJustification[col];</span>
+
+        //	paint header	***************************************************
+<span class="nc bnc" id="L1364" title="All 2 branches missed.">        if (leftVline)			//	draw left | line</span>
+        {
+<span class="nc" id="L1366">            g2D.setPaint(m_tFormat.getVLine_Color());</span>
+<span class="nc" id="L1367">            g2D.setStroke(m_tFormat.getVLine_Stroke());</span>
+<span class="nc bnc" id="L1368" title="All 2 branches missed.">            if (m_tFormat.isPaintBoundaryLines())				//	 -&gt; | (left)</span>
+<span class="nc" id="L1369">                g2D.drawLine(origX, (int)(origY+m_tFormat.getLineStroke().floatValue()),</span>
+<span class="nc" id="L1370">                    origX, (int)(origY+rowHeight-(4*m_tFormat.getLineStroke().floatValue())));</span>
+<span class="nc" id="L1371">            curX += m_tFormat.getVLineStroke().floatValue();</span>
+        }
+        //	X - start line
+<span class="nc bnc" id="L1374" title="All 2 branches missed.">        if (m_tFormat.isPaintHeaderLines())</span>
+        {
+<span class="nc" id="L1376">            g2D.setPaint(m_tFormat.getHeaderLine_Color());</span>
+<span class="nc" id="L1377">            g2D.setStroke(m_tFormat.getHeader_Stroke());</span>
+<span class="nc" id="L1378">            g2D.drawLine(origX, origY, 							//	 -&gt; - (top)</span>
+<span class="nc" id="L1379">                (int)(origX+colWidth-m_tFormat.getVLineStroke().floatValue()), origY);</span>
+        }
+<span class="nc" id="L1381">        curY += (2 * m_tFormat.getLineStroke().floatValue());	//	thick</span>
+        //	Background
+<span class="nc" id="L1383">        Color bg = getBackground(HEADER_ROW, col);</span>
+<span class="nc bnc" id="L1384" title="All 2 branches missed.">        if (!bg.equals(Color.white))</span>
+        {
+<span class="nc" id="L1386">            g2D.setPaint(bg);</span>
+<span class="nc" id="L1387">            g2D.fillRect(curX,</span>
+<span class="nc" id="L1388">                (int)(curY-m_tFormat.getLineStroke().floatValue()),</span>
+<span class="nc" id="L1389">                (int)(colWidth-m_tFormat.getVLineStroke().floatValue()),</span>
+<span class="nc" id="L1390">                (int)(rowHeight-(4*m_tFormat.getLineStroke().floatValue())));</span>
+        }
+
+
+<span class="nc" id="L1394">        int tempCurY = curY;</span>
+<span class="nc" id="L1395">        curX += H_GAP;		//	upper left gap</span>
+<span class="nc" id="L1396">        curY += V_GAP;</span>
+        //	Header
+<span class="nc" id="L1398">        AttributedString aString = null;</span>
+<span class="nc" id="L1399">        AttributedCharacterIterator iter = null;</span>
+<span class="nc" id="L1400">        LineBreakMeasurer measurer = null;</span>
+<span class="nc" id="L1401">        float usedHeight = 0;</span>
+
+        // Calculate column header height - teo_sarca [ 1673429 ]
+<span class="nc" id="L1404">        String headerString = m_columnHeader[col].toString();</span>
+<span class="nc bnc" id="L1405" title="All 2 branches missed.">        if (headerString.length() == 0)</span>
+<span class="nc" id="L1406">            headerString = &quot; &quot;;</span>
+        //if (m_columnHeader[col].toString().length() &gt; 0)
+        {
+<span class="nc" id="L1409">            aString = new AttributedString(headerString);</span>
+<span class="nc" id="L1410">            aString.addAttribute(TextAttribute.FONT, getFont(HEADER_ROW, col));</span>
+<span class="nc" id="L1411">            aString.addAttribute(TextAttribute.FOREGROUND, getColor(HEADER_ROW, col));</span>
+            //
+<span class="nc" id="L1413">            boolean fastDraw = LayoutEngine.s_FASTDRAW;</span>
+<span class="nc bnc" id="L1414" title="All 6 branches missed.">            if (fastDraw &amp;&amp; !isView &amp;&amp; !Util.is8Bit(headerString))</span>
+<span class="nc" id="L1415">                fastDraw = false;</span>
+<span class="nc" id="L1416">            iter = aString.getIterator();</span>
+<span class="nc" id="L1417">            measurer = new LineBreakMeasurer(iter, g2D.getFontRenderContext());</span>
+<span class="nc bnc" id="L1418" title="All 2 branches missed.">            while (measurer.getPosition() &lt; iter.getEndIndex())		//	print header</span>
+            {
+<span class="nc" id="L1420">                TextLayout layout = measurer.nextLayout(netWidth + 2);</span>
+<span class="nc bnc" id="L1421" title="All 2 branches missed.">                if (iter.getEndIndex() != measurer.getPosition())</span>
+<span class="nc" id="L1422">                    fastDraw = false;</span>
+
+<span class="nc bnc" id="L1424" title="All 2 branches missed.">                if (alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_Block))</span>
+                {
+<span class="nc" id="L1426">                    layout = layout.getJustifiedLayout(netWidth + 2);</span>
+<span class="nc" id="L1427">                    fastDraw = false;</span>
+                }
+<span class="nc" id="L1429">                curY += layout.getAscent();</span>
+<span class="nc" id="L1430">                float penX = curX;</span>
+<span class="nc bnc" id="L1431" title="All 2 branches missed.">                if (alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_Center))</span>
+<span class="nc" id="L1432">                    penX += (netWidth-layout.getAdvance())/2;</span>
+<span class="nc bnc" id="L1433" title="All 4 branches missed.">                else if ((alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_TrailingRight) &amp;&amp; layout.isLeftToRight())</span>
+<span class="nc bnc" id="L1434" title="All 4 branches missed.">                        || (alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_LeadingLeft) &amp;&amp; !layout.isLeftToRight()))</span>
+<span class="nc" id="L1435">                    penX += netWidth-layout.getAdvance();</span>
+                //
+<span class="nc bnc" id="L1437" title="All 2 branches missed.">                if (fastDraw)</span>
+                {	//	Bug - set Font/Color explicitly
+<span class="nc" id="L1439">                    g2D.setFont(getFont(HEADER_ROW, col));</span>
+<span class="nc" id="L1440">                    g2D.setColor(getColor(HEADER_ROW, col));</span>
+<span class="nc" id="L1441">                    g2D.drawString(iter, penX, curY);</span>
+<span class="nc" id="L1442">                }</span>
+                else
+<span class="nc" id="L1444">                    layout.draw(g2D, penX, curY);										//	-&gt; text</span>
+<span class="nc" id="L1445">                curY += layout.getDescent() + layout.getLeading();</span>
+<span class="nc" id="L1446">                usedHeight += layout.getAscent() + layout.getDescent();</span>
+
+<span class="nc bnc" id="L1448" title="All 2 branches missed.">                if ( !m_multiLineHeader )			//	one line only</span>
+<span class="nc" id="L1449">                    break;</span>
+            }
+        }
+
+<span class="nc" id="L1453">        curX += netWidth + H_GAP;</span>
+<span class="nc" id="L1454">        curY = tempCurY + (int)(rowHeight-(4*m_tFormat.getLineStroke().floatValue()));</span>
+        //	Y end line
+<span class="nc" id="L1456">        g2D.setPaint(m_tFormat.getVLine_Color());</span>
+<span class="nc" id="L1457">        g2D.setStroke(m_tFormat.getVLine_Stroke());</span>
+<span class="nc bnc" id="L1458" title="All 2 branches missed.">        if (m_tFormat.isPaintVLines())					//	 -&gt; | (right)</span>
+<span class="nc" id="L1459">            g2D.drawLine(curX, (int)(origY+m_tFormat.getLineStroke().floatValue()),</span>
+<span class="nc" id="L1460">                curX, (int)(origY+rowHeight-(4*m_tFormat.getLineStroke().floatValue())));</span>
+<span class="nc" id="L1461">        curX += m_tFormat.getVLineStroke().floatValue();</span>
+        //	X end line
+<span class="nc bnc" id="L1463" title="All 2 branches missed.">        if (m_tFormat.isPaintHeaderLines())</span>
+        {
+<span class="nc" id="L1465">            g2D.setPaint(m_tFormat.getHeaderLine_Color());</span>
+<span class="nc" id="L1466">            g2D.setStroke(m_tFormat.getHeader_Stroke());</span>
+<span class="nc" id="L1467">            g2D.drawLine(origX, curY, 					//	 -&gt; - (button)</span>
+<span class="nc" id="L1468">                (int)(origX+colWidth-m_tFormat.getVLineStroke().floatValue()), curY);</span>
+        }
+<span class="nc" id="L1470">        curY += (2 * m_tFormat.getLineStroke().floatValue());	//	thick</span>
+
+        //	paint Data		***************************************************
+<span class="nc bnc" id="L1473" title="All 2 branches missed.">        for (int row = firstRow; row &lt; nextPageRow; row++)</span>
+        {
+<span class="nc" id="L1475">            rowHeight = m_rowHeights.get(row);	//	includes 2*Gaps+Line</span>
+<span class="nc" id="L1476">            netHeight = rowHeight - (2*V_GAP) - m_tFormat.getLineStroke().floatValue();</span>
+<span class="nc" id="L1477">            int rowYstart = curY;</span>
+
+<span class="nc" id="L1479">            curX = origX;</span>
+<span class="nc bnc" id="L1480" title="All 2 branches missed.">            if (leftVline)			//	draw left | line</span>
+            {
+<span class="nc" id="L1482">                g2D.setPaint(m_tFormat.getVLine_Color());</span>
+<span class="nc" id="L1483">                g2D.setStroke(m_tFormat.getVLine_Stroke());</span>
+<span class="nc bnc" id="L1484" title="All 2 branches missed.">                if (m_tFormat.isPaintBoundaryLines())</span>
+<span class="nc" id="L1485">                    g2D.drawLine(curX, rowYstart, 				//	 -&gt; | (left)</span>
+<span class="nc" id="L1486">                        curX, (int)(rowYstart+rowHeight-m_tFormat.getLineStroke().floatValue()));</span>
+<span class="nc" id="L1487">                curX += m_tFormat.getVLineStroke().floatValue();</span>
+            }
+            //	Background
+<span class="nc" id="L1490">            bg = getBackground(row, col);</span>
+<span class="nc bnc" id="L1491" title="All 2 branches missed.">            if (!bg.equals(Color.white))</span>
+            {
+<span class="nc" id="L1493">                g2D.setPaint(bg);</span>
+<span class="nc" id="L1494">                g2D.fillRect(curX, curY,</span>
+<span class="nc" id="L1495">                    (int)(colWidth-m_tFormat.getVLineStroke().floatValue()),</span>
+<span class="nc" id="L1496">                    (int)(rowHeight-m_tFormat.getLineStroke().floatValue()) );</span>
+            }
+
+            // Over Line
+<span class="nc" id="L1500">            MReportLine rLine = getReportLine(row, col);</span>
+<span class="nc bnc" id="L1501" title="All 2 branches missed.">            if (rLine != null)</span>
+            {
+<span class="nc bnc" id="L1503" title="All 2 branches missed.">                if (rLine.getOverline() &gt; 1)</span>
+                {
+<span class="nc" id="L1505">                    curY -= V_GAP + m_tFormat.getVLineStroke().floatValue();</span>
+<span class="nc" id="L1506">                    g2D.setPaint(m_tFormat.getHeaderLine_Color());</span>
+<span class="nc" id="L1507">                    g2D.setStroke(rLine.getOverlineStroke(m_tFormat.getVLineStroke()));</span>
+<span class="nc" id="L1508">                    g2D.drawLine(curX, (int) (curY + m_tFormat.getVLineStroke().floatValue()),</span>
+<span class="nc" id="L1509">                                 (int) (curX + colWidth - m_tFormat.getVLineStroke().floatValue()), (int) (curY + m_tFormat.getVLineStroke().floatValue()));</span>
+<span class="nc" id="L1510">                    curY += V_GAP + m_tFormat.getVLineStroke().floatValue();</span>
+                }
+<span class="nc bnc" id="L1512" title="All 2 branches missed.">                if (rLine.getOverline() &gt; 0)</span>
+                {
+<span class="nc" id="L1514">                    g2D.setPaint(m_tFormat.getHeaderLine_Color());</span>
+<span class="nc" id="L1515">                    g2D.setStroke(rLine.getOverlineStroke(m_tFormat.getVLineStroke()));</span>
+<span class="nc" id="L1516">                    g2D.drawLine(curX, curY, (int) (curX + colWidth - m_tFormat.getVLineStroke().floatValue()), curY);</span>
+<span class="nc" id="L1517">                    curY += m_tFormat.getVLineStroke().floatValue();</span>
+                }
+            }
+
+<span class="nc" id="L1521">            curX += H_GAP;		//	upper left gap</span>
+<span class="nc" id="L1522">            curY += V_GAP;</span>
+
+            //	actual data
+<span class="nc" id="L1525">            Object[] printItems = getPrintItems(row,col);</span>
+
+<span class="nc" id="L1527">            float penY = curY;</span>
+
+            // suppress repeated values
+<span class="nc" id="L1530">            boolean suppress = false;</span>
+<span class="nc bnc" id="L1531" title="All 6 branches missed.">            if (m_colSuppressRepeats[col] &amp;&amp; row &gt; 0 &amp;&amp; row != firstRow)</span>
+            {
+<span class="nc" id="L1533">                Object[] lastItems = {};</span>
+<span class="nc" id="L1534">                lastItems = getPrintItems(row-1, col);</span>
+<span class="nc bnc" id="L1535" title="All 2 branches missed.">                if (Arrays.equals(lastItems,printItems) )</span>
+<span class="nc" id="L1536">                    suppress = true;</span>
+            }
+
+<span class="nc bnc" id="L1539" title="All 2 branches missed.">            if (!suppress)</span>
+            {
+<span class="nc bnc" id="L1541" title="All 6 branches missed.">                if (m_tablePrintData != null &amp;&amp; m_pageLogics != null &amp;&amp; col &lt; m_pageLogics.size())</span>
+                {
+<span class="nc" id="L1543">                    String pageLogic = m_pageLogics.get(col);</span>
+<span class="nc bnc" id="L1544" title="All 2 branches missed.">                    if (!Util.isEmpty(pageLogic, true))</span>
+                    {
+<span class="nc" id="L1546">                        m_tablePrintData.setRowIndex(row);</span>
+<span class="nc" id="L1547">                        PrintDataEvaluatee evaluatee = new PrintDataEvaluatee(getCurrentPage(), m_tablePrintData);</span>
+<span class="nc" id="L1548">                        boolean display = Evaluator.evaluateLogic(evaluatee, pageLogic);</span>
+<span class="nc bnc" id="L1549" title="All 2 branches missed.">                        if (!display)</span>
+<span class="nc" id="L1550">                            suppress = true;</span>
+                    }
+                }
+            }
+
+<span class="nc bnc" id="L1555" title="All 2 branches missed.">            if ( !suppress )</span>
+            {
+<span class="nc bnc" id="L1557" title="All 2 branches missed.">                for (int index = 0; index &lt; printItems.length; index++)</span>
+                {
+<span class="nc bnc" id="L1559" title="All 2 branches missed.">                    if (printItems[index] == null )</span>
+<span class="nc" id="L1560">                        ;</span>
+<span class="nc bnc" id="L1561" title="All 2 branches missed.">                    else if (printItems[index] instanceof ImageElement)</span>
+                    {
+<span class="nc" id="L1563">                        Image imageToDraw = ((ImageElement)printItems[index]).getImage();</span>
+<span class="nc bnc" id="L1564" title="All 2 branches missed.">                        if (imageToDraw != null) // teo_sarca [ 1674706 ]</span>
+                        {
+                            // Draw image using the scale factor - teo_sarca, [ 1673548 ] Image is not scaled in a report table cell
+<span class="nc" id="L1567">                            double scale = ((ImageElement)printItems[index]).getScaleFactor();</span>
+<span class="nc bnc" id="L1568" title="All 2 branches missed.">                            if (scale != 1.0) {</span>
+<span class="nc" id="L1569">                                AffineTransform transform = new AffineTransform();</span>
+<span class="nc" id="L1570">                                transform.translate(curX, penY);</span>
+<span class="nc" id="L1571">                                transform.scale(scale, scale);</span>
+<span class="nc" id="L1572">                                g2D.drawImage(imageToDraw, transform, this);</span>
+<span class="nc" id="L1573">                            }</span>
+                            else {
+<span class="nc" id="L1575">                                g2D.drawImage(imageToDraw, curX, (int)penY, this);</span>
+                            }
+                        }
+<span class="nc" id="L1578">                    }</span>
+<span class="nc bnc" id="L1579" title="All 2 branches missed.">                    else if (printItems[index] instanceof BarcodeElement)</span>
+                    {
+<span class="nc" id="L1581">                        BarcodeElement barcodeElement = (BarcodeElement)printItems[index];</span>
+<span class="nc" id="L1582">                        barcodeElement.paint(g2D, curX, (int)penY);</span>
+<span class="nc" id="L1583">                    }</span>
+<span class="nc bnc" id="L1584" title="All 2 branches missed.">                    else if (printItems[index] instanceof Boolean)</span>
+                    {
+<span class="nc" id="L1586">                        int penX = curX + (int)((netWidth-LayoutEngine.IMAGE_SIZE.width)/2);	//	center</span>
+<span class="nc bnc" id="L1587" title="All 2 branches missed.">                        if (((Boolean)printItems[index]).booleanValue())</span>
+<span class="nc" id="L1588">                            g2D.drawImage(LayoutEngine.IMAGE_TRUE, penX, (int)penY, this);</span>
+                        else
+<span class="nc" id="L1590">                            g2D.drawImage(LayoutEngine.IMAGE_FALSE, penX, (int)penY, this);</span>
+<span class="nc" id="L1591">                        penY += LayoutEngine.IMAGE_SIZE.height;</span>
+<span class="nc" id="L1592">                    }</span>
+<span class="nc bnc" id="L1593" title="All 2 branches missed.">                    else if (printItems[index] instanceof HTMLRenderer)</span>
+                    {
+<span class="nc" id="L1595">                        HTMLRenderer renderer = (HTMLRenderer)printItems[index];</span>
+<span class="nc" id="L1596">                        Rectangle allocation = new Rectangle((int)colWidth, (int)netHeight);</span>
+                        //	log.finest( &quot;printColumn HTML - &quot; + allocation);
+<span class="nc" id="L1598">                        g2D.translate(curX, penY);</span>
+<span class="nc" id="L1599">                        renderer.paint(g2D, allocation);</span>
+<span class="nc" id="L1600">                        g2D.translate(-curX, -penY);</span>
+<span class="nc" id="L1601">                        penY += allocation.getHeight();</span>
+<span class="nc" id="L1602">                    }</span>
+                    else
+                    {
+<span class="nc" id="L1605">                        String str = printItems[index].toString();</span>
+                        if (DEBUG_PRINT)
+                            if (log.isLoggable(Level.FINE)) log.fine(&quot;row=&quot; + row + &quot;,col=&quot; + col + &quot; - &quot; + str + &quot; 8Bit=&quot; + Util.is8Bit(str));
+<span class="nc bnc" id="L1608" title="All 2 branches missed.">                        if (str.length() &gt; 0)</span>
+                        {
+<span class="nc" id="L1610">                            usedHeight = 0;</span>
+<span class="nc" id="L1611">                            String[] lines = Pattern.compile(&quot;\n&quot;, Pattern.MULTILINE).split(str);</span>
+<span class="nc bnc" id="L1612" title="All 2 branches missed.">                            for (int lineNo = 0; lineNo &lt; lines.length; lineNo++)</span>
+                            {
+<span class="nc" id="L1614">                            	int fcColumn = col;</span>
+<span class="nc bnc" id="L1615" title="All 2 branches missed.">								if (belowCols != null)</span>
+								{
+<span class="nc" id="L1617">									fcColumn = belowCols.get(index);</span>
+<span class="nc" id="L1618">									alignment = m_columnJustification[fcColumn];</span>
+								}
+<span class="nc" id="L1620">                                String thisLine = lines[lineNo];</span>
+<span class="nc bnc" id="L1621" title="All 2 branches missed.">                                if (thisLine.length() == 0)</span>
+<span class="nc" id="L1622">                                    thisLine = &quot; &quot;;</span>
+<span class="nc" id="L1623">                                aString = new AttributedString(thisLine);</span>
+<span class="nc" id="L1624">                                aString.addAttribute(TextAttribute.FONT, getFont(row, fcColumn));</span>
+<span class="nc bnc" id="L1625" title="All 4 branches missed.">                                if (isView &amp;&amp; printItems[index] instanceof NamePair)	//	ID</span>
+                                {
+<span class="nc" id="L1627">                                    aString.addAttribute(TextAttribute.FOREGROUND, LINK_COLOR);</span>
+<span class="nc" id="L1628">                                    aString.addAttribute(TextAttribute.UNDERLINE, TextAttribute.UNDERLINE_LOW_ONE_PIXEL, 0, str.length());</span>
+<span class="nc" id="L1629">                                }</span>
+                                else
+<span class="nc" id="L1631">                                    aString.addAttribute(TextAttribute.FOREGROUND, getColor(row, fcColumn));</span>
+                                //
+<span class="nc" id="L1633">                                iter = aString.getIterator();</span>
+<span class="nc" id="L1634">                                boolean fastDraw = LayoutEngine.s_FASTDRAW;</span>
+<span class="nc bnc" id="L1635" title="All 6 branches missed.">                                if (fastDraw &amp;&amp; !isView &amp;&amp; !Util.is8Bit(thisLine))</span>
+                                {
+<span class="nc" id="L1637">                                    fastDraw = false;</span>
+                                }
+<span class="nc" id="L1639">                                measurer = new LineBreakMeasurer(iter, g2D.getFontRenderContext());</span>
+<span class="nc bnc" id="L1640" title="All 2 branches missed.">                                while (measurer.getPosition() &lt; iter.getEndIndex())		//	print element</span>
+                                {
+<span class="nc" id="L1642">                                    TextLayout layout = measurer.nextLayout(netWidth + 2);</span>
+<span class="nc bnc" id="L1643" title="All 2 branches missed.">                                    if (iter.getEndIndex() != measurer.getPosition())</span>
+<span class="nc" id="L1644">                                        fastDraw = false;</span>
+<span class="nc" id="L1645">                                    float lineHeight = layout.getAscent() + layout.getDescent() + layout.getLeading();</span>
+<span class="nc bnc" id="L1646" title="All 2 branches missed.">                                    if ((m_columnMaxHeight[col] &lt;= 0</span>
+<span class="nc bnc" id="L1647" title="All 2 branches missed.">                                            || (usedHeight + lineHeight) &lt;= m_columnMaxHeight[col])</span>
+<span class="nc bnc" id="L1648" title="All 2 branches missed.">                                            &amp;&amp; (usedHeight + lineHeight) &lt;= netHeight)</span>
+                                    {
+<span class="nc bnc" id="L1650" title="All 4 branches missed.">                                        if (alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_Block) &amp;&amp; measurer.getPosition() &lt; iter.getEndIndex())</span>
+                                        {
+<span class="nc" id="L1652">                                            layout = layout.getJustifiedLayout(netWidth + 2);</span>
+<span class="nc" id="L1653">                                            fastDraw = false;</span>
+                                        }
+<span class="nc" id="L1655">                                        penY += layout.getAscent();</span>
+<span class="nc" id="L1656">                                        float penX = curX;</span>
+<span class="nc bnc" id="L1657" title="All 2 branches missed.">                                        if (alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_Center))</span>
+<span class="nc" id="L1658">                                            penX += (netWidth-layout.getAdvance())/2;</span>
+<span class="nc bnc" id="L1659" title="All 4 branches missed.">                                        else if ((alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_TrailingRight) &amp;&amp; layout.isLeftToRight())</span>
+<span class="nc bnc" id="L1660" title="All 4 branches missed.">                                                || (alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_LeadingLeft) &amp;&amp; !layout.isLeftToRight()))</span>
+										{
+<span class="nc" id="L1662">                                            penX += netWidth-layout.getAdvance();</span>
+											// In last line one char x-space is left more
+<span class="nc bnc" id="L1664" title="All 2 branches missed.">											if (alignment.equals(MPrintFormatItem.FIELDALIGNMENTTYPE_TrailingRight)</span>
+<span class="nc bnc" id="L1665" title="All 2 branches missed.">													&amp;&amp; measurer.getPosition() &gt;= iter.getEndIndex()) {</span>
+<span class="nc" id="L1666">												penX -= Math</span>
+<span class="nc" id="L1667">														.ceil((layout.getAdvance() / layout.getCharacterCount()) / 2);</span>
+											}
+										}
+                                        //
+<span class="nc bnc" id="L1671" title="All 2 branches missed.">                                        if (fastDraw)</span>
+                                        {	//	Bug - set Font/Color explicitly
+<span class="nc" id="L1673">                                        	g2D.setFont(getFont(row, fcColumn));</span>
+<span class="nc bnc" id="L1674" title="All 4 branches missed.">                                            if (isView &amp;&amp; printItems[index] instanceof NamePair)	//	ID</span>
+                                            {
+<span class="nc" id="L1676">                                                g2D.setColor(LINK_COLOR);</span>
+                                                //	TextAttribute.UNDERLINE
+<span class="nc" id="L1678">                                            }</span>
+                                            else
+<span class="nc" id="L1680">                                            	g2D.setColor(getColor(row, fcColumn));</span>
+<span class="nc" id="L1681">                                            g2D.drawString(iter, penX, penY);</span>
+<span class="nc" id="L1682">                                        }</span>
+                                        else
+<span class="nc" id="L1684">                                            layout.draw(g2D, penX, penY);										//	-&gt; text</span>
+                                        if (DEBUG_PRINT)
+                                            if (log.isLoggable(Level.FINE)) log.fine(&quot;row=&quot; + row + &quot;,col=&quot; + col + &quot; - &quot; + str + &quot; - x=&quot; + penX + &quot;,y=&quot; + penY);
+<span class="nc" id="L1687">                                        penY += layout.getDescent() + layout.getLeading();</span>
+<span class="nc" id="L1688">                                        usedHeight += lineHeight;</span>
+                                        //
+<span class="nc bnc" id="L1690" title="All 2 branches missed.">                                        if (m_columnMaxHeight[col] == -1)	//	FirstLineOny</span>
+<span class="nc" id="L1691">                                            break;</span>
+                                    }
+                                }	//	print element
+                            }	//	for all lines
+                        }	//	length &gt; 0
+                    }	//	non boolean
+                }	//	for all print items
+            } // not suppressed
+
+<span class="nc" id="L1700">            curY += netHeight + V_GAP;</span>
+<span class="nc" id="L1701">            curX += netWidth + H_GAP;</span>
+            //	Y end line
+<span class="nc" id="L1703">            g2D.setPaint(m_tFormat.getVLine_Color());</span>
+<span class="nc" id="L1704">            g2D.setStroke(m_tFormat.getVLine_Stroke());</span>
+<span class="nc bnc" id="L1705" title="All 2 branches missed.">            if (m_tFormat.isPaintVLines())</span>
+<span class="nc" id="L1706">                g2D.drawLine(curX, rowYstart, 				//	 -&gt; | (right)</span>
+<span class="nc" id="L1707">                    curX, (int)(rowYstart+rowHeight-m_tFormat.getLineStroke().floatValue()));</span>
+<span class="nc" id="L1708">            curX += m_tFormat.getVLineStroke().floatValue();</span>
+
+            // Under Line
+<span class="nc bnc" id="L1711" title="All 4 branches missed.">            if (rLine != null &amp;&amp; rLine.getUnderline() &gt; 0)</span>
+            {
+<span class="nc bnc" id="L1713" title="All 2 branches missed.">                if (rLine.getUnderline() &gt; 1)</span>
+                {
+<span class="nc" id="L1715">                    curY -= V_GAP + m_tFormat.getVLineStroke().floatValue();</span>
+<span class="nc" id="L1716">                    g2D.setPaint(m_tFormat.getHeaderLine_Color());</span>
+<span class="nc" id="L1717">                    g2D.setStroke(rLine.getUnderlineStroke(m_tFormat.getVLineStroke()));</span>
+<span class="nc" id="L1718">                    g2D.drawLine(origX, curY, (int) (origX + colWidth - m_tFormat.getVLineStroke().floatValue()), curY);</span>
+<span class="nc" id="L1719">                    curY += V_GAP + m_tFormat.getVLineStroke().floatValue();</span>
+                }
+<span class="nc bnc" id="L1721" title="All 2 branches missed.">                if (rLine.getUnderline() &gt; 0)</span>
+                {
+<span class="nc" id="L1723">                    g2D.setPaint(m_tFormat.getHeaderLine_Color());</span>
+<span class="nc" id="L1724">                    g2D.setStroke(rLine.getUnderlineStroke(m_tFormat.getVLineStroke()));</span>
+<span class="nc" id="L1725">                    g2D.drawLine(origX, curY, (int) (origX + colWidth - m_tFormat.getVLineStroke().floatValue()), curY);</span>
+                }
+            }
+
+            // Maintain financial report detail and column section Y position
+<span class="nc bnc" id="L1730" title="All 2 branches missed.">            if ((int) (rowYstart + rowHeight) &gt; curY)</span>
+            {
+<span class="nc" id="L1732">                curY = (int) (rowYstart + rowHeight);</span>
+            }
+
+            //  X end line
+<span class="nc bnc" id="L1736" title="All 2 branches missed.">            if (row == m_data.getRowCount()-1)         //  last Line</span>
+            {
+                // left some space between underline and last line
+<span class="nc" id="L1739">                curY += 2 * V_GAP;</span>
+
+                /**
+                 * Bug fix - Bottom line was always displayed whether or not header lines was set to be visible
+                 * @author ashley
+                 */
+<span class="nc bnc" id="L1745" title="All 2 branches missed.">                if (m_tFormat.isPaintHeaderLines())</span>
+                {
+<span class="nc" id="L1747">                    g2D.setPaint(m_tFormat.getHeaderLine_Color());</span>
+<span class="nc" id="L1748">                    g2D.setStroke(m_tFormat.getHeader_Stroke());</span>
+<span class="nc" id="L1749">                    g2D.drawLine(origX, curY,                   //   -&gt; - (last line)</span>
+<span class="nc" id="L1750">                        (int)(origX+colWidth-m_tFormat.getVLineStroke().floatValue()), curY);</span>
+<span class="nc" id="L1751">                    curY += (2 * m_tFormat.getLineStroke().floatValue());   //  thick</span>
+<span class="nc" id="L1752">                }</span>
+                else
+                {
+<span class="nc" id="L1755">                    curY += m_tFormat.getLineStroke().floatValue();</span>
+                }
+<span class="nc" id="L1757">            }</span>
+            else
+            {
+            //  next line is a function column -&gt; underline this
+<span class="nc" id="L1761">                boolean nextIsFunction = m_functionRows.contains(Integer.valueOf(row+1));</span>
+<span class="nc bnc" id="L1762" title="All 4 branches missed.">                if (nextIsFunction &amp;&amp; m_functionRows.contains(Integer.valueOf(row)))</span>
+<span class="nc" id="L1763">                    nextIsFunction = false;     //  this is a function line too</span>
+<span class="nc" id="L1764">                MReportLine nextLine = getReportLine(row + 1, col);</span>
+<span class="nc bnc" id="L1765" title="All 6 branches missed.">                if (nextIsFunction || (m_finReportSumRows.contains(Integer.valueOf(row + 1)) &amp;&amp; nextLine != null</span>
+<span class="nc bnc" id="L1766" title="All 2 branches missed.">                        &amp;&amp; nextLine.getOverline() == 0))</span>
+                {
+<span class="nc" id="L1768">                    g2D.setPaint(m_tFormat.getFunctFG_Color());</span>
+<span class="nc" id="L1769">                    g2D.setStroke(m_tFormat.getHLine_Stroke());</span>
+
+<span class="nc" id="L1771">                    g2D.drawLine(origX, curY, 				// -&gt; - (bottom)</span>
+<span class="nc" id="L1772">                            (int) (origX + colWidth - m_tFormat.getVLineStroke().floatValue()), curY);</span>
+<span class="nc" id="L1773">                }</span>
+<span class="nc bnc" id="L1774" title="All 2 branches missed.">                else if (m_tFormat.isPaintHLines())</span>
+                {
+<span class="nc" id="L1776">                    g2D.setPaint(m_tFormat.getHLine_Color());</span>
+<span class="nc" id="L1777">                    g2D.setStroke(m_tFormat.getHLine_Stroke());</span>
+<span class="nc" id="L1778">                    g2D.drawLine(origX, curY,               //   -&gt; - (bottom)</span>
+<span class="nc" id="L1779">                        (int)(origX+colWidth-m_tFormat.getVLineStroke().floatValue()), curY);</span>
+                }
+<span class="nc" id="L1781">                curY += m_tFormat.getLineStroke().floatValue();</span>
+            }
+        }	// for all rows
+
+<span class="nc" id="L1785">    }	//	printColumn</span>
+
+    /**
+     * 	Add Additional Lines to row/col
+     * 	@param row row
+     * 	@param col col
+     * 	@param data data
+     */
+    private void addPrintLines (int row, int col, Serializable data)
+    {
+<span class="nc bnc" id="L1795" title="All 2 branches missed.">        while (m_printRows.getRowCount() &lt;= row)</span>
+<span class="nc" id="L1796">            m_printRows.addRow(null);</span>
+<span class="nc" id="L1797">        m_printRows.setRowIndex(row);</span>
+<span class="nc" id="L1798">        List&lt;ArrayList&lt;Serializable&gt;&gt; columns = m_printRows.getRowData();</span>
+<span class="nc bnc" id="L1799" title="All 2 branches missed.">        if (columns == null)</span>
+<span class="nc" id="L1800">            columns = new ArrayList&lt;ArrayList&lt;Serializable&gt;&gt;(m_columnHeader.length);</span>
+<span class="nc bnc" id="L1801" title="All 2 branches missed.">        while (columns.size() &lt;= col)</span>
+<span class="nc" id="L1802">            columns.add(null);</span>
+        //
+<span class="nc" id="L1804">        ArrayList&lt;Serializable&gt; coordinate = columns.get(col);</span>
+<span class="nc bnc" id="L1805" title="All 2 branches missed.">        if (coordinate == null)</span>
+<span class="nc" id="L1806">            coordinate = new ArrayList&lt;Serializable&gt;();</span>
+<span class="nc" id="L1807">        coordinate.add(data);</span>
+        //
+<span class="nc" id="L1809">        columns.set(col, coordinate);</span>
+<span class="nc" id="L1810">        m_printRows.setRowData(columns);</span>
+<span class="nc bnc" id="L1811" title="All 2 branches missed.">        if (log.isLoggable(Level.FINEST))</span>
+        {
+<span class="nc" id="L1813">            log.finest(&quot;row=&quot; + row + &quot;, col=&quot; + col</span>
+<span class="nc" id="L1814">                    + &quot; - Rows=&quot; + m_printRows.getRowCount() + &quot;, Cols=&quot; + columns.size()</span>
+<span class="nc" id="L1815">                    + &quot; - &quot; + data);</span>
+        }
+<span class="nc" id="L1817">    }	//	addAdditionalLines</span>
+
+    /** Print Data				*/
+<span class="nc" id="L1820">    private SerializableMatrix&lt;ArrayList&lt;Serializable&gt;&gt; m_printRows = new SerializableMatrixImpl&lt;ArrayList&lt;Serializable&gt;&gt;(&quot;PrintRows&quot;);</span>
+    private ArrayList&lt;String&gt; m_pageLogics;
+    private PrintData m_tablePrintData;
+
+    /**
+     * 	Get Print Data including additional Lines
+     * 	@param row row
+     * 	@param col col
+     * 	@return non null array of print objects (may be empty)
+     */
+    private Object[] getPrintItems (int row, int col)
+    {
+<span class="nc" id="L1832">        List&lt;ArrayList&lt;Serializable&gt;&gt; columns = null;</span>
+<span class="nc bnc" id="L1833" title="All 2 branches missed.">        if (m_printRows.getRowCount() &gt; row)</span>
+        {
+<span class="nc" id="L1835">            m_printRows.setRowIndex(row);</span>
+<span class="nc" id="L1836">            columns = m_printRows.getRowData();</span>
+        }
+<span class="nc bnc" id="L1838" title="All 2 branches missed.">        if (columns == null)</span>
+<span class="nc" id="L1839">            return new Object[]{};</span>
+<span class="nc" id="L1840">        ArrayList&lt;Serializable&gt; coordinate = null;</span>
+<span class="nc bnc" id="L1841" title="All 2 branches missed.">        if (columns.size() &gt; col)</span>
+<span class="nc" id="L1842">            coordinate = columns.get(col);</span>
+<span class="nc bnc" id="L1843" title="All 2 branches missed.">        if (coordinate == null)</span>
+<span class="nc" id="L1844">            return new Object[]{};</span>
+        //
+<span class="nc" id="L1846">        return coordinate.toArray();</span>
+    }	//	getPrintItems
+
+    /**
+     * Get Report Line.
+     *
+     * @param row row
+     * @param col column
+     * @return ReportLine for row/col
+     */
+    private MReportLine getReportLine(int row, int col)
+    {
+        // First specific position
+<span class="nc" id="L1859">        MReportLine rLine = (MReportLine) m_rowColReportLine.get(new Point(row, col));</span>
+<span class="nc bnc" id="L1860" title="All 2 branches missed.">        if (rLine != null)</span>
+<span class="nc" id="L1861">            return rLine;</span>
+
+<span class="nc" id="L1863">        return null;</span>
+    } // getReportLine
+
+    /**
+     * Set page logic expression
+     * @param pageLogics
+     */
+    public void setPageLogics(ArrayList&lt;String&gt; pageLogics)
+    {
+<span class="nc" id="L1872">        m_pageLogics = pageLogics;</span>
+<span class="nc" id="L1873">    }</span>
+
+    /**
+     * Set print data
+     * @param printData
+     */
+    public void setTablePrintData(PrintData printData)
+    {
+<span class="nc" id="L1881">        m_tablePrintData = printData;</span>
+<span class="nc" id="L1882">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

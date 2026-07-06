@@ -1,0 +1,283 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>InOutGenerateRMA.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.process</a> &gt; <span class="el_source">InOutGenerateRMA.java</span></div><h1>InOutGenerateRMA.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/ 
+
+package org.adempiere.process;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.I_C_InvoiceLine;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInOutLine;
+import org.compiere.model.MInvoiceLine;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MRMA;
+import org.compiere.model.MRMALine;
+import org.compiere.model.Query;
+import org.compiere.process.DocAction;
+import org.compiere.process.ProcessInfoParameter;
+import org.compiere.process.SvrProcess;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+
+/**
+ * Generate shipment for Vendor RMA.
+ * Based on {@link org.compiere.process.InOutGenerate}.
+ * @author Ashley Ramdass
+ * @author Teo Sarca
+ * 			&lt;li&gt;BF [ 2818523 ] Invoice and Shipment are not matched in case of RMA
+ * 				https://sourceforge.net/p/adempiere/bugs/1972/
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L51">public class InOutGenerateRMA extends SvrProcess</span>
+{
+    /** Manual Selection        */
+<span class="nc" id="L54">    private boolean     p_Selection = false;</span>
+    /** Warehouse               */
+    @SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L57">    private int         p_M_Warehouse_ID = 0;</span>
+    /** DocAction               */
+<span class="nc" id="L59">    private String      p_docAction = DocAction.ACTION_None;</span>
+    /** Number of Shipments     */
+<span class="nc" id="L61">    private int         m_created = 0;</span>
+    /** Movement Date           */
+<span class="nc" id="L63">    private Timestamp   p_movementDate = null;</span>
+
+    protected void prepare()
+    {
+<span class="nc" id="L67">        ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">        for (int i = 0; i &lt; para.length; i++)</span>
+        {
+<span class="nc" id="L70">            String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L71" title="All 2 branches missed.">            if (para[i].getParameter() == null)</span>
+<span class="nc" id="L72">                ;</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">            else if (name.equals(&quot;M_Warehouse_ID&quot;))</span>
+<span class="nc" id="L74">                p_M_Warehouse_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">            else if (name.equals(&quot;Selection&quot;))</span>
+<span class="nc" id="L76">                p_Selection = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">            else if (name.equals(&quot;DocAction&quot;))</span>
+<span class="nc" id="L78">                p_docAction = (String)para[i].getParameter();</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">            else if (name.equals(&quot;MovementDate&quot;))</span>
+<span class="nc" id="L80">            	p_movementDate = para[i].getParameterAsTimestamp();</span>
+            else
+<span class="nc" id="L82">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+        }
+<span class="nc bnc" id="L84" title="All 2 branches missed.">        if (p_movementDate == null) {</span>
+<span class="nc" id="L85">	        p_movementDate = Env.getContextAsDate(getCtx(), Env.DATE);</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">	        if (p_movementDate == null)</span>
+	        {
+<span class="nc" id="L88">	            p_movementDate = new Timestamp(System.currentTimeMillis());</span>
+	        }
+        }
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        if (getProcessInfo().getAD_InfoWindow_ID() &gt; 0) p_Selection=true;</span>
+<span class="nc" id="L92">    }</span>
+    
+    protected String doIt() throws Exception
+    {
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        if (!p_Selection)</span>
+        {
+<span class="nc" id="L98">            throw new IllegalStateException(&quot;Shipments can only be generated from selection&quot;);</span>
+        }
+        
+<span class="nc" id="L101">        String sql = &quot;SELECT rma.M_RMA_ID FROM M_RMA rma, T_Selection &quot;</span>
+            + &quot;WHERE rma.DocStatus='CO' AND rma.IsSOTrx='N' AND rma.AD_Client_ID=? &quot;
+            + &quot;AND rma.M_RMA_ID = T_Selection.T_Selection_ID &quot; 
+            + &quot;AND T_Selection.AD_PInstance_ID=? &quot;;
+        
+<span class="nc" id="L106">        PreparedStatement pstmt = null;</span>
+<span class="nc" id="L107">        ResultSet rs = null;</span>
+        try
+        {
+<span class="nc" id="L110">            pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L111">            pstmt.setInt(1, Env.getAD_Client_ID(getCtx()));</span>
+<span class="nc" id="L112">            pstmt.setInt(2, getAD_PInstance_ID());</span>
+<span class="nc" id="L113">            rs = pstmt.executeQuery();</span>
+            
+<span class="nc bnc" id="L115" title="All 2 branches missed.">            while (rs.next())</span>
+            {
+<span class="nc" id="L117">                generateShipment(rs.getInt(1));</span>
+            }
+<span class="nc" id="L119">        }</span>
+<span class="nc" id="L120">        catch (Exception ex)</span>
+        {
+<span class="nc" id="L122">			throw new AdempiereException(ex);</span>
+        }
+        finally
+        {
+<span class="nc" id="L126">            DB.close(rs,pstmt);</span>
+<span class="nc" id="L127">            rs = null;pstmt = null;</span>
+        }
+        
+<span class="nc" id="L130">        StringBuilder msgreturn = new StringBuilder(&quot;@Created@ = &quot;).append(m_created);</span>
+<span class="nc" id="L131">        return msgreturn.toString();</span>
+    }
+    
+    private int getShipmentDocTypeId(int M_RMA_ID)
+    {
+<span class="nc" id="L136">        String docTypeSQl = &quot;SELECT dt.C_DocTypeShipment_ID FROM C_DocType dt &quot;</span>
+            + &quot;INNER JOIN M_RMA rma ON dt.C_DocType_ID=rma.C_DocType_ID &quot;
+            + &quot;WHERE rma.M_RMA_ID=?&quot;;
+        
+<span class="nc" id="L140">        int docTypeId = DB.getSQLValue(get_TrxName(), docTypeSQl, M_RMA_ID);</span>
+        
+<span class="nc" id="L142">        return docTypeId;</span>
+    }
+    
+    private MInOut createShipment(MRMA rma)
+    {
+<span class="nc" id="L147">        int docTypeId = getShipmentDocTypeId(rma.get_ID());</span>
+        
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        if (docTypeId == -1)</span>
+        {
+<span class="nc" id="L151">            throw new IllegalStateException(&quot;Could not get shipment document type for Vendor RMA&quot;);</span>
+        }
+        
+<span class="nc" id="L154">        MInOut originalReceipt = rma.getShipment();</span>
+        
+<span class="nc" id="L156">        MInOut shipment = new MInOut(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L157">        shipment.setM_RMA_ID(rma.get_ID());</span>
+<span class="nc" id="L158">        shipment.setAD_Org_ID(rma.getAD_Org_ID());</span>
+<span class="nc" id="L159">        shipment.setAD_OrgTrx_ID(originalReceipt.getAD_OrgTrx_ID());</span>
+<span class="nc" id="L160">        shipment.setDescription(rma.getDescription());</span>
+<span class="nc" id="L161">        shipment.setC_BPartner_ID(rma.getC_BPartner_ID());</span>
+<span class="nc" id="L162">        shipment.setC_BPartner_Location_ID(originalReceipt.getC_BPartner_Location_ID());</span>
+<span class="nc" id="L163">        shipment.setIsSOTrx(rma.isSOTrx());</span>
+<span class="nc" id="L164">        shipment.setC_DocType_ID(docTypeId);       </span>
+<span class="nc" id="L165">        shipment.setM_Warehouse_ID(originalReceipt.getM_Warehouse_ID());</span>
+<span class="nc" id="L166">        shipment.setMovementType(MInOut.MOVEMENTTYPE_VendorReturns);</span>
+<span class="nc" id="L167">        shipment.setC_Project_ID(originalReceipt.getC_Project_ID());</span>
+<span class="nc" id="L168">        shipment.setC_Campaign_ID(originalReceipt.getC_Campaign_ID());</span>
+<span class="nc" id="L169">        shipment.setC_Activity_ID(originalReceipt.getC_Activity_ID());</span>
+<span class="nc" id="L170">        shipment.setUser1_ID(originalReceipt.getUser1_ID());</span>
+<span class="nc" id="L171">        shipment.setUser2_ID(originalReceipt.getUser2_ID());</span>
+<span class="nc" id="L172">        shipment.setC_CostCenter_ID(originalReceipt.getC_CostCenter_ID());</span>
+<span class="nc" id="L173">        shipment.setC_Department_ID(originalReceipt.getC_Department_ID());</span>
+<span class="nc" id="L174">        shipment.setMovementDate(p_movementDate);</span>
+<span class="nc" id="L175">        shipment.setDateAcct(p_movementDate);</span>
+        
+<span class="nc bnc" id="L177" title="All 2 branches missed.">        if (!shipment.save())</span>
+        {
+<span class="nc" id="L179">            throw new IllegalStateException(&quot;Could not create Shipment&quot;);</span>
+        }
+        
+<span class="nc" id="L182">        return shipment;</span>
+    }
+    
+    private MInOutLine[] createShipmentLines(MRMA rma, MInOut shipment)
+    {
+<span class="nc" id="L187">        ArrayList&lt;MInOutLine&gt; shipLineList = new ArrayList&lt;MInOutLine&gt;();</span>
+        
+<span class="nc" id="L189">        MRMALine rmaLines[] = rma.getLines(true);</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        for (MRMALine rmaLine : rmaLines)</span>
+        {
+<span class="nc bnc" id="L192" title="All 6 branches missed.">        	if (rmaLine.getM_InOutLine_ID() != 0 || rmaLine.getC_Charge_ID() != 0 || rmaLine.getM_Product_ID() != 0)</span>
+            {
+<span class="nc" id="L194">                MInOutLine shipLine = new MInOutLine(shipment);</span>
+<span class="nc" id="L195">                shipLine.setM_RMALine_ID(rmaLine.get_ID());</span>
+<span class="nc" id="L196">                shipLine.setLine(rmaLine.getLine());</span>
+<span class="nc" id="L197">                shipLine.setDescription(rmaLine.getDescription());</span>
+                
+<span class="nc bnc" id="L199" title="All 2 branches missed.">                if (rmaLine.getC_Charge_ID() != 0)</span>
+                {
+<span class="nc" id="L201">                	shipLine.setC_Charge_ID(rmaLine.getC_Charge_ID());</span>
+<span class="nc" id="L202">                	shipLine.set_ValueNoCheck(MInOutLine.COLUMNNAME_M_Product_ID, null);</span>
+<span class="nc" id="L203">                	shipLine.set_ValueNoCheck(MInOutLine.COLUMNNAME_M_AttributeSetInstance_ID, null);</span>
+<span class="nc" id="L204">                	shipLine.set_ValueNoCheck(MInOutLine.COLUMNNAME_M_Locator_ID, null);</span>
+<span class="nc" id="L205">                }</span>
+                else
+                {
+<span class="nc" id="L208">                	shipLine.setM_Product_ID(rmaLine.getM_Product_ID());</span>
+<span class="nc" id="L209">                    shipLine.setM_AttributeSetInstance_ID(rmaLine.getM_AttributeSetInstance_ID());</span>
+<span class="nc" id="L210">                    shipLine.setM_Locator_ID(rmaLine.getM_Locator_ID());</span>
+                }
+                
+<span class="nc" id="L213">                shipLine.setC_UOM_ID(rmaLine.getC_UOM_ID());</span>
+<span class="nc" id="L214">                shipLine.setQty(rmaLine.getQty());</span>
+<span class="nc" id="L215">                shipLine.setC_Project_ID(rmaLine.getC_Project_ID());</span>
+<span class="nc" id="L216">                shipLine.setC_Campaign_ID(rmaLine.getC_Campaign_ID());</span>
+<span class="nc" id="L217">                shipLine.setC_Activity_ID(rmaLine.getC_Activity_ID());</span>
+<span class="nc" id="L218">                shipLine.setC_ProjectPhase_ID(rmaLine.getC_ProjectPhase_ID());</span>
+<span class="nc" id="L219">                shipLine.setC_ProjectTask_ID(rmaLine.getC_ProjectTask_ID());</span>
+<span class="nc" id="L220">                shipLine.setUser1_ID(rmaLine.getUser1_ID());</span>
+<span class="nc" id="L221">                shipLine.setUser2_ID(rmaLine.getUser2_ID());</span>
+<span class="nc" id="L222">				shipLine.setC_CostCenter_ID(rmaLine.getC_CostCenter_ID());</span>
+<span class="nc" id="L223">				shipLine.setC_Department_ID(rmaLine.getC_Department_ID());</span>
+<span class="nc" id="L224">                shipLine.saveEx();</span>
+<span class="nc" id="L225">                shipLineList.add(shipLine);</span>
+                //
+                // Link to corresponding Invoice Line (if any) - teo_sarca [ 2818523 ]
+                // The MMatchInv records will be automatically generated on MInOut.completeIt()
+<span class="nc" id="L229">            	MInvoiceLine invoiceLine = new Query(shipment.getCtx(), I_C_InvoiceLine.Table_Name,</span>
+<span class="nc" id="L230">            			I_C_InvoiceLine.COLUMNNAME_M_RMALine_ID+&quot;=?&quot;,</span>
+<span class="nc" id="L231">            			shipment.get_TrxName())</span>
+<span class="nc" id="L232">            	.setParameters(rmaLine.getM_RMALine_ID())</span>
+<span class="nc" id="L233">            	.firstOnly();</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">            	if (invoiceLine != null)</span>
+            	{
+<span class="nc" id="L236">            		invoiceLine.setM_InOutLine_ID(shipLine.getM_InOutLine_ID());</span>
+<span class="nc" id="L237">            		invoiceLine.saveEx();</span>
+            	}
+
+            }
+        }
+        
+<span class="nc" id="L243">        MInOutLine shipLines[] = new MInOutLine[shipLineList.size()];</span>
+<span class="nc" id="L244">        shipLineList.toArray(shipLines);</span>
+        
+<span class="nc" id="L246">        return shipLines;</span>
+    }
+    
+    private void generateShipment(int M_RMA_ID)
+    {
+<span class="nc" id="L251">        MRMA rma = new MRMA(getCtx(), M_RMA_ID, get_TrxName());</span>
+<span class="nc" id="L252">        statusUpdate(Msg.getMsg(getCtx(), &quot;Processing&quot;) + &quot; &quot; + rma.getDocumentInfo());</span>
+        
+<span class="nc" id="L254">        MInOut shipment = createShipment(rma);</span>
+<span class="nc" id="L255">        MInOutLine shipmentLines[] = createShipmentLines(rma, shipment);</span>
+        
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        if (shipmentLines.length == 0)</span>
+        {
+<span class="nc" id="L259">            StringBuilder msglog = new StringBuilder(&quot;No shipment lines created: M_RMA_ID=&quot;)</span>
+<span class="nc" id="L260">                    .append(M_RMA_ID).append(&quot;, M_InOut_ID=&quot;).append(shipment.get_ID());</span>
+<span class="nc" id="L261">        	log.log(Level.WARNING, msglog.toString());</span>
+        }
+        
+<span class="nc" id="L264">        StringBuilder processMsg = new StringBuilder().append(shipment.getDocumentNo());</span>
+        
+<span class="nc bnc" id="L266" title="All 2 branches missed.">		if (!DocAction.ACTION_None.equals(p_docAction)) {</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">	        if (!shipment.processIt(p_docAction))</span>
+	        {
+<span class="nc" id="L269">	            processMsg.append(&quot; (NOT Processed)&quot;);</span>
+<span class="nc" id="L270">	            StringBuilder msglog = new StringBuilder(&quot;Shipment Processing failed: &quot;).append(shipment).append(&quot; - &quot;).append(shipment.getProcessMsg());</span>
+<span class="nc" id="L271">	            log.warning(msglog.toString());</span>
+<span class="nc" id="L272">	            throw new IllegalStateException(&quot;Shipment Processing failed: &quot; + shipment + &quot; - &quot; + shipment.getProcessMsg());</span>
+	        }
+		}
+<span class="nc" id="L275">        shipment.saveEx();</span>
+        
+        // Add processing information to process log
+<span class="nc" id="L278">        addBufferLog(shipment.getM_InOut_ID(), shipment.getMovementDate(), null, processMsg.toString(),shipment.get_Table_ID(),shipment.getM_InOut_ID());</span>
+<span class="nc" id="L279">        m_created++;</span>
+<span class="nc" id="L280">    }</span>
+    
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

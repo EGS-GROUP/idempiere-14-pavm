@@ -1,0 +1,1314 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Core.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.base</a> &gt; <span class="el_source">Core.java</span></div><h1>Core.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * This file is part of Adempiere ERP Bazaar                                  *
+ * http://www.adempiere.org                                                   *
+ *                                                                            *
+ * Copyright (C) Jorg Viola			                                          *
+ * Copyright (C) Contributors												  *
+ *                                                                            *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *                                                                            *
+ * Contributors:                                                              *
+ * - Heng Sin Low                                                             *
+ *****************************************************************************/
+package org.adempiere.base;
+
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+import javax.crypto.SecretKey;
+import javax.script.Compilable;
+import javax.script.CompiledScript;
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineFactory;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptException;
+
+import org.adempiere.base.event.IEventManager;
+import org.adempiere.base.markdown.IMarkdownRenderer;
+import org.adempiere.base.search.ISearchProvider;
+import org.adempiere.base.upload.IUploadService;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.model.IAddressValidation;
+import org.adempiere.model.IShipmentProcessor;
+import org.adempiere.model.ITaxProvider;
+import org.adempiere.model.MShipperFacade;
+import org.adempiere.util.DefaultReservationTracerFactory;
+import org.adempiere.util.IReservationTracerFactory;
+import org.compiere.Adempiere;
+import org.compiere.impexp.BankStatementLoaderInterface;
+import org.compiere.impexp.BankStatementMatcherInterface;
+import org.compiere.model.Callout;
+import org.compiere.model.I_AD_PrintHeaderFooter;
+import org.compiere.model.MAddressValidation;
+import org.compiere.model.MAuthorizationAccount;
+import org.compiere.model.MAuthorizationCredential;
+import org.compiere.model.MAuthorizationProvider;
+import org.compiere.model.MBankAccountProcessor;
+import org.compiere.model.MPaymentProcessor;
+import org.compiere.model.MRule;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MTaxProvider;
+import org.compiere.model.ModelValidator;
+import org.compiere.model.PO;
+import org.compiere.model.PaymentInterface;
+import org.compiere.model.PaymentProcessor;
+import org.compiere.model.ServerStateChangeEvent;
+import org.compiere.model.ServerStateChangeListener;
+import org.compiere.model.StandardTaxProvider;
+import org.compiere.model.SystemIDs;
+import org.compiere.process.ProcessCall;
+import org.compiere.util.CCache;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DefaultKeyStore;
+import org.compiere.util.Env;
+import org.compiere.util.PaymentExport;
+import org.compiere.util.ReplenishInterface;
+import org.compiere.util.Util;
+import org.idempiere.distributed.ICacheService;
+import org.idempiere.distributed.IClusterService;
+import org.idempiere.distributed.IMessageService;
+import org.idempiere.fa.service.api.DepreciationFactoryLookupDTO;
+import org.idempiere.fa.service.api.IDepreciationMethod;
+import org.idempiere.fa.service.api.IDepreciationMethodFactory;
+import org.idempiere.model.IMappedModelFactory;
+import org.idempiere.print.IPrintHeaderFooter;
+import org.idempiere.print.renderer.IReportRenderer;
+import org.idempiere.print.renderer.IReportRendererConfiguration;
+import org.idempiere.process.IMappedProcessFactory;
+import org.osgi.framework.ServiceReference;
+
+/**
+ * This is a facade class for the Service Locator.
+ * It provides simple access to all core services.
+ *
+ * @author viola
+ * @author hengsin
+ */
+<span class="nc" id="L98">public class Core {</span>
+
+	public static final String SCRIPT_ENGINE_FACTORY_CACHE_TABLE_NAME = &quot;_ScriptEngineFactory_Cache&quot;;
+
+	public static final String IPROCESS_FACTORY_CACHE_TABLE_NAME = &quot;_IProcessFactory_Cache&quot;;
+
+	public static final String IRESOURCE_FINDER_CACHE_TABLE_NAME = &quot;_IResourceFinder_Cache&quot;;
+
+	public static final String IDEPRECIATION_METHOD_FACTORY_CACHE_TABLE_NAME = &quot;_IDepreciationMethodFactory_Cache&quot;;
+
+	public static final String IPAYMENT_EXPORTER_FACTORY_CACHE_TABLE_NAME = &quot;_IPaymentExporterFactory_Cache&quot;;
+
+	public static final String IREPLENISH_FACTORY_CACHE_TABLE_NAME = &quot;_IReplenishFactory_Cache&quot;;
+
+	public static final String ITAX_PROVIDER_FACTORY_CACHE_TABLE_NAME = &quot;_ITaxProviderFactory_Cache&quot;;
+
+	public static final String IADDRESS_VALIDATION_FACTORY_CACHE_TABLE_NAME = &quot;_IAddressValidationFactory_Cache&quot;;
+
+	public static final String IBANK_STATEMENT_MATCHER_FACTORY_CACHE_TABLE_NAME = &quot;_IBankStatementMatcherFactory_Cache&quot;;
+
+	public static final String IBANK_STATEMENT_LOADER_FACTORY_CACHE_TABLE_NAME = &quot;_IBankStatementLoaderFactory_Cache&quot;;
+
+	public static final String IMODEL_VALIDATOR_FACTORY_CACHE_TABLE_NAME = &quot;_IModelValidatorFactory_Cache&quot;;
+
+	public static final String ISHIPMENT_PROCESSOR_FACTORY_CACHE_TABLE_NAME = &quot;_IShipmentProcessorFactory_Cache&quot;;
+
+	public static final String IPAYMENT_PROCESSOR_FACTORY_CACHE_TABLE_NAME = &quot;_IPaymentProcessorFactory_Cache&quot;;
+	
+	public static final String IPRINT_HEADER_FOOTER_CACHE_TABLE_NAME = &quot;_IIPrintHeaderFooterCache&quot;;
+
+<span class="nc" id="L128">	private final static CLogger s_log = CLogger.getCLogger(Core.class);</span>
+
+<span class="nc" id="L130">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IResourceFinder&gt;&gt; s_resourceFinderCache = new CCache&lt;&gt;(IRESOURCE_FINDER_CACHE_TABLE_NAME, &quot;IResourceFinder&quot;, 100, false);</span>
+	
+	/**
+	 * @return list of active resource finder
+	 */
+	public static IResourceFinder getResourceFinder() {
+<span class="nc" id="L136">		return new IResourceFinder() {</span>
+
+			public URL getResource(String name) {
+<span class="nc" id="L139">				IServiceReferenceHolder&lt;IResourceFinder&gt; cache = s_resourceFinderCache.get(name);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">				if (cache != null) {</span>
+<span class="nc" id="L141">					IResourceFinder service = cache.getService();</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L143">						URL url = service.getResource(name);</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">						if (url!=null)</span>
+<span class="nc" id="L145">							return url;</span>
+					}
+<span class="nc" id="L147">					s_resourceFinderCache.remove(name);</span>
+				}
+<span class="nc" id="L149">				List&lt;IServiceReferenceHolder&lt;IResourceFinder&gt;&gt; f = Service.locator().list(IResourceFinder.class).getServiceReferences();</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">				for (IServiceReferenceHolder&lt;IResourceFinder&gt; finder : f) {</span>
+<span class="nc" id="L151">					IResourceFinder service = finder.getService();</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L153">						URL url = service.getResource(name);</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">						if (url!=null) {</span>
+<span class="nc" id="L155">							s_resourceFinderCache.put(name, finder);</span>
+<span class="nc" id="L156">							return url;</span>
+						}
+					}
+				}
+<span class="nc" id="L160">				return null;</span>
+			}
+		};
+	}
+	
+	/**
+	 *
+	 * @param tableName
+	 * @param columnName
+	 * @return list of callout register for tableName.columnName
+	 */
+	public static List&lt;IColumnCallout&gt; findCallout(String tableName, String columnName) {
+<span class="nc" id="L172">		return ColumnCalloutManager.findCallout(tableName, columnName);</span>
+	}
+
+	/**
+	 *
+	 * @param className
+	 * @param methodName 
+	 * @return callout for className
+	 */
+	public static Callout getCallout(String className, String methodName) {
+<span class="nc" id="L182">		return ColumnCalloutManager.getCallout(className, methodName);</span>
+	}
+
+<span class="nc" id="L185">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IProcessFactory&gt;&gt; s_processFactoryCache = new CCache&lt;&gt;(IPROCESS_FACTORY_CACHE_TABLE_NAME, &quot;IProcessFactory&quot;, 100, false);</span>
+	
+	/**
+	 *
+	 * @param processId Java class name or equinox extension id
+	 * @return ProcessCall instance or null if processId not found
+	 */
+	public static ProcessCall getProcess(String processId) {
+<span class="nc" id="L193">		IServiceReferenceHolder&lt;IProcessFactory&gt; cache = s_processFactoryCache.get(processId);</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L195">			IProcessFactory service = cache.getService();</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L197">				ProcessCall process = service.newProcessInstance(processId);</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">				if (process != null)</span>
+<span class="nc" id="L199">					return process;</span>
+			}
+<span class="nc" id="L201">			s_processFactoryCache.remove(processId);</span>
+		}
+		
+<span class="nc" id="L204">		List&lt;IServiceReferenceHolder&lt;IProcessFactory&gt;&gt; factories = getProcessFactories();</span>
+<span class="nc bnc" id="L205" title="All 4 branches missed.">		if (factories != null &amp;&amp; !factories.isEmpty()) {</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">			for(IServiceReferenceHolder&lt;IProcessFactory&gt; factory : factories) {</span>
+<span class="nc" id="L207">				IProcessFactory service = factory.getService();</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">				if (service != null) {</span>
+<span class="nc" id="L209">					ProcessCall process = service.newProcessInstance(processId);</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">					if (process != null) {</span>
+<span class="nc" id="L211">						s_processFactoryCache.put(processId, factory);</span>
+<span class="nc" id="L212">						return process;</span>
+					}
+				}
+			}
+		}
+<span class="nc" id="L217">		return null; 		</span>
+	}
+
+	/**
+	 * This method load the process factories waiting until the DefaultProcessFactory on base is loaded (IDEMPIERE-3829)
+	 * @return List of factories implementing IProcessFactory
+	 */
+	private static List&lt;IServiceReferenceHolder&lt;IProcessFactory&gt;&gt; getProcessFactories() {
+<span class="nc" id="L225">		List&lt;IServiceReferenceHolder&lt;IProcessFactory&gt;&gt; factories = null;</span>
+<span class="nc" id="L226">		int maxIterations = 5;</span>
+<span class="nc" id="L227">		int waitMillis = 1000;</span>
+<span class="nc" id="L228">		int iterations = 0;</span>
+<span class="nc" id="L229">		boolean foundDefault = false;</span>
+<span class="nc" id="L230">		while (true) {</span>
+<span class="nc" id="L231">			factories = Service.locator().list(IProcessFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L232" title="All 4 branches missed.">			if (factories != null &amp;&amp; !factories.isEmpty()) {</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">				for(IServiceReferenceHolder&lt;IProcessFactory&gt; factory : factories) {</span>
+					// wait until DefaultProcessFactory is loaded
+<span class="nc" id="L235">					IProcessFactory service = factory.getService();</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">					if (service instanceof DefaultProcessFactory) {</span>
+<span class="nc" id="L237">						foundDefault = true;</span>
+<span class="nc" id="L238">						break;</span>
+					}
+				}
+			}
+<span class="nc" id="L242">			iterations++;</span>
+<span class="nc bnc" id="L243" title="All 4 branches missed.">			if (foundDefault || iterations &gt;= maxIterations) {</span>
+<span class="nc" id="L244">				break;</span>
+			}
+			try {
+<span class="nc" id="L247">				Thread.sleep(waitMillis);</span>
+<span class="nc" id="L248">			} catch (InterruptedException e) {</span>
+			}
+		}
+<span class="nc" id="L251">		return factories;</span>
+	}
+
+<span class="nc" id="L254">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IModelValidatorFactory&gt;&gt; s_modelValidatorFactoryCache = new CCache&lt;&gt;(IMODEL_VALIDATOR_FACTORY_CACHE_TABLE_NAME, &quot;IModelValidatorFactory&quot;, 100, false);</span>
+	
+	/**
+	 *
+	 * @param validatorId Java class name or equinox extension Id
+	 * @return ModelValidator instance of null if validatorId not found
+	 */
+	public static ModelValidator getModelValidator(String validatorId) {
+<span class="nc" id="L262">		IServiceReferenceHolder&lt;IModelValidatorFactory&gt; cache = s_modelValidatorFactoryCache.get(validatorId);</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L264">			IModelValidatorFactory service = cache.getService();</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L266">				ModelValidator validator = service.newModelValidatorInstance(validatorId);</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">				if (validator != null)</span>
+<span class="nc" id="L268">					return validator;</span>
+			}
+<span class="nc" id="L270">			s_modelValidatorFactoryCache.remove(validatorId);</span>
+		}
+<span class="nc" id="L272">		List&lt;IServiceReferenceHolder&lt;IModelValidatorFactory&gt;&gt; factoryList = Service.locator().list(IModelValidatorFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">		if (factoryList != null) {</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">			for(IServiceReferenceHolder&lt;IModelValidatorFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L275">				IModelValidatorFactory service = factory.getService();</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">				if (service != null) {</span>
+<span class="nc" id="L277">					ModelValidator validator = service.newModelValidatorInstance(validatorId);</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">					if (validator != null) {</span>
+<span class="nc" id="L279">						s_modelValidatorFactoryCache.put(validatorId, factory);</span>
+<span class="nc" id="L280">						return validator;</span>
+					}
+				}
+			}
+		}
+		
+<span class="nc" id="L286">		return null;</span>
+	}
+
+<span class="nc" id="L289">	private static IServiceReferenceHolder&lt;IKeyStore&gt; s_keystoreServiceReference = null;</span>
+<span class="nc" id="L290">	private static volatile boolean s_legacyKeyWarningLogged = false;</span>
+	
+	/**
+	 * 
+	 * @return {@link IKeyStore}
+	 */
+	public static IKeyStore getKeyStore(){
+<span class="nc" id="L297">		IKeyStore keystoreService = null;</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">		if (s_keystoreServiceReference != null) {</span>
+<span class="nc" id="L299">			keystoreService = s_keystoreServiceReference.getService();</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">			if (keystoreService != null)</span>
+<span class="nc" id="L301">				return keystoreService;</span>
+		}
+		
+<span class="nc" id="L304">		IServicesHolder&lt;IKeyStore&gt; list = Service.locator().list(IKeyStore.class);</span>
+<span class="nc" id="L305">		List&lt;IServiceReferenceHolder&lt;IKeyStore&gt;&gt; references = list.getServiceReferences();</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		for (IServiceReferenceHolder&lt;IKeyStore&gt; refHolder : references) {</span>
+<span class="nc" id="L307">			ServiceReference&lt;IKeyStore&gt; ref = refHolder.getServiceReference();</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			IKeyStore service = ref != null ? BaseActivator.getBundleContext().getService(ref) : null;</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">			if (service != null) {</span>
+				//test key store service is working
+<span class="nc" id="L311">				SecretKey key = service.getKey(0);</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">				if (key != null) {</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">					if (!s_legacyKeyWarningLogged) {</span>
+<span class="nc" id="L314">						final boolean legacyKeyDetected = key.getAlgorithm().equals(DefaultKeyStore.LEGACY_ALGORITHM);</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">						if (legacyKeyDetected)</span>
+<span class="nc" id="L316">							s_log.warning(&quot;Encryption with legacy key algorithm DES detected - it is recommended to migrate to a stronger algorithm&quot;);</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">						if (DB.isConnected()) {</span>
+<span class="nc" id="L318">							updateLegacyKeyWarningSysConfig(legacyKeyDetected);</span>
+<span class="nc" id="L319">						} else {</span>
+<span class="nc" id="L320">							Adempiere.addServerStateChangeListener(new ServerStateChangeListener() {</span>
+								@Override
+								public void stateChange(ServerStateChangeEvent event) {
+<span class="nc bnc" id="L323" title="All 2 branches missed.">									if (event.getEventType() == ServerStateChangeEvent.SERVER_START) </span>
+<span class="nc" id="L324">										updateLegacyKeyWarningSysConfig(legacyKeyDetected);</span>
+<span class="nc" id="L325">								}</span>
+							});
+						}
+					}
+<span class="nc" id="L329">					s_legacyKeyWarningLogged = true;</span>
+<span class="nc" id="L330">					keystoreService = service;</span>
+<span class="nc" id="L331">					s_keystoreServiceReference = refHolder;</span>
+<span class="nc" id="L332">					break;</span>
+				} else {
+<span class="nc" id="L334">					String componentName = (String)ref.getProperty(org.osgi.service.component.ComponentConstants.COMPONENT_NAME);</span>
+<span class="nc" id="L335">					throw new AdempiereException(&quot;Key store service [class=&quot; + service.getClass().getName()</span>
+<span class="nc" id="L336">							+ &quot;, component=&quot; + componentName </span>
+<span class="nc" id="L337">							+ &quot;, bundle=&quot; + ref.getBundle().getSymbolicName() </span>
+							+ &quot;] is not configured properly&quot;);
+				}
+			}
+		}
+<span class="nc" id="L342">		return keystoreService;</span>
+	}
+	
+	/**
+	 * Update SECURITY_DASHBOARD_LEGACY_KEY_WARNING SysConfig.
+	 * This method will be called asynchronously to avoid issues when DB is not yet connected.
+	 */
+	private static void updateLegacyKeyWarningSysConfig(boolean legacyKeyDetected) {
+		// Run in a separate thread to avoid blocking and to retry until DB is connected
+<span class="nc" id="L351">		String warn = MSysConfig.getValue(MSysConfig.SECURITY_DASHBOARD_LEGACY_KEY_WARNING, &quot;Y&quot;);</span>
+<span class="nc bnc" id="L352" title="All 2 branches missed.">		if (&quot;D&quot;.equals(warn))</span>
+<span class="nc" id="L353">			return; // warning disabled by sysadmin, do not override</span>
+<span class="nc bnc" id="L354" title="All 4 branches missed.">		if (&quot;Y&quot;.equals(warn) &amp;&amp; legacyKeyDetected)</span>
+<span class="nc" id="L355">			return; // warning already enabled and legacy key still detected, no update needed</span>
+<span class="nc bnc" id="L356" title="All 4 branches missed.">		if (&quot;N&quot;.equals(warn) &amp;&amp; !legacyKeyDetected)</span>
+<span class="nc" id="L357">			return; // warning already negated and no legacy key detected, no update needed</span>
+
+<span class="nc" id="L359">		MSysConfig conf = new MSysConfig(Env.getCtx(), SystemIDs.SYSCONFIG_SECURITY_DASHBOARD_LEGACY_KEY_WARNING, null);</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">		conf.setValue(legacyKeyDetected ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc" id="L361">		conf.saveEx();</span>
+
+<span class="nc bnc" id="L363" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L364">			s_log.info(&quot;Updated SECURITY_DASHBOARD_LEGACY_KEY_WARNING SysConfig&quot;);</span>
+<span class="nc" id="L365">	}</span>
+
+<span class="nc" id="L367">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IPaymentProcessorFactory&gt;&gt; s_paymentProcessorFactoryCache = new CCache&lt;&gt;(IPAYMENT_PROCESSOR_FACTORY_CACHE_TABLE_NAME, &quot;IPaymentProcessorFactory&quot;, 100, false);</span>
+	
+	/**
+	 *  Get payment processor instance
+	 * 	@param mbap payment processor model
+	 * 	@param mp payment model
+	 *  @return initialized PaymentProcessor or null
+	 */
+	public static PaymentProcessor getPaymentProcessor(MBankAccountProcessor mbap, PaymentInterface mp) {
+<span class="nc bnc" id="L376" title="All 2 branches missed.">		if (s_log.isLoggable(Level.FINE)) s_log.fine(&quot;create for &quot; + mbap);</span>
+		
+<span class="nc" id="L378">		MPaymentProcessor mpp = new MPaymentProcessor(mbap.getCtx(), mbap.getC_PaymentProcessor_ID(), mbap.get_TrxName());</span>
+<span class="nc" id="L379">		String className = mpp.getPayProcessorClass();</span>
+<span class="nc bnc" id="L380" title="All 4 branches missed.">		if (className == null || className.length() == 0) {</span>
+<span class="nc" id="L381">			s_log.log(Level.SEVERE, &quot;No PaymentProcessor class name in &quot; + mbap);</span>
+<span class="nc" id="L382">			return null;</span>
+		}
+		//
+<span class="nc" id="L385">		PaymentProcessor myProcessor = null;</span>
+<span class="nc" id="L386">		IServiceReferenceHolder&lt;IPaymentProcessorFactory&gt; cache = s_paymentProcessorFactoryCache.get(className);</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L388">			IPaymentProcessorFactory service = cache.getService();</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L390">				PaymentProcessor processor = service.newPaymentProcessorInstance(className);</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">				if (processor != null) </span>
+<span class="nc" id="L392">					myProcessor = processor;</span>
+			}
+<span class="nc bnc" id="L394" title="All 2 branches missed.">			if (myProcessor == null)</span>
+<span class="nc" id="L395">				s_paymentProcessorFactoryCache.remove(className);</span>
+		}
+		
+<span class="nc bnc" id="L398" title="All 2 branches missed.">		if (myProcessor == null) {</span>
+<span class="nc" id="L399">			List&lt;IServiceReferenceHolder&lt;IPaymentProcessorFactory&gt;&gt; factoryList = Service.locator().list(IPaymentProcessorFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">			if (factoryList != null) {</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">				for(IServiceReferenceHolder&lt;IPaymentProcessorFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L402">					IPaymentProcessorFactory service = factory.getService();</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L404">						PaymentProcessor processor = service.newPaymentProcessorInstance(className);</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">						if (processor != null) {</span>
+<span class="nc" id="L406">							myProcessor = processor;</span>
+<span class="nc" id="L407">							s_paymentProcessorFactoryCache.put(className, factory);</span>
+<span class="nc" id="L408">							break;</span>
+						}
+					}
+				}
+			}
+		}
+		
+<span class="nc bnc" id="L415" title="All 2 branches missed.">		if (myProcessor == null) {</span>
+<span class="nc" id="L416">			s_log.log(Level.SEVERE, &quot;Not found in service/extension registry and classpath&quot;);</span>
+<span class="nc" id="L417">			return null;</span>
+		}
+
+		//  Initialize
+<span class="nc" id="L421">		myProcessor.initialize(mbap, mp);</span>
+		//
+<span class="nc" id="L423">		return myProcessor;</span>
+	}
+	
+<span class="nc" id="L426">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IBankStatementLoaderFactory&gt;&gt; s_bankStatementLoaderFactoryCache = new CCache&lt;&gt;(IBANK_STATEMENT_LOADER_FACTORY_CACHE_TABLE_NAME, &quot;IBankStatementLoaderFactory&quot;, 100, false);</span>
+	
+	/**
+	 * get BankStatementLoader instance
+	 * 
+	 * @param className
+	 * @return instance of the BankStatementLoaderInterface or null
+	 */
+	public static BankStatementLoaderInterface getBankStatementLoader(String className){
+<span class="nc bnc" id="L435" title="All 4 branches missed.">		if (className == null || className.length() == 0) {</span>
+<span class="nc" id="L436">			s_log.log(Level.SEVERE, &quot;No BankStatementLoaderInterface class name&quot;);</span>
+<span class="nc" id="L437">			return null;</span>
+		}
+
+<span class="nc" id="L440">		BankStatementLoaderInterface myBankStatementLoader = null;</span>
+<span class="nc" id="L441">		IServiceReferenceHolder&lt;IBankStatementLoaderFactory&gt; cache = s_bankStatementLoaderFactoryCache.get(className);</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L443">			IBankStatementLoaderFactory service = cache.getService();</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L445">				BankStatementLoaderInterface loader = service.newBankStatementLoaderInstance(className);</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">				if (loader != null) </span>
+<span class="nc" id="L447">					myBankStatementLoader = loader;</span>
+			}
+<span class="nc bnc" id="L449" title="All 2 branches missed.">			if (myBankStatementLoader == null)</span>
+<span class="nc" id="L450">				s_bankStatementLoaderFactoryCache.remove(className);</span>
+		}
+<span class="nc bnc" id="L452" title="All 2 branches missed.">		if (myBankStatementLoader == null) {</span>
+<span class="nc" id="L453">			List&lt;IServiceReferenceHolder&lt;IBankStatementLoaderFactory&gt;&gt; factoryList = Service.locator().list(IBankStatementLoaderFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">			if (factoryList != null) {</span>
+<span class="nc bnc" id="L455" title="All 2 branches missed.">				for(IServiceReferenceHolder&lt;IBankStatementLoaderFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L456">					IBankStatementLoaderFactory service = factory.getService();</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L458">						BankStatementLoaderInterface loader = service.newBankStatementLoaderInstance(className);</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">						if (loader != null) {</span>
+<span class="nc" id="L460">							myBankStatementLoader = loader;</span>
+<span class="nc" id="L461">							s_bankStatementLoaderFactoryCache.put(className, factory);</span>
+<span class="nc" id="L462">							break;</span>
+						}
+					}
+				}
+			}
+		}
+		
+<span class="nc bnc" id="L469" title="All 2 branches missed.">		if (myBankStatementLoader == null) {</span>
+<span class="nc" id="L470">			s_log.log(Level.CONFIG, className + &quot; not found in service/extension registry and classpath&quot;);</span>
+<span class="nc" id="L471">			return null;</span>
+		}
+		
+<span class="nc" id="L474">		return myBankStatementLoader;</span>
+	}
+	
+<span class="nc" id="L477">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IBankStatementMatcherFactory&gt;&gt; s_bankStatementMatcherFactoryCache = new CCache&lt;&gt;(IBANK_STATEMENT_MATCHER_FACTORY_CACHE_TABLE_NAME, &quot;IBankStatementMatcherFactory&quot;, 100, false);</span>
+	
+	/**
+	 * get BankStatementMatcher instance
+	 * 
+	 * @param className
+	 * @return instance of the BankStatementMatcherInterface or null
+	 */
+	public static BankStatementMatcherInterface getBankStatementMatcher(String className){
+<span class="nc bnc" id="L486" title="All 4 branches missed.">		if (className == null || className.length() == 0) {</span>
+<span class="nc" id="L487">			s_log.log(Level.SEVERE, &quot;No BankStatementMatcherInterface class name&quot;);</span>
+<span class="nc" id="L488">			return null;</span>
+		}
+
+<span class="nc" id="L491">		BankStatementMatcherInterface myBankStatementMatcher = null;</span>
+<span class="nc" id="L492">		IServiceReferenceHolder&lt;IBankStatementMatcherFactory&gt; cache = s_bankStatementMatcherFactoryCache.get(className);</span>
+<span class="nc bnc" id="L493" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L494">			IBankStatementMatcherFactory service = cache.getService();</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L496">				BankStatementMatcherInterface matcher = service.newBankStatementMatcherInstance(className);</span>
+<span class="nc bnc" id="L497" title="All 2 branches missed.">				if (matcher != null) </span>
+<span class="nc" id="L498">					myBankStatementMatcher = matcher;</span>
+			}
+<span class="nc bnc" id="L500" title="All 2 branches missed.">			if (myBankStatementMatcher == null)</span>
+<span class="nc" id="L501">				s_bankStatementMatcherFactoryCache.remove(className);</span>
+		}
+<span class="nc bnc" id="L503" title="All 2 branches missed.">		if (myBankStatementMatcher == null) {</span>
+<span class="nc" id="L504">			List&lt;IServiceReferenceHolder&lt;IBankStatementMatcherFactory&gt;&gt; factoryList = Service.locator().list(IBankStatementMatcherFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L505" title="All 2 branches missed.">			if (factoryList != null) {</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">				for(IServiceReferenceHolder&lt;IBankStatementMatcherFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L507">					IBankStatementMatcherFactory service = factory.getService();</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L509">						BankStatementMatcherInterface matcher = service.newBankStatementMatcherInstance(className);</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">						if (matcher != null) {</span>
+<span class="nc" id="L511">							myBankStatementMatcher = matcher;</span>
+<span class="nc" id="L512">							s_bankStatementMatcherFactoryCache.put(className, factory);</span>
+<span class="nc" id="L513">							break;</span>
+						}
+					}
+				}
+			}
+		}
+		
+<span class="nc bnc" id="L520" title="All 2 branches missed.">		if (myBankStatementMatcher == null) {</span>
+<span class="nc" id="L521">			s_log.log(Level.CONFIG, className + &quot; not found in service/extension registry and classpath&quot;);</span>
+<span class="nc" id="L522">			return null;</span>
+		}
+		
+<span class="nc" id="L525">		return myBankStatementMatcher;</span>
+	}
+	
+<span class="nc" id="L528">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IShipmentProcessorFactory&gt;&gt; s_shipmentProcessorFactoryCache = new CCache&lt;&gt;(ISHIPMENT_PROCESSOR_FACTORY_CACHE_TABLE_NAME, &quot;IShipmentProcessorFactory&quot;, 100, false);</span>
+	
+	/**
+	 * 
+	 * @param sf
+	 * @return shipment process instance or null if not found
+	 */
+	public static IShipmentProcessor getShipmentProcessor(MShipperFacade sf) 
+	{
+<span class="nc bnc" id="L537" title="All 2 branches missed.">		if (s_log.isLoggable(Level.FINE)) s_log.fine(&quot;create for &quot; + sf);</span>
+		
+<span class="nc" id="L539">		String className = sf.getShippingProcessorClass();</span>
+<span class="nc bnc" id="L540" title="All 4 branches missed.">		if (className == null || className.length() == 0) </span>
+		{
+<span class="nc" id="L542">			s_log.log(Level.SEVERE, &quot;Shipment processor or class not defined for shipper &quot; + sf);</span>
+<span class="nc" id="L543">			return null;</span>
+		}
+	
+<span class="nc" id="L546">		IServiceReferenceHolder&lt;IShipmentProcessorFactory&gt; cache = s_shipmentProcessorFactoryCache.get(className);</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L548">			IShipmentProcessorFactory service = cache.getService();</span>
+<span class="nc bnc" id="L549" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L550">				IShipmentProcessor processor = service.newShipmentProcessorInstance(className);</span>
+<span class="nc bnc" id="L551" title="All 2 branches missed.">				if (processor != null)</span>
+<span class="nc" id="L552">					return processor;</span>
+			}
+<span class="nc" id="L554">			s_shipmentProcessorFactoryCache.remove(className);</span>
+		}
+<span class="nc" id="L556">		List&lt;IServiceReferenceHolder&lt;IShipmentProcessorFactory&gt;&gt; factoryList = Service.locator().list(IShipmentProcessorFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L557" title="All 2 branches missed.">		if (factoryList == null) </span>
+<span class="nc" id="L558">			return null;</span>
+<span class="nc bnc" id="L559" title="All 2 branches missed.">		for (IServiceReferenceHolder&lt;IShipmentProcessorFactory&gt; factory : factoryList)</span>
+		{
+<span class="nc" id="L561">			IShipmentProcessorFactory service = factory.getService();</span>
+<span class="nc bnc" id="L562" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L563">				IShipmentProcessor processor = service.newShipmentProcessorInstance(className);</span>
+<span class="nc bnc" id="L564" title="All 2 branches missed.">				if (processor != null) {</span>
+<span class="nc" id="L565">					s_shipmentProcessorFactoryCache.put(className, factory);</span>
+<span class="nc" id="L566">					return processor;</span>
+				}
+			}
+		}
+		
+<span class="nc" id="L571">		return null;</span>
+	}
+	
+<span class="nc" id="L574">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IAddressValidationFactory&gt;&gt; s_addressValidationFactoryCache = new CCache&lt;&gt;(IADDRESS_VALIDATION_FACTORY_CACHE_TABLE_NAME, &quot;IAddressValidationFactory&quot;, 100, false);</span>
+	
+	/**
+	 * Get address validation instance
+	 * @param validation
+	 * @return address validation instance or null if not found
+	 */
+	public static IAddressValidation getAddressValidation(MAddressValidation validation) 
+	{
+<span class="nc" id="L583">		String className = validation.getAddressValidationClass();</span>
+<span class="nc bnc" id="L584" title="All 4 branches missed.">		if (className == null || className.length() == 0) </span>
+		{
+<span class="nc" id="L586">			s_log.log(Level.SEVERE, &quot;Address validation class not defined: &quot; + validation);</span>
+<span class="nc" id="L587">			return null;</span>
+		}
+		
+<span class="nc" id="L590">		IServiceReferenceHolder&lt;IAddressValidationFactory&gt; cache = s_addressValidationFactoryCache.get(className);</span>
+<span class="nc bnc" id="L591" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L592">			IAddressValidationFactory service = cache.getService();</span>
+<span class="nc bnc" id="L593" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L594">				IAddressValidation processor = service.newAddressValidationInstance(className);</span>
+<span class="nc bnc" id="L595" title="All 2 branches missed.">				if (processor != null)</span>
+<span class="nc" id="L596">					return processor;</span>
+			}
+<span class="nc" id="L598">			s_addressValidationFactoryCache.remove(className);</span>
+		}
+<span class="nc" id="L600">		List&lt;IServiceReferenceHolder&lt;IAddressValidationFactory&gt;&gt; factoryList = Service.locator().list(IAddressValidationFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">		if (factoryList == null) </span>
+<span class="nc" id="L602">			return null;</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">		for (IServiceReferenceHolder&lt;IAddressValidationFactory&gt; factory : factoryList)</span>
+		{
+<span class="nc" id="L605">			IAddressValidationFactory service = factory.getService();</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L607">				IAddressValidation processor = service.newAddressValidationInstance(className);</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">				if (processor != null) {</span>
+<span class="nc" id="L609">					s_addressValidationFactoryCache.put(className, factory);</span>
+<span class="nc" id="L610">					return processor;</span>
+				}
+			}
+		}
+		
+<span class="nc" id="L615">		return null;</span>
+	}
+	
+<span class="nc" id="L618">	private static final CCache&lt;String, IServiceReferenceHolder&lt;ITaxProviderFactory&gt;&gt; s_taxProviderFactoryCache = new CCache&lt;&gt;(ITAX_PROVIDER_FACTORY_CACHE_TABLE_NAME, &quot;ITaxProviderFactory&quot;, 100, false);</span>
+	
+	/**
+	 * Get tax provider instance
+	 * @param provider
+	 * @return tax provider instance or null if not found
+	 */
+	public static ITaxProvider getTaxProvider(MTaxProvider provider) 
+	{
+<span class="nc" id="L627">		ITaxProvider calculator = null;</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">		if (provider != null)</span>
+		{
+<span class="nc bnc" id="L630" title="All 2 branches missed.">			if (provider.getC_TaxProvider_ID() == 0)</span>
+<span class="nc" id="L631">				return new StandardTaxProvider();</span>
+			
+<span class="nc bnc" id="L633" title="All 2 branches missed.">			if (!provider.isActive())</span>
+			{
+<span class="nc" id="L635">				s_log.log(Level.SEVERE, &quot;Tax provider is inactive: &quot; + provider);</span>
+<span class="nc" id="L636">				return null;</span>
+			}
+			
+<span class="nc" id="L639">			String className = provider.getTaxProviderClass();</span>
+<span class="nc bnc" id="L640" title="All 4 branches missed.">			if (className == null || className.length() == 0) </span>
+			{
+<span class="nc" id="L642">				s_log.log(Level.SEVERE, &quot;Tax provider class not defined: &quot; + provider);</span>
+<span class="nc" id="L643">				return null;</span>
+			}
+	
+<span class="nc" id="L646">			IServiceReferenceHolder&lt;ITaxProviderFactory&gt; cache = s_taxProviderFactoryCache.get(className);</span>
+<span class="nc bnc" id="L647" title="All 2 branches missed.">			if (cache != null) {</span>
+<span class="nc" id="L648">				ITaxProviderFactory service = cache.getService();</span>
+<span class="nc bnc" id="L649" title="All 2 branches missed.">				if (service != null) {</span>
+<span class="nc" id="L650">					calculator = service.newTaxProviderInstance(className);</span>
+<span class="nc bnc" id="L651" title="All 2 branches missed.">					if (calculator != null)</span>
+<span class="nc" id="L652">						return calculator;</span>
+				}
+<span class="nc" id="L654">				s_taxProviderFactoryCache.remove(className);</span>
+			}
+<span class="nc" id="L656">			List&lt;IServiceReferenceHolder&lt;ITaxProviderFactory&gt;&gt; factoryList = Service.locator().list(ITaxProviderFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">			if (factoryList == null) </span>
+<span class="nc" id="L658">				return null;</span>
+<span class="nc bnc" id="L659" title="All 2 branches missed.">			for (IServiceReferenceHolder&lt;ITaxProviderFactory&gt; factory : factoryList)</span>
+			{
+<span class="nc" id="L661">				ITaxProviderFactory service = factory.getService();</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">				if (service != null) {</span>
+<span class="nc" id="L663">					calculator = service.newTaxProviderInstance(className);</span>
+<span class="nc bnc" id="L664" title="All 2 branches missed.">					if (calculator != null) {</span>
+<span class="nc" id="L665">						s_taxProviderFactoryCache.put(className, factory);</span>
+<span class="nc" id="L666">						return calculator;</span>
+					}
+				}
+			}
+		}
+		
+<span class="nc" id="L672">		return null;</span>
+	}
+	
+<span class="nc" id="L675">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IReplenishFactory&gt;&gt; s_replenishFactoryCache = new CCache&lt;&gt;(IREPLENISH_FACTORY_CACHE_TABLE_NAME, &quot;IReplenishFactory&quot;, 100, false);</span>
+	
+	/**
+	 * get Custom Replenish instance
+	 * 
+	 * @param className
+	 * @return instance of the ReplenishInterface or null
+	 */
+	public static ReplenishInterface getReplenish(String className) {
+<span class="nc bnc" id="L684" title="All 4 branches missed.">		if (className == null || className.length() == 0) {</span>
+<span class="nc" id="L685">			s_log.log(Level.SEVERE, &quot;No ReplenishInterface class name&quot;);</span>
+<span class="nc" id="L686">			return null;</span>
+		}
+
+<span class="nc" id="L689">		ReplenishInterface myReplenishInstance = null;</span>
+<span class="nc" id="L690">		IServiceReferenceHolder&lt;IReplenishFactory&gt; cache = s_replenishFactoryCache.get(className);</span>
+<span class="nc bnc" id="L691" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L692">			IReplenishFactory service = cache.getService();</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L694">				ReplenishInterface loader = service.newReplenishInstance(className);</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">				if (loader != null) </span>
+<span class="nc" id="L696">					myReplenishInstance = loader;</span>
+			}
+<span class="nc bnc" id="L698" title="All 2 branches missed.">			if (myReplenishInstance == null)</span>
+<span class="nc" id="L699">				s_replenishFactoryCache.remove(className);</span>
+		}
+<span class="nc bnc" id="L701" title="All 2 branches missed.">		if (myReplenishInstance == null) {</span>
+<span class="nc" id="L702">			List&lt;IServiceReferenceHolder&lt;IReplenishFactory&gt;&gt; factoryList = Service.locator().list(IReplenishFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L703" title="All 2 branches missed.">			if (factoryList != null) {</span>
+<span class="nc bnc" id="L704" title="All 2 branches missed.">				for(IServiceReferenceHolder&lt;IReplenishFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L705">					IReplenishFactory service = factory.getService();</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L707">						ReplenishInterface loader = service.newReplenishInstance(className);</span>
+<span class="nc bnc" id="L708" title="All 2 branches missed.">						if (loader != null) {</span>
+<span class="nc" id="L709">							myReplenishInstance = loader;</span>
+<span class="nc" id="L710">							s_replenishFactoryCache.put(className, factory);</span>
+<span class="nc" id="L711">							break;</span>
+						}
+					}
+				}
+			}
+		}
+		
+<span class="nc bnc" id="L718" title="All 2 branches missed.">		if (myReplenishInstance == null) {</span>
+<span class="nc" id="L719">			s_log.log(Level.CONFIG, className + &quot; not found in service/extension registry and classpath&quot;);</span>
+<span class="nc" id="L720">			return null;</span>
+		}
+		
+<span class="nc" id="L723">		return myReplenishInstance;</span>
+	}
+	
+<span class="nc" id="L726">	private final static CCache&lt;String, IServiceReferenceHolder&lt;ScriptEngineFactory&gt;&gt; s_scriptEngineFactoryCache = new CCache&lt;&gt;(SCRIPT_ENGINE_FACTORY_CACHE_TABLE_NAME, &quot;ScriptEngineFactory&quot;, 100, false);</span>
+	
+	/** Get script engine 
+	 * 
+	 * @param engineName
+	 * @return ScriptEngine found, or null
+	 */
+	public static ScriptEngine getScriptEngine(String engineName)
+	{
+<span class="nc" id="L735">		ScriptEngineManager manager = new ScriptEngineManager(Core.class.getClassLoader());</span>
+<span class="nc" id="L736">		ScriptEngine engine = manager.getEngineByName(engineName);</span>
+<span class="nc bnc" id="L737" title="All 2 branches missed.">		if (engine != null)</span>
+<span class="nc" id="L738">			return engine;</span>
+		
+<span class="nc" id="L740">		IServiceReferenceHolder&lt;ScriptEngineFactory&gt; cache = s_scriptEngineFactoryCache.get(engineName);</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L742">			ScriptEngineFactory service = cache.getService();</span>
+<span class="nc bnc" id="L743" title="All 2 branches missed.">			if (service != null)</span>
+<span class="nc" id="L744">				return service.getScriptEngine();</span>
+<span class="nc" id="L745">			s_scriptEngineFactoryCache.remove(engineName);</span>
+		}
+<span class="nc" id="L747">		List&lt;IServiceReferenceHolder&lt;ScriptEngineFactory&gt;&gt; factoryList = Service.locator().list(ScriptEngineFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L748" title="All 2 branches missed.">		if (factoryList != null) {</span>
+<span class="nc bnc" id="L749" title="All 2 branches missed.">			for(IServiceReferenceHolder&lt;ScriptEngineFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L750">				ScriptEngineFactory service = factory.getService();</span>
+<span class="nc bnc" id="L751" title="All 2 branches missed.">				if (service != null) {</span>
+<span class="nc bnc" id="L752" title="All 2 branches missed.">					for (String name : service.getNames()) {</span>
+<span class="nc bnc" id="L753" title="All 2 branches missed.">						if (engineName.equals(name)) {</span>
+<span class="nc" id="L754">							s_scriptEngineFactoryCache.put(engineName, factory);</span>
+<span class="nc" id="L755">							return service.getScriptEngine();</span>
+						}
+					}
+				}
+			}
+		}
+		
+<span class="nc" id="L762">		return null;</span>
+	}
+	
+<span class="nc" id="L765">	private static final CCache&lt;String, IServiceReferenceHolder&lt;IPaymentExporterFactory&gt;&gt; s_paymentExporterFactory = new CCache&lt;&gt;(IPAYMENT_EXPORTER_FACTORY_CACHE_TABLE_NAME, &quot;IPaymentExporterFactory&quot;, 100, false);</span>
+	
+	/**
+	 * get PaymentExporter instance
+	 * 
+	 * @param className
+	 * @return instance of the PaymentExporterInterface or null
+	 */
+	public static PaymentExport getPaymentExporter (String className){
+<span class="nc bnc" id="L774" title="All 4 branches missed.">		if (className == null || className.length() == 0) {</span>
+<span class="nc" id="L775">			s_log.log(Level.SEVERE, &quot;No PaymentExporter class name&quot;);</span>
+<span class="nc" id="L776">			return null;</span>
+		}
+
+<span class="nc" id="L779">		PaymentExport myPaymentExporter = null;</span>
+<span class="nc" id="L780">		IServiceReferenceHolder&lt;IPaymentExporterFactory&gt; cache = s_paymentExporterFactory.get(className);</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L782">			IPaymentExporterFactory service = cache.getService();</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L784">				PaymentExport exporter = service.newPaymentExporterInstance(className);</span>
+<span class="nc bnc" id="L785" title="All 2 branches missed.">				if (exporter != null) </span>
+<span class="nc" id="L786">					myPaymentExporter = exporter;</span>
+			}
+<span class="nc bnc" id="L788" title="All 2 branches missed.">			if (myPaymentExporter == null)</span>
+<span class="nc" id="L789">				s_paymentExporterFactory.remove(className);</span>
+		}
+<span class="nc bnc" id="L791" title="All 2 branches missed.">		if (myPaymentExporter == null) {</span>
+<span class="nc" id="L792">			List&lt;IServiceReferenceHolder&lt;IPaymentExporterFactory&gt;&gt; factoryList = Service.locator().list(IPaymentExporterFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L793" title="All 2 branches missed.">			if (factoryList != null) {</span>
+<span class="nc bnc" id="L794" title="All 2 branches missed.">				for(IServiceReferenceHolder&lt;IPaymentExporterFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L795">					IPaymentExporterFactory service = factory.getService();</span>
+<span class="nc bnc" id="L796" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L797">						PaymentExport exporter = service.newPaymentExporterInstance(className);</span>
+<span class="nc bnc" id="L798" title="All 2 branches missed.">						if (exporter != null) {</span>
+<span class="nc" id="L799">							myPaymentExporter = exporter;</span>
+<span class="nc" id="L800">							s_paymentExporterFactory.put(className, factory);</span>
+<span class="nc" id="L801">							break;</span>
+						}
+					}
+				}
+			}
+		}
+		
+<span class="nc bnc" id="L808" title="All 2 branches missed.">		if (myPaymentExporter == null) {</span>
+<span class="nc" id="L809">			s_log.log(Level.CONFIG, className + &quot; not found in service/extension registry and classpath&quot;);</span>
+<span class="nc" id="L810">			return null;</span>
+		}
+		
+<span class="nc" id="L813">		return myPaymentExporter;</span>
+	}	
+
+<span class="nc" id="L816">	private static IServiceReferenceHolder&lt;IProductPricingFactory&gt; s_productPricingFactoryCache = null;</span>
+	
+	/**
+	 * get ProductPricing instance
+	 * 
+	 * @return instance of the IProductPricing or null
+	 */
+	public static synchronized IProductPricing getProductPricing() {
+<span class="nc bnc" id="L824" title="All 2 branches missed.">		if (s_productPricingFactoryCache != null) {</span>
+<span class="nc" id="L825">			IProductPricingFactory service = s_productPricingFactoryCache.getService();</span>
+<span class="nc bnc" id="L826" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L827">				IProductPricing myProductPricing = service.newProductPricingInstance();</span>
+<span class="nc bnc" id="L828" title="All 2 branches missed.">				if (myProductPricing != null)</span>
+<span class="nc" id="L829">					return myProductPricing;</span>
+			}
+<span class="nc" id="L831">			s_productPricingFactoryCache = null;</span>
+		}
+<span class="nc" id="L833">		IServiceReferenceHolder&lt;IProductPricingFactory&gt; factoryReference = Service.locator().locate(IProductPricingFactory.class).getServiceReference();</span>
+<span class="nc bnc" id="L834" title="All 2 branches missed.">		if (factoryReference != null) {</span>
+<span class="nc" id="L835">			IProductPricingFactory service = factoryReference.getService();</span>
+<span class="nc bnc" id="L836" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L837">				IProductPricing myProductPricing = service.newProductPricingInstance();</span>
+<span class="nc bnc" id="L838" title="All 2 branches missed.">				if (myProductPricing != null) {</span>
+<span class="nc" id="L839">					s_productPricingFactoryCache = factoryReference;</span>
+<span class="nc" id="L840">					return myProductPricing;</span>
+				}
+			}
+		}
+
+<span class="nc" id="L845">		return null;</span>
+	}
+	
+<span class="nc" id="L848">	private final static CCache&lt;String, IServiceReferenceHolder&lt;IDepreciationMethodFactory&gt;&gt; s_depreciationMethodFactoryCache = new CCache&lt;&gt;(IDEPRECIATION_METHOD_FACTORY_CACHE_TABLE_NAME, &quot;IDepreciationMethodFactory&quot;, 100, false);</span>
+	
+	/**
+	 * lookup implement {@link IDepreciationMethod}
+	 * @param factoryLookupDTO
+	 * @return {@link IDepreciationMethod}
+	 */
+	public static IDepreciationMethod getDepreciationMethod(DepreciationFactoryLookupDTO factoryLookupDTO) {
+<span class="nc" id="L856">		String cacheKey = factoryLookupDTO.depreciationType;</span>
+<span class="nc" id="L857">		IServiceReferenceHolder&lt;IDepreciationMethodFactory&gt; cache = s_depreciationMethodFactoryCache.get(cacheKey);</span>
+<span class="nc bnc" id="L858" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L859">			IDepreciationMethodFactory service = cache.getService();</span>
+<span class="nc bnc" id="L860" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L861">				IDepreciationMethod depreciationMethod = service.getDepreciationMethod(factoryLookupDTO);</span>
+<span class="nc bnc" id="L862" title="All 2 branches missed.">				if (depreciationMethod != null) </span>
+<span class="nc" id="L863">					return depreciationMethod;</span>
+			}
+<span class="nc" id="L865">			s_depreciationMethodFactoryCache.remove(cacheKey);</span>
+		}
+<span class="nc" id="L867">		List&lt;IServiceReferenceHolder&lt;IDepreciationMethodFactory&gt;&gt; factoryList = Service.locator().list(IDepreciationMethodFactory.class).getServiceReferences();</span>
+<span class="nc bnc" id="L868" title="All 2 branches missed.">		if (factoryList != null) {</span>
+<span class="nc bnc" id="L869" title="All 2 branches missed.">			for(IServiceReferenceHolder&lt;IDepreciationMethodFactory&gt; factory : factoryList) {</span>
+<span class="nc" id="L870">				IDepreciationMethodFactory service = factory.getService();</span>
+<span class="nc bnc" id="L871" title="All 2 branches missed.">				if (service != null) {</span>
+<span class="nc" id="L872">					IDepreciationMethod depreciationMethod = service.getDepreciationMethod(factoryLookupDTO);</span>
+<span class="nc bnc" id="L873" title="All 2 branches missed.">					if (depreciationMethod != null) {</span>
+<span class="nc" id="L874">						s_depreciationMethodFactoryCache.put(cacheKey, factory);</span>
+<span class="nc" id="L875">						return depreciationMethod;</span>
+					}
+				}
+			}
+		}
+
+<span class="nc" id="L881">		return null;</span>
+	}
+
+<span class="nc" id="L884">	private static IServiceReferenceHolder&lt;IMessageService&gt; s_messageServiceReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link IMessageService}
+	 */
+	public static synchronized IMessageService getMessageService() {
+<span class="nc" id="L891">		IMessageService messageService = null;</span>
+<span class="nc bnc" id="L892" title="All 2 branches missed.">		if (s_messageServiceReference != null) {</span>
+<span class="nc" id="L893">			messageService = s_messageServiceReference.getService();</span>
+<span class="nc bnc" id="L894" title="All 2 branches missed.">			if (messageService != null)</span>
+<span class="nc" id="L895">				return messageService;</span>
+		}
+<span class="nc" id="L897">		IServiceReferenceHolder&lt;IMessageService&gt; serviceReference = Service.locator().locate(IMessageService.class).getServiceReference();</span>
+<span class="nc bnc" id="L898" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L899">			messageService = serviceReference.getService();</span>
+<span class="nc" id="L900">			s_messageServiceReference = serviceReference;</span>
+		}
+<span class="nc" id="L902">		return messageService;</span>
+	}
+	
+<span class="nc" id="L905">	private static IServiceReferenceHolder&lt;IClusterService&gt; s_clusterServiceReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link IClusterService}
+	 */
+	public static synchronized IClusterService getClusterService() {
+<span class="nc" id="L912">		IClusterService clusterService = null;</span>
+<span class="nc bnc" id="L913" title="All 2 branches missed.">		if (s_clusterServiceReference != null) {</span>
+<span class="nc" id="L914">			clusterService = s_clusterServiceReference.getService();</span>
+<span class="nc bnc" id="L915" title="All 2 branches missed.">			if (clusterService != null)</span>
+<span class="nc" id="L916">				return clusterService;</span>
+		}
+<span class="nc" id="L918">		IServiceReferenceHolder&lt;IClusterService&gt; serviceReference = Service.locator().locate(IClusterService.class).getServiceReference();</span>
+<span class="nc bnc" id="L919" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L920">			clusterService = serviceReference.getService();</span>
+<span class="nc" id="L921">			s_clusterServiceReference = serviceReference;</span>
+		}
+<span class="nc" id="L923">		return clusterService;</span>
+	}
+	
+<span class="nc" id="L926">	private static IServiceReferenceHolder&lt;ICacheService&gt; s_cacheServiceReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link ICacheService}
+	 */
+	public static synchronized ICacheService getCacheService() {
+<span class="nc" id="L933">		ICacheService cacheService = null;</span>
+<span class="nc bnc" id="L934" title="All 2 branches missed.">		if (s_cacheServiceReference != null) {</span>
+<span class="nc" id="L935">			cacheService = s_cacheServiceReference.getService();</span>
+<span class="nc bnc" id="L936" title="All 2 branches missed.">			if (cacheService != null)</span>
+<span class="nc" id="L937">				return cacheService;</span>
+		}
+<span class="nc" id="L939">		IServiceReferenceHolder&lt;ICacheService&gt; serviceReference = Service.locator().locate(ICacheService.class).getServiceReference();</span>
+<span class="nc bnc" id="L940" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L941">			cacheService = serviceReference.getService();</span>
+<span class="nc" id="L942">			s_cacheServiceReference = serviceReference;</span>
+		}
+<span class="nc" id="L944">		return cacheService;</span>
+	}
+	
+<span class="nc" id="L947">	private static IServiceReferenceHolder&lt;IDictionaryService&gt; s_dictionaryServiceReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link IDictionaryService}
+	 */
+	public static synchronized IDictionaryService getDictionaryService() {
+<span class="nc" id="L954">		IDictionaryService ids = null;</span>
+<span class="nc bnc" id="L955" title="All 2 branches missed.">		if (s_dictionaryServiceReference != null) {</span>
+<span class="nc" id="L956">			ids = s_dictionaryServiceReference.getService();</span>
+<span class="nc bnc" id="L957" title="All 2 branches missed.">			if (ids != null)</span>
+<span class="nc" id="L958">				return ids;</span>
+		}
+<span class="nc" id="L960">		IServiceReferenceHolder&lt;IDictionaryService&gt; serviceReference = Service.locator().locate(IDictionaryService.class).getServiceReference();</span>
+<span class="nc bnc" id="L961" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L962">			ids = serviceReference.getService();</span>
+<span class="nc" id="L963">			s_dictionaryServiceReference = serviceReference;</span>
+		}
+<span class="nc" id="L965">		return ids;</span>
+	}
+
+<span class="nc" id="L968">	private static IServiceReferenceHolder&lt;IMappedModelFactory&gt; s_mappedModelFactoryReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link IMappedModelFactory}
+	 */
+	public static IMappedModelFactory getMappedModelFactory(){
+<span class="nc" id="L975">		IMappedModelFactory modelFactoryService = null;</span>
+<span class="nc bnc" id="L976" title="All 2 branches missed.">		if (s_mappedModelFactoryReference != null) {</span>
+<span class="nc" id="L977">			modelFactoryService = s_mappedModelFactoryReference.getService();</span>
+<span class="nc bnc" id="L978" title="All 2 branches missed.">			if (modelFactoryService != null)</span>
+<span class="nc" id="L979">				return modelFactoryService;</span>
+		}
+<span class="nc" id="L981">		IServiceReferenceHolder&lt;IMappedModelFactory&gt; serviceReference = Service.locator().locate(IMappedModelFactory.class).getServiceReference();</span>
+<span class="nc bnc" id="L982" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L983">			modelFactoryService = serviceReference.getService();</span>
+<span class="nc" id="L984">			s_mappedModelFactoryReference = serviceReference;</span>
+		}
+<span class="nc" id="L986">		return modelFactoryService;</span>
+	}
+	
+<span class="nc" id="L989">	private static IServiceReferenceHolder&lt;IMappedProcessFactory&gt; s_mappedProcessFactoryReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link IMappedProcessFactory}
+	 */
+	public static IMappedProcessFactory getMappedProcessFactory(){
+<span class="nc" id="L996">		IMappedProcessFactory processFactoryService = null;</span>
+<span class="nc bnc" id="L997" title="All 2 branches missed.">		if (s_mappedProcessFactoryReference != null) {</span>
+<span class="nc" id="L998">			processFactoryService = s_mappedProcessFactoryReference.getService();</span>
+<span class="nc bnc" id="L999" title="All 2 branches missed.">			if (processFactoryService != null)</span>
+<span class="nc" id="L1000">				return processFactoryService;</span>
+		}
+<span class="nc" id="L1002">		IServiceReferenceHolder&lt;IMappedProcessFactory&gt; serviceReference = Service.locator().locate(IMappedProcessFactory.class).getServiceReference();</span>
+<span class="nc bnc" id="L1003" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L1004">			processFactoryService = serviceReference.getService();</span>
+<span class="nc" id="L1005">			s_mappedProcessFactoryReference = serviceReference;</span>
+		}
+<span class="nc" id="L1007">		return processFactoryService;</span>
+	}
+	
+	/**
+	 * 
+	 * @return {@link IMappedColumnCalloutFactory}
+	 */
+	public static IMappedColumnCalloutFactory getMappedColumnCalloutFactory() {
+<span class="nc" id="L1015">		return ColumnCalloutManager.getMappedColumnCalloutFactory();		</span>
+	}
+	
+<span class="nc" id="L1018">	private static IServiceReferenceHolder&lt;IMappedDocumentFactory&gt; s_mappedDocumentFactoryReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link IMappedDocumentFactory}
+	 */
+	public static IMappedDocumentFactory getMappedDocumentFactory() {
+<span class="nc" id="L1025">		IMappedDocumentFactory factoryService = null;</span>
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">		if (s_mappedDocumentFactoryReference != null) {</span>
+<span class="nc" id="L1027">			factoryService = s_mappedDocumentFactoryReference.getService();</span>
+<span class="nc bnc" id="L1028" title="All 2 branches missed.">			if (factoryService != null)</span>
+<span class="nc" id="L1029">				return factoryService;</span>
+		}
+		
+<span class="nc" id="L1032">		IServiceReferenceHolder&lt;IMappedDocumentFactory&gt; serviceReference = Service.locator().locate(IMappedDocumentFactory.class).getServiceReference();</span>
+<span class="nc bnc" id="L1033" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L1034">			factoryService = serviceReference.getService();</span>
+<span class="nc" id="L1035">			s_mappedDocumentFactoryReference = serviceReference;</span>
+		}
+<span class="nc" id="L1037">		return factoryService;</span>
+	}
+	
+<span class="nc" id="L1040">	private static IServiceReferenceHolder&lt;IEventManager&gt; s_eventManagerReference = null;</span>
+	
+	/**
+	 * 
+	 * @return {@link IEventManager}
+	 */
+	public static IEventManager getEventManager() {
+<span class="nc" id="L1047">		IEventManager eventManager = null;</span>
+<span class="nc bnc" id="L1048" title="All 2 branches missed.">		if (s_eventManagerReference != null) {</span>
+<span class="nc" id="L1049">			eventManager = s_eventManagerReference.getService();</span>
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">			if (eventManager != null)</span>
+<span class="nc" id="L1051">				return eventManager;</span>
+		}
+<span class="nc" id="L1053">		IServiceReferenceHolder&lt;IEventManager&gt; serviceReference = Service.locator().locate(IEventManager.class).getServiceReference();</span>
+<span class="nc bnc" id="L1054" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L1055">			eventManager = serviceReference.getService();</span>
+<span class="nc" id="L1056">			s_eventManagerReference = serviceReference;</span>
+		}
+		
+<span class="nc" id="L1059">		return eventManager;</span>
+	}
+	
+	/**
+	 * 
+	 * @return {@link IUploadService}
+	 */
+	public static List&lt;IUploadService&gt; getUploadServices() {
+<span class="nc" id="L1067">		List&lt;IUploadService&gt; services = new ArrayList&lt;IUploadService&gt;();</span>
+<span class="nc" id="L1068">		List&lt;MAuthorizationAccount&gt; accounts = MAuthorizationAccount.getAuthorizedAccouts(Env.getAD_User_ID(Env.getCtx()), MAuthorizationAccount.AD_AUTHORIZATIONSCOPES_Document);</span>
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">		for (MAuthorizationAccount account : accounts) {</span>
+<span class="nc" id="L1070">			IUploadService service = getUploadService(account);</span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L1072">				services.add(service);</span>
+			}
+		}
+<span class="nc" id="L1075">		return services;</span>
+	}
+	
+	/**
+	 * 
+	 * @param account
+	 * @return {@link IUploadService}
+	 */
+	public static IUploadService getUploadService(MAuthorizationAccount account) {
+<span class="nc" id="L1084">		MAuthorizationCredential credential = new MAuthorizationCredential(account.getCtx(), account.getAD_AuthorizationCredential_ID(), account.get_TrxName());</span>
+<span class="nc" id="L1085">		MAuthorizationProvider authProvider = new MAuthorizationProvider(account.getCtx(), credential.getAD_AuthorizationProvider_ID(), account.get_TrxName());</span>
+<span class="nc" id="L1086">		String provider = authProvider.getName();</span>
+<span class="nc" id="L1087">		ServiceQuery query = new ServiceQuery();</span>
+<span class="nc" id="L1088">		query.put(&quot;provider&quot;, provider);</span>
+<span class="nc" id="L1089">		IServiceHolder&lt;IUploadService&gt; holder = Service.locator().locate(IUploadService.class, query);</span>
+<span class="nc bnc" id="L1090" title="All 2 branches missed.">		if (holder != null) {</span>
+<span class="nc" id="L1091">			return holder.getService();</span>
+		}
+		
+<span class="nc" id="L1094">		return null;</span>
+	}
+	
+<span class="nc" id="L1097">	private final static CCache&lt;String, IServiceReferenceHolder&lt;IPrintHeaderFooter&gt;&gt; s_printHeaderFooterCache = new CCache&lt;&gt;(IPRINT_HEADER_FOOTER_CACHE_TABLE_NAME, &quot;IPrintHeaderFooterFactory&quot;, 100, false);</span>
+	
+	/**
+	 * Get print header/footer instance
+	 * @param printHeaderFooter print header/footer
+	 * @return print header/footer instance or null if not found
+	 */
+	public static IPrintHeaderFooter getPrintHeaderFooter(I_AD_PrintHeaderFooter printHeaderFooter) {
+<span class="nc" id="L1105">		String componentName = printHeaderFooter.getSourceClassName();</span>
+<span class="nc bnc" id="L1106" title="All 2 branches missed.">		if (Util.isEmpty(componentName, true)) {</span>
+<span class="nc" id="L1107">			s_log.log(Level.SEVERE, &quot;Print Header/Footer source class not defined: &quot; + printHeaderFooter);</span>
+<span class="nc" id="L1108">			return null;</span>
+		}
+		
+<span class="nc" id="L1111">		IServiceReferenceHolder&lt;IPrintHeaderFooter&gt; cache = s_printHeaderFooterCache.get(componentName);</span>
+<span class="nc bnc" id="L1112" title="All 2 branches missed.">		if (cache != null) {</span>
+<span class="nc" id="L1113">			IPrintHeaderFooter service = cache.getService();</span>
+<span class="nc bnc" id="L1114" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L1115">				return service;</span>
+			}
+<span class="nc" id="L1117">			s_printHeaderFooterCache.remove(componentName);</span>
+		}
+		
+<span class="nc" id="L1120">		IServiceReferenceHolder&lt;IPrintHeaderFooter&gt; serviceReference = Service.locator()</span>
+<span class="nc" id="L1121">				.locate(IPrintHeaderFooter.class, componentName, null).getServiceReference();</span>
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">		if (serviceReference == null) </span>
+<span class="nc" id="L1123">			return null;</span>
+<span class="nc" id="L1124">		IPrintHeaderFooter service = serviceReference.getService();</span>
+<span class="nc bnc" id="L1125" title="All 2 branches missed.">		if (service != null) {</span>
+<span class="nc" id="L1126">			s_printHeaderFooterCache.put(componentName, serviceReference);</span>
+<span class="nc" id="L1127">			return service;</span>
+		}
+		
+<span class="nc" id="L1130">		return null;</span>
+	}
+	
+	/**
+	 * Get {@link IReservationTracerFactory} component
+	 * @return {@link IReservationTracerFactory} implementation
+	 */
+	public static IReservationTracerFactory getReservationTracerFactory() {
+<span class="nc" id="L1138">		IServiceHolder&lt;IReservationTracerFactory&gt; serviceHolder = Service.locator().locate(IReservationTracerFactory.class);</span>
+<span class="nc bnc" id="L1139" title="All 4 branches missed.">		if (serviceHolder != null &amp;&amp; serviceHolder.getService() != null)</span>
+<span class="nc" id="L1140">			return serviceHolder.getService();</span>
+		
+<span class="nc" id="L1142">		return DefaultReservationTracerFactory.getInstance();</span>
+	}
+	
+	/**
+	 * Get tax lookup service
+	 * @return ITaxLookup service
+	 */
+	public static ITaxLookup getTaxLookup() {
+<span class="nc" id="L1150">		String service = MSysConfig.getValue(MSysConfig.TAX_LOOKUP_SERVICE, DefaultTaxLookup.class.getName(), Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc" id="L1151">		IServiceHolder&lt;ITaxLookup&gt; serviceHolder = Service.locator().locate(ITaxLookup.class, service, null);</span>
+<span class="nc bnc" id="L1152" title="All 2 branches missed.">		if (serviceHolder != null)</span>
+<span class="nc" id="L1153">			return serviceHolder.getService();</span>
+
+		//fall back, should not reach here
+<span class="nc" id="L1156">		return new DefaultTaxLookup();</span>
+	}
+	
+	/**
+	 * @return {@link DefaultAnnotationBasedEventManager}
+	 */
+	public static DefaultAnnotationBasedEventManager getDefaultAnnotationBasedEventManager() {
+<span class="nc" id="L1163">		IServiceReferenceHolder&lt;DefaultAnnotationBasedEventManager&gt; serviceReference = Service.locator().locate(DefaultAnnotationBasedEventManager.class).getServiceReference();</span>
+<span class="nc bnc" id="L1164" title="All 2 branches missed.">		if (serviceReference != null) {</span>
+<span class="nc" id="L1165">			return serviceReference.getService();</span>
+		}
+<span class="nc" id="L1167">		return null;</span>
+	}
+
+	/**
+	 * get Credit Manager
+	 * 
+	 * @param  po
+	 * @return    instance of the ICreditManager
+	 */
+	public static ICreditManager getCreditManager(PO po)
+	{
+<span class="nc bnc" id="L1178" title="All 2 branches missed.">		if (po == null)</span>
+		{
+<span class="nc" id="L1180">			s_log.log(Level.SEVERE, &quot;Invalid PO&quot;);</span>
+<span class="nc" id="L1181">			return null;</span>
+		}
+
+<span class="nc" id="L1184">		ICreditManager myCreditManager = null;</span>
+
+<span class="nc" id="L1186">		List&lt;ICreditManagerFactory&gt; factoryList = Service.locator().list(ICreditManagerFactory.class).getServices();</span>
+<span class="nc bnc" id="L1187" title="All 2 branches missed.">		if (factoryList != null)</span>
+		{
+<span class="nc bnc" id="L1189" title="All 2 branches missed.">			for (ICreditManagerFactory factory : factoryList)</span>
+			{
+<span class="nc" id="L1191">				myCreditManager = factory.getCreditManager(po);</span>
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">				if (myCreditManager != null)</span>
+				{
+<span class="nc" id="L1194">					break;</span>
+				}
+			}
+		}
+
+<span class="nc bnc" id="L1199" title="All 2 branches missed.">		if (myCreditManager == null)</span>
+		{
+<span class="nc" id="L1201">			s_log.log(Level.CONFIG, &quot;For &quot; + po.get_TableName() + &quot; not found any service/extension registry.&quot;);</span>
+<span class="nc" id="L1202">			return null;</span>
+		}
+
+<span class="nc" id="L1205">		return myCreditManager;</span>
+	} // getCreditManager
+	
+	@SuppressWarnings(&quot;unchecked&quot;)
+	public static IReportRenderer&lt;IReportRendererConfiguration&gt; getReportRenderer(String id) {
+<span class="nc" id="L1210">		IReportRenderer&lt;IReportRendererConfiguration&gt; renderer = null;</span>
+		@SuppressWarnings(&quot;rawtypes&quot;)
+<span class="nc" id="L1212">		List&lt;IServiceReferenceHolder&lt;IReportRenderer&gt;&gt; rendererReferences = Service.locator().list(IReportRenderer.class).getServiceReferences();</span>
+<span class="nc bnc" id="L1213" title="All 2 branches missed.">		for(var holder : rendererReferences) {</span>
+<span class="nc" id="L1214">			renderer = holder.getService();</span>
+<span class="nc bnc" id="L1215" title="All 2 branches missed.">			if (renderer.getId().equals(id)) {</span>
+<span class="nc" id="L1216">				return renderer;</span>
+			}
+		}
+<span class="nc" id="L1219">		return null;</span>
+	}
+
+	/** Cache for compiled scripts, keyed by AD_Rule_ID */
+<span class="nc" id="L1223">	private final static CCache&lt;Integer, CompiledScript&gt; s_compiledScriptCache = new CCache&lt;&gt;(MRule.Table_Name, &quot;CompiledScript&quot;, 100, false);</span>
+
+	/**
+	 * Get a compiled script for the given rule.
+	 * Uses JSR-223 Compilable interface for caching pre-compiled scripts.
+	 * This significantly improves performance for repeatedly executed scripts
+	 * (e.g., table validators, callouts) by avoiding re-parsing and re-compilation.
+	 *
+	 * @param  rule MRule containing the script
+	 * @return      CompiledScript if engine supports compilation, null otherwise
+	 */
+	public static CompiledScript getCompiledScript(MRule rule)
+	{
+<span class="nc bnc" id="L1236" title="All 6 branches missed.">		if (rule == null || rule.getAD_Rule_ID() &lt;= 0 || Util.isEmpty(rule.getScript(), true))</span>
+<span class="nc" id="L1237">			return null;</span>
+
+		// Cache only supported for Groovy script engine
+<span class="nc bnc" id="L1240" title="All 2 branches missed.">		if (!&quot;groovy&quot;.equalsIgnoreCase(rule.getEngineName()))</span>
+		{
+<span class="nc bnc" id="L1242" title="All 2 branches missed.">			if (s_log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L1243">				s_log.fine(&quot;Script compilation caching is only supported for Groovy engine, skipping: &quot; + rule.getEngineName());</span>
+<span class="nc" id="L1244">			return null;</span>
+		}
+
+<span class="nc" id="L1247">		Integer key = Integer.valueOf(rule.getAD_Rule_ID());</span>
+
+		// Check cache first
+<span class="nc" id="L1250">		CompiledScript compiled = s_compiledScriptCache.get(key);</span>
+<span class="nc bnc" id="L1251" title="All 2 branches missed.">		if (compiled != null)</span>
+<span class="nc" id="L1252">			return compiled;</span>
+
+		// Get script engine
+<span class="nc" id="L1255">		ScriptEngine engine = getScriptEngine(rule.getEngineName());</span>
+<span class="nc bnc" id="L1256" title="All 2 branches missed.">		if (engine == null)</span>
+		{
+<span class="nc" id="L1258">			s_log.log(Level.WARNING, &quot;Script engine not found: &quot; + rule.getEngineName());</span>
+<span class="nc" id="L1259">			return null;</span>
+		}
+
+		// Check if engine supports compilation
+<span class="nc bnc" id="L1263" title="All 2 branches missed.">		if (!(engine instanceof Compilable))</span>
+		{
+<span class="nc bnc" id="L1265" title="All 2 branches missed.">			if (s_log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L1266">				s_log.fine(&quot;Script engine &quot; + rule.getEngineName() + &quot; does not support compilation&quot;);</span>
+<span class="nc" id="L1267">			return null;</span>
+		}
+
+		// Compile and cache
+		try
+		{
+<span class="nc" id="L1273">			compiled = ((Compilable) engine).compile(rule.getScript());</span>
+<span class="nc" id="L1274">			s_compiledScriptCache.put(key, compiled);</span>
+<span class="nc bnc" id="L1275" title="All 2 branches missed.">			if (s_log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L1276">				s_log.fine(&quot;Compiled and cached script: &quot; + rule.getValue());</span>
+<span class="nc" id="L1277">			return compiled;</span>
+		}
+<span class="nc" id="L1279">		catch (ScriptException e)</span>
+		{
+<span class="nc" id="L1281">			s_log.log(Level.SEVERE, &quot;Failed to compile script: &quot; + rule.getValue() + &quot;, Error: &quot; + e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L1282">			return null;</span>
+		}
+	} // getCompiledScript
+
+	/**
+	 * Get markdown renderer service
+	 * @return markdown renderer service
+	 */
+
+	/**
+	 * @return list of search providers
+	 */
+	public static List&lt;ISearchProvider&gt; getSearchProviders() {
+<span class="nc" id="L1295">		List&lt;ISearchProvider&gt; providers = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1296">		List&lt;IServiceReferenceHolder&lt;ISearchProvider&gt;&gt; refs = Service.locator().list(ISearchProvider.class)</span>
+<span class="nc" id="L1297">				.getServiceReferences();</span>
+<span class="nc bnc" id="L1298" title="All 2 branches missed.">		if (refs != null) {</span>
+<span class="nc bnc" id="L1299" title="All 2 branches missed.">			for (IServiceReferenceHolder&lt;ISearchProvider&gt; ref : refs) {</span>
+<span class="nc" id="L1300">				ISearchProvider provider = ref.getService();</span>
+<span class="nc bnc" id="L1301" title="All 2 branches missed.">				if (provider != null) {</span>
+<span class="nc" id="L1302">					providers.add(provider);</span>
+				}
+			}
+		}
+<span class="nc" id="L1306">		return providers;</span>
+	}
+
+	public static IMarkdownRenderer getMarkdownRenderer() {
+<span class="nc" id="L1310">		IServiceReferenceHolder&lt;IMarkdownRenderer&gt; holder = Service.locator().locate(IMarkdownRenderer.class).getServiceReference();</span>
+<span class="nc bnc" id="L1311" title="All 2 branches missed.">		return holder != null ? holder.getService() : null; </span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

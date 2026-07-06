@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PO_Record.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">PO_Record.java</span></div><h1>PO_Record.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.Serializable;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.compiere.util.CCache;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+/**
+ * 	Maintain AD_Table_ID/Record_ID constraint
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: PO_Record.java,v 1.4 2006/07/30 00:58:04 jjanke Exp $
+ */
+<span class="nc" id="L39">public class PO_Record</span>
+{
+	/** Cache for arrays of KeyNamePair&lt;AD_Table_ID, TableName&gt; for types of deletion: Cascade, Set Null, No Action */
+<span class="nc" id="L42">	private static final CCache&lt;String, KeyNamePair[]&gt; s_po_record_tables_cache = new CCache&lt;&gt;(null, &quot;PORecordTables&quot;, 100, 120, false);</span>
+
+	/**	Logger	*/
+<span class="nc" id="L45">	private static CLogger log = CLogger.getCLogger (PO_Record.class);</span>
+	
+	/**
+	 * Reset the KeyNamePair&lt;AD_Table_ID, TableName&gt; cache for constraint types + Record_ID/Record_UU reference id
+	 */
+	public static void resetCache() {
+<span class="nc" id="L51">		s_po_record_tables_cache.reset();</span>
+<span class="nc" id="L52">	}</span>
+	
+	/**
+	 * 	Delete Cascade including (selected)parent relationships
+	 *	@param AD_Table_ID table
+	 *	@param Record_IDorUU record ID (int) or UUID (String)
+	 *  @param whereTables filter for the Tables
+	 *	@param trxName transaction
+	 *	@return false if could not be deleted
+	 */
+	protected static boolean deleteRecordCascade (int AD_Table_ID, Serializable Record_IDorUU, String whereTables, String trxName)
+	{
+<span class="nc" id="L64">		return deleteRecordCascade(AD_Table_ID, Record_IDorUU, whereTables, trxName, null);</span>
+	}
+
+	/**
+	 * 	Delete Cascade including (selected)parent relationships
+	 *	@param AD_Table_ID table
+	 *	@param Record_IDorUU record ID (int) or UUID (String)
+	 *  @param whereTables filter for the Tables
+	 *	@param trxName transaction
+	 *  @param deletes if not null, the to be deleted PO record is added to the list instead of delete from DB
+	 *	@return false if could not be deleted
+	 */
+	protected static boolean deleteRecordCascade (int AD_Table_ID, Serializable Record_IDorUU, String whereTables, String trxName, List&lt;PO&gt; deletes)
+	{
+		int refId;
+		String columnName;
+<span class="nc bnc" id="L80" title="All 2 branches missed.">		if (Record_IDorUU instanceof Integer) {</span>
+<span class="nc" id="L81">			refId = DisplayType.RecordID;</span>
+<span class="nc" id="L82">			columnName = &quot;Record_ID&quot;;</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">		} else if (Record_IDorUU instanceof String) {</span>
+<span class="nc" id="L84">			refId = DisplayType.RecordUU;</span>
+<span class="nc" id="L85">			columnName = &quot;Record_UU&quot;;</span>
+<span class="nc" id="L86">		} else {</span>
+<span class="nc" id="L87">			throw new IllegalArgumentException(Record_IDorUU.getClass().getName() + &quot; not supported for ID/UUID&quot;);</span>
+		}
+<span class="nc" id="L89">		KeyNamePair[] cascades = getTablesWithConstraintType(refId, MColumn.FKCONSTRAINTTYPE_ModelCascade, whereTables, trxName);</span>
+		//	Table Loop
+<span class="nc" id="L91">		StringBuilder whereClause = new StringBuilder(&quot;AD_Table_ID=? AND &quot;).append(columnName).append(&quot;=?&quot;);</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">		for (KeyNamePair table : cascades)</span>
+		{
+			//	DELETE FROM table WHERE AD_Table_ID=#1 AND Record_ID=#2
+<span class="nc" id="L95">			List&lt;PO&gt; poList = new Query(Env.getCtx(), table.getName(), whereClause.toString(), trxName)</span>
+<span class="nc" id="L96">					.setParameters(AD_Table_ID, Record_IDorUU)</span>
+<span class="nc" id="L97">					.list();</span>
+
+<span class="nc" id="L99">			int count = 0;</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">			for(PO po : poList)</span>
+			{
+<span class="nc bnc" id="L102" title="All 2 branches missed.">				if (   po.get_Table_ID() == AD_Table_ID</span>
+<span class="nc bnc" id="L103" title="All 4 branches missed.">					&amp;&amp; (   (Record_IDorUU instanceof Integer &amp;&amp; po.get_ID() == (Integer)Record_IDorUU)</span>
+<span class="nc bnc" id="L104" title="All 4 branches missed.">						|| (Record_IDorUU instanceof String &amp;&amp; Record_IDorUU.equals(po.get_UUID()))</span>
+					   )
+					)
+<span class="nc" id="L107">					continue;</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">				if (deletes != null) {</span>
+<span class="nc" id="L109">					deletes.add(po);</span>
+<span class="nc" id="L110">				} else {</span>
+<span class="nc" id="L111">					po.deleteEx(true);</span>
+				}
+<span class="nc" id="L113">				count++;</span>
+			}
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			if (count &gt; 0)</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">				if (log.isLoggable(Level.CONFIG)) log.config(table.getName() + &quot; (&quot; + AD_Table_ID + &quot;/&quot; + Record_IDorUU + &quot;) #&quot; + count);</span>
+		}
+<span class="nc" id="L118">		return true;</span>
+	}	//	deleteRecordIdCascade
+
+	//IDEMPIERE-2060
+	/**
+	 * Delete dependent records.&lt;br/&gt;
+	 * This is model class implementation of the delete cascade option of foreign key constraint.
+	 * @param tableName
+	 * @param Record_IDorUU record ID (int) or UUID (String)
+	 * @param trxName
+	 */
+	public static void deleteModelCascade(String tableName, Serializable Record_IDorUU, String trxName) {
+<span class="nc" id="L130">		deleteModelCascade(tableName, Record_IDorUU, trxName, null);</span>
+<span class="nc" id="L131">	}</span>
+
+	/**
+	 * Delete dependent records.&lt;br/&gt;
+	 * This is model class implementation of the delete cascade option of foreign key constraint.
+	 * @param tableName
+	 * @param Record_IDorUU record ID (int) or UUID (String)
+	 * @param trxName
+	 * @param deletes if not null, the to be deleted PO record is added to the list instead of delete from DB
+	 */
+	public static void deleteModelCascade(String tableName, Serializable Record_IDorUU, String trxName, List&lt;PO&gt; deletes) {
+		int refId;
+<span class="nc bnc" id="L143" title="All 2 branches missed.">		if (Record_IDorUU instanceof Integer) {</span>
+<span class="nc" id="L144">			refId = DisplayType.RecordID;</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">		} else if (Record_IDorUU instanceof String) {</span>
+<span class="nc" id="L146">			refId = DisplayType.RecordUU;</span>
+<span class="nc" id="L147">		} else {</span>
+<span class="nc" id="L148">			throw new IllegalArgumentException(Record_IDorUU.getClass().getName() + &quot; not supported for ID/UUID&quot;);</span>
+		}
+<span class="nc" id="L150">		KeyNamePair[] tables = getTablesWithModelCascade(refId, tableName, trxName);</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">		for (KeyNamePair table : tables) {</span>
+<span class="nc" id="L152">			int dependentTableId = table.getKey();</span>
+<span class="nc" id="L153">			String dependentColumnName = table.getName();</span>
+<span class="nc" id="L154">			String dependentWhere = dependentColumnName + &quot;=?&quot;;</span>
+<span class="nc" id="L155">			List&lt;PO&gt; poList = new Query(Env.getCtx(), </span>
+<span class="nc" id="L156">					MTable.get(dependentTableId).getTableName(),</span>
+<span class="nc" id="L157">					dependentWhere,</span>
+<span class="nc" id="L158">					trxName).setParameters(Record_IDorUU).list();</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">			for (PO po : poList) {</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">				if (deletes != null)</span>
+<span class="nc" id="L161">					deletes.add(po);</span>
+				else
+<span class="nc" id="L163">					po.deleteEx(true, trxName);</span>
+			}
+		}
+<span class="nc" id="L166">	}</span>
+
+	/**
+	 * Get dependent tables
+	 * @param refId AD_Reference_ID - Record_ID or Record_UU
+	 * @param tableName
+	 * @param trxName
+	 * @return array of dependent tables (dependentTableId, dependentColumnName)
+	 */
+	private static KeyNamePair[] getTablesWithModelCascade(int refId, String tableName, String trxName) {
+		int refTableDirId;
+		int refTableId;
+		int refTableSearchId;
+<span class="nc bnc" id="L179" title="All 2 branches missed.">		if (refId == DisplayType.RecordID) {</span>
+<span class="nc" id="L180">			refTableDirId = DisplayType.TableDir;</span>
+<span class="nc" id="L181">			refTableId = DisplayType.Table;</span>
+<span class="nc" id="L182">			refTableSearchId = DisplayType.Search;</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">		} else if (refId == DisplayType.RecordUU) {</span>
+<span class="nc" id="L184">			refTableDirId = DisplayType.TableDirUU;</span>
+<span class="nc" id="L185">			refTableId = DisplayType.TableUU;</span>
+<span class="nc" id="L186">			refTableSearchId = DisplayType.SearchUU;</span>
+<span class="nc" id="L187">		} else {</span>
+<span class="nc" id="L188">			throw new IllegalArgumentException(refId + &quot; not supported for ID/UUID&quot;);</span>
+		}
+<span class="nc" id="L190">		StringBuilder key = new StringBuilder(MColumn.FKCONSTRAINTTYPE_ModelCascade).append(&quot;|&quot;).append(refId).append(&quot;|&quot;).append(tableName);</span>
+<span class="nc" id="L191">		KeyNamePair[] tables = s_po_record_tables_cache.get(key.toString());</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">		if (tables != null)</span>
+<span class="nc" id="L193">			return tables;</span>
+<span class="nc" id="L194">		final String sql = &quot;&quot;&quot;</span>
+			SELECT t.AD_Table_ID, 
+			       c.ColumnName 
+			FROM   AD_Column c 
+			       JOIN AD_Table t ON c.AD_Table_ID = t.AD_Table_ID 
+			       LEFT JOIN AD_Ref_Table r ON c.AD_Reference_Value_ID = r.AD_Reference_ID 
+			       LEFT JOIN AD_Table tr ON r.AD_Table_ID = tr.AD_Table_ID 
+			WHERE  t.IsView = 'N' 
+			       AND t.IsActive = 'Y' 
+			       AND c.IsActive = 'Y' 
+			       AND ( ( c.AD_Reference_ID = ? 
+			               AND c.ColumnName = ? || '_ID' ) 
+			              OR ( c.AD_Reference_ID IN (? , ?) 
+			                   AND ( tr.TableName = ? OR ( tr.TableName IS NULL AND c.ColumnName = ? || '_ID' ) ) ) ) 
+			       AND c.FKConstraintType = ?&quot;&quot;&quot;;
+<span class="nc" id="L209">		List&lt;List&lt;Object&gt;&gt; dependents = DB.getSQLArrayObjectsEx(trxName, sql, </span>
+<span class="nc" id="L210">				refTableDirId, tableName, refTableId, refTableSearchId, tableName, tableName, MColumn.FKCONSTRAINTTYPE_ModelCascade);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if (dependents != null) {</span>
+<span class="nc" id="L212">			tables = new KeyNamePair[dependents.size()];</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">			for (int i=0; i&lt;dependents.size(); i++) {</span>
+<span class="nc" id="L214">				List&lt;Object&gt; row = dependents.get(i);</span>
+<span class="nc" id="L215">				int dependentTableId = ((BigDecimal)row.get(0)).intValue();</span>
+<span class="nc" id="L216">				String dependentColumnName = (String) row.get(1);</span>
+<span class="nc" id="L217">				KeyNamePair vnp = new KeyNamePair(dependentTableId, dependentColumnName);</span>
+<span class="nc" id="L218">				tables[i] = vnp;</span>
+			}
+<span class="nc" id="L220">		} else {</span>
+<span class="nc" id="L221">			tables = new KeyNamePair[0];</span>
+		}
+<span class="nc" id="L223">		s_po_record_tables_cache.put(key.toString(), tables);</span>
+<span class="nc" id="L224">		return tables;</span>
+	}
+	
+	/**
+	 * If a referencing Record ID or Record UU exists to the deleted record, set it to NULL.&lt;br/&gt;
+	 * This is model class implementation of the set null option of foreign key constraint. 
+	 * @param AD_Table_ID
+	 * @param Record_IDorUU record ID (int) or UUID (String)
+	 * @param trxName
+	 */
+	public static void setRecordNull(int AD_Table_ID, Serializable Record_IDorUU, String trxName) {
+<span class="nc" id="L235">		setRecordNull(AD_Table_ID, Record_IDorUU, trxName, null);</span>
+<span class="nc" id="L236">	} </span>
+
+	/**
+	 * If a referencing Record ID or Record UU exists to the deleted record, set it to NULL.&lt;br/&gt;
+	 * This is model class implementation of the set null option of foreign key constraint. 
+	 * @param AD_Table_ID
+	 * @param Record_IDorUU record ID (int) or UUID (String)
+	 * @param trxName
+	 * @param updates if not null, the to be updated PO record is added to the list instead of saving to DB
+	 */
+	public static void setRecordNull(int AD_Table_ID, Serializable Record_IDorUU, String trxName, List&lt;PO&gt; updates){
+		int refId;
+		String columnName;
+<span class="nc bnc" id="L249" title="All 2 branches missed.">		if (Record_IDorUU instanceof Integer) {</span>
+<span class="nc" id="L250">			refId = DisplayType.RecordID;</span>
+<span class="nc" id="L251">			columnName = &quot;Record_ID&quot;;</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">		} else if (Record_IDorUU instanceof String) {</span>
+<span class="nc" id="L253">			refId = DisplayType.RecordUU;</span>
+<span class="nc" id="L254">			columnName = &quot;Record_UU&quot;;</span>
+<span class="nc" id="L255">		} else {</span>
+<span class="nc" id="L256">			throw new IllegalArgumentException(Record_IDorUU.getClass().getName() + &quot; not supported for ID/UUID&quot;);</span>
+		}
+<span class="nc" id="L258">		KeyNamePair[] tables = getTablesWithConstraintType(refId, MColumn.FKCONSTRAINTTYPE_ModelSetNull, trxName);</span>
+		// Table loop
+<span class="nc" id="L260">		StringBuilder whereClause = new StringBuilder(&quot;AD_Table_ID=? AND &quot;).append(columnName).append(&quot;=?&quot;);</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">		for (KeyNamePair table : tables) {</span>
+<span class="nc" id="L262">			List&lt;PO&gt; poList = new Query(Env.getCtx(), table.getName(), whereClause.toString(), trxName)</span>
+<span class="nc" id="L263">					.setParameters(AD_Table_ID, Record_IDorUU)</span>
+<span class="nc" id="L264">					.list();</span>
+			
+<span class="nc" id="L266">			int count = 0;</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">			for(PO po : poList) {</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">				if (   po.get_Table_ID() == AD_Table_ID</span>
+<span class="nc bnc" id="L269" title="All 4 branches missed.">					&amp;&amp; (   (Record_IDorUU instanceof Integer &amp;&amp; po.get_ID() == (Integer) Record_IDorUU)</span>
+<span class="nc bnc" id="L270" title="All 4 branches missed.">						|| (Record_IDorUU instanceof String &amp;&amp; Record_IDorUU.equals(po.get_UUID()))</span>
+					   )
+				   )
+<span class="nc" id="L273">					continue;</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">				if (po.isColumnMandatory(po.get_ColumnIndex(columnName))) {</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">					if (Record_IDorUU instanceof Integer)</span>
+<span class="nc" id="L276">						po.set_Value(columnName, 0);</span>
+					else
+<span class="nc" id="L278">						po.set_Value(columnName, &quot;&quot;);</span>
+<span class="nc" id="L279">				} else {</span>
+<span class="nc" id="L280">					po.set_Value(columnName, null);</span>
+				}
+<span class="nc bnc" id="L282" title="All 2 branches missed.">				if (updates != null) {</span>
+<span class="nc" id="L283">					updates.add(po);</span>
+<span class="nc" id="L284">				} else {</span>
+<span class="nc" id="L285">					po.saveEx(trxName);</span>
+				}
+<span class="nc" id="L287">				count++;</span>
+			}
+<span class="nc bnc" id="L289" title="All 2 branches missed.">			if (count &gt; 0) {</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">				if (log.isLoggable(Level.CONFIG)) log.config(table.getName() + &quot; (&quot; + AD_Table_ID + &quot;/&quot; + Record_IDorUU + &quot;) #&quot; + count);</span>
+			}
+		}
+<span class="nc" id="L293">	}</span>
+	
+	/**
+	 * 	Check if dependent records with delete restrict condition exists for a table/record combination.
+	 *	@param AD_Table_ID table
+	 *	@param Record_IDorUU record ID (int) or UUID (String)
+	 *	@param trxName transaction
+	 *	@return error message (Table Name) or null
+	 */
+	protected static String exists (int AD_Table_ID, Serializable Record_IDorUU, String trxName)
+	{
+		int refId;
+		String columnName;
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (Record_IDorUU instanceof Integer) {</span>
+<span class="nc" id="L307">			refId = DisplayType.RecordID;</span>
+<span class="nc" id="L308">			columnName = &quot;Record_ID&quot;;</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">		} else if (Record_IDorUU instanceof String) {</span>
+<span class="nc" id="L310">			refId = DisplayType.RecordUU;</span>
+<span class="nc" id="L311">			columnName = &quot;Record_UU&quot;;</span>
+<span class="nc" id="L312">		} else {</span>
+<span class="nc" id="L313">			log.warning(Record_IDorUU.getClass().getName() + &quot; not supported for ID/UUID&quot;);</span>
+<span class="nc" id="L314">			return null;</span>
+		}
+<span class="nc" id="L316">		KeyNamePair[] restricts = getTablesWithConstraintType(refId, MColumn.FKCONSTRAINTTYPE_ModelNoAction_ForbidDeletion, trxName);</span>
+		//	Table Loop only
+<span class="nc bnc" id="L318" title="All 2 branches missed.">		for (int i = 0; i &lt; restricts.length; i++)</span>
+		{
+			//	SELECT 1 FROM table WHERE AD_Table_ID=#1 AND Record_ID=#2 FETCH FIRST 1 ROWS ONLY
+<span class="nc" id="L321">			StringBuilder sqlb = new StringBuilder (&quot;SELECT 1 FROM &quot;)</span>
+<span class="nc" id="L322">				.append(restricts[i].getName())</span>
+<span class="nc" id="L323">				.append(&quot; WHERE AD_Table_ID=? AND &quot;).append(columnName).append(&quot;=?&quot;);</span>
+<span class="nc" id="L324">			String sql = DB.getDatabase().addPagingSQL(sqlb.toString(), 1, 1);</span>
+<span class="nc" id="L325">			int no = DB.getSQLValueEx(trxName, sql.toString(), AD_Table_ID, Record_IDorUU);</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">			if (no == 1)</span>
+<span class="nc" id="L327">				return Msg.getMsg(Env.getCtx(), &quot;DeleteErrorDependent&quot;) + &quot; -&gt; &quot; + restricts[i].getName();</span>
+		}
+<span class="nc" id="L329">		return null;</span>
+	}	//	exists
+
+	/**
+	 * Get array of tables which has a refId column with the defined Constraint Type
+	 * @param refId AD_Reference_ID - Record_ID or Record_UU
+	 * @param constraintType - FKConstraintType of AD_Column
+	 * @param trxName
+	 * @return array of KeyNamePair&lt;AD_Table_ID, TableName&gt; 
+	 */
+	private static KeyNamePair[] getTablesWithConstraintType(int refId, String constraintType, String trxName) {
+<span class="nc" id="L340">		return getTablesWithConstraintType(refId, constraintType, null, trxName);</span>
+	}
+
+	/**
+	 * Get array of tables which has a refId column with the defined Constraint Type
+	 * @param refId AD_Reference_ID - Record_ID or Record_UU
+	 * @param constraintType - FKConstraintType of AD_Column
+	 * @param whereTables - optional filter
+	 * @param trxName
+	 * @return array of KeyNamePair&lt;AD_Table_ID, TableName&gt; 
+	 */
+	private static KeyNamePair[] getTablesWithConstraintType(int refId, String constraintType, String whereTables, String trxName) {
+		String columnName;
+<span class="nc bnc" id="L353" title="All 2 branches missed.">		if (refId == DisplayType.RecordID) {</span>
+<span class="nc" id="L354">			columnName = &quot;Record_ID&quot;;</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">		} else if (refId == DisplayType.RecordUU) {</span>
+<span class="nc" id="L356">			columnName = &quot;Record_UU&quot;;</span>
+<span class="nc" id="L357">		} else {</span>
+<span class="nc" id="L358">			log.warning(refId + &quot; not supported for ID/UUID&quot;);</span>
+<span class="nc" id="L359">			return null;</span>
+		}
+<span class="nc" id="L361">		StringBuilder key = new StringBuilder(constraintType).append(&quot;|&quot;).append(refId).append(&quot;|&quot;).append(whereTables);</span>
+<span class="nc" id="L362">		KeyNamePair[] tables = s_po_record_tables_cache.get(key.toString());</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">		if (tables != null)</span>
+<span class="nc" id="L364">			return tables;</span>
+<span class="nc" id="L365">		String whereClause = &quot;c.AD_Reference_ID=? AND c.FKConstraintType=? AND AD_Table.IsView='N' AND c.ColumnName=?&quot;;</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">		if (! Util.isEmpty(whereTables))</span>
+<span class="nc" id="L367">			whereClause = whereClause + &quot; AND (&quot; + whereTables + &quot;)&quot;;</span>
+<span class="nc" id="L368">		List&lt;MTable&gt; listTables = new Query(Env.getCtx(), MTable.Table_Name, whereClause, trxName)</span>
+<span class="nc" id="L369">				.addJoinClause(&quot;JOIN AD_Column c ON (c.AD_Table_ID=AD_Table.AD_Table_ID)&quot;)</span>
+<span class="nc" id="L370">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L371">				.setParameters(refId, constraintType, columnName)</span>
+<span class="nc" id="L372">				.list();</span>
+<span class="nc" id="L373">		tables = new KeyNamePair[listTables.size()];</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">		for (int i=0; i&lt;listTables.size(); i++) {</span>
+<span class="nc" id="L375">			MTable table = listTables.get(i);</span>
+<span class="nc" id="L376">			tables[i] = new KeyNamePair(table.getAD_Table_ID(), table.getTableName());</span>
+		}
+<span class="nc" id="L378">		s_po_record_tables_cache.put(key.toString(), tables);</span>
+<span class="nc" id="L379">		return tables;</span>
+	}
+
+}	//	PO_Record
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

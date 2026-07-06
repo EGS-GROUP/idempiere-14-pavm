@@ -1,0 +1,494 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PackOut.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.pipo</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.pipo2</a> &gt; <span class="el_source">PackOut.java</span></div><h1>PackOut.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 Adempiere, Inc. All Rights Reserved.               *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *                                                                            *
+ * Copyright (C)                                                              *
+ * 2004 Robert KLEIN. robeklein@hotmail.com                                   *
+ * Contributor(s): Low Heng Sin hengsin@avantz.com                            *
+ *                 Teo Sarca teo.sarca@arhipac.ro, SC ARHIPAC SERVICE SRL     *
+ *****************************************************************************/
+package org.adempiere.pipo2;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.UnsupportedEncodingException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerConfigurationException;
+import javax.xml.transform.sax.SAXTransformerFactory;
+import javax.xml.transform.sax.TransformerHandler;
+import javax.xml.transform.stream.StreamResult;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MClient;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MTable;
+import org.compiere.tools.FileUtil;
+import org.compiere.util.CLogger;
+import org.compiere.util.Trx;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.AttributesImpl;
+
+/**
+ *	Convert AD to XML
+ *
+ *  @author Robert Klein
+ *  @version $Id: PackOut.java,v 1.0
+ *
+ * Contributor: William G. Heath - Export of workflows and dynamic validations
+ *
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;BF [ 1819315 ] PackOut: fix xml indentation not working
+ * 			&lt;li&gt;BF [ 1819319 ] PackOut: use just active AD_Package_Exp_Detail lines
+ */
+
+<span class="nc" id="L66">public class PackOut</span>
+{
+	/*** 1.0.0 **/
+	public final static String PackOutVersion = &quot;100&quot;;
+<span class="nc" id="L70">	private final static CLogger log = CLogger.getCLogger(PackOut.class);</span>
+
+	private String packageDirectory;
+<span class="nc" id="L73">	private int blobCount = 0;</span>
+
+<span class="nc" id="L75">	private IHandlerRegistry handlerRegistry = new OSGiHandlerRegistry();</span>
+	private PackoutItem packoutItem;
+	private String trxName;
+	private PackoutDocument packoutDocument;
+	private int processedCount;
+	private String exportFile;
+	private String packoutDirectory;
+<span class="nc" id="L82">	private PIPOContext pipoContext = new PIPOContext();</span>
+	private Timestamp fromDate;
+<span class="nc" id="L84">	private boolean isExportDictionaryEntity = false;</span>
+
+	public static final int MAX_OFFICIAL_ID = MTable.MAX_OFFICIAL_ID;
+
+<span class="nc" id="L88">	public static final String PACKOUT_BLOB_FILE_EXTENSION = &quot;.dat&quot;;</span>
+
+	public static void addTextElement(TransformerHandler handler, String qName, String text, AttributesImpl atts) throws SAXException {
+<span class="nc" id="L91">		handler.startElement(&quot;&quot;, &quot;&quot;, qName, atts);</span>
+<span class="nc" id="L92">		append(handler, text);</span>
+<span class="nc" id="L93">		handler.endElement(&quot;&quot;, &quot;&quot;, qName);</span>
+<span class="nc" id="L94">	}</span>
+
+	private static void append(TransformerHandler handler, String str) throws SAXException
+	{
+<span class="nc bnc" id="L98" title="All 2 branches missed.">		char[] contents = str != null ? str.toCharArray() : new char[0];</span>
+<span class="nc" id="L99">		handler.characters(contents,0,contents.length);</span>
+<span class="nc" id="L100">	}</span>
+
+	/**
+	 * Start the transformation to XML
+	 * @param packoutDirectory
+	 * @param destinationPath
+	 * @param packoutDocument
+	 * @param packoutItems
+	 * @param trxName
+	 * @throws java.lang.Exception
+	 */
+	public void export(String packoutDirectory, String destinationPath, PackoutDocument packoutDocument, List&lt;PackoutItem&gt; packoutItems, String trxName) throws java.lang.Exception
+	{
+<span class="nc" id="L113">		this.packoutDirectory = packoutDirectory;</span>
+<span class="nc" id="L114">		this.packoutDocument = packoutDocument;</span>
+<span class="nc" id="L115">		this.trxName = trxName;</span>
+
+<span class="nc" id="L117">		initContext();</span>
+
+<span class="nc" id="L119">		OutputStream  docStream = null;</span>
+<span class="nc" id="L120">		OutputStream  packoutStream = null;</span>
+
+<span class="nc" id="L122">		processedCount = 0;</span>
+		try {
+<span class="nc" id="L124">			packageDirectory = packoutDirectory+ packoutDocument.getPackageName();</span>
+<span class="nc" id="L125">			File docDirectoryFile = new File(packageDirectory+File.separator+&quot;doc&quot;+File.separator);</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">			if (!docDirectoryFile.exists()) {</span>
+<span class="nc" id="L127">				boolean success = docDirectoryFile.mkdirs();</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">				if (!success) {</span>
+<span class="nc" id="L129">					throw new AdempiereException(&quot;Failed to create directory for pack out. &quot; + packageDirectory+File.separator+&quot;doc&quot;+File.separator);</span>
+				}
+			}
+<span class="nc" id="L132">			String docFileName = packageDirectory+File.separator+&quot;doc&quot;+File.separator+packoutDocument.getPackageName()+&quot;Doc.xml&quot;;</span>
+<span class="nc" id="L133">			docStream = new FileOutputStream (docFileName, false);</span>
+<span class="nc" id="L134">			TransformerHandler docHandler = createDocHandler(docStream);</span>
+
+<span class="nc" id="L136">			String packoutFileName = packageDirectory+File.separator+ &quot;dict&quot;+File.separator+&quot;PackOut.xml&quot;;</span>
+<span class="nc" id="L137">			packoutStream = new FileOutputStream (packoutFileName, false);</span>
+<span class="nc" id="L138">			TransformerHandler packoutHandler = createPackoutHandler(packoutStream);</span>
+
+<span class="nc bnc" id="L140" title="All 2 branches missed.">			for(PackoutItem packoutItem : packoutItems){</span>
+<span class="nc" id="L141">				this.packoutItem = packoutItem;</span>
+<span class="nc" id="L142">				String type = packoutItem.getType();</span>
+
+<span class="nc" id="L144">				ElementHandler handler = handlerRegistry.getHandler(type);</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">				if (handler != null)</span>
+<span class="nc" id="L146">					handler.packOut(this,packoutHandler,docHandler,packoutItem.getRecordId(),packoutItem.getUUID());</span>
+				else
+<span class="nc" id="L148">					throw new IllegalArgumentException(&quot;Packout handler not found for type &quot; + type);</span>
+
+<span class="nc" id="L150">				processedCount++;</span>
+			}
+
+<span class="nc" id="L153">			packoutHandler.endElement(&quot;&quot;,&quot;&quot;,&quot;idempiere&quot;);</span>
+<span class="nc" id="L154">			packoutHandler.endDocument();</span>
+<span class="nc" id="L155">			docHandler.endElement(&quot;&quot;,&quot;&quot;,&quot;idempiereDocument&quot;);</span>
+<span class="nc" id="L156">			docHandler.endDocument();</span>
+<span class="nc" id="L157">		}</span>
+<span class="nc" id="L158">		catch (Exception e)</span>
+		{
+<span class="nc" id="L160">			log.log(Level.SEVERE,e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L161">			throw e;</span>
+		}
+		finally
+		{
+			// Close streams - teo_sarca [ 1704762 ]
+<span class="nc bnc" id="L166" title="All 2 branches missed.">			if (docStream != null)</span>
+				try {
+<span class="nc" id="L168">					docStream.close();</span>
+<span class="nc" id="L169">				} catch (Exception e) {}</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">			if (packoutStream != null)</span>
+				try {
+<span class="nc" id="L172">					packoutStream.close();</span>
+<span class="nc" id="L173">				} catch (Exception e) {}</span>
+		}
+
+		//create compressed packages
+		//set the files
+<span class="nc" id="L178">		File srcFolder = new File(packoutDirectory);</span>
+<span class="nc" id="L179">		File destZipFile = null;</span>
+<span class="nc bnc" id="L180" title="All 4 branches missed.">		if (destinationPath != null &amp;&amp; destinationPath.trim().length() &gt; 0)</span>
+		{
+<span class="nc" id="L182">			destZipFile = new File(destinationPath);</span>
+<span class="nc" id="L183">		} else {</span>
+<span class="nc" id="L184">			destZipFile = new File(packageDirectory+&quot;.zip&quot;);</span>
+		}
+		//delete the old packages if necessary
+<span class="nc" id="L187">		destZipFile.delete();</span>
+
+		//create the compressed packages
+<span class="nc" id="L190">		String includesdir = packoutDocument.getPackageName() + File.separator +&quot;**&quot;;</span>
+<span class="nc" id="L191">		Zipper.zipFolder(srcFolder, destZipFile, includesdir);</span>
+<span class="nc" id="L192">		exportFile = destZipFile.getAbsolutePath();</span>
+<span class="nc" id="L193">		FileUtil.deleteFolderRecursive(new File(packageDirectory));</span>
+<span class="nc" id="L194">	}	//	doIt</span>
+
+	private TransformerHandler createPackoutHandler(
+			OutputStream packoutStream) throws UnsupportedEncodingException, TransformerConfigurationException, SAXException {
+<span class="nc" id="L198">		StreamResult packoutStreamResult = new StreamResult(new OutputStreamWriter(packoutStream,&quot;UTF-8&quot;));</span>
+<span class="nc" id="L199">		SAXTransformerFactory packoutFactory = (SAXTransformerFactory) SAXTransformerFactory.newInstance();</span>
+		//indent-number attribute support is not guarantee
+		try {
+<span class="nc" id="L202">			packoutFactory.setAttribute(&quot;indent-number&quot;, Integer.valueOf(4));</span>
+<span class="nc" id="L203">		} catch (Exception e) {}</span>
+<span class="nc" id="L204">		TransformerHandler packoutHandler = packoutFactory.newTransformerHandler();</span>
+<span class="nc" id="L205">		Transformer packoutTransformer = packoutHandler.getTransformer();</span>
+<span class="nc" id="L206">		packoutTransformer.setOutputProperty(OutputKeys.ENCODING, &quot;UTF-8&quot;);</span>
+<span class="nc" id="L207">		packoutTransformer.setOutputProperty(OutputKeys.INDENT,&quot;yes&quot;);</span>
+		//indent-amount property support is not guarantee
+		try {
+<span class="nc" id="L210">			packoutTransformer.setOutputProperty(&quot;{http://xml.apache.org/xalan}indent-amount&quot;,&quot;4&quot;);</span>
+<span class="nc" id="L211">		} catch (Exception e) {}</span>
+<span class="nc" id="L212">		packoutHandler.setResult(packoutStreamResult);</span>
+<span class="nc" id="L213">		packoutHandler.startDocument();</span>
+<span class="nc" id="L214">		MClient client = MClient.get(pipoContext.ctx);</span>
+<span class="nc" id="L215">		AttributesImpl atts = new AttributesImpl();</span>
+<span class="nc" id="L216">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;Name&quot;,&quot;CDATA&quot;,packoutDocument.getPackageName());</span>
+<span class="nc" id="L217">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;Version&quot;,&quot;CDATA&quot;,packoutDocument.getPackageVersion());</span>
+<span class="nc" id="L218">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;idempiereVersion&quot;,&quot;CDATA&quot;,emptyIfNull(packoutDocument.getAdempiereVersion()));</span>
+<span class="nc" id="L219">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;DataBaseVersion&quot;,&quot;CDATA&quot;,emptyIfNull(packoutDocument.getDatabaseVersion()));</span>
+<span class="nc" id="L220">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;Description&quot;,&quot;CDATA&quot;,emptyIfNull(packoutDocument.getDescription()));</span>
+<span class="nc" id="L221">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;Author&quot;,&quot;CDATA&quot;,emptyIfNull(packoutDocument.getAuthor()));</span>
+<span class="nc" id="L222">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;AuthorEmail&quot;,&quot;CDATA&quot;,emptyIfNull(packoutDocument.getAuthorEmail()));</span>
+<span class="nc" id="L223">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;CreatedDate&quot;,&quot;CDATA&quot;,packoutDocument.getCreated().toString());</span>
+<span class="nc" id="L224">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;UpdatedDate&quot;,&quot;CDATA&quot;,packoutDocument.getUpdated().toString());</span>
+<span class="nc" id="L225">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;PackOutVersion&quot;,&quot;CDATA&quot;,PackOutVersion);</span>
+		// when exporting dictionary entities, for non System tenants is still marked as false to avoid potential risk
+		// of overwriting dictionary in target system, as they should be exported and imported with extra care
+<span class="nc bnc" id="L228" title="All 4 branches missed.">		atts.addAttribute(&quot;&quot;,&quot;&quot;,&quot;UpdateDictionary&quot;,&quot;CDATA&quot;, (isExportDictionaryEntity &amp;&amp; client.get_ID() == 0) ? &quot;true&quot; : &quot;false&quot;);</span>
+
+<span class="nc" id="L230">		StringBuilder sb = new StringBuilder ()</span>
+<span class="nc" id="L231">			.append(client.get_ID())</span>
+<span class="nc" id="L232">			.append(&quot;-&quot;)</span>
+<span class="nc" id="L233">			.append(client.getValue())</span>
+<span class="nc" id="L234">			.append(&quot;-&quot;)</span>
+<span class="nc" id="L235">			.append(client.getName());</span>
+<span class="nc" id="L236">		atts.addAttribute(&quot;&quot;, &quot;&quot;, &quot;Client&quot;, &quot;CDATA&quot;, sb.toString());</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">		if (client.getAD_Client_UU() == null)</span>
+<span class="nc" id="L238">			throw new IllegalStateException(&quot;2Pack requires UUID on AD_Client&quot;);</span>
+<span class="nc" id="L239">		atts.addAttribute(&quot;&quot;, &quot;&quot;, &quot;AD_Client_UU&quot;, &quot;CDATA&quot;, client.getAD_Client_UU());</span>
+
+<span class="nc" id="L241">		packoutHandler.startElement(&quot;&quot;,&quot;&quot;,&quot;idempiere&quot;,atts);</span>
+<span class="nc" id="L242">		return packoutHandler;</span>
+	}
+
+	private String emptyIfNull(String input) {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">		return input != null ? input : &quot;&quot;;</span>
+	}
+
+	private TransformerHandler createDocHandler(OutputStream docStream) throws UnsupportedEncodingException, TransformerConfigurationException, SAXException {
+<span class="nc" id="L250">		StreamResult docStreamResult = new StreamResult(new OutputStreamWriter(docStream,&quot;UTF-8&quot;));</span>
+<span class="nc" id="L251">		SAXTransformerFactory transformerFactory = (SAXTransformerFactory) SAXTransformerFactory.newInstance();</span>
+		//indent-number attribute support is not guarantee
+		try {
+<span class="nc" id="L254">			transformerFactory.setAttribute(&quot;indent-number&quot;, Integer.valueOf(4));</span>
+<span class="nc" id="L255">		} catch (Exception e) {}</span>
+<span class="nc" id="L256">		TransformerHandler docHandler = transformerFactory.newTransformerHandler();</span>
+<span class="nc" id="L257">		Transformer transformer = docHandler.getTransformer();</span>
+<span class="nc" id="L258">		transformer.setOutputProperty(OutputKeys.ENCODING,&quot;UTF-8&quot;);</span>
+<span class="nc" id="L259">		transformer.setOutputProperty(OutputKeys.INDENT,&quot;yes&quot;);</span>
+		//indent-amount property support is not guarantee
+		try {
+<span class="nc" id="L262">			transformer.setOutputProperty(&quot;{http://xml.apache.org/xalan}indent-amount&quot;,&quot;4&quot;);</span>
+<span class="nc" id="L263">		} catch (Exception e) {}</span>
+<span class="nc" id="L264">		docHandler.setResult(docStreamResult);</span>
+<span class="nc" id="L265">		docHandler.startDocument();</span>
+<span class="nc" id="L266">		docHandler.processingInstruction(&quot;xml-stylesheet&quot;,&quot;type=\&quot;text/css\&quot; href=\&quot;idempiereDocument.css\&quot;&quot;);</span>
+<span class="nc" id="L267">		AttributesImpl atts = new AttributesImpl();</span>
+<span class="nc" id="L268">		docHandler.startElement(&quot;&quot;,&quot;&quot;,&quot;idempiereDocument&quot;,atts);</span>
+<span class="nc" id="L269">		addTextElement(docHandler, &quot;header&quot;, packoutDocument.getPackageName()+&quot; Package Description&quot;, atts);</span>
+<span class="nc" id="L270">		addTextElement(docHandler, &quot;H1&quot;, &quot;Package Name:&quot;, atts);</span>
+<span class="nc" id="L271">		addTextElement(docHandler, &quot;packagename&quot;, packoutDocument.getPackageName(), atts);</span>
+<span class="nc" id="L272">		addTextElement(docHandler, &quot;H1&quot;, &quot;Author:&quot;, atts);</span>
+<span class="nc" id="L273">		addTextElement(docHandler, &quot;Name:&quot;, packoutDocument.getAuthor(), atts);</span>
+<span class="nc" id="L274">		addTextElement(docHandler, &quot;H1&quot;, &quot;Email Address:&quot;, atts);</span>
+<span class="nc" id="L275">		addTextElement(docHandler, &quot;Email&quot;, packoutDocument.getAuthorEmail(), atts);</span>
+<span class="nc" id="L276">		addTextElement(docHandler, &quot;H1&quot;, &quot;Created:&quot;, atts);</span>
+<span class="nc" id="L277">		addTextElement(docHandler, &quot;Date&quot;, packoutDocument.getCreated().toString(), atts);</span>
+<span class="nc" id="L278">		addTextElement(docHandler, &quot;H1&quot;, &quot;Updated:&quot;, atts);</span>
+<span class="nc" id="L279">		addTextElement(docHandler, &quot;Date&quot;, packoutDocument.getUpdated().toString(), atts);</span>
+<span class="nc" id="L280">		addTextElement(docHandler, &quot;H1&quot;, &quot;Description:&quot;, atts);</span>
+<span class="nc" id="L281">		addTextElement(docHandler, &quot;description&quot;, packoutDocument.getDescription(), atts);</span>
+<span class="nc" id="L282">		addTextElement(docHandler, &quot;H1&quot;, &quot;Instructions:&quot;, atts);</span>
+<span class="nc" id="L283">		addTextElement(docHandler, &quot;instructions&quot;, packoutDocument.getInstructions(), atts);</span>
+<span class="nc" id="L284">		addTextElement(docHandler, &quot;H1&quot;, &quot;Files in Package:&quot;, atts);</span>
+<span class="nc" id="L285">		addTextElement(docHandler, &quot;file&quot;, &quot;File: PackOut.xml&quot;, atts);</span>
+<span class="nc" id="L286">		addTextElement(docHandler, &quot;filedirectory&quot;, &quot;Directory: \\dict\\&quot;, atts);</span>
+<span class="nc" id="L287">		addTextElement(docHandler, &quot;filenotes&quot;, &quot;Notes: Contains all application/object settings for package&quot;, atts);</span>
+
+<span class="nc" id="L289">		MClient client = MClient.get(pipoContext.ctx);</span>
+<span class="nc" id="L290">		StringBuilder sb = new StringBuilder ()</span>
+<span class="nc" id="L291">			.append(client.get_ID())</span>
+<span class="nc" id="L292">			.append(&quot;-&quot;)</span>
+<span class="nc" id="L293">			.append(client.getValue())</span>
+<span class="nc" id="L294">			.append(&quot;-&quot;)</span>
+<span class="nc" id="L295">			.append(client.getName());</span>
+<span class="nc" id="L296">		addTextElement(docHandler, &quot;H1&quot;, &quot;Client:&quot;, atts);</span>
+<span class="nc" id="L297">		addTextElement(docHandler, &quot;Client&quot;, sb.toString(), atts);</span>
+
+<span class="nc" id="L299">		File packageDictDirFile = new File(packageDirectory+File.separator+ &quot;dict&quot;+File.separator);</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">		if (!packageDictDirFile.exists()) {</span>
+<span class="nc" id="L301">			boolean success = packageDictDirFile.mkdirs();</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">			if (!success)</span>
+<span class="nc" id="L303">				throw new AdempiereException(&quot;Failed to create directory. &quot; + packageDirectory+File.separator+ &quot;dict&quot;+File.separator);</span>
+		}
+<span class="nc" id="L305">		return docHandler;</span>
+	}
+
+	private void initContext() {
+<span class="nc bnc" id="L309" title="All 2 branches missed.">		if (trxName != null)</span>
+<span class="nc" id="L310">			pipoContext.trx = Trx.get(trxName, true);</span>
+<span class="nc" id="L311">		pipoContext.ctx.setProperty(&quot;isHandleTranslations&quot;, MSysConfig.getValue(MSysConfig.TWOPACK_HANDLE_TRANSLATIONS));</span>
+<span class="nc" id="L312">		pipoContext.packOut = this;</span>
+<span class="nc" id="L313">	}</span>
+
+	/**
+	 * @param sourceName
+	 * @param destName
+	 */
+	public void copyFile (String sourceName, String destName ) {
+<span class="nc" id="L320">		InputStream source = null;  // Stream for reading from the source file.</span>
+<span class="nc" id="L321">		OutputStream copy= null;   // Stream for writing the copy.</span>
+		boolean force;  // This is set to true if the &quot;-f&quot; option
+		//    is specified on the command line.
+		int byteCount;  // Number of bytes copied from the source file.
+
+<span class="nc" id="L326">		force = true;</span>
+		try {
+<span class="nc" id="L328">			source = new FileInputStream(sourceName);</span>
+<span class="nc" id="L329">		} catch (FileNotFoundException e) {</span>
+<span class="nc" id="L330">			System.out.println(&quot;Can't find file \&quot;&quot; + sourceName + &quot;\&quot;.&quot;);</span>
+<span class="nc" id="L331">			return;</span>
+		}
+
+		try {
+<span class="nc" id="L335">			File file = new File(destName);</span>
+<span class="nc bnc" id="L336" title="All 4 branches missed.">			if (file.exists() &amp;&amp; force == false) {</span>
+<span class="nc" id="L337">				System.out.println(&quot;Output file exists. Use the -f option to replace it.&quot;);</span>
+<span class="nc" id="L338">				return;</span>
+			}
+			try {
+<span class="nc" id="L341">				copy = new FileOutputStream(destName, false);</span>
+<span class="nc" id="L342">			} catch (IOException e) {</span>
+<span class="nc" id="L343">				System.out.println(&quot;Can't open output file \&quot;&quot;</span>
+<span class="nc" id="L344">						+ destName + &quot;\&quot;.&quot;);</span>
+<span class="nc" id="L345">				return;</span>
+			}
+<span class="nc" id="L347">			byteCount = 0;</span>
+			try {
+<span class="nc" id="L349">				while (true) {</span>
+<span class="nc" id="L350">					int data = source.read();</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">					if (data &lt; 0)</span>
+<span class="nc" id="L352">						break;</span>
+<span class="nc" id="L353">					copy.write(data);</span>
+<span class="nc" id="L354">					byteCount++;</span>
+				}
+<span class="nc" id="L356">				source.close();</span>
+<span class="nc" id="L357">				copy.close();</span>
+<span class="nc" id="L358">				System.out.println(&quot;Successfully copied &quot; + byteCount + &quot; bytes.&quot;);</span>
+<span class="nc" id="L359">			} catch (Exception e) {</span>
+<span class="nc" id="L360">				System.out.println(&quot;Error occurred while copying.  &quot;+ byteCount + &quot; bytes copied.&quot;);</span>
+<span class="nc" id="L361">				System.out.println(e.toString());</span>
+			}
+<span class="nc" id="L363">		} finally {</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">			if (source != null) {</span>
+				try {
+<span class="nc" id="L366">					source.close();</span>
+<span class="nc" id="L367">				} catch (IOException e) {}</span>
+			}
+<span class="nc bnc" id="L369" title="All 2 branches missed.">			if (copy != null) {</span>
+				try {
+<span class="nc" id="L371">					copy.close();</span>
+<span class="nc" id="L372">				} catch (IOException e) {}</span>
+			}
+		}
+<span class="nc" id="L375">	}</span>
+
+	public PIPOContext getCtx() {
+<span class="nc" id="L378">		return pipoContext;</span>
+	}
+
+	/**
+	 * @param data
+	 * @return
+	 * @throws IOException
+	 */
+	public String writeBlob(byte[] data) throws IOException {
+<span class="nc" id="L387">		blobCount++;</span>
+<span class="nc" id="L388">		String fileName = blobCount + PACKOUT_BLOB_FILE_EXTENSION;</span>
+<span class="nc" id="L389">		File path = new File(packageDirectory+File.separator+&quot;blobs&quot;+File.separator);</span>
+<span class="nc" id="L390">		path.mkdirs();</span>
+<span class="nc" id="L391">		File file = new File(path, fileName);</span>
+<span class="nc" id="L392">		FileOutputStream os = null;</span>
+		try {
+<span class="nc" id="L394">			os = new FileOutputStream(file);</span>
+<span class="nc" id="L395">			os.write(data);</span>
+<span class="nc" id="L396">			os.flush();</span>
+<span class="nc" id="L397">		} finally {</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">			if (os != null) {</span>
+				try {
+<span class="nc" id="L400">					os.close();</span>
+<span class="nc" id="L401">				} catch (IOException e) {}</span>
+			}
+		}
+<span class="nc" id="L404">		return fileName;</span>
+	}
+
+	/**
+	 * @return MPackageExpDetail
+	 */
+	public PackoutItem getCurrentPackoutItem() {
+<span class="nc" id="L411">		return packoutItem;</span>
+	}
+
+	/**
+	 *
+	 * @return PackoutDocument
+	 */
+	public PackoutDocument getPackoutDocument() {
+<span class="nc" id="L419">		return packoutDocument;</span>
+	}
+
+	public String getPackoutDirectory() {
+<span class="nc" id="L423">		return packoutDirectory;</span>
+	}
+
+	/**
+	 * @param name
+	 * @return ElementHandler
+	 */
+	public ElementHandler getHandler(String name) {
+<span class="nc" id="L431">		return handlerRegistry.getHandler(name);</span>
+	}
+
+	/**
+	 * @return number of records exported
+	 */
+	public int getExportCount() {
+<span class="nc" id="L438">		return processedCount;</span>
+	}
+
+	/**
+	 * @return absolute path for export file
+	 */
+	public String getExportFile() {
+<span class="nc" id="L445">		return exportFile;</span>
+	}
+
+	/**
+	 * @param fromDate
+	 */
+	public void setFromDate(Timestamp fromDate) {
+<span class="nc" id="L452">		this.fromDate = fromDate;</span>
+<span class="nc" id="L453">	}</span>
+
+	/**
+	 * @return from date
+	 */
+	public Timestamp getFromDate() {
+<span class="nc" id="L459">		return fromDate;</span>
+	}
+
+	/**
+	 * @param ctx
+	 */
+	public void setCtx(Properties ctx) {
+<span class="nc" id="L466">		pipoContext.ctx = ctx;</span>
+<span class="nc" id="L467">	}</span>
+
+<span class="nc" id="L469">	private List&lt;String&gt; processedRecords = new ArrayList&lt;String&gt;();</span>
+	private boolean includeOrganizationId;
+	public boolean isExported(String key) {
+<span class="nc bnc" id="L472" title="All 2 branches missed.">		if (processedRecords.contains(key))</span>
+<span class="nc" id="L473">			return true;</span>
+<span class="nc" id="L474">		processedRecords.add(key);</span>
+<span class="nc" id="L475">		return false;</span>
+	}
+
+	public boolean isExportDictionaryEntity() {
+<span class="nc" id="L479">		return isExportDictionaryEntity;</span>
+	}
+
+	public void setExportDictionaryEntity(boolean isExportDictionaryEntity) {
+<span class="nc" id="L483">		this.isExportDictionaryEntity = isExportDictionaryEntity;</span>
+<span class="nc" id="L484">	}</span>
+
+	public void setIncludeOrganizationId(boolean includeOrganizationId) {
+<span class="nc" id="L487">		this.includeOrganizationId = includeOrganizationId;		</span>
+<span class="nc" id="L488">	}</span>
+	
+	public boolean isIncludeOrganizationId() {
+<span class="nc" id="L491">		return includeOrganizationId;</span>
+	}
+}	//	PackOut
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

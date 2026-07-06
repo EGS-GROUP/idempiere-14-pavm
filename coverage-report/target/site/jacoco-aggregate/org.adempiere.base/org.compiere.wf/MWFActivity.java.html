@@ -1,0 +1,2153 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MWFActivity.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.wf</a> &gt; <span class="el_source">MWFActivity.java</span></div><h1>MWFActivity.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.wf;
+
+import static org.compiere.model.SystemIDs.MESSAGE_WORKFLOWRESULT;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Savepoint;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
+import java.util.Properties;
+import java.util.StringTokenizer;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MAttachment;
+import org.compiere.model.MBPartner;
+import org.compiere.model.MClient;
+import org.compiere.model.MColumn;
+import org.compiere.model.MConversionRate;
+import org.compiere.model.MMailText;
+import org.compiere.model.MNote;
+import org.compiere.model.MOrg;
+import org.compiere.model.MOrgInfo;
+import org.compiere.model.MPInstance;
+import org.compiere.model.MPInstancePara;
+import org.compiere.model.MProcess;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MRefList;
+import org.compiere.model.MRole;
+import org.compiere.model.MTable;
+import org.compiere.model.MUser;
+import org.compiere.model.MUserRoles;
+import org.compiere.model.MWFActivityApprover;
+import org.compiere.model.PO;
+import org.compiere.model.Query;
+import org.compiere.model.X_AD_WF_Activity;
+import org.compiere.print.ReportEngine;
+import org.compiere.process.DocAction;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.StateEngine;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trace;
+import org.compiere.util.Trx;
+import org.compiere.util.TrxEventListener;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+
+/**
+ *	Extended Workflow Activity Model for AD_WF_Activity. &lt;br/&gt;
+ *	Controlled by WF Process: set Node - startWork
+ *
+ *  @author Jorg Janke
+ *  @author Silvano Trinchero, www.freepath.it
+ *  		&lt;li&gt;IDEMPIERE-3209 added process-aware resultset-based constructor
+ *  @version $Id: MWFActivity.java,v 1.4 2006/07/30 00:51:05 jjanke Exp $
+ */
+public class MWFActivity extends X_AD_WF_Activity implements Runnable
+{	
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 7274149891086011624L;
+
+	private static final String CURRENT_WORKFLOW_PROCESS_INFO_ATTR = &quot;Workflow.ProcessInfo&quot;;
+	
+	/**
+	 * 	Get Activities for table/record
+	 *	@param ctx context
+	 *	@param AD_Table_ID table
+	 *	@param Record_ID record
+	 *	@param activeOnly if true only not processed records are returned
+	 *	@return activities
+	 */
+	public static MWFActivity[] get (Properties ctx, int AD_Table_ID, int Record_ID, boolean activeOnly)
+	{
+<span class="nc" id="L102">		ArrayList&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L103">		StringBuilder whereClause = new StringBuilder(&quot;AD_Table_ID=? AND Record_ID=?&quot;);</span>
+<span class="nc" id="L104">		params.add(AD_Table_ID);</span>
+<span class="nc" id="L105">		params.add(Record_ID);</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">		if (activeOnly)</span>
+		{
+<span class="nc" id="L108">			whereClause.append(&quot; AND Processed&lt;&gt;?&quot;);</span>
+<span class="nc" id="L109">			params.add(true);</span>
+		}
+<span class="nc" id="L111">		List&lt;MWFActivity&gt; list = new Query(ctx, Table_Name, whereClause.toString(), null)</span>
+<span class="nc" id="L112">					.setParameters(params)</span>
+<span class="nc" id="L113">					.setOrderBy(COLUMNNAME_AD_WF_Activity_ID)</span>
+<span class="nc" id="L114">					.list();</span>
+
+<span class="nc" id="L116">		MWFActivity[] retValue = new MWFActivity[list.size ()];</span>
+<span class="nc" id="L117">		list.toArray (retValue);</span>
+<span class="nc" id="L118">		return retValue;</span>
+	}	//	get
+
+	/**
+	 * 	Get info of active activities
+	 * 	@param ctx context
+	 *	@param AD_Table_ID table
+	 *	@param Record_ID record
+	 *	@return info of active activities (separated by new line character)
+	 */
+	public static String getActiveInfo (Properties ctx, int AD_Table_ID, int Record_ID)
+	{
+<span class="nc" id="L130">		MWFActivity[] acts = get (ctx, AD_Table_ID, Record_ID, true);</span>
+<span class="nc bnc" id="L131" title="All 4 branches missed.">		if (acts == null || acts.length == 0)</span>
+<span class="nc" id="L132">			return null;</span>
+		//
+<span class="nc" id="L134">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">		for (int i = 0; i &lt; acts.length; i++)</span>
+		{
+<span class="nc bnc" id="L137" title="All 2 branches missed.">			if (i &gt; 0)</span>
+<span class="nc" id="L138">				sb.append(&quot;\n&quot;);</span>
+<span class="nc" id="L139">			MWFActivity activity = acts[i];</span>
+<span class="nc" id="L140">			sb.append(activity.toStringX());</span>
+		}
+<span class="nc" id="L142">		return sb.toString();</span>
+	}	//	getActivityInfo
+
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param AD_WF_Activity_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MWFActivity(Properties ctx, String AD_WF_Activity_UU, String trxName) {
+<span class="nc" id="L152">        super(ctx, AD_WF_Activity_UU, trxName);</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">		if (Util.isEmpty(AD_WF_Activity_UU))</span>
+<span class="nc" id="L154">			throw new IllegalArgumentException (&quot;Cannot create new WF Activity directly&quot;);</span>
+<span class="nc" id="L155">		m_state = new StateEngine (getWFState());</span>
+<span class="nc" id="L156">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param AD_WF_Activity_ID id
+	 *	@param trxName transaction
+	 */
+	public MWFActivity (Properties ctx, int AD_WF_Activity_ID, String trxName)
+	{
+<span class="nc" id="L166">		super (ctx, AD_WF_Activity_ID, trxName);</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">		if (AD_WF_Activity_ID == 0)</span>
+<span class="nc" id="L168">			throw new IllegalArgumentException (&quot;Cannot create new WF Activity directly&quot;);</span>
+<span class="nc" id="L169">		m_state = new StateEngine (getWFState());</span>
+<span class="nc" id="L170">	}	//	MWFActivity</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MWFActivity (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L180">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L181">		m_state = new StateEngine (getWFState());</span>
+<span class="nc" id="L182">	}	//	MWFActivity</span>
+
+	/**
+	 * 	Parent Constructor
+	 *	@param process process
+	 *	@param AD_WF_Node_ID start node
+	 */
+	public MWFActivity (MWFProcess process, int AD_WF_Node_ID)
+	{
+<span class="nc" id="L191">		super (process.getCtx(), 0, process.get_TrxName());</span>
+<span class="nc" id="L192">		setAD_WF_Process_ID (process.getAD_WF_Process_ID());</span>
+<span class="nc" id="L193">		setPriority(process.getPriority());</span>
+		//	Document Link
+<span class="nc" id="L195">		setAD_Table_ID(process.getAD_Table_ID());</span>
+<span class="nc" id="L196">		setRecord_ID(process.getRecord_ID());</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		if(process.getPO() != null)</span>
+<span class="nc" id="L198">        	m_po = process.getPO();</span>
+		//modified by Rob Klein
+<span class="nc" id="L200">		setAD_Client_ID(process.getAD_Client_ID());</span>
+<span class="nc" id="L201">		setAD_Org_ID(process.getAD_Org_ID());</span>
+		//	Status
+<span class="nc" id="L203">		super.setWFState(WFSTATE_NotStarted);</span>
+<span class="nc" id="L204">		m_state = new StateEngine (getWFState());</span>
+<span class="nc" id="L205">		setProcessed (false);</span>
+		//	Set Workflow Node
+<span class="nc" id="L207">		setAD_Workflow_ID (process.getAD_Workflow_ID());</span>
+<span class="nc" id="L208">		setAD_WF_Node_ID (AD_WF_Node_ID);</span>
+		//	Node Priority &amp; End Duration
+<span class="nc" id="L210">		MWFNode node = MWFNode.get(getCtx(), AD_WF_Node_ID);</span>
+<span class="nc" id="L211">		int priority = node.getPriority();</span>
+<span class="nc bnc" id="L212" title="All 4 branches missed.">		if (priority != 0 &amp;&amp; priority != getPriority())</span>
+<span class="nc" id="L213">			setPriority (priority);</span>
+<span class="nc" id="L214">		long limitMS = node.getLimitMS();</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">		if (limitMS != 0)</span>
+<span class="nc" id="L216">			setEndWaitTime(new Timestamp(limitMS + System.currentTimeMillis()));</span>
+		//	Responsible
+<span class="nc" id="L218">		setResponsible(process);</span>
+<span class="nc" id="L219">		saveCrossTenantSafeEx();</span>
+		//
+<span class="nc" id="L221">		m_audit = new MWFEventAudit(this);</span>
+<span class="nc" id="L222">		m_audit.setAD_Org_ID(getAD_Org_ID());//Add by Hideaki Hagiwara</span>
+<span class="nc" id="L223">		m_audit.saveEx();</span>
+		//
+<span class="nc" id="L225">		m_process = process;</span>
+<span class="nc" id="L226">	}	//	MWFActivity</span>
+	
+	/**
+	 * 	Process-aware Parent Constructor
+	 *	@param process process
+	 *	@param ctx context
+	 *	@param rs record to load
+	 *  @param trxName transaction name
+	 */
+	public MWFActivity (MWFProcess process, Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L237">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L238">		m_process = process;</span>
+<span class="nc" id="L239">	}</span>
+	
+	/**
+	 * 	Parent Constructor
+	 *	@param process process
+	 *	@param next_ID start node
+	 *	@param lastPO PO from the previously executed node
+	 */
+	public MWFActivity(MWFProcess process, int next_ID, PO lastPO) {
+<span class="nc" id="L248">		this(process, next_ID);</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">		if (lastPO != null) {</span>
+			// Compare if the last PO is the same type and record needed here, if yes, use it
+<span class="nc bnc" id="L251" title="All 4 branches missed.">			if (lastPO.get_Table_ID() == getAD_Table_ID() &amp;&amp; lastPO.get_ID() == getRecord_ID()) {</span>
+<span class="nc" id="L252">				m_po = lastPO;</span>
+			}
+		}
+<span class="nc" id="L255">	}</span>
+
+	/**	State Machine				*/
+<span class="nc" id="L258">	private StateEngine			m_state = null;</span>
+	/**	Workflow Node				*/
+<span class="nc" id="L260">	private MWFNode				m_node = null;</span>
+	/** Transaction					*/
+	//private Trx 				m_trx = null;
+	/**	Audit						*/
+<span class="nc" id="L264">	private MWFEventAudit		m_audit = null;</span>
+	/** Persistent Object			*/
+<span class="nc" id="L266">	private PO					m_po = null;</span>
+	/** Document Status				*/
+<span class="nc" id="L268">	private String				m_docStatus = null;</span>
+	/**	New Value to save in audit	*/
+<span class="nc" id="L270">	private String				m_newValue = null;</span>
+	/** Process						*/
+<span class="nc" id="L272">	private MWFProcess 			m_process = null;</span>
+	/** List of email recipients	*/
+<span class="nc" id="L274">	private ArrayList&lt;String&gt; 	m_emails = new ArrayList&lt;String&gt;();</span>
+
+	/**
+	 * 	Get State
+	 *	@return state
+	 */
+	public StateEngine getState()
+	{
+<span class="nc" id="L282">		return m_state;</span>
+	}	//	getState
+
+	/**
+	 * Set Activity State.&lt;br/&gt;
+	 * It also validates the new state and if is valid,
+	 * then create event audit and call {@link MWFProcess#checkActivities(String, PO)}
+	 * @param WFState StateEngine.STATE_*
+	 */
+	@Override
+	public void setWFState (String WFState)
+	{
+<span class="nc bnc" id="L294" title="All 2 branches missed.">		if (m_state == null)</span>
+<span class="nc" id="L295">			m_state = new StateEngine (getWFState());</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		if (m_state.isClosed())</span>
+<span class="nc" id="L297">			return;</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">		if (getWFState().equals(WFState))</span>
+<span class="nc" id="L299">			return;</span>
+		//
+<span class="nc bnc" id="L301" title="All 2 branches missed.">		if (m_state.isValidNewState(WFState))</span>
+		{
+<span class="nc" id="L303">			String oldState = getWFState();</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(oldState + &quot;-&gt;&quot;+ WFState + &quot;, Msg=&quot; + getTextMsg());</span>
+<span class="nc" id="L305">			super.setWFState (WFState);</span>
+<span class="nc" id="L306">			m_state = new StateEngine (getWFState());</span>
+<span class="nc" id="L307">			boolean valid = save();</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			if (! valid) {</span>
+				// the activity could not be updated, probably it was deleted by the rollback to savepoint
+				// so, set the ID to zero and save it again (insert)
+<span class="nc" id="L311">				setAD_WF_Activity_ID(0);</span>
+<span class="nc" id="L312">				saveEx();</span>
+			}
+<span class="nc" id="L314">			updateEventAudit();</span>
+
+			//	Inform Process
+<span class="nc bnc" id="L317" title="All 2 branches missed.">			if (m_process == null)</span>
+<span class="nc" id="L318">				m_process = new MWFProcess (getCtx(), getAD_WF_Process_ID(),</span>
+<span class="nc" id="L319">					this.get_TrxName());</span>
+			try{
+<span class="nc" id="L321">				m_process.checkActivities(this.get_TrxName(), m_po);</span>
+<span class="nc" id="L322">			}catch (Exception e) {</span>
+<span class="nc" id="L323">				setWFState(WFSTATE_Terminated); </span>
+<span class="nc" id="L324">				m_process.setWFState(MWFProcess.WFSTATE_Terminated);</span>
+<span class="nc" id="L325">				 m_docStatus = DocAction.STATUS_Invalid;</span>
+<span class="nc" id="L326">				 m_process.setProcessMsg(e.getLocalizedMessage());</span>
+<span class="nc" id="L327">				 log.log(Level.SEVERE, e.getLocalizedMessage());</span>
+			}
+<span class="nc" id="L329">		}</span>
+		else
+		{
+<span class="nc" id="L332">			String msg = &quot;Set WFState - Ignored Invalid Transformation - New=&quot;</span>
+<span class="nc" id="L333">				+ WFState + &quot;, Current=&quot; + getWFState();</span>
+<span class="nc" id="L334">			log.log(Level.SEVERE, msg);</span>
+<span class="nc" id="L335">			Trace.printStack();</span>
+<span class="nc" id="L336">			setTextMsgBefore(msg);</span>
+<span class="nc" id="L337">			saveEx();</span>
+			// TODO: teo_sarca: throw exception ? please analyze the call hierarchy first
+		}
+<span class="nc" id="L340">	}	//	setWFState</span>
+
+	/**
+	 * 	Is Activity closed
+	 * 	@return true if closed
+	 */
+	public boolean isClosed()
+	{
+<span class="nc" id="L348">		return m_state.isClosed();</span>
+	}	//	isClosed
+
+	/**
+	 * 	Update Event Audit ({@link MWFEventAudit})
+	 */
+	private void updateEventAudit()
+	{
+<span class="nc" id="L356">		getEventAudit();</span>
+<span class="nc" id="L357">		m_audit.setTextMsg(getTextMsg());</span>
+<span class="nc" id="L358">		m_audit.setWFState(getWFState());</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (m_newValue != null)</span>
+<span class="nc" id="L360">			m_audit.setNewValue(m_newValue);</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">		if (m_state.isClosed())</span>
+		{
+<span class="nc" id="L363">			m_audit.setEventType(MWFEventAudit.EVENTTYPE_ProcessCompleted);</span>
+<span class="nc" id="L364">			long ms = System.currentTimeMillis() - m_audit.getCreated().getTime();</span>
+<span class="nc" id="L365">			m_audit.setElapsedTimeMS(new BigDecimal(ms));</span>
+<span class="nc" id="L366">		}</span>
+		else
+<span class="nc" id="L368">			m_audit.setEventType(MWFEventAudit.EVENTTYPE_StateChanged);</span>
+<span class="nc" id="L369">		boolean valid = m_audit.save();</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">		if (! valid) {</span>
+			// the event audit could not be updated, probably it was deleted by the rollback to savepoint
+			// so, set the ID to zero and save it again (insert)
+<span class="nc" id="L373">			m_audit.setAD_WF_EventAudit_ID(0);</span>
+<span class="nc" id="L374">			m_audit.saveEx();</span>
+		}
+<span class="nc" id="L376">	}	//	updateEventAudit</span>
+
+	/**
+	 * 	Get/Create new Event Audit
+	 * 	@return event
+	 */
+	public MWFEventAudit getEventAudit()
+	{
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (m_audit != null)</span>
+<span class="nc" id="L385">			return m_audit;</span>
+<span class="nc" id="L386">		MWFEventAudit[] events = MWFEventAudit.get(getCtx(), getAD_WF_Process_ID(), getAD_WF_Node_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L387" title="All 4 branches missed.">		if (events == null || events.length == 0)</span>
+<span class="nc" id="L388">			m_audit = new MWFEventAudit(this);</span>
+		else
+<span class="nc" id="L390">			m_audit = events[events.length-1];		//	last event</span>
+<span class="nc" id="L391">		return m_audit;</span>
+	}	//	getEventAudit
+
+	/**
+	 * 	Get Persistent Object in Transaction
+	 * 	@param trx transaction
+	 *	@return po
+	 */
+	public PO getPO (Trx trx)
+	{
+<span class="nc bnc" id="L401" title="All 2 branches missed.">		if (m_po != null) {</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">			if (trx != null)</span>
+<span class="nc" id="L403">				m_po.set_TrxName(trx.getTrxName());</span>
+<span class="nc" id="L404">			return m_po;</span>
+		}
+
+<span class="nc" id="L407">		MTable table = MTable.get (getCtx(), getAD_Table_ID());</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">		if (trx != null)</span>
+<span class="nc" id="L409">			m_po = table.getPO(getRecord_ID(), trx.getTrxName());</span>
+		else
+<span class="nc" id="L411">			m_po = table.getPO(getRecord_ID(), null);</span>
+<span class="nc" id="L412">		return m_po;</span>
+	}	//	getPO
+
+	/**
+	 * 	Get Persistent Object
+	 *	@return po
+	 */
+	public PO getPO()
+	{
+<span class="nc bnc" id="L421" title="All 2 branches missed.">		return getPO(get_TrxName() != null ? Trx.get(get_TrxName(), false) : null);</span>
+	}	//	getPO
+
+	/**
+	 * 	Get PO AD_Client_ID
+	 *	@return client of PO
+	 */
+	public int getPO_AD_Client_ID()
+	{
+<span class="nc bnc" id="L430" title="All 2 branches missed.">		if (m_po == null)</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">			getPO(get_TrxName() != null ? Trx.get(get_TrxName(), false) : null);</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">		if (m_po != null)</span>
+<span class="nc" id="L433">			return m_po.getAD_Client_ID();</span>
+<span class="nc" id="L434">		return 0;</span>
+	}	//	getPO_AD_Client_ID
+
+	/**
+	 * 	Get Attribute Value (AD_Column_ID of {@link MWFNode}) of PO
+	 *	@return Attribute Value or null
+	 */
+	public Object getAttributeValue()
+	{
+<span class="nc" id="L443">		MWFNode node = getNode();</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">		if (node == null)</span>
+<span class="nc" id="L445">			return null;</span>
+<span class="nc" id="L446">		int AD_Column_ID = node.getAD_Column_ID();</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">		if (AD_Column_ID == 0)</span>
+<span class="nc" id="L448">			return null;</span>
+<span class="nc" id="L449">		PO po = getPO();</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">		if (po.get_ID() == 0)</span>
+<span class="nc" id="L451">			return null;</span>
+<span class="nc" id="L452">		return po.get_ValueOfColumn(AD_Column_ID);</span>
+	}	//	getAttributeValue
+
+	/**
+	 * 	Is SO Trx
+	 *	@return SO Trx or if not found true
+	 */
+	public boolean isSOTrx()
+	{
+<span class="nc" id="L461">		PO po = getPO();</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">		if (po.get_ID() == 0)</span>
+<span class="nc" id="L463">			return true;</span>
+		//	Is there a Column?
+<span class="nc" id="L465">		int index = po.get_ColumnIndex(&quot;IsSOTrx&quot;);</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">		if (index &lt; 0)</span>
+		{
+<span class="nc bnc" id="L468" title="All 2 branches missed.">			if (po.get_TableName().startsWith(&quot;M_&quot;))</span>
+<span class="nc" id="L469">				return false;</span>
+<span class="nc" id="L470">			return true;</span>
+		}
+		//	we have a column
+		try
+		{
+<span class="nc" id="L475">			Boolean IsSOTrx = (Boolean)po.get_Value(index);</span>
+<span class="nc" id="L476">			return IsSOTrx.booleanValue();</span>
+		}
+<span class="nc" id="L478">		catch (Exception e)</span>
+		{
+<span class="nc" id="L480">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+		}
+<span class="nc" id="L482">		return true;</span>
+	}	//	isSOTrx
+
+	/**
+	 * 	Set AD_WF_Node_ID.
+	 * 	(Re)Set state to Not Started.
+	 *	@param AD_WF_Node_ID new node
+	 */
+	@Override
+	public void setAD_WF_Node_ID (int AD_WF_Node_ID)
+	{
+<span class="nc bnc" id="L493" title="All 2 branches missed.">		if (AD_WF_Node_ID == 0)</span>
+<span class="nc" id="L494">			throw new IllegalArgumentException(&quot;Workflow Node is not defined&quot;);</span>
+<span class="nc" id="L495">		super.setAD_WF_Node_ID (AD_WF_Node_ID);</span>
+		//
+<span class="nc bnc" id="L497" title="All 2 branches missed.">		if (!WFSTATE_NotStarted.equals(getWFState()))</span>
+		{
+<span class="nc" id="L499">			super.setWFState(WFSTATE_NotStarted);</span>
+<span class="nc" id="L500">			m_state = new StateEngine (getWFState());</span>
+		}
+<span class="nc bnc" id="L502" title="All 2 branches missed.">		if (isProcessed())</span>
+<span class="nc" id="L503">			setProcessed (false);</span>
+<span class="nc" id="L504">	}	//	setAD_WF_Node_ID</span>
+
+	/**
+	 * 	Get WF Node
+	 *	@return node
+	 */
+	public MWFNode getNode()
+	{
+<span class="nc bnc" id="L512" title="All 2 branches missed.">		if (m_node == null)</span>
+<span class="nc" id="L513">			m_node = MWFNode.getCopy(getCtx(), getAD_WF_Node_ID(), get_TrxName());</span>
+<span class="nc" id="L514">		return m_node;</span>
+	}	//	getNode
+
+	/**
+	 * 	Get WF Node Name
+	 *	@return translated node name
+	 */
+	public String getNodeName()
+	{
+<span class="nc" id="L523">		return getNode().getName(true);</span>
+	}	//	getNodeName
+
+	/**
+	 * 	Get Node Description
+	 *	@return translated node description
+	 */
+	public String getNodeDescription()
+	{
+<span class="nc" id="L532">		return getNode().getDescription(true);</span>
+	}	//	getNodeDescription
+
+	/**
+	 * 	Get Node Help
+	 *	@return translated node help
+	 */
+	public String getNodeHelp()
+	{
+<span class="nc" id="L541">		return getNode().getHelp(true);</span>
+	}	//	getNodeHelp
+
+	/**
+	 * 	Is this an user Approval step?
+	 *	@return true if User Approval
+	 */
+	public boolean isUserApproval()
+	{
+<span class="nc" id="L550">		return getNode().isUserApproval();</span>
+	}	//	isNodeApproval
+
+	/**
+	 * 	Is this a Manual user step?
+	 *	@return true if Window/Form/..
+	 */
+	public boolean isUserManual()
+	{
+<span class="nc" id="L559">		return getNode().isUserManual();</span>
+	}	//	isUserManual
+
+	/**
+	 * 	Is this a user choice step?
+	 *	@return true if User Choice
+	 */
+	public boolean isUserChoice()
+	{
+<span class="nc" id="L568">		return getNode().isUserChoice();</span>
+	}	//	isUserChoice
+
+	/**
+	 * 	Set Text Msg (add after existing)
+	 *	@param TextMsg
+	 */
+	public void setTextMsg (String TextMsg)
+	{
+<span class="nc bnc" id="L577" title="All 4 branches missed.">		if (TextMsg == null || TextMsg.length() == 0)</span>
+<span class="nc" id="L578">			return;</span>
+<span class="nc" id="L579">		String oldText = getTextMsg();</span>
+<span class="nc bnc" id="L580" title="All 4 branches missed.">		if (oldText == null || oldText.length() == 0)</span>
+<span class="nc" id="L581">			super.setTextMsg (Util.trimSize(TextMsg,1000));</span>
+<span class="nc bnc" id="L582" title="All 4 branches missed.">		else if (TextMsg != null &amp;&amp; TextMsg.length() &gt; 0)</span>
+<span class="nc" id="L583">			super.setTextMsg (Util.trimSize(oldText + &quot;\n - &quot; + TextMsg,1000));</span>
+<span class="nc" id="L584">	}	//	setTextMsg</span>
+
+	/**
+	 * 	Set Text Msg (add before existing)
+	 *	@param TextMsg
+	 */
+	public void setTextMsgBefore (String TextMsg)
+	{
+<span class="nc bnc" id="L592" title="All 4 branches missed.">		if (TextMsg == null || TextMsg.length() == 0)</span>
+<span class="nc" id="L593">			return;</span>
+<span class="nc" id="L594">		String oldText = getTextMsg();</span>
+<span class="nc bnc" id="L595" title="All 4 branches missed.">		if (oldText == null || oldText.length() == 0)</span>
+<span class="nc" id="L596">			super.setTextMsg (Util.trimSize(TextMsg,1000));</span>
+<span class="nc bnc" id="L597" title="All 4 branches missed.">		else if (TextMsg != null &amp;&amp; TextMsg.length() &gt; 0)</span>
+<span class="nc" id="L598">			super.setTextMsg (Util.trimSize(TextMsg + &quot;\n - &quot; + oldText,1000));</span>
+<span class="nc" id="L599">	}	//	setTextMsgBefore</span>
+
+	/**
+	 * 	Add to Text Msg
+	 *	@param obj some object
+	 */
+	public void addTextMsg (Object obj)
+	{
+<span class="nc bnc" id="L607" title="All 2 branches missed.">		if (obj == null)</span>
+<span class="nc" id="L608">			return;</span>
+		//
+<span class="nc" id="L610">		StringBuilder TextMsg = new StringBuilder ();</span>
+<span class="nc bnc" id="L611" title="All 2 branches missed.">		if (obj instanceof Exception)</span>
+		{
+<span class="nc" id="L613">			Exception ex = (Exception)obj;</span>
+<span class="nc bnc" id="L614" title="All 4 branches missed.">			if (ex.getMessage() != null &amp;&amp; ex.getMessage().trim().length() &gt; 0)</span>
+			{
+<span class="nc" id="L616">				TextMsg.append(ex.toString());</span>
+<span class="nc" id="L617">			}</span>
+<span class="nc bnc" id="L618" title="All 2 branches missed.">			else if (ex instanceof NullPointerException)</span>
+			{
+<span class="nc" id="L620">				TextMsg.append(ex.getClass().getName());</span>
+			}
+<span class="nc bnc" id="L622" title="All 2 branches missed.">			while (ex != null)</span>
+			{
+<span class="nc" id="L624">				StackTraceElement[] st = ex.getStackTrace();</span>
+<span class="nc bnc" id="L625" title="All 2 branches missed.">				for (int i = 0; i &lt; st.length; i++)</span>
+				{
+<span class="nc" id="L627">					StackTraceElement ste = st[i];</span>
+<span class="nc bnc" id="L628" title="All 6 branches missed.">					if (i == 0 || ste.getClassName().startsWith(&quot;org.compiere&quot;) || ste.getClassName().startsWith(&quot;org.adempiere&quot;))</span>
+<span class="nc" id="L629">						TextMsg.append(&quot; (&quot;).append(i).append(&quot;): &quot;)</span>
+<span class="nc" id="L630">							.append(ste.toString())</span>
+<span class="nc" id="L631">							.append(&quot;\n&quot;);</span>
+				}
+<span class="nc bnc" id="L633" title="All 2 branches missed.">				if (ex.getCause() instanceof Exception)</span>
+<span class="nc" id="L634">					ex = (Exception)ex.getCause();</span>
+				else
+<span class="nc" id="L636">					ex = null;</span>
+			}
+<span class="nc" id="L638">		}</span>
+		else
+		{
+<span class="nc" id="L641">			TextMsg.append(obj.toString());</span>
+		}
+		//
+<span class="nc" id="L644">		String oldText = getTextMsg();</span>
+<span class="nc bnc" id="L645" title="All 4 branches missed.">		if (oldText == null || oldText.length() == 0)</span>
+<span class="nc" id="L646">			super.setTextMsg(Util.trimSize(TextMsg.toString(),1000));</span>
+<span class="nc bnc" id="L647" title="All 4 branches missed.">		else if (TextMsg != null &amp;&amp; TextMsg.length() &gt; 0)</span>
+<span class="nc" id="L648">			super.setTextMsg(Util.trimSize(oldText + &quot;\n - &quot; + TextMsg.toString(),1000));</span>
+<span class="nc" id="L649">	}	//	setTextMsg</span>
+
+	/**
+	 * 	Get WF State text
+	 *	@return workflow state text
+	 */
+	public String getWFStateText ()
+	{
+<span class="nc" id="L657">		return MRefList.getListName(getCtx(), WFSTATE_AD_Reference_ID, getWFState());</span>
+	}	//	getWFStateText
+
+	/**
+	 * 	Set Responsible and User from Process / Node
+	 *	@param process process
+	 */
+	private void setResponsible (MWFProcess process)
+	{
+		//	Responsible
+<span class="nc" id="L667">		int AD_WF_Responsible_ID = getNode().getAD_WF_Responsible_ID();</span>
+		// get Client WF Responsible from the cache
+<span class="nc" id="L669">		MWFResponsible ovrResp = MWFResponsible.getClientWFResp(p_ctx, AD_WF_Responsible_ID);</span>
+<span class="nc bnc" id="L670" title="All 2 branches missed.">		if (ovrResp != null)</span>
+		{
+<span class="nc" id="L672">			AD_WF_Responsible_ID = ovrResp.getAD_WF_Responsible_ID();</span>
+		}
+				
+<span class="nc bnc" id="L675" title="All 2 branches missed.">		if (AD_WF_Responsible_ID == 0)	//	not defined on Node Level</span>
+<span class="nc" id="L676">			AD_WF_Responsible_ID = process.getAD_WF_Responsible_ID();</span>
+<span class="nc" id="L677">		setAD_WF_Responsible_ID (AD_WF_Responsible_ID);</span>
+<span class="nc" id="L678">		MWFResponsible resp = getResponsible();</span>
+
+		//	User - Directly responsible
+<span class="nc" id="L681">		int AD_User_ID = resp.getAD_User_ID();</span>
+		//	Invoker - get Sales Rep or last updater of document
+<span class="nc bnc" id="L683" title="All 4 branches missed.">		if (AD_User_ID == 0 &amp;&amp; resp.isInvoker())</span>
+<span class="nc" id="L684">			AD_User_ID = process.getAD_User_ID();</span>
+		//
+<span class="nc" id="L686">		setAD_User_ID(AD_User_ID);</span>
+<span class="nc" id="L687">	}	//	setResponsible</span>
+
+	/**
+	 * 	Get workflow Responsible
+	 *	@return workflow responsible
+	 */
+	public MWFResponsible getResponsible()
+	{
+<span class="nc" id="L695">		MWFResponsible resp = MWFResponsible.getCopy(getCtx(), getAD_WF_Responsible_ID(), get_TrxName());</span>
+<span class="nc" id="L696">		return resp;</span>
+	}	//	isInvoker
+
+	/**
+	 * 	Is Invoker (no user and no role)
+	 *	@return true if invoker
+	 */
+	public boolean isInvoker()
+	{
+<span class="nc" id="L705">		return getResponsible().isInvoker();</span>
+	}	//	isInvoker
+
+	/**
+	 * 	Get Approval User.&lt;br/&gt;
+	 * 	If the returned user is the same, the document is approved.
+	 *	@param AD_User_ID starting User
+	 *	@param C_Currency_ID currency
+	 *	@param amount amount
+	 *	@param AD_Org_ID document organization
+	 *	@param ownDocument the document is owned by AD_User_ID
+	 *	@return AD_User_ID - if -1 no Approver
+	 */
+	public int getApprovalUser (int AD_User_ID,
+			int C_Currency_ID, BigDecimal amount,
+			int AD_Org_ID, boolean ownDocument)
+	{
+		//	Nothing to approve
+<span class="nc bnc" id="L723" title="All 2 branches missed.">		if (amount == null</span>
+<span class="nc bnc" id="L724" title="All 2 branches missed.">			|| amount.signum() == 0)</span>
+<span class="nc" id="L725">			return AD_User_ID;</span>
+
+		//	Starting user
+<span class="nc" id="L728">		MUser user = MUser.get(getCtx(), AD_User_ID);</span>
+<span class="nc bnc" id="L729" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;For User=&quot; + user</span>
+<span class="nc" id="L730">			+ &quot;, Amt=&quot; + amount</span>
+<span class="nc" id="L731">			+ &quot;, Own=&quot; + ownDocument);</span>
+
+<span class="nc" id="L733">		MUser oldUser = null;</span>
+<span class="nc bnc" id="L734" title="All 2 branches missed.">		while (user != null)</span>
+		{
+<span class="nc bnc" id="L736" title="All 2 branches missed.">			if (user.equals(oldUser))</span>
+			{
+<span class="nc bnc" id="L738" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Loop - &quot; + user.getName());</span>
+<span class="nc" id="L739">				user=null;</span>
+<span class="nc" id="L740">				break;</span>
+			}
+<span class="nc" id="L742">			oldUser = user;</span>
+<span class="nc bnc" id="L743" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;User=&quot; + user.getName());</span>
+			//	Get Roles of User
+<span class="nc" id="L745">			MRole[] roles = user.getRoles(AD_Org_ID);</span>
+<span class="nc bnc" id="L746" title="All 2 branches missed.">			for (int i = 0; i &lt; roles.length; i++)</span>
+			{
+<span class="nc" id="L748">				MRole role = roles[i];</span>
+<span class="nc bnc" id="L749" title="All 4 branches missed.">				if (ownDocument &amp;&amp; !role.isCanApproveOwnDoc())</span>
+<span class="nc" id="L750">					continue;	//	find a role with allows them to approve own</span>
+<span class="nc" id="L751">				BigDecimal roleAmt = role.getAmtApproval();</span>
+<span class="nc bnc" id="L752" title="All 4 branches missed.">				if (roleAmt == null || roleAmt.signum() == 0)</span>
+<span class="nc" id="L753">					continue;</span>
+<span class="nc bnc" id="L754" title="All 2 branches missed.">				if (C_Currency_ID != role.getC_Currency_ID()</span>
+<span class="nc bnc" id="L755" title="All 2 branches missed.">					&amp;&amp; role.getC_Currency_ID() != 0)			//	No currency = amt only</span>
+				{
+<span class="nc" id="L757">					roleAmt =  MConversionRate.convert(getCtx(),//	today &amp; default rate</span>
+<span class="nc" id="L758">						roleAmt, role.getC_Currency_ID(),</span>
+<span class="nc" id="L759">						C_Currency_ID, getAD_Client_ID(), AD_Org_ID);</span>
+<span class="nc bnc" id="L760" title="All 4 branches missed.">					if (roleAmt == null || roleAmt.signum() == 0)</span>
+<span class="nc" id="L761">						continue;</span>
+				}
+<span class="nc bnc" id="L763" title="All 2 branches missed.">				boolean approved = amount.compareTo(roleAmt) &lt;= 0;</span>
+<span class="nc bnc" id="L764" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Approved=&quot; + approved</span>
+<span class="nc" id="L765">					+ &quot; - User=&quot; + user.getName() + &quot;, Role=&quot; + role.getName()</span>
+<span class="nc" id="L766">					+ &quot;, ApprovalAmt=&quot; + roleAmt);</span>
+<span class="nc bnc" id="L767" title="All 2 branches missed.">				if (approved) {</span>
+					// Verify accumulated amount approval - FR [3123769] - Carlos Ruiz - GlobalQSS
+<span class="nc" id="L769">					BigDecimal roleAmtAcc = role.getAmtApprovalAccum();</span>
+<span class="nc" id="L770">					Integer daysAmtAcc = role.getDaysApprovalAccum();</span>
+<span class="nc bnc" id="L771" title="All 4 branches missed.">					if (   roleAmtAcc != null &amp;&amp; roleAmtAcc.signum() &gt; 0</span>
+<span class="nc bnc" id="L772" title="All 4 branches missed.">						&amp;&amp; daysAmtAcc != null &amp;&amp; daysAmtAcc.intValue() &gt; 0) {</span>
+<span class="nc" id="L773">						BigDecimal amtApprovedAccum = getAmtAccum(m_po, daysAmtAcc.intValue(), user.getAD_User_ID());</span>
+<span class="nc" id="L774">						amtApprovedAccum = amtApprovedAccum.add(amount); // include amount of current doc</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">						approved = amtApprovedAccum.compareTo(roleAmtAcc) &lt;= 0;</span>
+<span class="nc bnc" id="L776" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;ApprovedAccum=&quot; + approved </span>
+<span class="nc" id="L777">								+ &quot; - User=&quot; + user.getName() + &quot;, Role=&quot; + role.getName()</span>
+<span class="nc" id="L778">								+ &quot;, ApprovalAmtAccum=&quot; + roleAmtAcc</span>
+<span class="nc" id="L779">								+ &quot;, AccumDocsApproved=&quot; + amtApprovedAccum</span>
+<span class="nc" id="L780">								+ &quot; in past &quot; + daysAmtAcc.intValue() + &quot; days&quot;);</span>
+					}
+				}
+				
+<span class="nc bnc" id="L784" title="All 2 branches missed.">				if (approved)</span>
+<span class="nc" id="L785">					return user.getAD_User_ID();</span>
+			}
+
+			//	**** Find next User
+			//	Get Supervisor
+<span class="nc bnc" id="L790" title="All 2 branches missed.">			if (user.getSupervisor_ID() != 0)</span>
+			{
+<span class="nc" id="L792">				user = MUser.get(getCtx(), user.getSupervisor_ID());</span>
+<span class="nc bnc" id="L793" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Supervisor: &quot; + user.getName());</span>
+<span class="nc" id="L794">			}</span>
+			else
+			{
+<span class="nc bnc" id="L797" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;No Supervisor&quot;);</span>
+<span class="nc" id="L798">				MOrg org = MOrg.get (getCtx(), AD_Org_ID);</span>
+<span class="nc" id="L799">				MOrgInfo orgInfo = org.getInfo();</span>
+				//	Get Org Supervisor
+<span class="nc bnc" id="L801" title="All 2 branches missed.">				if (orgInfo.getSupervisor_ID() != 0)</span>
+				{
+<span class="nc" id="L803">					user = MUser.get(getCtx(), orgInfo.getSupervisor_ID());</span>
+<span class="nc bnc" id="L804" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;Org=&quot; + org.getName() + &quot;,Supervisor: &quot; + user.getName());</span>
+<span class="nc" id="L805">				}</span>
+				else
+				{
+<span class="nc bnc" id="L808" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;No Org Supervisor&quot;);</span>
+					//	Get Parent Org Supervisor
+<span class="nc bnc" id="L810" title="All 2 branches missed.">					if (orgInfo.getParent_Org_ID() != 0)</span>
+					{
+<span class="nc" id="L812">						org = MOrg.get (getCtx(), orgInfo.getParent_Org_ID());</span>
+<span class="nc" id="L813">						orgInfo = org.getInfo();</span>
+<span class="nc bnc" id="L814" title="All 2 branches missed.">						if (orgInfo.getSupervisor_ID() != 0)</span>
+						{
+<span class="nc" id="L816">							user = MUser.get(getCtx(), orgInfo.getSupervisor_ID());</span>
+<span class="nc bnc" id="L817" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(&quot;Parent Org Supervisor: &quot; + user.getName());</span>
+						}
+					}
+				}
+			}	//	No Supervisor
+			//ownDocument should always be false for the next user
+<span class="nc" id="L823">			ownDocument = false;</span>
+		}	//	while there is a user to approve
+
+<span class="nc bnc" id="L826" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;No user found&quot;);	</span>
+<span class="nc" id="L827">		return -1;</span>
+	}	//	getApproval
+
+	/**
+	 * 	Get The Amount of Accumulated Approvals of this same document within the indicated days
+	 *	@param po - the document being approved
+	 *	@param days - the days to check
+	 *	@param userid - user approving
+	 *	@return amount - approval amount of approved documents within the indicated days
+	 */
+	private BigDecimal getAmtAccum(PO po, int days, int userid) {
+<span class="nc" id="L838">		BigDecimal amtaccum = Env.ZERO;</span>
+<span class="nc" id="L839">		String tablename = po.get_TableName();</span>
+<span class="nc" id="L840">		MTable tablepo = MTable.get(getCtx(), po.get_Table_ID());</span>
+<span class="nc" id="L841">		String checkSameSO = &quot;&quot;;</span>
+<span class="nc bnc" id="L842" title="All 2 branches missed.">		if (po.get_ColumnIndex(&quot;IsSOTrx&quot;) &gt; 0) {</span>
+<span class="nc bnc" id="L843" title="All 2 branches missed.">			checkSameSO = &quot; AND doc.IsSOTrx='&quot; + ((Boolean) po.get_Value(&quot;IsSOTrx&quot;) ? &quot;Y&quot; : &quot;N&quot;) + &quot;'&quot;;</span>
+		}
+<span class="nc" id="L845">		String checkSameReceipt = &quot;&quot;;</span>
+<span class="nc bnc" id="L846" title="All 2 branches missed.">		if (po.get_ColumnIndex(&quot;IsReceipt&quot;) &gt; 0) {</span>
+<span class="nc bnc" id="L847" title="All 2 branches missed.">			checkSameReceipt = &quot; AND doc.IsReceipt='&quot; + ((Boolean) po.get_Value(&quot;IsReceipt&quot;) ? &quot;Y&quot; : &quot;N&quot;) + &quot;'&quot;;</span>
+		}
+<span class="nc" id="L849">		String checkDocAction = &quot;&quot;;</span>
+<span class="nc bnc" id="L850" title="All 2 branches missed.">		if (po.get_ColumnIndex(&quot;DocStatus&quot;) &gt; 0) {</span>
+<span class="nc" id="L851">			checkDocAction = &quot; AND DocStatus IN ('CO','CL')&quot;;</span>
+		}
+<span class="nc" id="L853">		String sql = &quot;&quot;</span>
+<span class="nc" id="L854">			+ &quot;SELECT DISTINCT doc.&quot; + tablename + &quot;_ID &quot;</span>
+<span class="nc" id="L855">			+ &quot; FROM  &quot; + tablename + &quot; doc, &quot;</span>
+			+ &quot;       AD_WF_Activity a, &quot;
+			+ &quot;       AD_WF_Node n, &quot;
+			+ &quot;       AD_Column c &quot;
+			+ &quot; WHERE a.AD_WF_Node_ID = n.AD_WF_Node_ID &quot;
+			+ &quot;       AND n.AD_Column_ID = c.AD_Column_ID &quot;
+<span class="nc" id="L861">			+ &quot;       AND a.AD_Table_ID = &quot; + po.get_Table_ID()</span>
+<span class="nc" id="L862">			+ &quot;       AND a.Record_ID = doc.&quot; + tablename + &quot;_ID &quot;</span>
+<span class="nc" id="L863">			+ &quot;       AND a.Record_ID != &quot; + po.get_ID()</span>
+			+ &quot;       AND c.ColumnName = 'IsApproved' &quot;
+			+ &quot;       AND n.Action = 'C' &quot;
+			+ &quot;       AND a.WFState = 'CC' &quot;
+<span class="nc" id="L867">			+ &quot;       AND a.UpdatedBy = &quot; + userid</span>
+<span class="nc" id="L868">			+ &quot;       AND a.Updated &gt; Trunc(getDate()) - &quot; + (days-1)</span>
+<span class="nc" id="L869">			+ checkSameSO</span>
+<span class="nc" id="L870">			+ checkSameReceipt</span>
+<span class="nc" id="L871">			+ checkDocAction;</span>
+<span class="nc" id="L872">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L873">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L876">			pstmt = DB.prepareStatement (sql, get_TrxName());</span>
+<span class="nc" id="L877">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L878" title="All 2 branches missed.">			while (rs.next ()) {</span>
+<span class="nc" id="L879">				int doc_id = rs.getInt(1);</span>
+<span class="nc" id="L880">				PO doc = tablepo.getPO(doc_id, get_TrxName());</span>
+<span class="nc" id="L881">				BigDecimal docamt = ((DocAction) doc).getApprovalAmt();</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">				if (docamt != null)</span>
+<span class="nc" id="L883">					amtaccum = amtaccum.add(docamt);</span>
+			}
+<span class="nc" id="L885">		}</span>
+<span class="nc" id="L886">		catch (Exception e)</span>
+		{
+<span class="nc" id="L888">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L892">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L893">			rs = null; pstmt = null;</span>
+		}
+		
+<span class="nc" id="L896">		return amtaccum;</span>
+	}
+
+	/**
+	 * 	Run activity. &lt;br/&gt;
+	 * 	Called from MWFProcess.startNext.&lt;br/&gt;
+	 * 	Feedback to Process via setWFState -&amp;gt; checkActivities.
+	 */
+	public void run()
+	{
+<span class="nc bnc" id="L906" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;Node=&quot; + getNode());</span>
+<span class="nc" id="L907">		m_newValue = null;</span>
+
+<span class="nc" id="L909">		Trx trx = null;</span>
+<span class="nc" id="L910">		boolean localTrx = false;</span>
+<span class="nc bnc" id="L911" title="All 2 branches missed.">		if (get_TrxName() == null)</span>
+		{
+<span class="nc" id="L913">			this.set_TrxName(Trx.createTrxName(&quot;WFA&quot;));</span>
+<span class="nc" id="L914">			localTrx = true;</span>
+		}
+
+<span class="nc" id="L917">		trx = Trx.get(get_TrxName(), true);</span>
+<span class="nc bnc" id="L918" title="All 2 branches missed.">		if (localTrx)</span>
+<span class="nc" id="L919">			trx.setDisplayName(getClass().getName()+&quot;_run&quot;);</span>
+
+<span class="nc" id="L921">		Savepoint savepoint = null;</span>
+
+		//
+		try
+		{
+<span class="nc bnc" id="L926" title="All 2 branches missed.">			if (m_process.getProcessInfo() != null)</span>
+<span class="nc" id="L927">				Env.getCtx().put(CURRENT_WORKFLOW_PROCESS_INFO_ATTR, m_process.getProcessInfo());</span>
+<span class="nc bnc" id="L928" title="All 2 branches missed.">			if (!localTrx) {</span>
+				// when cascade workflows, avoid setting a savepoint for each workflow
+				// use the same first savepoint from the transaction
+<span class="nc" id="L931">				savepoint = trx.getLastWFSavepoint();</span>
+<span class="nc bnc" id="L932" title="All 2 branches missed.">				if (savepoint == null) {</span>
+<span class="nc" id="L933">					savepoint = trx.setSavepoint(null);</span>
+<span class="nc" id="L934">					trx.setLastWFSavepoint(savepoint);</span>
+				}
+			}
+
+<span class="nc bnc" id="L938" title="All 2 branches missed.">			if (!m_state.isValidAction(StateEngine.ACTION_Start))</span>
+			{
+<span class="nc" id="L940">				setTextMsgBefore(&quot;State=&quot; + getWFState() + &quot; - cannot start&quot;);</span>
+<span class="nc" id="L941">				addTextMsg(new Exception(&quot;&quot;));</span>
+<span class="nc" id="L942">				setWFState(StateEngine.STATE_Terminated);</span>
+<span class="nc" id="L943">				return;</span>
+			}
+			//
+<span class="nc" id="L946">			setWFState(StateEngine.STATE_Running);</span>
+
+<span class="nc bnc" id="L948" title="All 2 branches missed.">			if (getNode().get_ID() == 0)</span>
+			{
+<span class="nc" id="L950">				setTextMsgBefore(&quot;Node not found - AD_WF_Node_ID=&quot; + getAD_WF_Node_ID());</span>
+<span class="nc" id="L951">				setWFState(StateEngine.STATE_Aborted);</span>
+<span class="nc" id="L952">				return;</span>
+			}
+			//	Do Work
+			/****	Trx Start	****/
+<span class="nc" id="L956">			boolean done = performWork(Trx.get(get_TrxName(), false));</span>
+
+			/****	Trx End		****/
+			// teo_sarca [ 1708835 ]
+			// Reason: if the commit fails the document should be put in Invalid state
+<span class="nc bnc" id="L961" title="All 2 branches missed.">			if (localTrx)</span>
+			{
+				try {
+<span class="nc" id="L964">					trx.commit(true);</span>
+<span class="nc" id="L965">				} catch (Exception e) {</span>
+					// If we have a DocStatus, change it to Invalid, and throw the exception to the next level
+<span class="nc bnc" id="L967" title="All 2 branches missed.">					if (m_docStatus != null)</span>
+<span class="nc" id="L968">						m_docStatus = DocAction.STATUS_Invalid;</span>
+<span class="nc" id="L969">					throw e;</span>
+				}
+			}
+
+<span class="nc bnc" id="L973" title="All 2 branches missed.">			setWFState (done ? StateEngine.STATE_Completed : StateEngine.STATE_Suspended);</span>
+
+<span class="nc" id="L975">		}</span>
+<span class="nc" id="L976">		catch (Exception e)</span>
+		{
+<span class="nc" id="L978">			log.log(Level.WARNING, &quot;&quot; + getNode(), e);</span>
+			/****	Trx Rollback	****/
+<span class="nc bnc" id="L980" title="All 2 branches missed.">			if (localTrx)</span>
+			{
+<span class="nc" id="L982">				trx.rollback();</span>
+<span class="nc" id="L983">			}</span>
+<span class="nc bnc" id="L984" title="All 2 branches missed.">			else if (savepoint != null)</span>
+			{
+				try
+				{
+<span class="nc" id="L988">					trx.rollback(savepoint);</span>
+<span class="nc" id="L989">					trx.setLastWFSavepoint(null);</span>
+<span class="nc" id="L990">				} catch (SQLException e1) {}</span>
+			}
+
+			//
+<span class="nc bnc" id="L994" title="All 2 branches missed.">			if (e.getCause() != null)</span>
+<span class="nc" id="L995">				log.log(Level.WARNING, &quot;Cause&quot;, e.getCause());</span>
+
+<span class="nc" id="L997">			String processMsg = e.getLocalizedMessage();</span>
+<span class="nc bnc" id="L998" title="All 4 branches missed.">			if (processMsg == null || processMsg.length() == 0)</span>
+<span class="nc" id="L999">				processMsg = e.getMessage();</span>
+<span class="nc" id="L1000">			setTextMsgBefore(processMsg);</span>
+			// addTextMsg(e); // do not add the exception text
+<span class="nc" id="L1002">			boolean contextLost = false;</span>
+<span class="nc bnc" id="L1003" title="All 4 branches missed.">			if (e instanceof AdempiereException &amp;&amp; &quot;Context lost&quot;.equals(e.getMessage()))</span>
+			{
+<span class="nc" id="L1005">				contextLost = true;			</span>
+<span class="nc" id="L1006">				m_docStatus = DocAction.STATUS_Invalid;</span>
+			}			
+			try {
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">				if (contextLost)</span>
+				{
+<span class="nc bnc" id="L1011" title="All 2 branches missed.">					Env.getCtx().setProperty(Env.AD_CLIENT_ID, (m_po != null ? Integer.toString(m_po.getAD_Client_ID()) : &quot;0&quot;) );</span>
+<span class="nc" id="L1012">					m_state = new StateEngine(WFSTATE_Running);</span>
+<span class="nc" id="L1013">					setProcessed(true);</span>
+<span class="nc" id="L1014">					setWFState (StateEngine.STATE_Aborted);</span>
+<span class="nc" id="L1015">				}</span>
+				else
+				{
+<span class="nc" id="L1018">					setWFState (StateEngine.STATE_Terminated);	//	unlocks</span>
+				}
+							
+				//	Set Document Status
+<span class="nc bnc" id="L1022" title="All 6 branches missed.">				if (m_po != null &amp;&amp; m_po instanceof DocAction &amp;&amp; m_docStatus != null)</span>
+				{
+<span class="nc" id="L1024">					m_po.load(get_TrxName());</span>
+<span class="nc" id="L1025">					DocAction doc = (DocAction)m_po;</span>
+<span class="nc" id="L1026">					doc.setDocStatus(m_docStatus);</span>
+<span class="nc" id="L1027">					m_po.saveEx();</span>
+				}
+<span class="nc bnc" id="L1029" title="All 2 branches missed.">				if (m_process != null)</span>
+				{
+<span class="nc" id="L1031">					m_process.setProcessMsg(this.getTextMsg());</span>
+					try {
+<span class="nc" id="L1033">						m_process.saveEx();</span>
+<span class="nc" id="L1034">					} catch (Exception ex) {</span>
+<span class="nc" id="L1035">						log.log(Level.SEVERE, ex.getMessage(), ex);</span>
+					}
+				}
+<span class="nc" id="L1038">			} finally {</span>
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">				if (contextLost)</span>
+<span class="nc" id="L1040">					Env.getCtx().remove(Env.AD_CLIENT_ID);</span>
+			}
+		}
+		finally
+		{
+<span class="nc bnc" id="L1045" title="All 4 branches missed.">			if (localTrx &amp;&amp; trx != null)</span>
+			{
+<span class="nc" id="L1047">				trx.close();</span>
+			}
+<span class="nc" id="L1049">			Env.getCtx().remove(CURRENT_WORKFLOW_PROCESS_INFO_ATTR);</span>
+		}
+<span class="nc" id="L1051">	}	//	run</span>
+
+	/**
+	 * Get ProcessInfo instance of current workflow process
+	 * @return {@link ProcessInfo}
+	 */
+	public static ProcessInfo getCurrentWorkflowProcessInfo() 
+	{
+<span class="nc" id="L1059">		Object o = Env.getCtx().get(CURRENT_WORKFLOW_PROCESS_INFO_ATTR);</span>
+<span class="nc bnc" id="L1060" title="All 4 branches missed.">		if (o != null &amp;&amp; o instanceof ProcessInfo)</span>
+<span class="nc" id="L1061">			return (ProcessInfo) o;</span>
+<span class="nc" id="L1062">		return null;</span>
+	}
+	
+	/**
+	 * 	Perform action of current workflow node.
+	 * 	Set Text Msg.
+	 * 	@param trx transaction
+	 *	@return true if completed, false otherwise
+	 *	@throws Exception if error
+	 */
+	private boolean performWork (Trx trx) throws Exception
+	{
+<span class="nc bnc" id="L1074" title="All 4 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (m_node + &quot; [&quot; + (trx!=null ? trx.getTrxName() : &quot;&quot;) + &quot;]&quot;);</span>
+<span class="nc" id="L1075">		m_docStatus = null;</span>
+<span class="nc bnc" id="L1076" title="All 2 branches missed.">		if (m_node.getPriority() != 0)		//	overwrite priority if defined</span>
+<span class="nc" id="L1077">			setPriority(m_node.getPriority());</span>
+<span class="nc" id="L1078">		String action = m_node.getAction();</span>
+
+		/******	Sleep (Start/End)			******/
+<span class="nc bnc" id="L1081" title="All 2 branches missed.">		if (MWFNode.ACTION_WaitSleep.equals(action))</span>
+		{
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Sleep:WaitTime=&quot; + m_node.getWaitTime());</span>
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">			if (m_node.getWaitTime() == 0) // IDEMPIERE-73 Carlos Ruiz - globalqss</span>
+<span class="nc" id="L1085">				return true;	//	done</span>
+<span class="nc" id="L1086">			Calendar cal = Calendar.getInstance();</span>
+<span class="nc" id="L1087">			cal.add(Calendar.MINUTE, m_node.getWaitTime());</span>
+<span class="nc" id="L1088">			setEndWaitTime(new Timestamp(cal.getTimeInMillis()));</span>
+<span class="nc bnc" id="L1089" title="All 2 branches missed.">			if (m_node.getWaitTime() == -1)</span>
+<span class="nc" id="L1090">				prepareCommitEvent();</span>
+<span class="nc" id="L1091">			return false;		//	not done</span>
+		}
+
+		/******	Document Action				******/
+<span class="nc bnc" id="L1095" title="All 2 branches missed.">		else if (MWFNode.ACTION_DocumentAction.equals(action))</span>
+		{
+<span class="nc bnc" id="L1097" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;DocumentAction=&quot; + m_node.getDocAction());</span>
+<span class="nc" id="L1098">			getPO(trx);</span>
+<span class="nc bnc" id="L1099" title="All 2 branches missed.">			if (m_po == null)</span>
+<span class="nc" id="L1100">				throw new Exception(&quot;Persistent Object not found - AD_Table_ID=&quot;</span>
+<span class="nc" id="L1101">					+ getAD_Table_ID() + &quot;, Record_ID=&quot; + getRecord_ID());</span>
+<span class="nc" id="L1102">			boolean success = false;</span>
+<span class="nc" id="L1103">			String processMsg = null;</span>
+<span class="nc" id="L1104">			DocAction doc = null;</span>
+<span class="nc bnc" id="L1105" title="All 2 branches missed.">			if (m_po instanceof DocAction)</span>
+			{
+<span class="nc" id="L1107">				doc = (DocAction)m_po;</span>
+				//
+				try {
+<span class="nc" id="L1110">					success = doc.processIt (m_node.getDocAction());	//	** Do the work</span>
+<span class="nc" id="L1111">					setTextMsg(doc.getSummary());</span>
+<span class="nc" id="L1112">					processMsg = doc.getProcessMsg();</span>
+					// Bug 1904717 - Invoice reversing has incorrect doc status
+					// Just prepare and complete return a doc status to take into account
+					// the rest of methods return boolean, so doc status must not be taken into account when not successful
+<span class="nc bnc" id="L1116" title="All 2 branches missed.">					if (   DocAction.ACTION_Prepare.equals(m_node.getDocAction())</span>
+<span class="nc bnc" id="L1117" title="All 2 branches missed.">						|| DocAction.ACTION_Complete.equals(m_node.getDocAction())</span>
+<span class="nc bnc" id="L1118" title="All 2 branches missed.">						|| success)</span>
+<span class="nc" id="L1119">						m_docStatus = doc.getDocStatus();</span>
+<span class="nc" id="L1120">				}</span>
+<span class="nc" id="L1121">				catch (Exception e) {</span>
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">					if (m_process != null)</span>
+<span class="nc" id="L1123">						m_process.setProcessMsg(e.getLocalizedMessage());</span>
+<span class="nc" id="L1124">					throw e;</span>
+				}
+			}
+			else
+<span class="nc" id="L1128">				throw new IllegalStateException(&quot;Persistent Object not DocAction - &quot;</span>
+<span class="nc" id="L1129">					+ m_po.getClass().getName()</span>
+<span class="nc" id="L1130">					+ &quot; - AD_Table_ID=&quot; + getAD_Table_ID() + &quot;, Record_ID=&quot; + getRecord_ID());</span>
+			//
+<span class="nc bnc" id="L1132" title="All 2 branches missed.">			if (!m_po.save())</span>
+			{
+<span class="nc" id="L1134">				success = false;</span>
+<span class="nc" id="L1135">				m_docStatus = null;</span>
+<span class="nc" id="L1136">				processMsg = &quot;SaveError&quot;;</span>
+<span class="nc" id="L1137">				ValueNamePair ppE = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">				if (ppE != null)</span>
+<span class="nc" id="L1139">					processMsg = ppE.getName();</span>
+			}
+<span class="nc bnc" id="L1141" title="All 2 branches missed.">			if (!success)</span>
+			{
+<span class="nc bnc" id="L1143" title="All 4 branches missed.">				if (processMsg == null || processMsg.length() == 0)</span>
+				{
+<span class="nc" id="L1145">					processMsg = &quot;PerformWork Error - &quot; + m_node.toStringX();</span>
+<span class="nc bnc" id="L1146" title="All 2 branches missed.">					if (doc != null)	//	problem: status will be rolled back</span>
+<span class="nc" id="L1147">						processMsg += &quot; - DocStatus=&quot; + doc.getDocStatus();</span>
+				}
+<span class="nc" id="L1149">				throw new Exception(processMsg);</span>
+			}
+<span class="nc" id="L1151">			return success;</span>
+		}	//	DocumentAction
+
+		/******	Report						******/
+<span class="nc bnc" id="L1155" title="All 2 branches missed.">		else if (MWFNode.ACTION_AppsReport.equals(action))</span>
+		{
+<span class="nc bnc" id="L1157" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Report:AD_Process_ID=&quot; + m_node.getAD_Process_ID());</span>
+			//	Process
+<span class="nc bnc" id="L1159" title="All 2 branches missed.">			MProcess process = MProcess.getCopy(getCtx(), m_node.getAD_Process_ID(), (trx != null ? trx.getTrxName() : null));</span>
+<span class="nc bnc" id="L1160" title="All 4 branches missed.">			if (!process.isReport() || process.getAD_ReportView_ID() == 0)</span>
+<span class="nc" id="L1161">				throw new IllegalStateException(&quot;Not a Report AD_Process_ID=&quot; + m_node.getAD_Process_ID());</span>
+			//
+<span class="nc" id="L1163">			ProcessInfo pi = new ProcessInfo (m_node.getName(true), m_node.getAD_Process_ID(),</span>
+<span class="nc" id="L1164">				getAD_Table_ID(), getRecord_ID());</span>
+<span class="nc" id="L1165">			pi.setAD_User_ID(getAD_User_ID());</span>
+<span class="nc" id="L1166">			pi.setAD_Client_ID(getAD_Client_ID());</span>
+<span class="nc" id="L1167">			MPInstance pInstance = new MPInstance(getCtx(), process.getAD_Process_ID(), getAD_Table_ID(), getRecord_ID(), null); // TODO: Support WFActivity with Record_UU</span>
+<span class="nc" id="L1168">			pInstance.saveEx();</span>
+<span class="nc" id="L1169">			fillParameter(pInstance, trx);</span>
+<span class="nc" id="L1170">			pi.setAD_PInstance_ID(pInstance.getAD_PInstance_ID());</span>
+			//	Report
+<span class="nc" id="L1172">			ReportEngine re = ReportEngine.get(getCtx(), pi);</span>
+<span class="nc bnc" id="L1173" title="All 2 branches missed.">			if (re == null)</span>
+<span class="nc" id="L1174">				throw new IllegalStateException(&quot;Cannot create Report AD_Process_ID=&quot; + m_node.getAD_Process_ID());</span>
+<span class="nc" id="L1175">			File report = re.getPDF();</span>
+			//	Notice
+<span class="nc" id="L1177">			int AD_Message_ID = MESSAGE_WORKFLOWRESULT;		//	HARDCODED WorkflowResult</span>
+<span class="nc" id="L1178">			MNote note = new MNote(getCtx(), AD_Message_ID, getAD_User_ID(), trx.getTrxName());</span>
+<span class="nc" id="L1179">			note.setTextMsg(m_node.getName(true));</span>
+<span class="nc" id="L1180">			note.setDescription(m_node.getDescription(true));</span>
+<span class="nc" id="L1181">			note.setRecord(getAD_Table_ID(), getRecord_ID());</span>
+<span class="nc" id="L1182">			note.saveEx();</span>
+			//	Attachment
+<span class="nc" id="L1184">			MAttachment attachment = new MAttachment (getCtx(), MNote.Table_ID, note.getAD_Note_ID(), note.getAD_Note_UU(), get_TrxName());</span>
+<span class="nc" id="L1185">			attachment.addEntry(report);</span>
+<span class="nc" id="L1186">			attachment.setTextMsg(m_node.getName(true));</span>
+<span class="nc" id="L1187">			attachment.saveEx();</span>
+<span class="nc" id="L1188">			attachment.close();</span>
+<span class="nc" id="L1189">			return true;</span>
+		}
+
+		/******	Process						******/
+<span class="nc bnc" id="L1193" title="All 2 branches missed.">		else if (MWFNode.ACTION_AppsProcess.equals(action))</span>
+		{
+<span class="nc bnc" id="L1195" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Process:AD_Process_ID=&quot; + m_node.getAD_Process_ID());</span>
+			//	Process
+<span class="nc" id="L1197">			MProcess process = MProcess.get(getCtx(), m_node.getAD_Process_ID());</span>
+<span class="nc" id="L1198">			MPInstance pInstance = new MPInstance(getCtx(), process.getAD_Process_ID(), getAD_Table_ID(), getRecord_ID(), null); // TODO: Support WFActivity with Record_UU</span>
+<span class="nc" id="L1199">			pInstance.setIsProcessing(true);</span>
+<span class="nc" id="L1200">			pInstance.saveEx();</span>
+			try {
+<span class="nc" id="L1202">				fillParameter(pInstance, trx);</span>
+				//
+<span class="nc" id="L1204">				ProcessInfo pi = new ProcessInfo (m_node.getName(true), m_node.getAD_Process_ID(),</span>
+<span class="nc" id="L1205">					getAD_Table_ID(), getRecord_ID());</span>
+				
+				//check record id overwrite
+<span class="nc" id="L1208">				MWFNodePara[] nParams = m_node.getParameters();</span>
+<span class="nc bnc" id="L1209" title="All 2 branches missed.">				for(MWFNodePara p : nParams) </span>
+				{
+<span class="nc bnc" id="L1211" title="All 6 branches missed.">					if (p.getAD_Process_Para_ID() == 0 &amp;&amp; p.getAttributeName().equalsIgnoreCase(&quot;Record_ID&quot;) &amp;&amp; !Util.isEmpty(p.getAttributeValue(), true)) </span>
+					{
+						try 
+						{
+<span class="nc" id="L1215">							Object value = parseNodeParaAttribute(p);</span>
+<span class="nc bnc" id="L1216" title="All 4 branches missed.">							if (value == p || value == null)</span>
+<span class="nc" id="L1217">								break;</span>
+<span class="nc" id="L1218">							int recordId = Integer.valueOf(value.toString());</span>
+<span class="nc" id="L1219">							pi.setRecord_ID(recordId);</span>
+<span class="nc" id="L1220">						}</span>
+<span class="nc" id="L1221">						catch (NumberFormatException e)</span>
+						{
+<span class="nc" id="L1223">							log.log(Level.WARNING, e.getMessage(), e);</span>
+						}
+<span class="nc" id="L1225">						break;</span>
+					}
+				}
+	
+<span class="nc" id="L1229">				pi.setAD_User_ID(getAD_User_ID());</span>
+<span class="nc" id="L1230">				pi.setAD_Client_ID(getAD_Client_ID());</span>
+<span class="nc" id="L1231">				pi.setAD_PInstance_ID(pInstance.getAD_PInstance_ID());</span>
+<span class="nc" id="L1232">				boolean success = process.processItWithoutTrxClose(pi, trx);</span>
+<span class="nc" id="L1233">				setTextMsgBefore(pi.getSummary());</span>
+<span class="nc" id="L1234">				return success;</span>
+			}
+			finally {
+<span class="nc" id="L1237">				pInstance.setIsProcessing(false);</span>
+<span class="nc" id="L1238">				pInstance.saveEx();</span>
+			}
+		}
+
+		/******	Start Task (Probably redundant;
+		        same can be achieved by attaching a Workflow node sequentially) ******/
+		/*
+		else if (MWFNode.ACTION_AppsTask.equals(action))
+		{
+			log.warning (&quot;Task:AD_Task_ID=&quot; + m_node.getAD_Task_ID());
+			log.warning(&quot;Start Task is not implemented yet&quot;);
+		}
+		*/
+
+		/******	EMail						******/
+<span class="nc bnc" id="L1253" title="All 2 branches missed.">		else if (MWFNode.ACTION_EMail.equals(action))</span>
+		{
+<span class="nc bnc" id="L1255" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine (&quot;EMail:EMailRecipient=&quot; + m_node.getEMailRecipient());</span>
+<span class="nc" id="L1256">			getPO(trx);</span>
+<span class="nc bnc" id="L1257" title="All 2 branches missed.">			if (m_po == null)</span>
+<span class="nc" id="L1258">				throw new Exception(&quot;Persistent Object not found - AD_Table_ID=&quot;</span>
+<span class="nc" id="L1259">					+ getAD_Table_ID() + &quot;, Record_ID=&quot; + getRecord_ID());</span>
+<span class="nc bnc" id="L1260" title="All 2 branches missed.">			if (m_po instanceof DocAction)</span>
+			{
+<span class="nc" id="L1262">				m_emails = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L1263">				sendEMail();</span>
+<span class="nc" id="L1264">				setTextMsgBefore(m_emails.toString());</span>
+<span class="nc" id="L1265">			} else</span>
+			{
+<span class="nc" id="L1267">				MClient client = MClient.get(getCtx(), getAD_Client_ID());</span>
+<span class="nc" id="L1268">				MMailText mailtext = new MMailText(getCtx(),getNode().getR_MailText_ID(),null);</span>
+<span class="nc" id="L1269">				mailtext.setPO(m_po);</span>
+
+<span class="nc" id="L1271">				String subject = getNode().getDescription()</span>
+<span class="nc" id="L1272">				+ &quot;: &quot; + mailtext.getMailHeader();</span>
+
+<span class="nc" id="L1274">				String message = mailtext.getMailText(true)</span>
+<span class="nc" id="L1275">				+ &quot;\n-----\n&quot; + getNodeHelp();</span>
+<span class="nc" id="L1276">				String to = getNode().getEMail();</span>
+
+<span class="nc" id="L1278">				client.sendEMail(to, subject, message, null);</span>
+			}
+<span class="nc" id="L1280">			return true;	//	done</span>
+		}	//	EMail
+
+		/******	Set Variable				******/
+<span class="nc bnc" id="L1284" title="All 2 branches missed.">		else if (MWFNode.ACTION_SetVariable.equals(action))</span>
+		{
+<span class="nc" id="L1286">			String value = m_node.getAttributeValue();</span>
+<span class="nc bnc" id="L1287" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;SetVariable:AD_Column_ID=&quot; + m_node.getAD_Column_ID()</span>
+<span class="nc" id="L1288">				+ &quot; to &quot; +  value);</span>
+<span class="nc" id="L1289">			MColumn column = m_node.getColumn();</span>
+<span class="nc" id="L1290">			int dt = column.getAD_Reference_ID();</span>
+<span class="nc" id="L1291">			return setVariable (value, dt, null, trx);</span>
+		}	//	SetVariable
+
+		/******	TODO Start WF Instance		******/
+<span class="nc bnc" id="L1295" title="All 2 branches missed.">		else if (MWFNode.ACTION_SubWorkflow.equals(action))</span>
+		{
+<span class="nc" id="L1297">			log.warning (&quot;Workflow:AD_Workflow_ID=&quot; + m_node.getAD_Workflow_ID());</span>
+<span class="nc" id="L1298">			log.warning(&quot;Start WF Instance is not implemented yet&quot;);</span>
+<span class="nc" id="L1299">		}</span>
+
+		/******	User Choice					******/
+<span class="nc bnc" id="L1302" title="All 2 branches missed.">		else if (MWFNode.ACTION_UserChoice.equals(action))</span>
+		{
+<span class="nc bnc" id="L1304" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;UserChoice:AD_Column_ID=&quot; + m_node.getAD_Column_ID());</span>
+			//	Approval
+<span class="nc bnc" id="L1306" title="All 2 branches missed.">			if (m_node.isUserApproval()</span>
+<span class="nc bnc" id="L1307" title="All 2 branches missed.">				&amp;&amp; getPO(trx) instanceof DocAction)</span>
+			{
+<span class="nc" id="L1309">				DocAction doc = (DocAction)m_po;</span>
+<span class="nc" id="L1310">				boolean autoApproval = false;</span>
+				//	Approval Hierarchy
+<span class="nc bnc" id="L1312" title="All 2 branches missed.">				if (isInvoker())</span>
+				{
+					//	Set Approver
+<span class="nc" id="L1315">					int startAD_User_ID = Env.getAD_User_ID(getCtx());</span>
+<span class="nc bnc" id="L1316" title="All 2 branches missed.">					if (startAD_User_ID == 0)</span>
+<span class="nc" id="L1317">						startAD_User_ID = doc.getDoc_User_ID();</span>
+<span class="nc" id="L1318">					int nextAD_User_ID = getApprovalUser(startAD_User_ID,</span>
+<span class="nc" id="L1319">						doc.getC_Currency_ID(), doc.getApprovalAmt(),</span>
+<span class="nc" id="L1320">						doc.getAD_Org_ID(),</span>
+<span class="nc bnc" id="L1321" title="All 2 branches missed.">						startAD_User_ID == doc.getDoc_User_ID());	//	own doc</span>
+<span class="nc bnc" id="L1322" title="All 2 branches missed.">                   if (nextAD_User_ID&lt;=0) {</span>
+<span class="nc" id="L1323">                	   m_docStatus = DocAction.STATUS_Invalid;</span>
+<span class="nc" id="L1324">                	   throw new AdempiereException(Msg.getMsg(getCtx(), &quot;NoApprover&quot;));</span>
+                   }
+					//	same user = approved
+<span class="nc bnc" id="L1327" title="All 2 branches missed.">					autoApproval = startAD_User_ID == nextAD_User_ID;</span>
+<span class="nc bnc" id="L1328" title="All 2 branches missed.">					if (!autoApproval)</span>
+<span class="nc" id="L1329">						setAD_User_ID(nextAD_User_ID);</span>
+<span class="nc" id="L1330">				}</span>
+				else	//	fixed Approver
+				{
+<span class="nc" id="L1333">					MWFResponsible resp = getResponsible();</span>
+					// MZ Goodwill
+					// [ 1742751 ] Workflow: User Choice is not working
+<span class="nc bnc" id="L1336" title="All 2 branches missed.">					if (resp.isHuman())</span>
+					{
+<span class="nc bnc" id="L1338" title="All 2 branches missed.">						autoApproval = resp.getAD_User_ID() == Env.getAD_User_ID(getCtx());</span>
+<span class="nc bnc" id="L1339" title="All 4 branches missed.">						if (!autoApproval &amp;&amp; resp.getAD_User_ID() != 0)</span>
+<span class="nc" id="L1340">							setAD_User_ID(resp.getAD_User_ID());</span>
+<span class="nc" id="L1341">					}</span>
+<span class="nc bnc" id="L1342" title="All 2 branches missed.">					else if(resp.isRole())</span>
+					{
+<span class="nc" id="L1344">						MUserRoles[] urs = MUserRoles.getOfRole(getCtx(), resp.getAD_Role_ID());</span>
+<span class="nc bnc" id="L1345" title="All 2 branches missed.">						for (int i = 0; i &lt; urs.length; i++)</span>
+						{
+<span class="nc bnc" id="L1347" title="All 4 branches missed.">							if(urs[i].getAD_User_ID() == Env.getAD_User_ID(getCtx()) &amp;&amp; urs[i].isActive())</span>
+							{
+<span class="nc" id="L1349">								autoApproval = true;</span>
+<span class="nc" id="L1350">								break;</span>
+							}
+						}
+<span class="nc" id="L1353">					}</span>
+<span class="nc bnc" id="L1354" title="All 2 branches missed.">					else if(resp.isManual()) {</span>
+<span class="nc" id="L1355">					    MWFActivityApprover[] approvers = MWFActivityApprover.getOfActivity(getCtx(), getAD_WF_Activity_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1356" title="All 2 branches missed.">                        for (int i = 0; i &lt; approvers.length; i++)</span>
+                        {
+<span class="nc bnc" id="L1358" title="All 2 branches missed.">                            if(approvers[i].getAD_User_ID() == Env.getAD_User_ID(getCtx()))</span>
+                            {
+<span class="nc" id="L1360">                                autoApproval = true;</span>
+<span class="nc" id="L1361">                                break;</span>
+                            }
+                        }
+<span class="nc" id="L1364">					}</span>
+<span class="nc bnc" id="L1365" title="All 2 branches missed.">					else if(resp.isOrganization())</span>
+					{
+<span class="nc" id="L1367">						throw new AdempiereException(&quot;Support not implemented for &quot;+resp);</span>
+					}
+					else
+					{
+<span class="nc" id="L1371">						throw new AdempiereException(&quot;@NotSupported@ &quot;+resp);</span>
+					}
+					// end MZ
+				}
+<span class="nc bnc" id="L1375" title="All 2 branches missed.">				if (autoApproval</span>
+<span class="nc bnc" id="L1376" title="All 2 branches missed.">					&amp;&amp; doc.processIt(DocAction.ACTION_Approve)</span>
+<span class="nc bnc" id="L1377" title="All 2 branches missed.">					&amp;&amp; doc.save())</span>
+<span class="nc" id="L1378">					return true;	//	done</span>
+			}	//	approval
+<span class="nc" id="L1380">			return false;	//	wait for user</span>
+		}
+		/******	User Form					******/
+<span class="nc bnc" id="L1383" title="All 2 branches missed.">		else if (MWFNode.ACTION_UserForm.equals(action))</span>
+		{
+<span class="nc bnc" id="L1385" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Form:AD_Form_ID=&quot; + m_node.getAD_Form_ID());</span>
+<span class="nc" id="L1386">			return false;</span>
+		}
+		/******	User Window					******/
+<span class="nc bnc" id="L1389" title="All 2 branches missed.">		else if (MWFNode.ACTION_UserWindow.equals(action))</span>
+		{
+<span class="nc bnc" id="L1391" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Window:AD_Window_ID=&quot; + m_node.getAD_Window_ID());</span>
+<span class="nc" id="L1392">			return false;</span>
+		}
+		/******	User Info					******/
+<span class="nc bnc" id="L1395" title="All 2 branches missed.">		else if (MWFNode.ACTION_UserInfo.equals(action))</span>
+		{
+<span class="nc bnc" id="L1397" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;InfoWindow:AD_InfoWindow_ID=&quot; + m_node.getAD_InfoWindow_ID());</span>
+<span class="nc" id="L1398">			return false;</span>
+		}
+		//
+<span class="nc" id="L1401">		throw new IllegalArgumentException(&quot;Invalid Action (Not Implemented) =&quot; + action);</span>
+	}	//	performWork
+
+	/**
+	 * 	Set value to PO
+	 *	@param value new Value
+	 *	@param displayType display type
+	 *	@param textMsg optional Message
+	 *	@return true if set
+	 *	@throws Exception if error
+	 */
+	private boolean setVariable(String value, int displayType, String textMsg, Trx trx) throws Exception
+	{
+<span class="nc" id="L1414">		m_newValue = null;</span>
+<span class="nc" id="L1415">		getPO(trx);</span>
+<span class="nc bnc" id="L1416" title="All 2 branches missed.">		if (m_po == null)</span>
+<span class="nc" id="L1417">			throw new Exception(&quot;Persistent Object not found - AD_Table_ID=&quot;</span>
+<span class="nc" id="L1418">				+ getAD_Table_ID() + &quot;, Record_ID=&quot; + getRecord_ID());</span>
+		//	Set Value
+<span class="nc" id="L1420">		Object dbValue = null;</span>
+<span class="nc bnc" id="L1421" title="All 2 branches missed.">		if (value == null)</span>
+<span class="nc" id="L1422">			;</span>
+<span class="nc bnc" id="L1423" title="All 2 branches missed.">		else if (displayType == DisplayType.YesNo)</span>
+<span class="nc" id="L1424">			dbValue = Boolean.valueOf(&quot;Y&quot;.equals(value));</span>
+<span class="nc bnc" id="L1425" title="All 2 branches missed.">		else if (DisplayType.isNumeric(displayType))</span>
+<span class="nc" id="L1426">			dbValue = new BigDecimal (value);</span>
+<span class="nc bnc" id="L1427" title="All 2 branches missed.">		else if (DisplayType.isID(displayType)) {</span>
+<span class="nc" id="L1428">			MColumn column = MColumn.get(Env.getCtx(), getNode().getAD_Column_ID());</span>
+<span class="nc" id="L1429">			String referenceTableName = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L1430" title="All 2 branches missed.">			if (referenceTableName != null) {</span>
+<span class="nc" id="L1431">				MTable refTable = MTable.get(Env.getCtx(), referenceTableName);</span>
+<span class="nc" id="L1432">				dbValue = Integer.valueOf(value);</span>
+<span class="nc" id="L1433">				boolean validValue = true;</span>
+<span class="nc" id="L1434">				PO po = refTable.getPO((Integer)dbValue, trx.getTrxName());</span>
+<span class="nc bnc" id="L1435" title="All 4 branches missed.">				if (po == null || po.get_ID() == 0) {</span>
+					// foreign key does not exist
+<span class="nc" id="L1437">					validValue = false;</span>
+				}
+<span class="nc bnc" id="L1439" title="All 4 branches missed.">				if (validValue &amp;&amp; po.getAD_Client_ID() != Env.getAD_Client_ID(Env.getCtx())) {</span>
+<span class="nc" id="L1440">					validValue = false;</span>
+<span class="nc bnc" id="L1441" title="All 2 branches missed.">					if (po.getAD_Client_ID() == 0) {</span>
+<span class="nc" id="L1442">						String accessLevel = refTable.getAccessLevel();</span>
+<span class="nc bnc" id="L1443" title="All 2 branches missed.">						if (   MTable.ACCESSLEVEL_All.equals(accessLevel)</span>
+<span class="nc bnc" id="L1444" title="All 2 branches missed.">							|| MTable.ACCESSLEVEL_SystemPlusClient.equals(accessLevel)) {</span>
+							// client foreign keys are OK if the table has reference All or System+Client
+<span class="nc" id="L1446">							validValue = true;</span>
+						}
+					}
+				}
+<span class="nc bnc" id="L1450" title="All 2 branches missed.">				if (! validValue) {</span>
+<span class="nc" id="L1451">					throw new Exception(&quot;Persistent Object not updated - AD_Table_ID=&quot;</span>
+<span class="nc" id="L1452">							+ getAD_Table_ID() + &quot;, Record_ID=&quot; + getRecord_ID()</span>
+<span class="nc" id="L1453">							+ &quot; - Value=&quot; + value + &quot; is not valid for a foreign key&quot;);</span>
+				}
+			}
+		}
+		else
+<span class="nc" id="L1458">			dbValue = value;</span>
+<span class="nc bnc" id="L1459" title="All 2 branches missed.">		if (!m_po.set_ValueOfColumnReturningBoolean(getNode().getAD_Column_ID(), dbValue)) {</span>
+<span class="nc" id="L1460">			throw new Exception(&quot;Persistent Object not updated - AD_Table_ID=&quot;</span>
+<span class="nc" id="L1461">					+ getAD_Table_ID() + &quot;, Record_ID=&quot; + getRecord_ID()</span>
+<span class="nc" id="L1462">					+ &quot; - Value=&quot; + value + &quot; error : &quot; + CLogger.retrieveErrorString(&quot;check logs&quot;));</span>
+		}
+<span class="nc" id="L1464">		m_po.saveEx();</span>
+<span class="nc bnc" id="L1465" title="All 4 branches missed.">		if (dbValue != null &amp;&amp; !dbValue.equals(m_po.get_ValueOfColumn(getNode().getAD_Column_ID())))</span>
+<span class="nc" id="L1466">			throw new Exception(&quot;Persistent Object not updated - AD_Table_ID=&quot;</span>
+<span class="nc" id="L1467">				+ getAD_Table_ID() + &quot;, Record_ID=&quot; + getRecord_ID()</span>
+<span class="nc" id="L1468">				+ &quot; - Should=&quot; + value + &quot;, Is=&quot; + m_po.get_ValueOfColumn(m_node.getAD_Column_ID()));</span>
+		//	Info
+<span class="nc" id="L1470">		String msg = getNode().getAttributeName() + &quot;=&quot; + value;</span>
+<span class="nc bnc" id="L1471" title="All 4 branches missed.">		if (textMsg != null &amp;&amp; textMsg.length() &gt; 0)</span>
+<span class="nc" id="L1472">			msg += &quot; - &quot; + textMsg;</span>
+<span class="nc" id="L1473">		setTextMsgBefore (msg);</span>
+<span class="nc" id="L1474">		m_newValue = value;</span>
+<span class="nc" id="L1475">		return true;</span>
+	}	//	setVariable
+
+	/**
+	 * 	Set User Choice
+	 * 	@param AD_User_ID user
+	 *	@param value new Value
+	 *	@param displayType display type
+	 *	@param textMsg optional Message
+	 *	@return true if set
+	 *	@throws Exception if error
+	 */
+	public boolean setUserChoice (int AD_User_ID, String value, int displayType,
+		String textMsg) throws Exception
+	{
+<span class="nc" id="L1490">		setWFState (StateEngine.STATE_Running);</span>
+<span class="nc" id="L1491">		setAD_User_ID(AD_User_ID);</span>
+<span class="nc bnc" id="L1492" title="All 2 branches missed.">		Trx trx = ( get_TrxName() != null ) ? Trx.get(get_TrxName(), false) : null;</span>
+<span class="nc" id="L1493">		boolean ok = setVariable (value, displayType, textMsg, trx);</span>
+<span class="nc bnc" id="L1494" title="All 2 branches missed.">		if (!ok)</span>
+<span class="nc" id="L1495">			return false;</span>
+
+<span class="nc" id="L1497">		String newState = StateEngine.STATE_Completed;</span>
+		//	Approval
+<span class="nc bnc" id="L1499" title="All 4 branches missed.">		if (getNode().isUserApproval() &amp;&amp; getPO(trx) instanceof DocAction)</span>
+		{
+<span class="nc" id="L1501">			DocAction doc = (DocAction)m_po;</span>
+			// Not approved
+<span class="nc bnc" id="L1503" title="All 2 branches missed.">			if (!&quot;Y&quot;.equals(value)) {</span>
+<span class="nc" id="L1504">				newState = StateEngine.STATE_Aborted;</span>
+<span class="nc bnc" id="L1505" title="All 2 branches missed.">				if (!(doc.processIt(DocAction.ACTION_Reject)))</span>
+<span class="nc" id="L1506">					setTextMsgBefore(&quot;Cannot Reject - Document Status: &quot; + doc.getDocStatus());</span>
+<span class="nc" id="L1507">			} else {</span>
+<span class="nc bnc" id="L1508" title="All 2 branches missed.">				if (isInvoker()) {</span>
+<span class="nc" id="L1509">					int startAD_User_ID = Env.getAD_User_ID(getCtx());</span>
+<span class="nc bnc" id="L1510" title="All 2 branches missed.">					if (startAD_User_ID == 0)</span>
+<span class="nc" id="L1511">						startAD_User_ID = doc.getDoc_User_ID();</span>
+<span class="nc" id="L1512">					int nextAD_User_ID = getApprovalUser(startAD_User_ID, doc.getC_Currency_ID(), doc.getApprovalAmt(),</span>
+<span class="nc bnc" id="L1513" title="All 2 branches missed.">							doc.getAD_Org_ID(), startAD_User_ID == doc.getDoc_User_ID()); // own doc</span>
+					// No Approver
+<span class="nc bnc" id="L1515" title="All 2 branches missed.">					if (nextAD_User_ID &lt;= 0) {</span>
+<span class="nc" id="L1516">						newState = StateEngine.STATE_Aborted;</span>
+<span class="nc" id="L1517">						setTextMsgBefore(Msg.getMsg(getCtx(), &quot;NoApprover&quot;));</span>
+<span class="nc" id="L1518">						doc.processIt(DocAction.ACTION_Reject);</span>
+<span class="nc bnc" id="L1519" title="All 2 branches missed.">					} else if (startAD_User_ID != nextAD_User_ID) {</span>
+<span class="nc" id="L1520">						forwardTo(nextAD_User_ID, &quot;Next Approver&quot;);</span>
+<span class="nc" id="L1521">						newState = StateEngine.STATE_Suspended;</span>
+<span class="nc" id="L1522">					} else // Approve</span>
+					{
+<span class="nc bnc" id="L1524" title="All 2 branches missed.">						if (!(doc.processIt(DocAction.ACTION_Approve))) {</span>
+<span class="nc" id="L1525">							newState = StateEngine.STATE_Aborted;</span>
+<span class="nc" id="L1526">							setTextMsgBefore(&quot;Cannot Approve - Document Status: &quot; + doc.getDocStatus());</span>
+						}
+					}
+<span class="nc" id="L1529">				}</span>
+				// No Invoker - Approve
+<span class="nc bnc" id="L1531" title="All 2 branches missed.">				else if (!(doc.processIt(DocAction.ACTION_Approve))) {</span>
+<span class="nc" id="L1532">					newState = StateEngine.STATE_Aborted;</span>
+<span class="nc" id="L1533">					setTextMsgBefore(&quot;Cannot Approve - Document Status: &quot; + doc.getDocStatus());</span>
+				}
+			}
+<span class="nc" id="L1536">			doc.saveEx();</span>
+				
+			// Send Approval Notification
+<span class="nc bnc" id="L1539" title="All 2 branches missed.">			if (newState.equals(StateEngine.STATE_Aborted)) {</span>
+<span class="nc" id="L1540">				MUser to = new MUser(getCtx(), doc.getDoc_User_ID(), null);</span>
+
+				// send email
+<span class="nc bnc" id="L1543" title="All 2 branches missed.">				if (to.isNotificationEMail()) {</span>
+<span class="nc" id="L1544">					MClient client = MClient.get(getCtx(), doc.getAD_Client_ID());</span>
+<span class="nc" id="L1545">					client.sendEMail(doc.getDoc_User_ID(), Msg.getMsg(getCtx(), &quot;NotApproved&quot;)</span>
+<span class="nc" id="L1546">							+ &quot;: &quot; + doc.getDocumentNo(),</span>
+<span class="nc bnc" id="L1547" title="All 2 branches missed.">							(doc.getSummary() != null ? doc.getSummary() + &quot;\n&quot; : &quot;&quot; )</span>
+<span class="nc bnc" id="L1548" title="All 2 branches missed.">							+ (doc.getProcessMsg() != null ? doc.getProcessMsg() + &quot;\n&quot; : &quot;&quot;)</span>
+<span class="nc bnc" id="L1549" title="All 2 branches missed.">							+ (getTextMsg() != null ? getTextMsg() : &quot;&quot;), null);</span>
+				}
+
+				// Send Note
+<span class="nc bnc" id="L1553" title="All 2 branches missed.">				if (to.isNotificationNote()) {</span>
+<span class="nc" id="L1554">					MNote note = new MNote(getCtx(), &quot;NotApproved&quot;, doc.getDoc_User_ID(), null);</span>
+<span class="nc bnc" id="L1555" title="All 2 branches missed.">					note.setTextMsg((doc.getSummary() != null ? doc.getSummary() + &quot;\n&quot; : &quot;&quot; )</span>
+<span class="nc bnc" id="L1556" title="All 2 branches missed.">							+ (doc.getProcessMsg() != null ? doc.getProcessMsg() + &quot;\n&quot; : &quot;&quot;)</span>
+<span class="nc bnc" id="L1557" title="All 2 branches missed.">							+ (getTextMsg() != null ? getTextMsg() : &quot;&quot;));</span>
+					// 2007-06-08, matthiasO.
+					// Add record information to the note, so that the user receiving the
+					// note can jump to the doc easily
+<span class="nc" id="L1561">					note.setRecord(m_po.get_Table_ID(), m_po.get_ID());</span>
+<span class="nc" id="L1562">					note.saveEx();</span>
+				}
+			}
+		}
+<span class="nc" id="L1566">		setWFState (newState);</span>
+<span class="nc" id="L1567">		return ok;</span>
+	}	//	setUserChoice
+
+	/**
+	 * 	Forward to user, usually for approval
+	 *	@param AD_User_ID user
+	 *	@param textMsg text message
+	 *	@return true if forwarded
+	 */
+	public boolean forwardTo (int AD_User_ID, String textMsg)
+	{
+<span class="nc bnc" id="L1578" title="All 2 branches missed.">		if (AD_User_ID == getAD_User_ID())</span>
+		{
+<span class="nc" id="L1580">			log.log(Level.WARNING, &quot;Same User - AD_User_ID=&quot; + AD_User_ID);</span>
+<span class="nc" id="L1581">			return false;</span>
+		}
+		//
+<span class="nc" id="L1584">		MUser oldUser = MUser.get(getCtx(), getAD_User_ID());</span>
+<span class="nc" id="L1585">		MUser user = MUser.get(getCtx(), AD_User_ID);</span>
+<span class="nc bnc" id="L1586" title="All 4 branches missed.">		if (user == null || user.get_ID() == 0)</span>
+		{
+<span class="nc" id="L1588">			log.log(Level.WARNING, &quot;Does not exist - AD_User_ID=&quot; + AD_User_ID);</span>
+<span class="nc" id="L1589">			return false;</span>
+		}
+		//	Update
+<span class="nc" id="L1592">		setAD_User_ID (user.getAD_User_ID());</span>
+<span class="nc" id="L1593">		setTextMsg(textMsg);</span>
+<span class="nc" id="L1594">		saveEx();</span>
+		//	Close up Old Event
+<span class="nc" id="L1596">		getEventAudit();</span>
+<span class="nc" id="L1597">		m_audit.setAD_User_ID(oldUser.getAD_User_ID());</span>
+<span class="nc" id="L1598">		m_audit.setTextMsg(getTextMsg());</span>
+<span class="nc" id="L1599">		m_audit.setAttributeName(&quot;AD_User_ID&quot;);</span>
+<span class="nc" id="L1600">		m_audit.setOldValue(oldUser.getName()+ &quot;(&quot;+oldUser.getAD_User_ID()+&quot;)&quot;);</span>
+<span class="nc" id="L1601">		m_audit.setNewValue(user.getName()+ &quot;(&quot;+user.getAD_User_ID()+&quot;)&quot;);</span>
+		//
+<span class="nc" id="L1603">		m_audit.setWFState(getWFState());</span>
+<span class="nc" id="L1604">		m_audit.setEventType(MWFEventAudit.EVENTTYPE_StateChanged);</span>
+<span class="nc" id="L1605">		long ms = System.currentTimeMillis() - m_audit.getCreated().getTime();</span>
+<span class="nc" id="L1606">		m_audit.setElapsedTimeMS(new BigDecimal(ms));</span>
+<span class="nc" id="L1607">		m_audit.saveEx();</span>
+		//	Create new one
+<span class="nc" id="L1609">		m_audit = new MWFEventAudit(this);</span>
+<span class="nc" id="L1610">		m_audit.saveEx();</span>
+<span class="nc" id="L1611">		return true;</span>
+	}	//	forwardTo
+
+	/**
+	 * 	Set User Confirmation
+	 * 	@param AD_User_ID user
+	 *	@param textMsg optional message
+	 */
+	public void setUserConfirmation (int AD_User_ID, String textMsg)
+	{
+<span class="nc" id="L1621">		log.fine(textMsg);</span>
+<span class="nc" id="L1622">		setWFState (StateEngine.STATE_Running);</span>
+<span class="nc" id="L1623">		setAD_User_ID(AD_User_ID);</span>
+<span class="nc bnc" id="L1624" title="All 2 branches missed.">		if (textMsg != null)</span>
+<span class="nc" id="L1625">			setTextMsgBefore (textMsg);</span>
+<span class="nc" id="L1626">		setWFState (StateEngine.STATE_Completed);</span>
+<span class="nc" id="L1627">	}	//	setUserConfirmation</span>
+
+
+	/**
+	 * 	Fill Report/Process Parameters
+	 *	@param pInstance process instance
+	 * 	@param trx transaction
+	 */
+	private void fillParameter(MPInstance pInstance, Trx trx)
+	{
+<span class="nc" id="L1637">		getPO(trx);</span>
+		//
+<span class="nc" id="L1639">		MWFNodePara[] nParams = m_node.getParameters();</span>
+<span class="nc" id="L1640">		MProcessPara[] processParams = pInstance.getProcessParameters();</span>
+<span class="nc bnc" id="L1641" title="All 2 branches missed.">		for (int pi = 0; pi &lt; processParams.length; pi++)</span>
+		{
+<span class="nc" id="L1643">			MPInstancePara iPara = new MPInstancePara (pInstance, processParams[pi].getSeqNo());</span>
+<span class="nc" id="L1644">			iPara.setParameterName(processParams[pi].getColumnName());</span>
+<span class="nc" id="L1645">			iPara.setInfo(processParams[pi].getName());</span>
+<span class="nc" id="L1646">			iPara.setParameterName(processParams[pi].getColumnName());</span>
+<span class="nc" id="L1647">			iPara.setInfo(processParams[pi].getName());</span>
+<span class="nc bnc" id="L1648" title="All 2 branches missed.">			for (int np = 0; np &lt; nParams.length; np++)</span>
+			{
+<span class="nc" id="L1650">				MWFNodePara nPara = nParams[np];				</span>
+<span class="nc bnc" id="L1651" title="All 2 branches missed.">				if (iPara.getParameterName().equals(nPara.getAttributeName()))</span>
+				{
+<span class="nc" id="L1653">					String variableName = nPara.getAttributeValue();</span>
+<span class="nc" id="L1654">					Object value = parseNodeParaAttribute(nPara);</span>
+<span class="nc bnc" id="L1655" title="All 2 branches missed.">					if (value == nPara)</span>
+<span class="nc" id="L1656">						break;</span>
+
+					//	No Value
+<span class="nc bnc" id="L1659" title="All 2 branches missed.">					if (value == null)</span>
+					{
+<span class="nc bnc" id="L1661" title="All 2 branches missed.">						if (nPara.isMandatory())</span>
+<span class="nc" id="L1662">							log.warning(nPara.getAttributeName()</span>
+<span class="nc" id="L1663">								+ &quot; - empty - mandatory!&quot;);</span>
+						else
+<span class="nc bnc" id="L1665" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(nPara.getAttributeName()</span>
+								+ &quot; - empty&quot;);
+<span class="nc" id="L1667">						break;</span>
+					}
+<span class="nc bnc" id="L1669" title="All 2 branches missed.">					if( DisplayType.isText(nPara.getDisplayType())</span>
+<span class="nc bnc" id="L1670" title="All 2 branches missed.">							&amp;&amp; Util.isEmpty(String.valueOf(value))) {</span>
+<span class="nc bnc" id="L1671" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(nPara.getAttributeName() + &quot; - empty string&quot;);</span>
+<span class="nc" id="L1672">							break;</span>
+					}
+
+					//	Convert to Type
+					try
+					{
+<span class="nc bnc" id="L1678" title="All 2 branches missed.">						if (DisplayType.isNumeric(nPara.getDisplayType())</span>
+<span class="nc bnc" id="L1679" title="All 2 branches missed.">							|| DisplayType.isID(nPara.getDisplayType()))</span>
+						{
+<span class="nc" id="L1681">							BigDecimal bd = null;</span>
+<span class="nc bnc" id="L1682" title="All 2 branches missed.">							if (value instanceof BigDecimal)</span>
+<span class="nc" id="L1683">								bd = (BigDecimal)value;</span>
+<span class="nc bnc" id="L1684" title="All 2 branches missed.">							else if (value instanceof Integer)</span>
+<span class="nc" id="L1685">								bd = new BigDecimal (((Integer)value).intValue());</span>
+							else
+<span class="nc" id="L1687">								bd = new BigDecimal (value.toString());</span>
+<span class="nc" id="L1688">							iPara.setP_Number(bd);</span>
+<span class="nc bnc" id="L1689" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(nPara.getAttributeName()</span>
+<span class="nc" id="L1690">								+ &quot; = &quot; + variableName + &quot; (=&quot; + bd + &quot;=)&quot;);</span>
+<span class="nc" id="L1691">						}</span>
+<span class="nc bnc" id="L1692" title="All 2 branches missed.">						else if (DisplayType.isDate(nPara.getDisplayType()))</span>
+						{
+<span class="nc" id="L1694">							Timestamp ts = null;</span>
+<span class="nc bnc" id="L1695" title="All 2 branches missed.">							if (value instanceof Timestamp)</span>
+<span class="nc" id="L1696">								ts = (Timestamp)value;</span>
+							else
+<span class="nc" id="L1698">								ts = Timestamp.valueOf(value.toString());</span>
+<span class="nc" id="L1699">							iPara.setP_Date(ts);</span>
+<span class="nc bnc" id="L1700" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(nPara.getAttributeName()</span>
+<span class="nc" id="L1701">								+ &quot; = &quot; + variableName + &quot; (=&quot; + ts + &quot;=)&quot;);</span>
+<span class="nc" id="L1702">						}</span>
+						else
+						{
+<span class="nc" id="L1705">							iPara.setP_String(value.toString());</span>
+<span class="nc bnc" id="L1706" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(nPara.getAttributeName()</span>
+<span class="nc" id="L1707">								+ &quot; = &quot; + variableName</span>
+<span class="nc" id="L1708">								+ &quot; (=&quot; + value + &quot;=) &quot; + value.getClass().getName());</span>
+						}
+<span class="nc bnc" id="L1710" title="All 2 branches missed.">						if (!iPara.save())</span>
+<span class="nc" id="L1711">							log.warning(&quot;Not Saved - &quot; + nPara.getAttributeName());</span>
+<span class="nc" id="L1712">					}</span>
+<span class="nc" id="L1713">					catch (Exception e)</span>
+					{
+<span class="nc" id="L1715">						log.warning(nPara.getAttributeName()</span>
+<span class="nc" id="L1716">							+ &quot; = &quot; + variableName + &quot; (&quot; + value</span>
+<span class="nc" id="L1717">							+ &quot;) &quot; + value.getClass().getName()</span>
+<span class="nc" id="L1718">							+ &quot; - &quot; + e.getLocalizedMessage());</span>
+					}
+<span class="nc" id="L1720">					break;</span>
+				}
+			}	//	node parameter loop
+		}	//	instance parameter loop
+<span class="nc" id="L1724">	}	//	fillParameter</span>
+
+	/**
+	 * Parse attribute value of node parameter
+	 * @param nPara node parameter
+	 * @return parsed value
+	 */
+	private Object parseNodeParaAttribute(MWFNodePara nPara)
+	{
+<span class="nc" id="L1733">		String variableName = nPara.getAttributeValue();</span>
+<span class="nc bnc" id="L1734" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(nPara.getAttributeName()</span>
+<span class="nc" id="L1735">			+ &quot; = &quot; + variableName);</span>
+		//	Value - Constant/Variable
+<span class="nc" id="L1737">		Object value = variableName;</span>
+<span class="nc bnc" id="L1738" title="All 2 branches missed.">		if (variableName == null</span>
+<span class="nc bnc" id="L1739" title="All 4 branches missed.">			|| (variableName != null &amp;&amp; variableName.length() == 0))</span>
+<span class="nc" id="L1740">			value = null;</span>
+<span class="nc bnc" id="L1741" title="All 4 branches missed.">		else if (variableName.indexOf('@') != -1 &amp;&amp; m_po != null)	//	we have a variable</span>
+		{
+			//	Strip
+<span class="nc" id="L1744">			int index = variableName.indexOf('@');</span>
+<span class="nc" id="L1745">			String columnName = variableName.substring(index+1);</span>
+<span class="nc" id="L1746">			index = columnName.indexOf('@');</span>
+<span class="nc bnc" id="L1747" title="All 2 branches missed.">			if (index == -1)</span>
+			{
+<span class="nc" id="L1749">				log.warning(nPara.getAttributeName()</span>
+<span class="nc" id="L1750">					+ &quot; - cannot evaluate=&quot; + variableName);</span>
+<span class="nc" id="L1751">				return nPara;</span>
+			}
+<span class="nc" id="L1753">			columnName = columnName.substring(0, index);</span>
+<span class="nc" id="L1754">			index = m_po.get_ColumnIndex(columnName);</span>
+<span class="nc bnc" id="L1755" title="All 2 branches missed.">			if (index != -1)</span>
+			{
+<span class="nc" id="L1757">				value = m_po.get_Value(index);</span>
+<span class="nc" id="L1758">			}</span>
+			else	//	not a column
+			{
+				//	try Env
+<span class="nc" id="L1762">				String env = Env.getContext(getCtx(), columnName);</span>
+<span class="nc bnc" id="L1763" title="All 2 branches missed.">				if (env.length() == 0)</span>
+				{
+<span class="nc" id="L1765">					log.warning(nPara.getAttributeName()</span>
+<span class="nc" id="L1766">						+ &quot; - not column nor environment =&quot; + columnName</span>
+<span class="nc" id="L1767">						+ &quot;(&quot; + variableName + &quot;)&quot;);</span>
+<span class="nc" id="L1768">					return nPara;</span>
+				}
+				else
+<span class="nc" id="L1771">					value = env;</span>
+			}
+		}	//	@variable@
+<span class="nc" id="L1774">		return value;</span>
+	}
+	
+	/**
+	 * 	Send EMail
+	 */
+	private void sendEMail()
+	{
+<span class="nc" id="L1782">		DocAction doc = (DocAction)m_po;</span>
+<span class="nc" id="L1783">		MMailText text = new MMailText (getCtx(), m_node.getR_MailText_ID(), null);</span>
+<span class="nc" id="L1784">		text.setPO(m_po, true);</span>
+		//
+<span class="nc" id="L1786">		String subject = null;</span>
+<span class="nc" id="L1787">		String raw = text.getMailHeader(false);</span>
+<span class="nc bnc" id="L1788" title="All 4 branches missed.">		if (raw != null &amp;&amp; raw.contains(&quot;@_noDocInfo_@&quot;))</span>
+<span class="nc" id="L1789">			subject = text.getMailHeader().replace(&quot;@_noDocInfo_@&quot;, &quot;&quot;);</span>
+		else
+<span class="nc" id="L1791">			subject = doc.getDocumentInfo() + &quot;: &quot; + text.getMailHeader();</span>
+<span class="nc" id="L1792">		String message = null;</span>
+<span class="nc" id="L1793">		raw = text.getMailText(true, false);</span>
+<span class="nc bnc" id="L1794" title="All 6 branches missed.">		if (raw != null &amp;&amp; (raw.contains(&quot;@=DocumentInfo&quot;) || raw.contains(&quot;@=documentInfo&quot;)</span>
+<span class="nc bnc" id="L1795" title="All 6 branches missed.">				|| raw.contains(&quot;@=Summary&quot;) || raw.contains(&quot;@=summary&quot;) || raw.contains(&quot;@_noDocInfo_@&quot;)))</span>
+<span class="nc" id="L1796">			message = text.getMailText(true).replace(&quot;@_noDocInfo_@&quot;, &quot;&quot;);</span>
+		else
+<span class="nc" id="L1798">			message = text.getMailText(true)</span>
+<span class="nc" id="L1799">				+ &quot;\n-----\n&quot; + doc.getDocumentInfo()</span>
+<span class="nc" id="L1800">				+ &quot;\n&quot; + doc.getSummary();</span>
+<span class="nc bnc" id="L1801" title="All 4 branches missed.">		File pdf = doc != null &amp;&amp; m_node.isAttachedDocumentToEmail() ? doc.createPDF() : null;</span>
+		//
+<span class="nc" id="L1803">		MClient client = MClient.get(doc.getCtx(), doc.getAD_Client_ID());</span>
+
+		//	Explicit EMail
+<span class="nc" id="L1806">		sendEMail(client, 0, m_node.getEMail(), subject, message, pdf, text.isHtml());</span>
+		//	Recipient Type
+<span class="nc" id="L1808">		String recipient = m_node.getEMailRecipient();</span>
+		//	email to document user
+<span class="nc bnc" id="L1810" title="All 4 branches missed.">		if (recipient == null || recipient.length() == 0)</span>
+<span class="nc" id="L1811">			sendEMail(client, doc.getDoc_User_ID(), null, subject, message, pdf, text.isHtml());</span>
+<span class="nc bnc" id="L1812" title="All 2 branches missed.">		else if (recipient.equals(MWFNode.EMAILRECIPIENT_DocumentBusinessPartner))</span>
+		{
+<span class="nc" id="L1814">			int index = m_po.get_ColumnIndex(&quot;AD_User_ID&quot;);</span>
+<span class="nc bnc" id="L1815" title="All 2 branches missed.">			if (index &gt; 0)</span>
+			{
+<span class="nc" id="L1817">				Object oo = m_po.get_Value(index);</span>
+<span class="nc bnc" id="L1818" title="All 2 branches missed.">				if (oo instanceof Integer)</span>
+				{
+<span class="nc" id="L1820">					int AD_User_ID = ((Integer)oo).intValue();</span>
+<span class="nc bnc" id="L1821" title="All 2 branches missed.">					if (AD_User_ID != 0)</span>
+<span class="nc" id="L1822">						sendEMail(client, AD_User_ID, null, subject, message, pdf, text.isHtml());</span>
+					else
+<span class="nc" id="L1824">						log.fine(&quot;No User in Document&quot;);</span>
+<span class="nc" id="L1825">				}</span>
+				else
+<span class="nc" id="L1827">					log.fine(&quot;Empty User in Document&quot;);</span>
+<span class="nc" id="L1828">			}</span>
+			else
+<span class="nc" id="L1830">				log.fine(&quot;No User Field in Document&quot;);</span>
+<span class="nc" id="L1831">		}</span>
+<span class="nc bnc" id="L1832" title="All 2 branches missed.">		else if (recipient.equals(MWFNode.EMAILRECIPIENT_DocumentOwner))</span>
+<span class="nc" id="L1833">			sendEMail(client, doc.getDoc_User_ID(), null, subject, message, pdf, text.isHtml());</span>
+<span class="nc bnc" id="L1834" title="All 2 branches missed.">		else if (recipient.equals(MWFNode.EMAILRECIPIENT_WFResponsible))</span>
+		{
+<span class="nc" id="L1836">			MWFResponsible resp = getResponsible();</span>
+<span class="nc bnc" id="L1837" title="All 2 branches missed.">			if (resp.isInvoker())</span>
+<span class="nc" id="L1838">				sendEMail(client, doc.getDoc_User_ID(), null, subject, message, pdf, text.isHtml());</span>
+<span class="nc bnc" id="L1839" title="All 2 branches missed.">			else if (resp.isHuman())</span>
+<span class="nc" id="L1840">				sendEMail(client, resp.getAD_User_ID(), null, subject, message, pdf, text.isHtml());</span>
+<span class="nc bnc" id="L1841" title="All 2 branches missed.">			else if (resp.isRole())</span>
+			{
+<span class="nc" id="L1843">				MRole role = resp.getRole();</span>
+<span class="nc bnc" id="L1844" title="All 2 branches missed.">				if (role != null)</span>
+				{
+<span class="nc" id="L1846">					MUser[] users = MUser.getWithRole(role);</span>
+<span class="nc bnc" id="L1847" title="All 2 branches missed.">					for (int i = 0; i &lt; users.length; i++)</span>
+<span class="nc" id="L1848">						sendEMail(client, users[i].getAD_User_ID(), null, subject, message, pdf, text.isHtml());</span>
+				}
+<span class="nc" id="L1850">			}</span>
+<span class="nc bnc" id="L1851" title="All 2 branches missed.">			else if (resp.isOrganization())</span>
+			{
+<span class="nc" id="L1853">				MOrgInfo org = MOrgInfo.get(getCtx(), m_po.getAD_Org_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1854" title="All 2 branches missed.">				if (org.getSupervisor_ID() == 0) {</span>
+<span class="nc bnc" id="L1855" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;No Supervisor for AD_Org_ID=&quot; + m_po.getAD_Org_ID());</span>
+<span class="nc" id="L1856">				} else {</span>
+<span class="nc" id="L1857">					sendEMail(client, org.getSupervisor_ID(), null, subject, message, pdf, text.isHtml());</span>
+				}
+			}
+		}
+<span class="nc" id="L1861">	}	//	sendEMail</span>
+
+	/**
+	 * 	Send EMail
+	 *	@param client client
+	 *	@param AD_User_ID user
+	 *	@param email email string
+	 *	@param subject subject
+	 *	@param message message
+	 *	@param pdf attachment
+	 *  @param  isHtml isHtml
+	 */
+	private void sendEMail (MClient client, int AD_User_ID, String email,
+		String subject, String message, File pdf, boolean isHtml)
+	{
+<span class="nc bnc" id="L1876" title="All 2 branches missed.">		if (AD_User_ID != 0)</span>
+		{
+<span class="nc" id="L1878">			MUser user = new MUser(getCtx(), AD_User_ID, get_TrxName());</span>
+<span class="nc" id="L1879">			email = user.getEMail();</span>
+<span class="nc bnc" id="L1880" title="All 4 branches missed.">			if (email != null &amp;&amp; email.length() &gt; 0)</span>
+			{
+<span class="nc" id="L1882">				email = email.trim();</span>
+<span class="nc bnc" id="L1883" title="All 2 branches missed.">				if (!m_emails.contains(email))</span>
+				{
+<span class="nc" id="L1885">					client.sendEMail(null, user, subject, message, pdf,isHtml);</span>
+<span class="nc" id="L1886">					m_emails.add(email);</span>
+				}
+<span class="nc" id="L1888">			}</span>
+			else
+<span class="nc bnc" id="L1890" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;No EMail for User &quot; + user.getName());</span>
+<span class="nc" id="L1891">		}</span>
+<span class="nc bnc" id="L1892" title="All 4 branches missed.">		else if (email != null &amp;&amp; email.length() &gt; 0)</span>
+		{
+			//	Just one
+<span class="nc bnc" id="L1895" title="All 2 branches missed.">			if (email.indexOf(';') == -1)</span>
+			{
+<span class="nc" id="L1897">				email = email.trim();</span>
+<span class="nc bnc" id="L1898" title="All 2 branches missed.">				if (!m_emails.contains(email))</span>
+				{
+<span class="nc" id="L1900">					client.sendEMail(email, subject, message, pdf, isHtml);</span>
+<span class="nc" id="L1901">					m_emails.add(email);</span>
+				}
+<span class="nc" id="L1903">				return;</span>
+			}
+			//	Multiple EMail
+<span class="nc" id="L1906">			StringTokenizer st = new StringTokenizer(email, &quot;;&quot;);</span>
+<span class="nc bnc" id="L1907" title="All 2 branches missed.">			while (st.hasMoreTokens())</span>
+			{
+<span class="nc" id="L1909">				String email1 = st.nextToken().trim();</span>
+<span class="nc bnc" id="L1910" title="All 2 branches missed.">				if (email1.length() == 0)</span>
+<span class="nc" id="L1911">					continue;</span>
+<span class="nc bnc" id="L1912" title="All 2 branches missed.">				if (!m_emails.contains(email1))</span>
+				{
+<span class="nc" id="L1914">					client.sendEMail(email1, subject, message, pdf, isHtml);</span>
+<span class="nc" id="L1915">					m_emails.add(email1);</span>
+				}
+			}
+		}
+<span class="nc" id="L1919">	}	//	sendEMail</span>
+
+	/**
+	 * 	Get Process Activity (Event) History
+	 *	@return history in html format
+	 */
+	public String getHistoryHTML()
+	{
+<span class="nc" id="L1927">		SimpleDateFormat format = DisplayType.getDateFormat(DisplayType.DateTime);</span>
+<span class="nc" id="L1928">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L1929">		MWFEventAudit[] events = MWFEventAudit.get(getCtx(), getAD_WF_Process_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1930" title="All 2 branches missed.">		for (int i = 0; i &lt; events.length; i++)</span>
+		{
+<span class="nc" id="L1932">			MWFEventAudit audit = events[i];</span>
+<span class="nc" id="L1933">			sb.append(&quot;&lt;p&gt;&quot;);</span>
+<span class="nc" id="L1934">			sb.append(format.format(audit.getCreated()))</span>
+<span class="nc" id="L1935">				.append(&quot; &quot;)</span>
+<span class="nc" id="L1936">				.append(getHTMLpart(&quot;b&quot;, audit.getNodeName()))</span>
+<span class="nc" id="L1937">				.append(&quot;: &quot;)</span>
+<span class="nc" id="L1938">				.append(getHTMLpart(null, audit.getDescription()))</span>
+<span class="nc" id="L1939">				.append(getHTMLpart(&quot;i&quot;, audit.getTextMsg()));</span>
+<span class="nc" id="L1940">			sb.append(&quot;&lt;/p&gt;&quot;);</span>
+		}
+<span class="nc" id="L1942">		return sb.toString();</span>
+	}	//	getHistory
+
+	/**
+	 * 	Get HTML part
+	 *	@param tag HTML tag
+	 *	@param content content
+	 *	@return &lt;tag&gt;content&lt;/tag&gt;
+	 */
+	private StringBuffer getHTMLpart (String tag, String content)
+	{
+<span class="nc" id="L1953">		StringBuffer sb = new StringBuffer();</span>
+<span class="nc bnc" id="L1954" title="All 4 branches missed.">		if (content == null || content.length() == 0)</span>
+<span class="nc" id="L1955">			return sb;</span>
+<span class="nc bnc" id="L1956" title="All 4 branches missed.">		if (tag != null &amp;&amp; tag.length() &gt; 0)</span>
+<span class="nc" id="L1957">			sb.append(&quot;&lt;&quot;).append(tag).append(&quot;&gt;&quot;);</span>
+<span class="nc" id="L1958">		sb.append(content);</span>
+<span class="nc bnc" id="L1959" title="All 4 branches missed.">		if (tag != null &amp;&amp; tag.length() &gt; 0)</span>
+<span class="nc" id="L1960">			sb.append(&quot;&lt;/&quot;).append(tag).append(&quot;&gt;&quot;);</span>
+<span class="nc" id="L1961">		return sb;</span>
+	}	//	getHTMLpart
+
+	/**
+	 * 	Does the underlying PO object has a PDF Attachment
+	 * 	@return true if there is a pdf attachment
+	 */
+	public boolean isPdfAttachment()
+	{
+<span class="nc bnc" id="L1970" title="All 2 branches missed.">		if (getPO() == null)</span>
+<span class="nc" id="L1971">			return false;</span>
+<span class="nc" id="L1972">		return m_po.isPdfAttachment();</span>
+	}	//	isPDFAttachment
+
+	/**
+	 * 	Get PDF Attachment of underlying PO object
+	 *	@return pdf data or null
+	 */
+	public byte[] getPdfAttachment()
+	{
+<span class="nc bnc" id="L1981" title="All 2 branches missed.">		if (getPO() == null)</span>
+<span class="nc" id="L1982">			return null;</span>
+<span class="nc" id="L1983">		return m_po.getPdfAttachment();</span>
+	}	//	getPdfAttachment
+
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L1993">		StringBuilder sb = new StringBuilder (&quot;MWFActivity[&quot;);</span>
+<span class="nc" id="L1994">		sb.append(get_ID()).append(&quot;,Node=&quot;);</span>
+<span class="nc bnc" id="L1995" title="All 2 branches missed.">		if (m_node == null)</span>
+<span class="nc" id="L1996">			sb.append(getAD_WF_Node_ID());</span>
+		else
+<span class="nc" id="L1998">			sb.append(m_node.getName());</span>
+<span class="nc" id="L1999">		sb.append(&quot;,State=&quot;).append(getWFState())</span>
+<span class="nc" id="L2000">			.append(&quot;,AD_User_ID=&quot;).append(getAD_User_ID())</span>
+<span class="nc" id="L2001">			.append(&quot;,&quot;).append(getCreated())</span>
+<span class="nc" id="L2002">			.append (&quot;]&quot;);</span>
+<span class="nc" id="L2003">		return sb.toString ();</span>
+	} 	//	toString
+
+	/**
+	 * 	User String Representation.
+	 * 	Suspended: Approve it (Joe)
+	 *	@return info
+	 */
+	public String toStringX ()
+	{
+<span class="nc" id="L2013">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L2014">		sb.append(getWFStateText())</span>
+<span class="nc" id="L2015">			.append(&quot;: &quot;).append(getNode().getName());</span>
+<span class="nc bnc" id="L2016" title="All 2 branches missed.">		if (getAD_User_ID() &gt; 0)</span>
+		{
+<span class="nc" id="L2018">			MUser user = MUser.get(getCtx(), getAD_User_ID());</span>
+<span class="nc" id="L2019">			sb.append(&quot; (&quot;).append(user.getName()).append(&quot;)&quot;);</span>
+		}
+<span class="nc" id="L2021">		return sb.toString();</span>
+	}	//	toStringX
+
+	/**
+	 * 	Get Document Summary
+	 *	@return PO Summary
+	 */
+	public String getSummary()
+	{
+<span class="nc" id="L2030">		PO po = getPO();</span>
+<span class="nc bnc" id="L2031" title="All 2 branches missed.">		if (po == null)</span>
+<span class="nc" id="L2032">			return null;</span>
+<span class="nc" id="L2033">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L2034">		String[] keyColumns = po.get_KeyColumns();</span>
+<span class="nc bnc" id="L2035" title="All 4 branches missed.">		if ((keyColumns != null) &amp;&amp; (keyColumns.length &gt; 0))</span>
+<span class="nc" id="L2036">			sb.append(Msg.getElement(getCtx(), keyColumns[0])).append(&quot; &quot;);</span>
+<span class="nc" id="L2037">		int index = po.get_ColumnIndex(&quot;DocumentNo&quot;);</span>
+<span class="nc bnc" id="L2038" title="All 2 branches missed.">		if (index != -1)</span>
+<span class="nc" id="L2039">			sb.append(po.get_Value(index)).append(&quot;: &quot;);</span>
+<span class="nc" id="L2040">		index = po.get_ColumnIndex(&quot;SalesRep_ID&quot;);</span>
+<span class="nc" id="L2041">		Integer sr = null;</span>
+<span class="nc bnc" id="L2042" title="All 2 branches missed.">		if (index != -1)</span>
+<span class="nc" id="L2043">			sr = (Integer)po.get_Value(index);</span>
+		else
+		{
+<span class="nc" id="L2046">			index = po.get_ColumnIndex(&quot;AD_User_ID&quot;);</span>
+<span class="nc bnc" id="L2047" title="All 2 branches missed.">			if (index != -1)</span>
+<span class="nc" id="L2048">				sr = (Integer)po.get_Value(index);</span>
+		}
+<span class="nc bnc" id="L2050" title="All 2 branches missed.">		if (sr != null)</span>
+		{
+<span class="nc" id="L2052">			MUser user = MUser.get(getCtx(), sr.intValue());</span>
+<span class="nc bnc" id="L2053" title="All 2 branches missed.">			if (user != null)</span>
+<span class="nc" id="L2054">				sb.append(user.getName()).append(&quot; &quot;);</span>
+		}
+		//
+<span class="nc" id="L2057">		index = po.get_ColumnIndex(&quot;C_BPartner_ID&quot;);</span>
+<span class="nc bnc" id="L2058" title="All 2 branches missed.">		if (index != -1)</span>
+		{
+<span class="nc" id="L2060">			Integer bp = (Integer)po.get_Value(index);</span>
+<span class="nc bnc" id="L2061" title="All 2 branches missed.">			if (bp != null)</span>
+			{
+<span class="nc" id="L2063">				MBPartner partner = MBPartner.get(getCtx(), bp.intValue());</span>
+<span class="nc bnc" id="L2064" title="All 2 branches missed.">				if (partner != null)</span>
+<span class="nc" id="L2065">					sb.append(partner.getName()).append(&quot; &quot;);</span>
+			}
+		}
+<span class="nc" id="L2068">		return sb.toString();</span>
+	}	//	getSummary
+
+	/**
+	 * Set up transaction event listener to set workflow state to StateEngine.STATE_Completed in the transaction
+	 * after commit event. 
+	 */
+	private void prepareCommitEvent()
+	{
+<span class="nc" id="L2077">		Trx trx = null;</span>
+<span class="nc bnc" id="L2078" title="All 2 branches missed.">		if (get_TrxName() == null)</span>
+		{
+<span class="nc" id="L2080">			return; // no transaction, nothing to commit</span>
+		}
+<span class="nc" id="L2082">		MWFActivity activity = new MWFActivity (getCtx(), get_ID(), get_TrxName());</span>
+<span class="nc" id="L2083">		trx = Trx.get(get_TrxName(), true);</span>
+<span class="nc" id="L2084">		trx.addTrxEventListener(new TrxListener(activity));		</span>
+<span class="nc" id="L2085">	}</span>
+
+	/** Transaction event listener to update workflow activity in the after commit event */
+	static class TrxListener implements TrxEventListener {
+
+		private MWFActivity activity;
+
+<span class="nc" id="L2092">		protected TrxListener(MWFActivity activity) {</span>
+<span class="nc" id="L2093">			this.activity = activity;</span>
+<span class="nc" id="L2094">		}</span>
+		
+		@Override
+		public void afterRollback(Trx trx, boolean success) {
+<span class="nc" id="L2098">		}</span>
+		
+		@Override
+		public void afterCommit(Trx trx, boolean success) {
+<span class="nc bnc" id="L2102" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L2103">				trx.removeTrxEventListener(this);</span>
+<span class="nc" id="L2104">				activity.setWFState (StateEngine.STATE_Completed);</span>
+			}
+<span class="nc" id="L2106">		}</span>
+		
+		@Override
+		public void afterClose(Trx trx) {
+<span class="nc" id="L2110">			trx.removeTrxEventListener(this);</span>
+<span class="nc" id="L2111">		}		</span>
+	}
+
+	/**
+	 * Get where clause to get the pending activities related to a User (unprocessed and suspended).&lt;br/&gt;
+	 * The where clause return requires the AD_User_ID parameter 5 times, and then AD_Client_ID.
+	 * @return Where Clause
+	 */
+	public static String getWhereUserPendingActivities() {
+<span class="nc" id="L2120">		final String where =</span>
+<span class="nc" id="L2121">			&quot;AD_WF_Activity.Processed='N' AND AD_WF_Activity.WFState='OS' AND (&quot;</span>
+			//	Owner of Activity
+			+ &quot; AD_WF_Activity.AD_User_ID=?&quot;	//	#1
+			//	Invoker (if no invoker = all)
+			+ &quot; OR EXISTS (SELECT * FROM AD_WF_Responsible r WHERE AD_WF_Activity.AD_WF_Responsible_ID=r.AD_WF_Responsible_ID&quot;
+			+ &quot; AND r.ResponsibleType='H' AND COALESCE(r.AD_User_ID,0)=0 AND COALESCE(r.AD_Role_ID,0)=0 AND (AD_WF_Activity.AD_User_ID=? OR AD_WF_Activity.AD_User_ID IS NULL))&quot;	//	#2
+			//  Responsible User
+			+ &quot; OR EXISTS (SELECT * FROM AD_WF_Responsible r WHERE AD_WF_Activity.AD_WF_Responsible_ID=r.AD_WF_Responsible_ID&quot;
+			+ &quot; AND r.ResponsibleType='H' AND r.AD_User_ID=?)&quot;		//	#3
+			//	Responsible Role
+			+ &quot; OR EXISTS (SELECT * FROM AD_WF_Responsible r INNER JOIN AD_User_Roles ur ON (r.AD_Role_ID=ur.AD_Role_ID)&quot;
+			+ &quot; WHERE AD_WF_Activity.AD_WF_Responsible_ID=r.AD_WF_Responsible_ID AND r.ResponsibleType='R' AND ur.AD_User_ID=? AND ur.isActive = 'Y')&quot;	//	#4
+			///* Manual Responsible */ 
+			+ &quot; OR EXISTS (SELECT * FROM AD_WF_ActivityApprover r &quot;
+			+ &quot; WHERE AD_WF_Activity.AD_WF_Activity_ID=r.AD_WF_Activity_ID AND r.AD_User_ID=? AND r.isActive = 'Y')&quot; // #5
+			+ &quot;) AND AD_WF_Activity.AD_Client_ID=?&quot;;	//	#6
+<span class="nc" id="L2137">		return where;</span>
+	}
+
+	/**
+	 * Get process message
+	 * @return process message
+	 */
+	public String getProcessMsg() {
+
+<span class="nc bnc" id="L2146" title="All 2 branches missed.">		if (m_process == null)</span>
+<span class="nc" id="L2147">			return null;</span>
+
+<span class="nc" id="L2149">		return m_process.getProcessMsg();</span>
+	}
+
+}	//	MWFActivity
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

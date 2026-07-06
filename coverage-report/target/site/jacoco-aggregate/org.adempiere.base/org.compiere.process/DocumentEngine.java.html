@@ -1,0 +1,1532 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DocumentEngine.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">DocumentEngine.java</span></div><h1>DocumentEngine.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+
+import org.adempiere.base.event.EventManager;
+import org.adempiere.base.event.EventProperty;
+import org.adempiere.base.event.IEventTopics;
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MAcctSchema;
+import org.compiere.model.MAllocationHdr;
+import org.compiere.model.MBankStatement;
+import org.compiere.model.MBankTransfer;
+import org.compiere.model.MCash;
+import org.compiere.model.MClient;
+import org.compiere.model.MColumn;
+import org.compiere.model.MDepositBatch;
+import org.compiere.model.MDocType;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInventory;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MJournal;
+import org.compiere.model.MJournalBatch;
+import org.compiere.model.MMovement;
+import org.compiere.model.MOrder;
+import org.compiere.model.MPayment;
+import org.compiere.model.MProduction;
+import org.compiere.model.MRMA;
+import org.compiere.model.MRole;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.SystemIDs;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.eevolution.model.I_DD_Order;
+import org.eevolution.model.I_HR_Process;
+import org.eevolution.model.I_PP_Cost_Collector;
+import org.eevolution.model.I_PP_Order;
+import org.idempiere.acct.AcctModelServices;
+import org.idempiere.acct.IDocPostingService;
+import org.osgi.service.event.Event;
+
+/**
+ *	Document Action Engine
+ *
+ *  @author Jorg Janke
+ *  @author Karsten Thiemann FR [ 1782412 ]
+ *  @author victor.perez@e-evolution.com www.e-evolution.com FR [ 1866214 ]  https://sourceforge.net/p/adempiere/feature-requests/298/
+ *  @version $Id: DocumentEngine.java,v 1.2 2006/07/30 00:54:44 jjanke Exp $
+ */
+public class DocumentEngine implements DocAction
+{
+	/**
+	 * When client accounting is immediate, set this PO attribute to override the default of immediate posting after complete of document
+	 */
+	public static final String DOCUMENT_POST_IMMEDIATE_AFTER_COMPLETE = &quot;Document.PostImmediateAfterComplete&quot;;
+
+	/**
+	 * 	Doc Engine (Drafted)
+	 * 	@param po document
+	 */
+	public DocumentEngine (DocAction po)
+	{
+<span class="nc" id="L92">		this (po, STATUS_Drafted);</span>
+<span class="nc" id="L93">	}	//	DocActionEngine</span>
+
+	/**
+	 * 	Doc Engine
+	 * 	@param po document
+	 * 	@param docStatus initial document status
+	 */
+<span class="nc" id="L100">	public DocumentEngine (DocAction po, String docStatus)</span>
+	{
+<span class="nc" id="L102">		m_document = po;</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">		if (docStatus != null)</span>
+<span class="nc" id="L104">			m_status = docStatus;</span>
+<span class="nc" id="L105">	}	//	DocActionEngine</span>
+
+	/** Persistent Document 	*/
+	private DocAction	m_document;
+	/** Document Status			*/
+<span class="nc" id="L110">	private String		m_status = STATUS_Drafted;</span>
+	/**	Process Message 		*/
+<span class="nc" id="L112">	private String		m_message = null;</span>
+	/** Actual Doc Action		*/
+<span class="nc" id="L114">	private String		m_action = null;</span>
+
+	/**	Logger			*/
+<span class="nc" id="L117">	private static CLogger log = CLogger.getCLogger(DocumentEngine.class);</span>
+
+	/**
+	 * 	Get Doc Status
+	 *	@return document status
+	 */
+	@Override
+	public String getDocStatus()
+	{
+<span class="nc" id="L126">		return m_status;</span>
+	}	//	getDocStatus
+
+	/**
+	 * 	Set Doc Status - Ignored
+	 *	@param ignored Status is not set directly
+	 *  @see org.compiere.process.DocAction#setDocStatus(String)
+	 */
+	@Override
+	public void setDocStatus(String ignored)
+	{
+<span class="nc" id="L137">	}	//	setDocStatus</span>
+
+	/**
+	 * 	Is current Document Status is Drafted
+	 *	@return true if current status is drafted
+	 */
+	public boolean isDrafted()
+	{
+<span class="nc" id="L145">		return STATUS_Drafted.equals(m_status);</span>
+	}	//	isDrafted
+
+	/**
+	 * 	Is current Document Status is Invalid
+	 *	@return true if current status is Invalid
+	 */
+	public boolean isInvalid()
+	{
+<span class="nc" id="L154">		return STATUS_Invalid.equals(m_status);</span>
+	}	//	isInvalid
+
+	/**
+	 * 	Is current Document Status is In Progress
+	 *	@return true if current status is In Progress
+	 */
+	public boolean isInProgress()
+	{
+<span class="nc" id="L163">		return STATUS_InProgress.equals(m_status);</span>
+	}	//	isInProgress
+
+	/**
+	 * 	Is current Document Status is Approved
+	 *	@return true if current status is Approved
+	 */
+	public boolean isApproved()
+	{
+<span class="nc" id="L172">		return STATUS_Approved.equals(m_status);</span>
+	}	//	isApproved
+
+	/**
+	 * 	Is current Document Status is Not Approved
+	 *	@return true if current status is Not Approved
+	 */
+	public boolean isNotApproved()
+	{
+<span class="nc" id="L181">		return STATUS_NotApproved.equals(m_status);</span>
+	}	//	isNotApproved
+
+	/**
+	 * 	Is current Document Status is Waiting Payment or Confirmation
+	 *	@return true if current status is Waiting Payment
+	 */
+	public boolean isWaiting()
+	{
+<span class="nc bnc" id="L190" title="All 2 branches missed.">		return STATUS_WaitingPayment.equals(m_status)</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">			|| STATUS_WaitingConfirmation.equals(m_status);</span>
+	}	//	isWaitingPayment
+
+	/**
+	 * 	Is current Document Status is Completed
+	 *	@return true if current status is Completed
+	 */
+	public boolean isCompleted()
+	{
+<span class="nc" id="L200">		return STATUS_Completed.equals(m_status);</span>
+	}	//	isCompleted
+
+	/**
+	 * 	Is current Document Status is Reversed
+	 *	@return true if current status is Reversed
+	 */
+	public boolean isReversed()
+	{
+<span class="nc" id="L209">		return STATUS_Reversed.equals(m_status);</span>
+	}	//	isReversed
+
+	/**
+	 * 	Is current Document Status is Closed
+	 *	@return true if current status is Closed
+	 */
+	public boolean isClosed()
+	{
+<span class="nc" id="L218">		return STATUS_Closed.equals(m_status);</span>
+	}	//	isClosed
+
+	/**
+	 * 	Is current Document Status is Voided
+	 *	@return true if current status is Voided
+	 */
+	public boolean isVoided()
+	{
+<span class="nc" id="L227">		return STATUS_Voided.equals(m_status);</span>
+	}	//	isVoided
+
+	/**
+	 * 	Is current Document Status is Unknown
+	 *	@return true if current status is unknown
+	 */
+	public boolean isUnknown()
+	{
+<span class="nc bnc" id="L236" title="All 2 branches missed.">		return STATUS_Unknown.equals(m_status) ||</span>
+<span class="nc bnc" id="L237" title="All 8 branches missed.">			!(isDrafted() || isInvalid() || isInProgress() || isNotApproved()</span>
+<span class="nc bnc" id="L238" title="All 6 branches missed.">				|| isApproved() || isWaiting() || isCompleted()</span>
+<span class="nc bnc" id="L239" title="All 6 branches missed.">				|| isReversed() || isClosed() || isVoided() );</span>
+	}	//	isUnknown
+
+	/**
+	 * 	Process document action.&lt;br/&gt;
+	 * 	Checks if user (document) action is valid and then process action.&lt;br/&gt;
+	 * 	Calls the individual actions which call the document action.
+	 *	@param processAction document action value from workflow
+	 *	@param docAction document action value from document (PO)
+	 *	@return true if performed
+	 */
+	public boolean processIt (String processAction, String docAction)
+	{
+		//ensure doc status not change by other session
+<span class="nc bnc" id="L253" title="All 2 branches missed.">		if (m_document instanceof PO) {</span>
+<span class="nc" id="L254">			PO docPO = (PO) m_document;</span>
+<span class="nc bnc" id="L255" title="All 6 branches missed.">			if (docPO.get_ID() &gt; 0 &amp;&amp; docPO.get_TrxName() != null &amp;&amp; docPO.get_ValueOld(&quot;DocStatus&quot;) != null) {</span>
+<span class="nc" id="L256">				DB.getDatabase().forUpdate(docPO, 30);</span>
+<span class="nc" id="L257">				String docStatusOriginal = (String) docPO.get_ValueOld(&quot;DocStatus&quot;);</span>
+<span class="nc" id="L258">				String statusSql = &quot;SELECT DocStatus FROM &quot; + docPO.get_TableName() + &quot; WHERE &quot; + docPO.get_KeyColumns()[0] + &quot; = ? &quot;;</span>
+<span class="nc" id="L259">				String currentStatus = DB.getSQLValueString((String)null, statusSql, docPO.get_ID());</span>
+<span class="nc bnc" id="L260" title="All 4 branches missed.">				if (!docStatusOriginal.equals(currentStatus) &amp;&amp; currentStatus != null) {</span>
+<span class="nc" id="L261">					currentStatus = DB.getSQLValueString(docPO.get_TrxName(), statusSql, docPO.get_ID());</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">					if (!docStatusOriginal.equals(currentStatus)) {</span>
+<span class="nc" id="L263">						throw new IllegalStateException(Msg.getMsg(docPO.getCtx(), &quot;DocStatusChanged&quot;) + &quot; &quot; + docPO.toString());</span>
+					}
+				}
+			}
+		}
+				
+<span class="nc" id="L269">		m_message = null;</span>
+<span class="nc" id="L270">		m_action = null;</span>
+		//	Std User Workflows - see MWFNodeNext.isValidFor
+
+<span class="nc bnc" id="L273" title="All 2 branches missed.">		if (isValidAction(processAction))	//	WF Selection first</span>
+<span class="nc" id="L274">			m_action = processAction;</span>
+		//
+<span class="nc bnc" id="L276" title="All 2 branches missed.">		else if (isValidAction(docAction))	//	User Selection second</span>
+<span class="nc" id="L277">			m_action = docAction;</span>
+		//	Nothing to do
+<span class="nc bnc" id="L279" title="All 2 branches missed.">		else if (processAction.equals(ACTION_None)</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">			|| docAction.equals(ACTION_None))</span>
+		{
+<span class="nc bnc" id="L282" title="All 2 branches missed.">			if (m_document != null)</span>
+<span class="nc" id="L283">				m_document.get_Logger().info (&quot;**** No Action (Prc=&quot; + processAction + &quot;/Doc=&quot; + docAction + &quot;) &quot; + m_document);</span>
+<span class="nc" id="L284">			return true;</span>
+		}
+		else
+		{
+<span class="nc" id="L288">			throw new IllegalStateException(&quot;Status=&quot; + getDocStatus()</span>
+<span class="nc" id="L289">				+ &quot; - Invalid Actions: Process=&quot;  + processAction + &quot;, Doc=&quot; + docAction);</span>
+		}
+<span class="nc bnc" id="L291" title="All 4 branches missed.">		if (m_document != null &amp;&amp; m_document.get_Logger().isLoggable(Level.INFO))</span>
+<span class="nc" id="L292">				m_document.get_Logger().info (&quot;**** Action=&quot; + m_action + &quot; (Prc=&quot; + processAction + &quot;/Doc=&quot; + docAction + &quot;) &quot; + m_document);</span>
+<span class="nc" id="L293">		boolean success = processIt (m_action);</span>
+<span class="nc bnc" id="L294" title="All 4 branches missed.">		if (m_document != null &amp;&amp; m_document.get_Logger().isLoggable(Level.FINE))</span>
+<span class="nc" id="L295">			m_document.get_Logger().fine(&quot;**** Action=&quot; + m_action + &quot; - Success=&quot; + success);</span>
+<span class="nc" id="L296">		return success;</span>
+	}	//	process
+
+	/**
+	 * 	Process document action - internal API, do not call directly.&lt;br/&gt;
+	 * 	Calls the individual actions which call the document action.
+	 *	@param action document action
+	 *	@return true if performed
+	 */
+	@Override
+	public boolean processIt (String action)
+	{
+<span class="nc" id="L308">		m_message = null;</span>
+<span class="nc" id="L309">		m_action = action;</span>
+		//
+<span class="nc bnc" id="L311" title="All 2 branches missed.">		if (ACTION_Unlock.equals(m_action))</span>
+<span class="nc" id="L312">			return unlockIt();</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		if (ACTION_Invalidate.equals(m_action))</span>
+<span class="nc" id="L314">			return invalidateIt();</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">		if (ACTION_Prepare.equals(m_action))</span>
+<span class="nc" id="L316">			return STATUS_InProgress.equals(prepareIt());</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">		if (ACTION_Approve.equals(m_action))</span>
+<span class="nc" id="L318">			return approveIt();</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">		if (ACTION_Reject.equals(m_action))</span>
+<span class="nc" id="L320">			return rejectIt();</span>
+<span class="nc bnc" id="L321" title="All 4 branches missed.">		if (ACTION_Complete.equals(m_action) || ACTION_WaitComplete.equals(m_action))</span>
+		{
+<span class="nc" id="L323">			String status = null;</span>
+<span class="nc bnc" id="L324" title="All 4 branches missed.">			if (isDrafted() || isInvalid())		//	prepare if not prepared yet</span>
+			{
+<span class="nc" id="L326">				status = prepareIt();</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">				if (!STATUS_InProgress.equals(status))</span>
+<span class="nc" id="L328">					return false;</span>
+			}
+<span class="nc" id="L330">			status = completeIt();</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">			boolean ok =   STATUS_Completed.equals(status)</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">						|| STATUS_InProgress.equals(status)</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">						|| STATUS_WaitingPayment.equals(status)</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">						|| STATUS_WaitingConfirmation.equals(status);</span>
+<span class="nc bnc" id="L335" title="All 4 branches missed.">			if (m_document != null &amp;&amp; ok)</span>
+			{
+				// PostProcess documents when invoice or inout (this is to postprocess the generated MatchPO and MatchInv if any)
+<span class="nc" id="L338">				List&lt;PO&gt; docsPostProcess = new ArrayList&lt;PO&gt;();</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">				if (m_document instanceof IDocsPostProcess) {</span>
+<span class="nc" id="L340">					docsPostProcess = ((IDocsPostProcess) m_document).getDocsPostProcess(); </span>
+				}
+<span class="nc bnc" id="L342" title="All 4 branches missed.">				if (m_document instanceof PO &amp;&amp; docsPostProcess.size() &gt; 0) {</span>
+					// Process (this is to update the ProcessedOn flag with a timestamp after the original document)
+<span class="nc bnc" id="L344" title="All 2 branches missed.">					for (PO docafter : docsPostProcess) {</span>
+<span class="nc" id="L345">						docafter.setProcessedOn(&quot;Processed&quot;, true, false);</span>
+<span class="nc" id="L346">						docafter.saveEx();</span>
+					}
+				}
+
+<span class="nc bnc" id="L350" title="All 4 branches missed.">				if (STATUS_Completed.equals(status) &amp;&amp; MClient.isClientAccountingImmediate())</span>
+				{
+<span class="nc" id="L352">					boolean postNow = true;</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">					if (m_document instanceof PO)</span>
+					{
+<span class="nc" id="L355">						Object attribute = ((PO) m_document).get_Attribute(DOCUMENT_POST_IMMEDIATE_AFTER_COMPLETE);</span>
+<span class="nc bnc" id="L356" title="All 4 branches missed.">						if (attribute != null &amp;&amp; attribute instanceof Boolean)</span>
+						{
+<span class="nc" id="L358">							postNow = (boolean) attribute;</span>
+						}
+					}
+					
+<span class="nc bnc" id="L362" title="All 2 branches missed.">					if (postNow)</span>
+					{
+<span class="nc" id="L364">						m_document.saveEx();</span>
+<span class="nc" id="L365">						postIt();</span>
+	
+<span class="nc bnc" id="L367" title="All 4 branches missed.">						if (m_document instanceof PO &amp;&amp; docsPostProcess.size() &gt; 0) {</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">							for (PO docafter : docsPostProcess) {								</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">								if (docafter.get_ValueAsBoolean(&quot;Posted&quot;))</span>
+<span class="nc" id="L370">									continue;</span>
+<span class="nc" id="L371">								String ignoreError = DocumentEngine.postImmediate(docafter.getCtx(), docafter.getAD_Client_ID(), docafter.get_Table_ID(), docafter.get_ID(), true, docafter.get_TrxName());</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">								if (!Util.isEmpty(ignoreError, true)) {</span>
+<span class="nc" id="L373">									log.warning(&quot;Error posting &quot; + docafter + &quot;. Error=&quot;+ignoreError);</span>
+<span class="nc" id="L374">								} else {</span>
+<span class="nc" id="L375">									docafter.load(docafter.get_TrxName());</span>
+								}
+							}
+						}
+					}
+				}
+
+			}
+<span class="nc" id="L383">			return ok;</span>
+		}
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		if (ACTION_ReActivate.equals(m_action))</span>
+<span class="nc" id="L386">			return reActivateIt();</span>
+<span class="nc bnc" id="L387" title="All 4 branches missed.">		if (ACTION_Reverse_Accrual.equals(m_action) || ACTION_Reverse_Correct.equals(m_action))</span>
+		{
+<span class="nc" id="L389">			boolean ok = false;</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">			if (ACTION_Reverse_Accrual.equals(m_action))</span>
+<span class="nc" id="L391">				ok = reverseAccrualIt();</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">			else if (ACTION_Reverse_Correct.equals(m_action))</span>
+<span class="nc" id="L393">				ok = reverseCorrectIt();</span>
+			
+<span class="nc bnc" id="L395" title="All 4 branches missed.">			if (m_document != null &amp;&amp; ok)</span>
+			{
+<span class="nc bnc" id="L397" title="All 6 branches missed.">				if (MClient.isClientAccountingImmediate() &amp;&amp; m_document instanceof IDocsPostProcess &amp;&amp; m_document instanceof PO)</span>
+				{
+<span class="nc" id="L399">					List&lt;PO&gt; docsPostProcess = ((IDocsPostProcess) m_document).getDocsPostProcess(); </span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">					if (docsPostProcess.size() &gt; 0) {</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">						if (((PO) m_document).get_ValueAsBoolean(&quot;Posted&quot;)) {</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">							for (PO docafter : docsPostProcess) {								</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">								if (docafter.get_ValueAsBoolean(&quot;Posted&quot;))</span>
+<span class="nc" id="L404">									continue;</span>
+<span class="nc" id="L405">								String ignoreError = DocumentEngine.postImmediate(docafter.getCtx(), docafter.getAD_Client_ID(), docafter.get_Table_ID(), docafter.get_ID(), true, docafter.get_TrxName());</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">								if (!Util.isEmpty(ignoreError, true)) {</span>
+<span class="nc" id="L407">									log.warning(&quot;Error posting &quot; + docafter + &quot;. Error=&quot;+ignoreError);</span>
+<span class="nc" id="L408">								} else {</span>
+<span class="nc" id="L409">									docafter.load(docafter.get_TrxName());</span>
+								}
+							}
+						}
+					}				
+				}
+			}
+			
+<span class="nc" id="L417">			return ok;</span>
+		}
+<span class="nc bnc" id="L419" title="All 2 branches missed.">		if (ACTION_Close.equals(m_action))</span>
+<span class="nc" id="L420">			return closeIt();</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">		if (ACTION_Void.equals(m_action))</span>
+<span class="nc" id="L422">			return voidIt();</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (ACTION_Post.equals(m_action))</span>
+<span class="nc" id="L424">			return postIt();</span>
+		//
+<span class="nc" id="L426">		return false;</span>
+	}	//	processDocument
+
+	/**
+	 * 	Unlock Document.&lt;br/&gt;
+	 * 	Status: Drafted.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#unlockIt()
+	 */
+	@Override
+	public boolean unlockIt()
+	{
+<span class="nc bnc" id="L438" title="All 2 branches missed.">		if (!isValidAction(ACTION_Unlock))</span>
+<span class="nc" id="L439">			return false;</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L442" title="All 2 branches missed.">			if (m_document.unlockIt())</span>
+			{
+<span class="nc" id="L444">				m_status = STATUS_Drafted;</span>
+<span class="nc" id="L445">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L446">				return true;</span>
+			}
+<span class="nc" id="L448">			return false;</span>
+		}
+<span class="nc" id="L450">		m_status = STATUS_Drafted;</span>
+<span class="nc" id="L451">		return true;</span>
+	}	//	unlockIt
+
+	/**
+	 * 	Invalidate Document.&lt;br/&gt;
+	 * 	Status: Invalid.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#invalidateIt()
+	 */
+	@Override
+	public boolean invalidateIt()
+	{
+<span class="nc bnc" id="L463" title="All 2 branches missed.">		if (!isValidAction(ACTION_Invalidate))</span>
+<span class="nc" id="L464">			return false;</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L467" title="All 2 branches missed.">			if (m_document.invalidateIt())</span>
+			{
+<span class="nc" id="L469">				m_status = STATUS_Invalid;</span>
+<span class="nc" id="L470">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L471">				return true;</span>
+			}
+<span class="nc" id="L473">			return false;</span>
+		}
+<span class="nc" id="L475">		m_status = STATUS_Invalid;</span>
+<span class="nc" id="L476">		return true;</span>
+	}	//	invalidateIt
+
+	/**
+	 *	Prepare Document.&lt;br/&gt;
+	 * 	Status is set by document action method.
+	 * 	@return new status (In Progress or Invalid)
+	 * 	@see org.compiere.process.DocAction#prepareIt()
+	 */
+	@Override
+	public String prepareIt()
+	{
+<span class="nc bnc" id="L488" title="All 2 branches missed.">		if (!isValidAction(ACTION_Prepare))</span>
+<span class="nc" id="L489">			return m_status;</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc" id="L492">			m_status = m_document.prepareIt();</span>
+<span class="nc" id="L493">			m_document.setDocStatus(m_status);</span>
+		}
+<span class="nc" id="L495">		return m_status;</span>
+	}	//	processIt
+
+	/**
+	 * 	Approve Document.&lt;br/&gt;
+	 * 	Status: Approved.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#approveIt()
+	 */
+	@Override
+	public boolean  approveIt()
+	{
+<span class="nc bnc" id="L507" title="All 2 branches missed.">		if (!isValidAction(ACTION_Approve))</span>
+<span class="nc" id="L508">			return false;</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L511" title="All 2 branches missed.">			if (m_document.approveIt())</span>
+			{
+<span class="nc" id="L513">				m_status = STATUS_Approved;</span>
+<span class="nc" id="L514">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L515">				return true;</span>
+			}
+<span class="nc" id="L517">			return false;</span>
+		}
+<span class="nc" id="L519">		m_status = STATUS_Approved;</span>
+<span class="nc" id="L520">		return true;</span>
+	}	//	approveIt
+
+	/**
+	 * 	Reject Approval.&lt;br/&gt;
+	 * 	Status: Not Approved.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#rejectIt()
+	 */
+	@Override
+	public boolean rejectIt()
+	{
+<span class="nc bnc" id="L532" title="All 2 branches missed.">		if (!isValidAction(ACTION_Reject))</span>
+<span class="nc" id="L533">			return false;</span>
+<span class="nc bnc" id="L534" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L536" title="All 2 branches missed.">			if (m_document.rejectIt())</span>
+			{
+<span class="nc" id="L538">				m_status = STATUS_NotApproved;</span>
+<span class="nc" id="L539">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L540">				return true;</span>
+			}
+<span class="nc" id="L542">			return false;</span>
+		}
+<span class="nc" id="L544">		m_status = STATUS_NotApproved;</span>
+<span class="nc" id="L545">		return true;</span>
+	}	//	rejectIt
+
+	/**
+	 * 	Complete Document.&lt;br/&gt;
+	 * 	Status is set by document action method.
+	 * 	@return new document status (Complete, In Progress, Invalid, Waiting ..)
+	 * 	@see org.compiere.process.DocAction#completeIt()
+	 */
+	@Override
+	public String completeIt()
+	{
+<span class="nc bnc" id="L557" title="All 2 branches missed.">		if (!isValidAction(ACTION_Complete))</span>
+<span class="nc" id="L558">			return m_status;</span>
+<span class="nc bnc" id="L559" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc" id="L561">			m_status = m_document.completeIt();</span>
+<span class="nc" id="L562">			m_document.setDocStatus(m_status);</span>
+		}
+<span class="nc" id="L564">		return m_status;</span>
+	}	//	completeIt
+
+	/**
+	 * 	Post Document.&lt;br/&gt;
+	 * 	Does not change status.
+	 * 	@return true if success
+	 */
+	public boolean postIt()
+	{
+<span class="nc bnc" id="L574" title="All 2 branches missed.">		if (!isValidAction(ACTION_Post)</span>
+<span class="nc bnc" id="L575" title="All 2 branches missed.">			|| m_document == null)</span>
+<span class="nc" id="L576">			return false;</span>
+
+<span class="nc" id="L578">		String error = DocumentEngine.postImmediate(Env.getCtx(), m_document.getAD_Client_ID(), m_document.get_Table_ID(), m_document.get_ID(), true, m_document.get_TrxName());</span>
+<span class="nc bnc" id="L579" title="All 2 branches missed.">		if (ACTION_Post.equals(m_action)) {</span>
+			// forced post via process - throw exception to inform the caller about the error
+<span class="nc bnc" id="L581" title="All 2 branches missed.">			if (! Util.isEmpty(error)) {</span>
+<span class="nc" id="L582">				throw new AdempiereException(error);</span>
+			}
+		}
+<span class="nc bnc" id="L585" title="All 2 branches missed.">		return (error == null);</span>
+	}	//	postIt
+
+	/**
+	 * 	Void Document.&lt;br/&gt;
+	 * 	Status: Voided.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#voidIt()
+	 */
+	@Override
+	public boolean voidIt()
+	{
+<span class="nc bnc" id="L597" title="All 2 branches missed.">		if (!isValidAction(ACTION_Void))</span>
+<span class="nc" id="L598">			return false;</span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L601" title="All 2 branches missed.">			if (m_document.voidIt())</span>
+			{
+<span class="nc" id="L603">				m_status = STATUS_Voided;</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">				if (!m_document.getDocStatus().equals(STATUS_Reversed))</span>
+<span class="nc" id="L605">					m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L606">				return true;</span>
+			}
+<span class="nc" id="L608">			return false;</span>
+		}
+<span class="nc" id="L610">		m_status = STATUS_Voided;</span>
+<span class="nc" id="L611">		return true;</span>
+	}	//	voidIt
+
+	/**
+	 * 	Close Document.&lt;br/&gt;
+	 * 	Status: Closed.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#closeIt()
+	 */
+	@Override
+	public boolean closeIt()
+	{
+<span class="nc bnc" id="L623" title="All 2 branches missed.">		if (m_document != null 	//	orders can be closed any time</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">			&amp;&amp; m_document.get_Table_ID() == MOrder.Table_ID)</span>
+<span class="nc" id="L625">			;</span>
+<span class="nc bnc" id="L626" title="All 2 branches missed.">		else if (!isValidAction(ACTION_Close))</span>
+<span class="nc" id="L627">			return false;</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L630" title="All 2 branches missed.">			if (m_document.closeIt())</span>
+			{
+<span class="nc" id="L632">				m_status = STATUS_Closed;</span>
+<span class="nc" id="L633">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L634">				return true;</span>
+			}
+<span class="nc" id="L636">			return false;</span>
+		}
+<span class="nc" id="L638">		m_status = STATUS_Closed;</span>
+<span class="nc" id="L639">		return true;</span>
+	}	//	closeIt
+
+	/**
+	 * 	Reverse Correct Document.&lt;br/&gt;
+	 * 	Status: Reversed.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#reverseCorrectIt()
+	 */
+	@Override
+	public boolean reverseCorrectIt()
+	{
+<span class="nc bnc" id="L651" title="All 2 branches missed.">		if (!isValidAction(ACTION_Reverse_Correct))</span>
+<span class="nc" id="L652">			return false;</span>
+<span class="nc bnc" id="L653" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L655" title="All 2 branches missed.">			if (m_document.reverseCorrectIt())</span>
+			{
+<span class="nc" id="L657">				m_status = STATUS_Reversed;</span>
+<span class="nc" id="L658">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L659">				return true;</span>
+			}
+<span class="nc" id="L661">			return false;</span>
+		}
+<span class="nc" id="L663">		m_status = STATUS_Reversed;</span>
+<span class="nc" id="L664">		return true;</span>
+	}	//	reverseCorrectIt
+
+	/**
+	 * 	Reverse Accrual Document.&lt;br/&gt;
+	 * 	Status: Reversed.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#reverseAccrualIt()
+	 */
+	@Override
+	public boolean reverseAccrualIt()
+	{
+<span class="nc bnc" id="L676" title="All 2 branches missed.">		if (!isValidAction(ACTION_Reverse_Accrual))</span>
+<span class="nc" id="L677">			return false;</span>
+<span class="nc bnc" id="L678" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L680" title="All 2 branches missed.">			if (m_document.reverseAccrualIt())</span>
+			{
+<span class="nc" id="L682">				m_status = STATUS_Reversed;</span>
+<span class="nc" id="L683">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L684">				return true;</span>
+			}
+<span class="nc" id="L686">			return false;</span>
+		}
+<span class="nc" id="L688">		m_status = STATUS_Reversed;</span>
+<span class="nc" id="L689">		return true;</span>
+	}	//	reverseAccrualIt
+
+	/**
+	 * 	Re-activate Document.&lt;br/&gt;
+	 * 	Status: In Progress.
+	 * 	@return true if success
+	 * 	@see org.compiere.process.DocAction#reActivateIt()
+	 */
+	@Override
+	public boolean reActivateIt()
+	{
+<span class="nc bnc" id="L701" title="All 2 branches missed.">		if (!isValidAction(ACTION_ReActivate))</span>
+<span class="nc" id="L702">			return false;</span>
+<span class="nc bnc" id="L703" title="All 2 branches missed.">		if (m_document != null)</span>
+		{
+<span class="nc bnc" id="L705" title="All 2 branches missed.">			if (m_document.reActivateIt())</span>
+			{
+<span class="nc" id="L707">				m_status = STATUS_InProgress;</span>
+<span class="nc" id="L708">				m_document.setDocStatus(m_status);</span>
+<span class="nc" id="L709">				return true;</span>
+			}
+<span class="nc" id="L711">			return false;</span>
+		}
+<span class="nc" id="L713">		m_status = STATUS_InProgress;</span>
+<span class="nc" id="L714">		return true;</span>
+	}	//	reActivateIt
+
+
+	/**
+	 * 	Set Document Status to new Status
+	 *	@param newStatus new status
+	 */
+	protected void setStatus (String newStatus)
+	{
+<span class="nc" id="L724">		m_status = newStatus;</span>
+<span class="nc" id="L725">	}	//	setStatus</span>
+
+	/**
+	 * 	Get available Document Actions based on current Document Status.
+	 *	@return array of actions
+	 */
+	public String[] getActionOptions()
+	{
+<span class="nc bnc" id="L733" title="All 2 branches missed.">		if (isInvalid())</span>
+<span class="nc" id="L734">			return new String[] {ACTION_Prepare, ACTION_Invalidate,</span>
+<span class="nc" id="L735">				ACTION_Unlock, ACTION_Void};</span>
+
+<span class="nc bnc" id="L737" title="All 2 branches missed.">		if (isDrafted())</span>
+<span class="nc" id="L738">			return new String[] {ACTION_Prepare, ACTION_Invalidate, ACTION_Complete,</span>
+<span class="nc" id="L739">				ACTION_Unlock, ACTION_Void};</span>
+
+<span class="nc bnc" id="L741" title="All 4 branches missed.">		if (isInProgress() || isApproved())</span>
+<span class="nc" id="L742">			return new String[] {ACTION_Complete, ACTION_WaitComplete,</span>
+<span class="nc" id="L743">				ACTION_Approve, ACTION_Reject,</span>
+<span class="nc" id="L744">				ACTION_Unlock, ACTION_Void, ACTION_Prepare};</span>
+
+<span class="nc bnc" id="L746" title="All 2 branches missed.">		if (isNotApproved())</span>
+<span class="nc" id="L747">			return new String[] {ACTION_Reject, ACTION_Prepare,</span>
+<span class="nc" id="L748">				ACTION_Unlock, ACTION_Void};</span>
+
+<span class="nc bnc" id="L750" title="All 2 branches missed.">		if (isWaiting())</span>
+<span class="nc" id="L751">			return new String[] {ACTION_Complete, ACTION_WaitComplete,</span>
+<span class="nc" id="L752">				ACTION_ReActivate, ACTION_Void, ACTION_Close};</span>
+
+<span class="nc bnc" id="L754" title="All 2 branches missed.">		if (isCompleted())</span>
+<span class="nc" id="L755">			return new String[] {ACTION_Close, ACTION_ReActivate,</span>
+<span class="nc" id="L756">				ACTION_Reverse_Accrual, ACTION_Reverse_Correct,</span>
+<span class="nc" id="L757">				ACTION_Post, ACTION_Void};</span>
+
+<span class="nc bnc" id="L759" title="All 2 branches missed.">		if (isClosed())</span>
+<span class="nc" id="L760">			return new String[] {ACTION_Post, ACTION_ReActivate};</span>
+
+<span class="nc bnc" id="L762" title="All 4 branches missed.">		if (isReversed() || isVoided())</span>
+<span class="nc" id="L763">			return new String[] {ACTION_Post};</span>
+
+<span class="nc" id="L765">		return new String[] {};</span>
+	}	//	getActionOptions
+
+	/**
+	 * 	Is The Action Valid based on current document status.
+	 *	@param action action
+	 *	@return true if valid
+	 */
+	public boolean isValidAction (String action)
+	{
+<span class="nc" id="L775">		String[] options = getActionOptions();</span>
+<span class="nc bnc" id="L776" title="All 2 branches missed.">		for (int i = 0; i &lt; options.length; i++)</span>
+		{
+<span class="nc bnc" id="L778" title="All 2 branches missed.">			if (options[i].equals(action))</span>
+<span class="nc" id="L779">				return true;</span>
+		}
+<span class="nc" id="L781">		return false;</span>
+	}	//	isValidAction
+
+	/**
+	 * 	Get Process Message
+	 *	@return clear text error message
+	 */
+	@Override
+	public String getProcessMsg ()
+	{
+<span class="nc" id="L791">		return m_message;</span>
+	}	//	getProcessMsg
+
+	/**
+	 * 	Set Process Message
+	 *	@param msg clear text error message
+	 */
+	public void setProcessMsg (String msg)
+	{
+<span class="nc" id="L800">		m_message = msg;</span>
+<span class="nc" id="L801">	}	//	setProcessMsg</span>
+
+	/**	Document Exception Message		*/
+<span class="nc" id="L804">	private static String EXCEPTION_MSG = &quot;Document Engine is no Document&quot;;</span>
+
+	/**
+	 *	Not applicable, throw exception
+	 */
+	@Override
+	public String getSummary()
+	{
+<span class="nc" id="L812">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public String getDocumentNo()
+	{
+<span class="nc" id="L821">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public String getDocumentInfo()
+	{
+<span class="nc" id="L830">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public int getDoc_User_ID()
+	{
+<span class="nc" id="L839">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public int getC_Currency_ID()
+	{
+<span class="nc" id="L848">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public BigDecimal getApprovalAmt()
+	{
+<span class="nc" id="L857">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public int getAD_Client_ID()
+	{
+<span class="nc" id="L866">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public int getAD_Org_ID()
+	{
+<span class="nc" id="L875">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Get Doc Action
+	 *	@return Document Action
+	 */
+	@Override
+	public String getDocAction()
+	{
+<span class="nc" id="L885">		return m_action;</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public boolean save()
+	{
+<span class="nc" id="L894">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+
+	/**
+	 * 	Not applicable, throw exception
+	 */
+	@Override
+	public void saveEx() throws AdempiereException
+	{
+<span class="nc" id="L903">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}
+	
+	/**
+	 * 	Get Context
+	 *	@return context
+	 */
+	@Override
+	public Properties getCtx()
+	{
+<span class="nc bnc" id="L913" title="All 2 branches missed.">		if (m_document != null)</span>
+<span class="nc" id="L914">			return m_document.getCtx();</span>
+<span class="nc" id="L915">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}	//	getCtx
+
+	/**
+	 * 	Get ID of record
+	 *	@return ID
+	 */
+	@Override
+	public int get_ID()
+	{
+<span class="nc bnc" id="L925" title="All 2 branches missed.">		if (m_document != null)</span>
+<span class="nc" id="L926">			return m_document.get_ID();</span>
+<span class="nc" id="L927">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}	//	get_ID
+
+	/**
+	 * 	Get AD_Table_ID
+	 *	@return AD_Table_ID
+	 */
+	@Override
+	public int get_Table_ID()
+	{
+<span class="nc bnc" id="L937" title="All 2 branches missed.">		if (m_document != null)</span>
+<span class="nc" id="L938">			return m_document.get_Table_ID();</span>
+<span class="nc" id="L939">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}	//	get_Table_ID
+
+	/**
+	 * 	Get Logger
+	 *	@return logger
+	 */
+	@Override
+	public CLogger get_Logger()
+	{
+<span class="nc bnc" id="L949" title="All 2 branches missed.">		if (m_document != null)</span>
+<span class="nc" id="L950">			return m_document.get_Logger();</span>
+<span class="nc" id="L951">		throw new IllegalStateException(EXCEPTION_MSG);</span>
+	}	//	get_Logger
+
+	/**
+	 * 	Get Transaction
+	 *	@return trx name
+	 */
+	@Override
+	public String get_TrxName()
+	{
+<span class="nc" id="L961">		return null;</span>
+	}	//	get_TrxName
+
+	/**
+	 * 	CreatePDF
+	 *	@return null
+	 */
+	@Override
+	public File createPDF ()
+	{
+<span class="nc" id="L971">		return null;</span>
+	}
+
+	/**
+	 * Get list of valid document action into the options array parameter.&lt;br/&gt;
+	 * Set default document action into the docAction array parameter.
+	 * @param docStatus
+	 * @param processing
+	 * @param orderType
+	 * @param isSOTrx
+	 * @param AD_Table_ID
+	 * @param docAction
+	 * @param options
+	 * @param periodOpen - flag indicating if the period is Open - to avoid including Void and ReverseCorrect options in the list
+	 * @param po
+	 * @return End index of valid options[] (exclusive)
+	 */
+	public static int getValidActions(String docStatus, Object processing,
+			String orderType, String isSOTrx, int AD_Table_ID, String[] docAction, String[] options, boolean periodOpen, PO po)
+	{
+<span class="nc" id="L991">		return getValidActions(docStatus, processing, orderType, isSOTrx, AD_Table_ID, docAction, options, periodOpen, true, po);</span>
+	}
+	
+	/**
+	 * Get list of valid document action into the options array parameter.&lt;br/&gt;
+	 * Set default document action into the docAction array parameter.
+	 * @param docStatus
+	 * @param processing
+	 * @param orderType
+	 * @param isSOTrx
+	 * @param AD_Table_ID
+	 * @param docAction
+	 * @param options
+	 * @param periodOpen - flag indicating if the period is Open - to avoid including Void and ReverseCorrect options in the list
+	 * @param isBackDateTrxAllowed - flag indicating if back-date transaction is allowed
+	 * @param po
+	 * @return End index of valid options[] (exclusive)
+	 */
+	public static int getValidActions(String docStatus, Object processing,
+			String orderType, String isSOTrx, int AD_Table_ID, String[] docAction, String[] options, boolean periodOpen, boolean isBackDateTrxAllowed, PO po)
+	{
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">		if (options == null)</span>
+<span class="nc" id="L1013">			throw new IllegalArgumentException(&quot;Option array parameter is null&quot;);</span>
+<span class="nc bnc" id="L1014" title="All 2 branches missed.">		if (docAction == null)</span>
+<span class="nc" id="L1015">			throw new IllegalArgumentException(&quot;Doc action array parameter is null&quot;);</span>
+
+<span class="nc" id="L1017">		int index = 0;</span>
+
+		//	Locked
+<span class="nc bnc" id="L1020" title="All 2 branches missed.">		if (processing != null)</span>
+		{
+<span class="nc" id="L1022">			boolean locked = &quot;Y&quot;.equals(processing);</span>
+<span class="nc bnc" id="L1023" title="All 4 branches missed.">			if (!locked &amp;&amp; processing instanceof Boolean)</span>
+<span class="nc" id="L1024">				locked = ((Boolean)processing).booleanValue();</span>
+<span class="nc bnc" id="L1025" title="All 2 branches missed.">			if (locked)</span>
+<span class="nc" id="L1026">				options[index++] = DocumentEngine.ACTION_Unlock;</span>
+		}
+
+		//	Approval required           ..  NA
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">		if (docStatus.equals(DocumentEngine.STATUS_NotApproved))</span>
+		{
+<span class="nc" id="L1032">			options[index++] = DocumentEngine.ACTION_Prepare;</span>
+<span class="nc" id="L1033">			options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1034">		}</span>
+		//	Draft/In Process/Invalid	..  DR/IP/IN
+<span class="nc bnc" id="L1036" title="All 2 branches missed.">		else if (docStatus.equals(DocumentEngine.STATUS_Drafted)</span>
+<span class="nc bnc" id="L1037" title="All 2 branches missed.">			|| docStatus.equals(DocumentEngine.STATUS_InProgress)</span>
+<span class="nc bnc" id="L1038" title="All 2 branches missed.">			|| docStatus.equals(DocumentEngine.STATUS_Invalid))</span>
+		{
+<span class="nc" id="L1040">			options[index++] = DocumentEngine.ACTION_Complete;</span>
+<span class="nc" id="L1041">			options[index++] = DocumentEngine.ACTION_Prepare;</span>
+<span class="nc" id="L1042">			options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1043">		}</span>
+		//	Approved                  ..  AP
+<span class="nc bnc" id="L1045" title="All 2 branches missed.">		else if (docStatus.equals(DocumentEngine.STATUS_Approved))</span>
+		{
+<span class="nc" id="L1047">			options[index++] = DocumentEngine.ACTION_Complete;</span>
+<span class="nc" id="L1048">			options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1049">		}</span>
+		//	Complete                    ..  CO
+<span class="nc bnc" id="L1051" title="All 2 branches missed.">		else if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+		{
+<span class="nc" id="L1053">			options[index++] = DocumentEngine.ACTION_Close;</span>
+<span class="nc" id="L1054">		}</span>
+		//	Waiting Payment
+<span class="nc bnc" id="L1056" title="All 2 branches missed.">		else if (docStatus.equals(DocumentEngine.STATUS_WaitingPayment)</span>
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">			|| docStatus.equals(DocumentEngine.STATUS_WaitingConfirmation))</span>
+		{
+<span class="nc" id="L1059">			options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1060">			options[index++] = DocumentEngine.ACTION_Prepare;</span>
+		}
+
+		/********************
+		 *  Order
+		 */
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">		if (AD_Table_ID == MOrder.Table_ID)</span>
+		{
+			//	Draft                       ..  DR/IP/IN
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Drafted)</span>
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">				|| docStatus.equals(DocumentEngine.STATUS_InProgress)</span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">				|| docStatus.equals(DocumentEngine.STATUS_Invalid))</span>
+			{
+				//	Draft Sales Order Quote/Proposal - Process
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">				if (&quot;Y&quot;.equals(isSOTrx)</span>
+<span class="nc bnc" id="L1075" title="All 4 branches missed.">					&amp;&amp; (&quot;OB&quot;.equals(orderType) || &quot;ON&quot;.equals(orderType)))</span>
+<span class="nc" id="L1076">					docAction[0] = DocumentEngine.ACTION_Prepare;</span>
+<span class="nc" id="L1077">			}</span>
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1079" title="All 2 branches missed.">			else if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc" id="L1081">				options[index++] = DocumentEngine.ACTION_Void;</span>
+
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">				if (canReactivateThisDocType(po.get_ValueAsInt(&quot;C_DocType_ID&quot;)))</span>
+<span class="nc" id="L1084">					options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+<span class="nc" id="L1085">			}</span>
+<span class="nc bnc" id="L1086" title="All 2 branches missed.">			else if (docStatus.equals(DocumentEngine.STATUS_WaitingPayment))</span>
+			{
+<span class="nc" id="L1088">				options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+<span class="nc" id="L1089">				options[index++] = DocumentEngine.ACTION_Close;</span>
+			}
+<span class="nc" id="L1091">		}</span>
+		/********************
+		 *  Shipment
+		 */
+<span class="nc bnc" id="L1095" title="All 2 branches missed.">		else if (AD_Table_ID == MInOut.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1100" title="All 4 branches missed.">				if (periodOpen &amp;&amp; isBackDateTrxAllowed) {</span>
+<span class="nc" id="L1101">					options[index++] = DocumentEngine.ACTION_Reverse_Correct;</span>
+				}
+<span class="nc" id="L1103">				options[index++] = DocumentEngine.ACTION_Reverse_Accrual;</span>
+			}
+<span class="nc" id="L1105">		}</span>
+		/********************
+		 *  Invoice
+		 */
+<span class="nc bnc" id="L1109" title="All 2 branches missed.">		else if (AD_Table_ID == MInvoice.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1112" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1114" title="All 2 branches missed.">				if (periodOpen ) {</span>
+<span class="nc bnc" id="L1115" title="All 2 branches missed.">					if (canReactivateThisDocType(po.get_ValueAsInt(&quot;C_DocType_ID&quot;)))</span>
+<span class="nc" id="L1116">						options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+
+<span class="nc bnc" id="L1118" title="All 2 branches missed.">					if (isBackDateTrxAllowed)</span>
+<span class="nc" id="L1119">						options[index++] = DocumentEngine.ACTION_Reverse_Correct;	</span>
+				}
+
+<span class="nc" id="L1122">				options[index++] = DocumentEngine.ACTION_Reverse_Accrual;</span>
+			}
+<span class="nc" id="L1124">		}</span>
+		/********************
+		 *  Payment
+		 */
+<span class="nc bnc" id="L1128" title="All 2 branches missed.">		else if (AD_Table_ID == MPayment.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1131" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1133" title="All 2 branches missed.">				if (periodOpen) {</span>
+<span class="nc" id="L1134">					options[index++] = DocumentEngine.ACTION_Reverse_Correct;</span>
+<span class="nc bnc" id="L1135" title="All 2 branches missed.">					if (canReactivateThisDocType(po.get_ValueAsInt(&quot;C_DocType_ID&quot;)))</span>
+<span class="nc" id="L1136">						options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+				}
+<span class="nc" id="L1138">				options[index++] = DocumentEngine.ACTION_Reverse_Accrual;</span>
+			}
+<span class="nc" id="L1140">		}</span>
+		/********************
+		 *  GL Journal
+		 */
+<span class="nc bnc" id="L1144" title="All 4 branches missed.">		else if (AD_Table_ID == MJournal.Table_ID || AD_Table_ID == MJournalBatch.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1147" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1149" title="All 2 branches missed.">				if (periodOpen) {</span>
+<span class="nc" id="L1150">					options[index++] = DocumentEngine.ACTION_Reverse_Correct;</span>
+<span class="nc bnc" id="L1151" title="All 2 branches missed.">					if (canReactivateThisDocType(po.get_ValueAsInt(&quot;C_DocType_ID&quot;)))</span>
+<span class="nc" id="L1152">						options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+				}
+<span class="nc" id="L1154">				options[index++] = DocumentEngine.ACTION_Reverse_Accrual;</span>
+			}
+<span class="nc" id="L1156">		}</span>
+		/********************
+		 *  Allocation
+		 */
+<span class="nc bnc" id="L1160" title="All 2 branches missed.">		else if (AD_Table_ID == MAllocationHdr.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1163" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1165" title="All 2 branches missed.">				if (periodOpen) {</span>
+<span class="nc" id="L1166">					options[index++] = DocumentEngine.ACTION_Reverse_Correct;</span>
+				}
+<span class="nc" id="L1168">				options[index++] = DocumentEngine.ACTION_Reverse_Accrual;</span>
+			}
+<span class="nc" id="L1170">		}</span>
+		//[ 1782412 ]
+		/********************
+		 *  Cash
+		 */
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">		else if (AD_Table_ID == MCash.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1178" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc" id="L1180">				options[index++] = DocumentEngine.ACTION_Void;</span>
+			}
+<span class="nc" id="L1182">		}</span>
+		/********************
+		 *  Bank Statement
+		 */
+<span class="nc bnc" id="L1186" title="All 2 branches missed.">		else if (AD_Table_ID == MBankStatement.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1189" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1191" title="All 2 branches missed.">				if (periodOpen) {</span>
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">					if (canReactivateThisDocType(po.get_ValueAsInt(&quot;C_DocType_ID&quot;)))</span>
+<span class="nc" id="L1193">						options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+<span class="nc" id="L1194">					options[index++] = DocumentEngine.ACTION_Void;</span>
+				}
+			}
+<span class="nc" id="L1197">		}</span>
+		/********************
+		 *  Inventory Movement, Physical Inventory
+		 */
+<span class="nc bnc" id="L1201" title="All 2 branches missed.">		else if (AD_Table_ID == MMovement.Table_ID</span>
+<span class="nc bnc" id="L1202" title="All 2 branches missed.">			|| AD_Table_ID == MInventory.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1205" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1207" title="All 4 branches missed.">				if (periodOpen &amp;&amp; isBackDateTrxAllowed) {</span>
+<span class="nc" id="L1208">					options[index++] = DocumentEngine.ACTION_Reverse_Correct;</span>
+				}
+<span class="nc" id="L1210">				options[index++] = DocumentEngine.ACTION_Reverse_Accrual;</span>
+			}
+<span class="nc" id="L1212">		}</span>
+		/********************
+		 *  Manufacturing Order
+		 */
+<span class="nc bnc" id="L1216" title="All 2 branches missed.">		else if (AD_Table_ID == I_PP_Order.Table_ID)</span>
+		{
+<span class="nc bnc" id="L1218" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Drafted)</span>
+<span class="nc bnc" id="L1219" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_InProgress)</span>
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_Invalid))</span>
+				{
+<span class="nc" id="L1222">					options[index++] = DocumentEngine.ACTION_Close;</span>
+<span class="nc" id="L1223">				}</span>
+				//	Complete                    ..  CO
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">				else if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+				{
+<span class="nc" id="L1227">					options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1228">					options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+				}
+<span class="nc" id="L1230">		}</span>
+		/********************
+		 *  Production
+		 */
+<span class="nc bnc" id="L1234" title="All 2 branches missed.">		else if (AD_Table_ID == MProduction.Table_ID)</span>
+		{
+			//	Complete                    ..  CO
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc bnc" id="L1239" title="All 4 branches missed.">				if (periodOpen &amp;&amp; isBackDateTrxAllowed) {</span>
+<span class="nc" id="L1240">					options[index++] = DocumentEngine.ACTION_Reverse_Correct;</span>
+				}
+<span class="nc" id="L1242">				options[index++] = DocumentEngine.ACTION_Reverse_Accrual;</span>
+			}
+
+<span class="nc" id="L1245">		}</span>
+		/********************
+		 *  Manufacturing Cost Collector
+		 */
+<span class="nc bnc" id="L1249" title="All 2 branches missed.">		else if (AD_Table_ID == I_PP_Cost_Collector.Table_ID)</span>
+		{
+<span class="nc bnc" id="L1251" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Drafted)</span>
+<span class="nc bnc" id="L1252" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_InProgress)</span>
+<span class="nc bnc" id="L1253" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_Invalid))</span>
+				{
+<span class="nc" id="L1255">					options[index++] = DocumentEngine.ACTION_Close;</span>
+<span class="nc" id="L1256">				}</span>
+				//	Complete                    ..  CO
+<span class="nc bnc" id="L1258" title="All 2 branches missed.">				else if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+				{
+<span class="nc" id="L1260">					options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1261">					options[index++] = DocumentEngine.ACTION_Reverse_Correct;</span>
+				}
+<span class="nc" id="L1263">		}</span>
+		/********************
+		 *  Distribution Order
+		 */
+<span class="nc bnc" id="L1267" title="All 2 branches missed.">		else if (AD_Table_ID == I_DD_Order.Table_ID)</span>
+		{
+<span class="nc bnc" id="L1269" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Drafted)</span>
+<span class="nc bnc" id="L1270" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_InProgress)</span>
+<span class="nc bnc" id="L1271" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_Invalid))</span>
+				{
+<span class="nc" id="L1273">					options[index++] = DocumentEngine.ACTION_Close;</span>
+<span class="nc" id="L1274">				}</span>
+				//	Complete                    ..  CO
+<span class="nc bnc" id="L1276" title="All 2 branches missed.">				else if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+				{
+<span class="nc" id="L1278">					options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1279">					options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+				}
+<span class="nc" id="L1281">		}</span>
+		/********************
+		 *  Payroll Process
+		 */
+<span class="nc bnc" id="L1285" title="All 2 branches missed.">		else if (AD_Table_ID == I_HR_Process.Table_ID)</span>
+		{
+<span class="nc bnc" id="L1287" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Drafted)</span>
+<span class="nc bnc" id="L1288" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_InProgress)</span>
+<span class="nc bnc" id="L1289" title="All 2 branches missed.">					|| docStatus.equals(DocumentEngine.STATUS_Invalid))</span>
+				{
+<span class="nc" id="L1291">					options[index++] = DocumentEngine.ACTION_Close;</span>
+<span class="nc" id="L1292">				}</span>
+				//	Complete                    ..  CO
+<span class="nc bnc" id="L1294" title="All 2 branches missed.">				else if (docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+				{
+<span class="nc" id="L1296">					options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1297">					options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+				}
+<span class="nc" id="L1299">		}</span>
+		/********************
+		 *  RMA Process
+		 */
+<span class="nc bnc" id="L1303" title="All 2 branches missed.">		else if (AD_Table_ID == MRMA.Table_ID)</span>
+		{
+<span class="nc bnc" id="L1305" title="All 2 branches missed.">			if(docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+				// IDEMPIERE-98 - Implement void for completed RMAs - Diego Ruiz - globalqss
+<span class="nc" id="L1308">				options[index++] = DocumentEngine.ACTION_Void;</span>
+			}
+<span class="nc" id="L1310">		}</span>
+		/********************
+		 *  Bank Transfer Process
+		 */
+<span class="nc bnc" id="L1314" title="All 2 branches missed.">		else if (AD_Table_ID == MBankTransfer.Table_ID)</span>
+		{
+<span class="nc bnc" id="L1316" title="All 2 branches missed.">			if(docStatus.equals(DocumentEngine.STATUS_Completed))</span>
+			{
+<span class="nc" id="L1318">				options[index++] = DocumentEngine.ACTION_Void;</span>
+			}
+<span class="nc" id="L1320">		}</span>
+		/********************
+		 *  Deposit Batch
+		 */
+<span class="nc bnc" id="L1324" title="All 2 branches missed.">		else if (AD_Table_ID == MDepositBatch.Table_ID)</span>
+		{
+			//	Complete
+<span class="nc bnc" id="L1327" title="All 2 branches missed.">			if (docStatus.equals(DocumentEngine.STATUS_Completed)) </span>
+			{
+<span class="nc" id="L1329">				options[index++] = DocumentEngine.ACTION_Void;</span>
+<span class="nc" id="L1330">				options[index++] = DocumentEngine.ACTION_ReActivate;</span>
+			}
+		}
+
+<span class="nc bnc" id="L1334" title="All 2 branches missed.">		if (po instanceof DocOptions)</span>
+<span class="nc" id="L1335">			index = ((DocOptions) po).customizeValidActions(docStatus, processing, orderType, isSOTrx,</span>
+<span class="nc" id="L1336">					AD_Table_ID, docAction, options, index);</span>
+
+<span class="nc" id="L1338">		AtomicInteger indexObj = new AtomicInteger(index);</span>
+<span class="nc" id="L1339">		ArrayList&lt;String&gt; docActionsArray = new ArrayList&lt;String&gt;(Arrays.asList(docAction));</span>
+<span class="nc" id="L1340">		ArrayList&lt;String&gt; optionsArray = new ArrayList&lt;String&gt;(Arrays.asList(options));</span>
+<span class="nc" id="L1341">		DocActionEventData eventData = new DocActionEventData(docStatus, processing, orderType, isSOTrx, AD_Table_ID, docActionsArray, optionsArray, indexObj, po);</span>
+<span class="nc" id="L1342">		Event event = EventManager.newEvent(IEventTopics.DOCACTION,</span>
+<span class="nc" id="L1343">				new EventProperty(EventManager.EVENT_DATA, eventData),</span>
+<span class="nc" id="L1344">				new EventProperty(EventManager.TABLE_NAME_PROPERTY, po.get_TableName()));</span>
+<span class="nc" id="L1345">		EventManager.getInstance().sendEvent(event);</span>
+<span class="nc" id="L1346">		index = indexObj.get();</span>
+<span class="nc bnc" id="L1347" title="All 2 branches missed.">		for (int i = 0; i &lt; optionsArray.size(); i++)</span>
+<span class="nc" id="L1348">			options[i] = optionsArray.get(i);</span>
+<span class="nc bnc" id="L1349" title="All 2 branches missed.">		for (int i = 0; i &lt; docActionsArray.size(); i++)</span>
+<span class="nc" id="L1350">			docAction[i] = docActionsArray.get(i);</span>
+
+<span class="nc" id="L1352">		return index;</span>
+	}
+
+	/**
+	 * Fill lists with DocAction Ref_List(135) values
+	 * @param v_value
+	 * @param v_name
+	 * @param v_description
+	 */
+	public static void readReferenceList(ArrayList&lt;String&gt; v_value, ArrayList&lt;String&gt; v_name,
+			ArrayList&lt;String&gt; v_description)
+	{
+<span class="nc bnc" id="L1364" title="All 2 branches missed.">		if (v_value == null)</span>
+<span class="nc" id="L1365">			throw new IllegalArgumentException(&quot;v_value parameter is null&quot;);</span>
+<span class="nc bnc" id="L1366" title="All 2 branches missed.">		if (v_name == null)</span>
+<span class="nc" id="L1367">			throw new IllegalArgumentException(&quot;v_name parameter is null&quot;);</span>
+<span class="nc bnc" id="L1368" title="All 2 branches missed.">		if (v_description == null)</span>
+<span class="nc" id="L1369">			throw new IllegalArgumentException(&quot;v_description parameter is null&quot;);</span>
+
+		String sql;
+<span class="nc bnc" id="L1372" title="All 2 branches missed.">		if (Env.isBaseLanguage(Env.getCtx(), &quot;AD_Ref_List&quot;))</span>
+<span class="nc" id="L1373">			sql = &quot;SELECT Value, Name, Description FROM AD_Ref_List &quot;</span>
+<span class="nc" id="L1374">				+ &quot;WHERE AD_Reference_ID=? ORDER BY Name&quot;;</span>
+		else
+<span class="nc" id="L1376">			sql = &quot;SELECT l.Value, t.Name, t.Description &quot;</span>
+				+ &quot;FROM AD_Ref_List l, AD_Ref_List_Trl t &quot;
+				+ &quot;WHERE l.AD_Ref_List_ID=t.AD_Ref_List_ID&quot;
+<span class="nc" id="L1379">				+ &quot; AND t.AD_Language='&quot; + Env.getAD_Language(Env.getCtx()) + &quot;'&quot;</span>
+				+ &quot; AND l.AD_Reference_ID=? ORDER BY t.Name&quot;;
+<span class="nc" id="L1381">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1382">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1385">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L1386">			pstmt.setInt(1, DocAction.AD_REFERENCE_ID);</span>
+<span class="nc" id="L1387">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1388" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L1390">				String value = rs.getString(1);</span>
+<span class="nc" id="L1391">				String name = rs.getString(2);</span>
+<span class="nc" id="L1392">				String description = rs.getString(3);</span>
+<span class="nc bnc" id="L1393" title="All 2 branches missed.">				if (description == null)</span>
+<span class="nc" id="L1394">					description = &quot;&quot;;</span>
+				//
+<span class="nc" id="L1396">				v_value.add(value);</span>
+<span class="nc" id="L1397">				v_name.add(name);</span>
+<span class="nc" id="L1398">				v_description.add(description);</span>
+			}
+<span class="nc" id="L1400">		}</span>
+<span class="nc" id="L1401">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L1403">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L1407">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1408">			rs = null;</span>
+<span class="nc" id="L1409">			pstmt = null;</span>
+		}
+<span class="nc" id="L1411">	}</span>
+
+	/**
+	 * Checks the access rights of the given role/client for the given document actions.
+	 * @param clientId
+	 * @param roleId
+	 * @param docTypeId
+	 * @param options
+	 * @param maxIndex
+	 * @return End index of valid options[] (exclusive)
+	 */
+	public static int checkActionAccess(int clientId, int roleId, int docTypeId, String[] options, int maxIndex) {
+<span class="nc" id="L1423">		return MRole.get(Env.getCtx(), roleId).checkActionAccess(clientId, docTypeId, options, maxIndex);</span>
+	}
+
+	/**
+	 *  Perform immediate posting of document
+	 *
+	 *	@param	ctx Client Context
+	 *  @param  AD_Client_ID    Client ID of Document
+	 *  @param  AD_Table_ID     Table ID of Document
+	 *  @param  Record_ID       Record ID of this document
+	 *  @param  force           force posting
+	 *  @param  trxName			ignore, retained for backward compatibility
+	 *  @return null, if success or error message
+	 */
+	public static String postImmediate (Properties ctx,
+		int AD_Client_ID, int AD_Table_ID, int Record_ID, boolean force, String trxName)
+	{
+		// Ensure the table has Posted column / i.e. GL_JournalBatch can be completed but not posted
+<span class="nc bnc" id="L1441" title="All 2 branches missed.">		if (MColumn.getColumn_ID(MTable.getTableName(ctx, AD_Table_ID), &quot;Posted&quot;) &lt;= 0)</span>
+<span class="nc" id="L1442">			return null;</span>
+
+<span class="nc" id="L1444">		String error = null;</span>
+<span class="nc bnc" id="L1445" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;Table=&quot; + AD_Table_ID + &quot;, Record=&quot; + Record_ID);</span>
+<span class="nc bnc" id="L1446" title="All 2 branches missed.">		if (AcctModelServices.isDocPostingAvailable()) {</span>
+<span class="nc" id="L1447">			MAcctSchema[] ass = MAcctSchema.getClientAcctSchema(ctx, AD_Client_ID);</span>
+<span class="nc" id="L1448">			IDocPostingService docPostingService = AcctModelServices.getDocPostingService();</span>
+<span class="nc bnc" id="L1449" title="All 2 branches missed.">			if (docPostingService != null)</span>
+<span class="nc" id="L1450">				error = docPostingService.postImmediate(ass, AD_Table_ID, Record_ID, force, trxName);</span>
+		}
+<span class="nc" id="L1452">		return error;</span>
+	}	//	postImmediate
+
+	/**
+	 * Process document action.  This replaces DocAction.processIt().
+	 * @param doc
+	 * @param processAction 
+	 * @return true if performed
+	 */
+	public static boolean processIt(DocAction doc, String processAction) {
+<span class="nc" id="L1462">		boolean success = false;</span>
+		
+<span class="nc" id="L1464">		DocumentEngine engine = new DocumentEngine(doc, doc.getDocStatus());</span>
+<span class="nc" id="L1465">		success = engine.processIt(processAction, doc.getDocAction());</span>
+
+<span class="nc" id="L1467">		return success;</span>
+	}
+	
+	/**
+	 * Fill lists with DocAction Ref_List(131) values
+	 * @param v_value
+	 * @param v_name
+	 * @param v_description
+	 */
+	public static void readStatusReferenceList(ArrayList&lt;String&gt; v_value, ArrayList&lt;String&gt; v_name,
+			ArrayList&lt;String&gt; v_description)
+	{
+<span class="nc bnc" id="L1479" title="All 2 branches missed.">		if (v_value == null)</span>
+<span class="nc" id="L1480">			throw new IllegalArgumentException(&quot;v_value parameter is null&quot;);</span>
+<span class="nc bnc" id="L1481" title="All 2 branches missed.">		if (v_name == null)</span>
+<span class="nc" id="L1482">			throw new IllegalArgumentException(&quot;v_name parameter is null&quot;);</span>
+<span class="nc bnc" id="L1483" title="All 2 branches missed.">		if (v_description == null)</span>
+<span class="nc" id="L1484">			throw new IllegalArgumentException(&quot;v_description parameter is null&quot;);</span>
+
+		String sql;
+<span class="nc bnc" id="L1487" title="All 2 branches missed.">		if (Env.isBaseLanguage(Env.getCtx(), &quot;AD_Ref_List&quot;))</span>
+<span class="nc" id="L1488">			sql = &quot;SELECT Value, Name, Description FROM AD_Ref_List &quot;</span>
+<span class="nc" id="L1489">				+ &quot;WHERE AD_Reference_ID=? ORDER BY Name&quot;;</span>
+		else
+<span class="nc" id="L1491">			sql = &quot;SELECT l.Value, t.Name, t.Description &quot;</span>
+				+ &quot;FROM AD_Ref_List l, AD_Ref_List_Trl t &quot;
+				+ &quot;WHERE l.AD_Ref_List_ID=t.AD_Ref_List_ID&quot;
+<span class="nc" id="L1494">				+ &quot; AND t.AD_Language='&quot; + Env.getAD_Language(Env.getCtx()) + &quot;'&quot;</span>
+				+ &quot; AND l.AD_Reference_ID=? ORDER BY t.Name&quot;;
+<span class="nc" id="L1496">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1497">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1500">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L1501">			pstmt.setInt(1, SystemIDs.REFERENCE_DOCUMENTSTATUS);</span>
+<span class="nc" id="L1502">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1503" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L1505">				String value = rs.getString(1);</span>
+<span class="nc" id="L1506">				String name = rs.getString(2);</span>
+<span class="nc" id="L1507">				String description = rs.getString(3);</span>
+<span class="nc bnc" id="L1508" title="All 2 branches missed.">				if (description == null)</span>
+<span class="nc" id="L1509">					description = &quot;&quot;;</span>
+				//
+<span class="nc" id="L1511">				v_value.add(value);</span>
+<span class="nc" id="L1512">				v_name.add(name);</span>
+<span class="nc" id="L1513">				v_description.add(description);</span>
+			}
+<span class="nc" id="L1515">		}</span>
+<span class="nc" id="L1516">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L1518">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L1522">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1523">			rs = null;</span>
+<span class="nc" id="L1524">			pstmt = null;</span>
+		}
+<span class="nc" id="L1526">	}</span>
+
+	public static boolean canReactivateThisDocType(int docTypeID) {
+<span class="nc bnc" id="L1529" title="All 4 branches missed.">		return docTypeID &gt; 0 &amp;&amp; MDocType.get(docTypeID).isCanBeReactivated();</span>
+	}
+}	//	DocumentEnine
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

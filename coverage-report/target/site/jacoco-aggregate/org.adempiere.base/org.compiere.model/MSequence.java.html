@@ -1,0 +1,1526 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MSequence.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MSequence.java</span></div><h1>MSequence.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Properties;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.db.CConnection;
+import org.compiere.util.CCache;
+import org.compiere.util.CLogMgt;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DefaultEvaluatee;
+import org.compiere.util.Env;
+import org.compiere.util.Ini;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+
+/**
+ *	Sequence Model.
+ *	@see org.compiere.process.SequenceCheck
+ *  @author Jorg Janke
+ *  @version $Id: MSequence.java,v 1.3 2006/07/30 00:58:04 jjanke Exp $
+ */
+public class MSequence extends X_AD_Sequence
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -750059366190164777L;
+
+	private static final int QUERY_TIME_OUT = 30;
+	
+	private static final String NoYearNorMonth = &quot;-&quot;;
+	
+	/** 
+	 * Define a key by adding &quot;/K&quot; after a context variable in the Prefix or Suffix
+	 *  E.g. &amp;#64;Updated&amp;lt;yyyymm&amp;#62;/K&amp;#64; 
+	 */
+	private static final String KEY_CONTEXT_VARIABLE = &quot;/K&quot;;
+	/** Separator for SequenceNo Key Parts */
+	private static final String SEQUENCE_NO_KEY_SEPARATOR = &quot;-&quot;;
+
+	/**
+	 * @param AD_Client_ID
+	 * @param TableName
+	 * @return next id from table id sequence
+	 */
+	public static int getNextID (int AD_Client_ID, String TableName)
+	{
+<span class="nc" id="L81">		return getNextID(AD_Client_ID, TableName, null);</span>
+	}
+
+	/**
+	 *	Get next number from table id sequence
+	 *  @param AD_Client_ID client
+	 *  @param TableName table name
+	 * 	@param trxName
+	 *  @return next id or (-1=not found, -2=error)
+	 */
+	public static int getNextID (int AD_Client_ID, String TableName, String trxName)
+	{
+<span class="nc" id="L93">		boolean isSystemNativeSequence = MSysConfig.getBooleanValue(MSysConfig.SYSTEM_NATIVE_SEQUENCE,false);</span>
+		//	Check AdempiereSys
+<span class="nc" id="L95">		boolean adempiereSys = false;</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">		if (Ini.isClient())</span>
+		{
+<span class="nc" id="L98">			adempiereSys = Ini.isPropertyBool(Ini.P_ADEMPIERESYS);</span>
+<span class="nc" id="L99">		} </span>
+		else
+		{
+<span class="nc" id="L102">			String sysProperty = Env.getCtx().getProperty(Ini.P_ADEMPIERESYS, &quot;N&quot;);</span>
+<span class="nc bnc" id="L103" title="All 4 branches missed.">			adempiereSys = &quot;y&quot;.equalsIgnoreCase(sysProperty) || &quot;true&quot;.equalsIgnoreCase(sysProperty);</span>
+		}
+<span class="nc bnc" id="L105" title="All 4 branches missed.">		if (adempiereSys &amp;&amp; AD_Client_ID &gt; 11)</span>
+<span class="nc" id="L106">			adempiereSys = false;</span>
+		//
+<span class="nc bnc" id="L108" title="All 2 branches missed.">		if (CLogMgt.isLevel(Level.FINER))</span>
+<span class="nc" id="L109">			s_log.log(Level.FINER, TableName + &quot; - AdempiereSys=&quot; + adempiereSys  + &quot; [&quot; + trxName + &quot;]&quot;);</span>
+
+<span class="nc bnc" id="L111" title="All 4 branches missed.">		if (TableName == null || TableName.length() == 0)</span>
+<span class="nc" id="L112">			throw new IllegalArgumentException(&quot;TableName missing&quot;);</span>
+
+<span class="nc" id="L114">		int retValue = -1;</span>
+
+		// If maintaining official dictionary try to get the ID from http official server
+<span class="nc bnc" id="L117" title="All 2 branches missed.">		if (adempiereSys) {</span>
+<span class="nc" id="L118">			boolean isUseCentralizedID = MSysConfig.getBooleanValue(MSysConfig.DICTIONARY_ID_USE_CENTRALIZED_ID, true); // defaults to true</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">			if (isUseCentralizedID) {</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">				if (! isExceptionCentralized(TableName)) {</span>
+					// get ID from http site
+<span class="nc" id="L122">					retValue = getNextOfficialID_HTTP(TableName);</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">					if (retValue &gt; 0) {</span>
+<span class="nc" id="L124">						DB.executeUpdateEx(&quot;UPDATE AD_Sequence SET CurrentNextSys = ? + 1 WHERE Name=? AND IsTableID='Y' AND IsAutoSequence='Y'&quot;,</span>
+<span class="nc" id="L125">								new Object[] {retValue, TableName},</span>
+<span class="nc" id="L126">								trxName);</span>
+					}
+<span class="nc" id="L128">					return retValue;</span>
+				}
+			} else {
+				// is an error to get a system ID from local
+<span class="nc" id="L132">				throw new AdempiereException(&quot;System IDs must be always obtained from Centralized ID server&quot;);</span>
+			}
+		}
+
+<span class="nc" id="L136">		boolean queryProjectServer = false;</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">		if (isTableWithEntityType(TableName))</span>
+<span class="nc" id="L138">			queryProjectServer = true;</span>
+<span class="nc bnc" id="L139" title="All 4 branches missed.">		if (!queryProjectServer &amp;&amp; MSequence.Table_Name.equalsIgnoreCase(TableName))</span>
+<span class="nc" id="L140">			queryProjectServer = true;</span>
+
+		// If not official dictionary try to get the ID from http custom server - if configured
+<span class="nc bnc" id="L143" title="All 6 branches missed.">		if (queryProjectServer &amp;&amp; ( ! adempiereSys ) &amp;&amp; ( ! isExceptionCentralized(TableName) ) ) {</span>
+<span class="nc" id="L144">			boolean isUseProjectCentralizedID = MSysConfig.getBooleanValue(MSysConfig.PROJECT_ID_USE_CENTRALIZED_ID, false); // defaults to false</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">			if (isUseProjectCentralizedID) {</span>
+				// get ID from http site
+<span class="nc" id="L147">				retValue = getNextProjectID_HTTP(TableName);</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">				if (retValue &gt; 0) {</span>
+<span class="nc" id="L149">					DB.executeUpdateEx(&quot;UPDATE AD_Sequence SET CurrentNext = GREATEST(CurrentNext, ? + 1) WHERE Name=? AND IsTableID='Y' AND IsAutoSequence='Y'&quot;,</span>
+<span class="nc" id="L150">							new Object[] {retValue, TableName},</span>
+<span class="nc" id="L151">							trxName);</span>
+				}
+<span class="nc" id="L153">				return retValue;</span>
+			}
+		}
+
+<span class="nc bnc" id="L157" title="All 2 branches missed.">		if (isSystemNativeSequence)</span>
+		{
+<span class="nc" id="L159">			retValue = CConnection.get().getDatabase().getNextID(TableName+&quot;_SQ&quot;, trxName);</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">			if (retValue == -1) {</span>
+				// try to create the sequence and try again
+<span class="nc" id="L162">				MSequence.createTableSequence(Env.getCtx(), TableName, trxName, true);</span>
+<span class="nc" id="L163">				retValue = CConnection.get().getDatabase().getNextID(TableName+&quot;_SQ&quot;, trxName);</span>
+			}
+<span class="nc" id="L165">			return retValue;</span>
+		}
+
+		// use AD_Sequence to obtain the next ID
+<span class="nc" id="L169">		String selectSQL = null;</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">		if (DB.isOracle() == false)</span>
+		{
+<span class="nc" id="L172">			selectSQL = &quot;SELECT CurrentNext, CurrentNextSys, IncrementNo, AD_Sequence_ID &quot;</span>
+				+ &quot;FROM AD_Sequence &quot;
+				+ &quot;WHERE Name=?&quot;
+				+ &quot; AND IsActive='Y' AND IsTableID='Y' AND IsAutoSequence='Y' &quot;
+				+ &quot; FOR UPDATE OF AD_Sequence &quot;;
+<span class="nc" id="L177">		}</span>
+		else
+		{
+<span class="nc" id="L180">			selectSQL = &quot;SELECT CurrentNext, CurrentNextSys, IncrementNo, AD_Sequence_ID &quot;</span>
+			+ &quot;FROM AD_Sequence &quot;
+			+ &quot;WHERE Name=?&quot;
+			+ &quot; AND IsActive='Y' AND IsTableID='Y' AND IsAutoSequence='Y' &quot;;
+			
+<span class="nc bnc" id="L185" title="All 2 branches missed.">			if(adempiereSys)</span>
+<span class="nc" id="L186">				selectSQL += &quot; FOR UPDATE OF CurrentNextSys&quot;;</span>
+			else
+<span class="nc" id="L188">				selectSQL += &quot; FOR UPDATE OF CurrentNext&quot;;</span>
+		}
+<span class="nc bnc" id="L190" title="All 4 branches missed.">		if (!DB.isOracle() &amp;&amp; !DB.isPostgreSQL())</span>
+<span class="nc" id="L191">			selectSQL = DB.getDatabase().convertStatement(selectSQL);</span>
+
+<span class="nc" id="L193">		Connection conn = null;</span>
+<span class="nc" id="L194">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L195">		ResultSet rs = null;</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">		for (int i = 0; i &lt; 3; i++)</span>
+		{
+			try
+			{
+<span class="nc" id="L200">				conn = DB.getConnection(false);</span>
+				//	Error
+<span class="nc bnc" id="L202" title="All 2 branches missed.">				if (conn == null)</span>
+<span class="nc" id="L203">					return -1;</span>
+
+<span class="nc" id="L205">				pstmt = conn.prepareStatement(selectSQL,</span>
+<span class="nc" id="L206">					ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);</span>
+<span class="nc" id="L207">				pstmt.setString(1, TableName);</span>
+				//
+<span class="nc bnc" id="L209" title="All 2 branches missed.">				if (DB.getDatabase().isQueryTimeoutSupported())</span>
+				{
+<span class="nc" id="L211">					int timeout = MSysConfig.getIntValue(MSysConfig.MSEQUENCE_GETNEXT_TIMEOUT, QUERY_TIME_OUT, Env.getAD_Client_ID(Env.getCtx())); // default 30 seconds</span>
+<span class="nc" id="L212">					pstmt.setQueryTimeout(timeout);</span>
+				}
+<span class="nc" id="L214">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">				if (s_log.isLoggable(Level.FINEST)) s_log.finest(&quot;AC=&quot; + conn.getAutoCommit() + &quot;, RO=&quot; + conn.isReadOnly()</span>
+<span class="nc" id="L216">					+ &quot; - Isolation=&quot; + conn.getTransactionIsolation() + &quot;(&quot; + Connection.TRANSACTION_READ_COMMITTED</span>
+<span class="nc" id="L217">					+ &quot;) - RSType=&quot; + pstmt.getResultSetType() + &quot;(&quot; + ResultSet.TYPE_SCROLL_SENSITIVE</span>
+<span class="nc" id="L218">					+ &quot;), RSConcur=&quot; + pstmt.getResultSetConcurrency() + &quot;(&quot; + ResultSet.CONCUR_UPDATABLE</span>
+					+ &quot;)&quot;);
+<span class="nc bnc" id="L220" title="All 2 branches missed.">				if (rs.next())</span>
+				{
+<span class="nc" id="L222">					int AD_Sequence_ID = rs.getInt(4);</span>
+<span class="nc" id="L223">					PreparedStatement updateSQL = null;</span>
+					try 
+					{
+<span class="nc" id="L226">						int incrementNo = rs.getInt(3);</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">						if (adempiereSys) {</span>
+<span class="nc" id="L228">							String updateCmd = &quot;UPDATE AD_Sequence SET CurrentNextSys=CurrentNextSys+? WHERE AD_Sequence_ID=?&quot;;</span>
+<span class="nc bnc" id="L229" title="All 4 branches missed.">							if (!DB.isOracle() &amp;&amp; !DB.isPostgreSQL())</span>
+<span class="nc" id="L230">								updateCmd = DB.getDatabase().convertStatement(updateCmd);</span>
+<span class="nc" id="L231">							updateSQL = conn.prepareStatement(updateCmd);</span>
+<span class="nc" id="L232">							retValue = rs.getInt(2);</span>
+<span class="nc" id="L233">						} else {</span>
+<span class="nc" id="L234">							String updateCmd = &quot;UPDATE AD_Sequence SET CurrentNext=CurrentNext+? WHERE AD_Sequence_ID=?&quot;;</span>
+<span class="nc bnc" id="L235" title="All 4 branches missed.">							if (!DB.isOracle() &amp;&amp; !DB.isPostgreSQL())</span>
+<span class="nc" id="L236">								updateCmd = DB.getDatabase().convertStatement(updateCmd);</span>
+<span class="nc" id="L237">							updateSQL = conn.prepareStatement(updateCmd);</span>
+<span class="nc" id="L238">							retValue = rs.getInt(1);</span>
+						}
+<span class="nc" id="L240">						updateSQL.setInt(1, incrementNo);</span>
+<span class="nc" id="L241">						updateSQL.setInt(2, AD_Sequence_ID);</span>
+<span class="nc" id="L242">						updateSQL.executeUpdate();</span>
+<span class="nc" id="L243">					} finally {</span>
+<span class="nc" id="L244">						DB.close(updateSQL);</span>
+<span class="nc" id="L245">						updateSQL = null;</span>
+					}
+
+					//if (trx == null)
+<span class="nc" id="L249">					conn.commit();</span>
+<span class="nc" id="L250">				}</span>
+				else
+<span class="nc" id="L252">					s_log.severe (&quot;No record found - &quot; + TableName);</span>
+
+				//
+				break;		//	EXIT
+			}
+<span class="nc" id="L257">			catch (Exception e)</span>
+			{
+<span class="nc" id="L259">				s_log.log(Level.SEVERE, TableName + &quot; - &quot; + e.getMessage(), e);</span>
+				try
+				{
+<span class="nc bnc" id="L262" title="All 2 branches missed.">					if (conn != null)</span>
+<span class="nc" id="L263">						conn.rollback();</span>
+<span class="nc" id="L264">				} catch (SQLException e1) { }</span>
+			}
+			finally
+			{
+<span class="nc" id="L268">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L269">				pstmt = null;rs = null;</span>
+				
+<span class="nc bnc" id="L271" title="All 2 branches missed.">				if (conn != null)</span>
+				{
+					try {
+<span class="nc" id="L274">						conn.close();</span>
+<span class="nc" id="L275">					} catch (SQLException e) {}</span>
+<span class="nc" id="L276">					conn = null;</span>
+				}
+			}
+<span class="nc" id="L279">			Thread.yield();		//	give it time</span>
+		}
+
+<span class="nc" id="L282">		return retValue;</span>
+	}	//	getNextID
+
+	/**
+	 * 	Get next Document No for table
+	 *	@param AD_Client_ID client
+	 *	@param TableName table name
+	 * 	@param trxName optional Transaction Name
+	 *	@return document no or null
+	 */
+	public static String getDocumentNo (int AD_Client_ID, String TableName, String trxName)
+	{
+<span class="nc" id="L294">		return getDocumentNo(AD_Client_ID, TableName, trxName, null);</span>
+
+	}
+	
+	/**
+	 * 	Get next Document No for table (when the document doesn't have a c_doctype)
+	 *	@param AD_Client_ID client
+	 *	@param TableName table name
+	 * 	@param trxName optional Transaction Name
+	 *  @param po - used to get the date, org and parse context variables
+	 *	@return document no or null
+	 */
+	public static String getDocumentNo (int AD_Client_ID, String TableName, String trxName, PO po)
+	{
+<span class="nc bnc" id="L308" title="All 4 branches missed.">		if (TableName == null || TableName.length() == 0)</span>
+<span class="nc" id="L309">			throw new IllegalArgumentException(&quot;TableName missing&quot;);</span>
+
+<span class="nc" id="L311">		MSequence seq = get(Env.getCtx(), TableName, trxName, /*tableID=*/false);</span>
+<span class="nc bnc" id="L312" title="All 4 branches missed.">		if (seq == null || seq.get_ID() == 0) {</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">			if (!MSequence.createTableSequence(Env.getCtx(), TableName, trxName, /*tableID=*/false))</span>
+<span class="nc" id="L314">				throw new AdempiereException(&quot;Could not create table sequence&quot;);</span>
+<span class="nc" id="L315">			seq = get(Env.getCtx(), TableName, trxName, /*tableID=*/false);</span>
+<span class="nc bnc" id="L316" title="All 4 branches missed.">			if (seq == null || seq.get_ID() == 0)</span>
+<span class="nc" id="L317">				throw new AdempiereException(&quot;Could not find table sequence&quot;);</span>
+		}
+		
+<span class="nc" id="L320">		return getDocumentNoFromSeq(seq, trxName, po);</span>
+	}	//	getDocumentNo
+
+	/**
+	 * Get next document no from sequence
+	 * @param seq
+	 * @param trxName
+	 * @param po
+	 * @return document no or null
+	 */
+	public static String getDocumentNoFromSeq(MSequence seq, String trxName, PO po) {
+		//	Check AdempiereSys
+<span class="nc" id="L332">		boolean adempiereSys = false;</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">		if (Ini.isClient()) </span>
+		{
+<span class="nc" id="L335">			adempiereSys = Ini.isPropertyBool(Ini.P_ADEMPIERESYS);</span>
+<span class="nc" id="L336">		} </span>
+		else
+		{
+<span class="nc" id="L339">			String sysProperty = Env.getCtx().getProperty(Ini.P_ADEMPIERESYS, &quot;N&quot;);</span>
+<span class="nc bnc" id="L340" title="All 4 branches missed.">			adempiereSys = &quot;y&quot;.equalsIgnoreCase(sysProperty) || &quot;true&quot;.equalsIgnoreCase(sysProperty);</span>
+		}
+<span class="nc bnc" id="L342" title="All 4 branches missed.">		if (adempiereSys &amp;&amp; Env.getAD_Client_ID(Env.getCtx()) &gt; 11)</span>
+<span class="nc" id="L343">			adempiereSys = false;</span>
+		//
+
+<span class="nc" id="L346">		int AD_Sequence_ID = seq.getAD_Sequence_ID();</span>
+<span class="nc" id="L347">		boolean isStartNewYear = seq.isStartNewYear();</span>
+<span class="nc" id="L348">		boolean isStartNewMonth = seq.isStartNewMonth();</span>
+<span class="nc" id="L349">		String dateColumn = seq.getDateColumn();</span>
+<span class="nc" id="L350">		boolean isUseOrgLevel = seq.isOrgLevelSequence();</span>
+<span class="nc" id="L351">		String orgColumn = seq.getOrgColumn();</span>
+<span class="nc" id="L352">		int startNo = seq.getStartNo();</span>
+<span class="nc" id="L353">		int incrementNo = seq.getIncrementNo();</span>
+<span class="nc" id="L354">		String decimalPattern = seq.getDecimalPattern();</span>
+<span class="nc" id="L355">		SequenceNoKeyParts keyParts = new SequenceNoKeyParts(seq, po, trxName);</span>
+		
+		// Parse prefix and suffix
+<span class="nc" id="L358">		String prefixValue = null;</span>
+<span class="nc" id="L359">		String suffixValue = null;</span>
+<span class="nc bnc" id="L360" title="All 4 branches missed.">		if (seq.getPrefix() != null &amp;&amp; seq.getPrefix().length() &gt; 0) {</span>
+<span class="nc" id="L361">			prefixValue = Env.parseVariable(seq.getPrefix().replaceAll(KEY_CONTEXT_VARIABLE+&quot;@&quot;, &quot;@&quot;), po, trxName, false);</span>
+<span class="nc" id="L362">			keyParts.parsePrefix(seq.getPrefix());</span>
+		}
+<span class="nc bnc" id="L364" title="All 4 branches missed.">		if (seq.getSuffix() != null &amp;&amp; seq.getSuffix().length() &gt; 0) {</span>
+<span class="nc" id="L365">			suffixValue = Env.parseVariable(seq.getSuffix().replaceAll(KEY_CONTEXT_VARIABLE+&quot;@&quot;, &quot;@&quot;), po, trxName, false);</span>
+<span class="nc" id="L366">			keyParts.parseSuffix(seq.getSuffix());</span>
+		}
+
+<span class="nc" id="L369">		StringBuilder selectSQL = new StringBuilder();</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">		if (seq.isSequenceNoLevel()) {</span>
+<span class="nc" id="L371">			selectSQL.append(&quot;SELECT y.CurrentNext, s.CurrentNextSys &quot;)</span>
+<span class="nc" id="L372">					.append(&quot;FROM AD_Sequence_No y, AD_Sequence s &quot;)</span>
+<span class="nc" id="L373">					.append(&quot;WHERE y.AD_Sequence_ID = s.AD_Sequence_ID &quot;)</span>
+<span class="nc" id="L374">					.append(&quot;AND s.AD_Sequence_ID = ? &quot;);</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">			if (seq.isOrgLevelSequence())</span>
+<span class="nc" id="L376">				selectSQL.append(&quot;AND y.AD_Org_ID = ? &quot;);</span>
+<span class="nc bnc" id="L377" title="All 6 branches missed.">			if (seq.isStartNewYear() || seq.isUsePrefixAsKey() || seq.isUseSuffixAsKey())</span>
+<span class="nc" id="L378">				selectSQL.append(&quot;AND y.SequenceKey = ? &quot;);</span>
+<span class="nc" id="L379">			selectSQL.append(&quot;AND s.IsActive='Y' AND s.IsTableID='N' AND s.IsAutoSequence='Y' &quot;)</span>
+<span class="nc" id="L380">					.append(&quot;ORDER BY s.AD_Client_ID DESC&quot;);</span>
+<span class="nc" id="L381">		} else {</span>
+<span class="nc" id="L382">			selectSQL.append(&quot;SELECT s.CurrentNext, s.CurrentNextSys &quot;)</span>
+<span class="nc" id="L383">					.append(&quot;FROM AD_Sequence s &quot;)</span>
+<span class="nc" id="L384">					.append(&quot;WHERE s.AD_Sequence_ID = ? &quot;)</span>
+<span class="nc" id="L385">					.append(&quot;AND s.IsActive='Y' AND s.IsTableID='N' AND s.IsAutoSequence='Y' &quot;)</span>
+<span class="nc" id="L386">					.append(&quot;ORDER BY s.AD_Client_ID DESC&quot;);</span>
+		}
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		if (DB.isOracle() == false)</span>
+		{
+<span class="nc bnc" id="L390" title="All 2 branches missed.">			if (seq.isSequenceNoLevel()) {</span>
+<span class="nc" id="L391">				selectSQL.append(&quot; FOR UPDATE OF y&quot;);</span>
+<span class="nc" id="L392">			} else {</span>
+<span class="nc" id="L393">				selectSQL.append(&quot; FOR UPDATE OF s&quot;);</span>
+			}
+<span class="nc" id="L395">		}</span>
+		else
+		{
+<span class="nc bnc" id="L398" title="All 2 branches missed.">			if (seq.isSequenceNoLevel()) {</span>
+<span class="nc" id="L399">				selectSQL.append(&quot; FOR UPDATE OF y.&quot;);</span>
+<span class="nc" id="L400">			} else {</span>
+<span class="nc" id="L401">				selectSQL.append(&quot; FOR UPDATE OF s.&quot;);</span>
+			}
+			
+<span class="nc bnc" id="L404" title="All 2 branches missed.">			if(adempiereSys)</span>
+<span class="nc" id="L405">				selectSQL.append(&quot;CurrentNextSys&quot;);</span>
+			else
+<span class="nc" id="L407">				selectSQL.append(&quot;CurrentNext&quot;);</span>
+		}		
+<span class="nc bnc" id="L409" title="All 4 branches missed.">		if (!DB.isOracle() &amp;&amp; !DB.isPostgreSQL())</span>
+<span class="nc" id="L410">			selectSQL = new StringBuilder(DB.getDatabase().convertStatement(selectSQL.toString()));</span>
+<span class="nc" id="L411">		Connection conn = null;</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">		Trx trx = trxName == null ? null : Trx.get(trxName, true);</span>
+		//
+		
+<span class="nc" id="L415">		String calendarYearMonth = NoYearNorMonth;</span>
+<span class="nc" id="L416">		int docOrg_ID = 0;</span>
+<span class="nc" id="L417">		int next = -1;</span>
+
+<span class="nc" id="L419">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L420">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc bnc" id="L423" title="All 2 branches missed.">			if (trx != null)</span>
+<span class="nc" id="L424">				conn = trx.getConnection();</span>
+			else
+<span class="nc" id="L426">				conn = DB.getConnection(false);</span>
+			//	Error
+<span class="nc bnc" id="L428" title="All 2 branches missed.">			if (conn == null)</span>
+<span class="nc" id="L429">				return null;</span>
+
+<span class="nc bnc" id="L431" title="All 2 branches missed.">			if (isStartNewYear)</span>
+			{
+<span class="nc" id="L433">				SimpleDateFormat sdf = null;</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">				if (isStartNewMonth)</span>
+<span class="nc" id="L435">					sdf = new SimpleDateFormat(&quot;yyyyMM&quot;);</span>
+				else
+<span class="nc" id="L437">					sdf = new SimpleDateFormat(&quot;yyyy&quot;);</span>
+				
+<span class="nc bnc" id="L439" title="All 6 branches missed.">				if (po != null &amp;&amp; dateColumn != null &amp;&amp; dateColumn.length() &gt; 0)</span>
+				{
+<span class="nc" id="L441">					Date docDate = (Date)po.get_Value(dateColumn);</span>
+<span class="nc" id="L442">					calendarYearMonth = sdf.format(docDate);</span>
+<span class="nc" id="L443">				}</span>
+				else
+				{
+<span class="nc" id="L446">					calendarYearMonth = sdf.format(new Date());</span>
+				}
+<span class="nc" id="L448">				keyParts.setCalendarYearMonth(calendarYearMonth);</span>
+			}
+			
+<span class="nc bnc" id="L451" title="All 2 branches missed.">			if (isUseOrgLevel)</span>
+			{
+<span class="nc bnc" id="L453" title="All 6 branches missed.">				if (po != null &amp;&amp; orgColumn != null &amp;&amp; orgColumn.length() &gt; 0)</span>
+				{
+<span class="nc" id="L455">					docOrg_ID = po.get_ValueAsInt(orgColumn);</span>
+<span class="nc" id="L456">					keyParts.setAD_Org_ID(docOrg_ID);</span>
+				}
+			}
+
+<span class="nc" id="L460">			pstmt = conn.prepareStatement(selectSQL.toString(),</span>
+<span class="nc" id="L461">				ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);</span>
+<span class="nc" id="L462">			int index = 1;</span>
+<span class="nc" id="L463">			pstmt.setInt(index++, AD_Sequence_ID);</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">			if (seq.isSequenceNoLevel()) {</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">				if (seq.isOrgLevelSequence())</span>
+<span class="nc" id="L466">					pstmt.setInt(index++, docOrg_ID);</span>
+<span class="nc bnc" id="L467" title="All 6 branches missed.">				if (seq.isStartNewYear() || seq.isUsePrefixAsKey() || seq.isUseSuffixAsKey())</span>
+<span class="nc" id="L468">					pstmt.setString(index++, keyParts.getKey());</span>
+			}
+
+			//
+<span class="nc bnc" id="L472" title="All 2 branches missed.">			if (DB.getDatabase().isQueryTimeoutSupported())</span>
+			{
+<span class="nc" id="L474">				int timeout = MSysConfig.getIntValue(MSysConfig.MSEQUENCE_GETNEXT_TIMEOUT, QUERY_TIME_OUT, Env.getAD_Client_ID(Env.getCtx())); // default 30 seconds</span>
+<span class="nc" id="L475">				pstmt.setQueryTimeout(timeout);</span>
+			}
+<span class="nc" id="L477">			rs = pstmt.executeQuery();</span>
+
+<span class="nc bnc" id="L479" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc bnc" id="L481" title="All 2 branches missed.">				if (s_log.isLoggable(Level.FINE)) s_log.fine(&quot;AD_Sequence_ID=&quot;+AD_Sequence_ID);</span>
+
+<span class="nc" id="L483">				PreparedStatement updateSQL = null;</span>
+				try
+				{
+<span class="nc bnc" id="L486" title="All 2 branches missed.">					if (adempiereSys) {</span>
+<span class="nc" id="L487">						String updateCmd = &quot;UPDATE AD_Sequence SET CurrentNextSys = CurrentNextSys + ? WHERE AD_Sequence_ID = ?&quot;;</span>
+<span class="nc bnc" id="L488" title="All 4 branches missed.">						if (!DB.isOracle() &amp;&amp; !DB.isPostgreSQL())</span>
+<span class="nc" id="L489">							updateCmd = DB.getDatabase().convertStatement(updateCmd);</span>
+<span class="nc" id="L490">						updateSQL = conn.prepareStatement(updateCmd);</span>
+<span class="nc" id="L491">						next = rs.getInt(2);</span>
+<span class="nc" id="L492">					} else {</span>
+<span class="nc" id="L493">						StringBuilder sql = new StringBuilder(&quot;UPDATE&quot;);</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">						sql.append(seq.isSequenceNoLevel() ? &quot; AD_Sequence_No &quot; : &quot; AD_Sequence &quot;)</span>
+<span class="nc" id="L495">							.append(&quot;SET CurrentNext = CurrentNext + ? WHERE AD_Sequence_ID=?&quot;);</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">						if (seq.isOrgLevelSequence())</span>
+<span class="nc" id="L497">							sql.append(&quot; AND AD_Org_ID=?&quot;);</span>
+<span class="nc bnc" id="L498" title="All 6 branches missed.">						if (seq.isStartNewYear() || seq.isUsePrefixAsKey() || seq.isUseSuffixAsKey())</span>
+<span class="nc" id="L499">							sql.append(&quot; AND SequenceKey=?&quot;);</span>
+						
+<span class="nc bnc" id="L501" title="All 4 branches missed.">						if (!DB.isOracle() &amp;&amp; !DB.isPostgreSQL())</span>
+<span class="nc" id="L502">							sql = new StringBuilder(DB.getDatabase().convertStatement(sql.toString()));</span>
+<span class="nc" id="L503">						updateSQL = conn.prepareStatement(sql.toString());</span>
+<span class="nc" id="L504">						next = rs.getInt(1);</span>
+					}
+<span class="nc" id="L506">					int idx = 1;</span>
+<span class="nc" id="L507">					updateSQL.setInt(idx++, incrementNo);</span>
+<span class="nc" id="L508">					updateSQL.setInt(idx++, AD_Sequence_ID);</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">					if (seq.isOrgLevelSequence())</span>
+<span class="nc" id="L510">						updateSQL.setInt(idx++, docOrg_ID);</span>
+<span class="nc bnc" id="L511" title="All 6 branches missed.">					if (seq.isStartNewYear() || seq.isUsePrefixAsKey() || seq.isUseSuffixAsKey())</span>
+<span class="nc" id="L512">						updateSQL.setString(idx++, keyParts.getKey());</span>
+<span class="nc" id="L513">					updateSQL.executeUpdate();</span>
+<span class="nc" id="L514">				}</span>
+				finally
+				{
+<span class="nc" id="L517">					DB.close(updateSQL);</span>
+<span class="nc" id="L518">					updateSQL = null;</span>
+				}
+			}
+			else
+			{ // did not find sequence no
+<span class="nc bnc" id="L523" title="All 2 branches missed.">				if (seq.isSequenceNoLevel()) </span>
+				{	// create sequence (CurrentNo = StartNo + IncrementNo) for this year/month/org and return first number (=StartNo)
+<span class="nc" id="L525">					next = startNo;</span>
+
+<span class="nc" id="L527">					X_AD_Sequence_No seqno = new X_AD_Sequence_No(Env.getCtx(), 0, trxName);</span>
+<span class="nc" id="L528">					seqno.setAD_Sequence_ID(AD_Sequence_ID);</span>
+<span class="nc" id="L529">					seqno.setAD_Org_ID(docOrg_ID);</span>
+<span class="nc" id="L530">					seqno.setSequenceKey(keyParts.getKey());</span>
+<span class="nc" id="L531">					seqno.setCurrentNext(startNo + incrementNo);</span>
+<span class="nc" id="L532">					seqno.saveEx();</span>
+<span class="nc" id="L533">				}</span>
+				else	// standard
+				{
+<span class="nc" id="L536">					s_log.warning (&quot;(Sequence)- no record found - &quot; + seq);</span>
+<span class="nc" id="L537">					next = -2;</span>
+				}
+			}
+			//	Commit
+<span class="nc bnc" id="L541" title="All 2 branches missed.">			if (trx == null)</span>
+			{
+<span class="nc" id="L543">				conn.commit();</span>
+			}
+<span class="nc" id="L545">		}</span>
+<span class="nc" id="L546">		catch (Exception e)</span>
+		{
+<span class="nc" id="L548">			s_log.log(Level.SEVERE, &quot;(DocType) [&quot; + trxName + &quot;]&quot;, e);</span>
+<span class="nc bnc" id="L549" title="All 2 branches missed.">			if (DBException.isTimeout(e))</span>
+<span class="nc" id="L550">				throw new AdempiereException(&quot;GenerateDocumentNoTimeOut&quot;, e);</span>
+			else
+<span class="nc" id="L552">				throw new AdempiereException(&quot;GenerateDocumentNoError&quot;, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L556">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L557">			pstmt = null;rs = null;</span>
+			//	Finish
+			try
+			{
+<span class="nc bnc" id="L561" title="All 4 branches missed.">				if (trx == null &amp;&amp; conn != null) {</span>
+<span class="nc" id="L562">					conn.close();</span>
+<span class="nc" id="L563">					conn = null;</span>
+				}
+<span class="nc" id="L565">			}</span>
+<span class="nc" id="L566">			catch (Exception e)</span>
+			{
+<span class="nc" id="L568">				s_log.log(Level.SEVERE, &quot;(DocType) - finish&quot;, e);</span>
+			}
+		}
+		//	Error
+<span class="nc bnc" id="L572" title="All 2 branches missed.">		if (next &lt; 0)</span>
+<span class="nc" id="L573">			return null;</span>
+
+		//	create DocumentNo
+<span class="nc" id="L576">		StringBuilder doc = new StringBuilder();</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">		if (!Util.isEmpty(prefixValue, true))</span>
+<span class="nc" id="L578">			doc.append(prefixValue);</span>
+
+<span class="nc bnc" id="L580" title="All 4 branches missed.">		if (decimalPattern != null &amp;&amp; decimalPattern.length() &gt; 0)</span>
+<span class="nc" id="L581">			doc.append(new DecimalFormat(decimalPattern).format(next));</span>
+		else
+<span class="nc" id="L583">			doc.append(next);</span>
+
+<span class="nc bnc" id="L585" title="All 2 branches missed.">		if (!Util.isEmpty(suffixValue, true))</span>
+<span class="nc" id="L586">			doc.append(suffixValue);</span>
+		
+<span class="nc" id="L588">		String documentNo = doc.toString();</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">		if (s_log.isLoggable(Level.FINER)) s_log.finer (documentNo + &quot; (&quot; + incrementNo + &quot;)&quot;</span>
+<span class="nc" id="L590">				+ &quot; - Sequence=&quot; + AD_Sequence_ID + &quot; [&quot; + trx + &quot;]&quot;);</span>
+<span class="nc" id="L591">		return documentNo;</span>
+	}
+	
+<span class="nc" id="L594">	private AtomicReference&lt;Boolean&gt; isSequenceNoLevel = new AtomicReference&lt;&gt;();</span>
+<span class="nc" id="L595">	private AtomicReference&lt;Boolean&gt; isUsePrefixAsKey = new AtomicReference&lt;&gt;();</span>
+<span class="nc" id="L596">	private AtomicReference&lt;Boolean&gt; isUseSuffixAsKey = new AtomicReference&lt;&gt;();</span>
+	
+	/**
+	 * Is the sequence a sequence no level sequence
+	 * @param seq sequence
+	 * @return true if the sequence is a sequence no level sequence
+	 */
+	public boolean isSequenceNoLevel() {
+<span class="nc" id="L604">		Boolean value = isSequenceNoLevel.get();</span>
+<span class="nc bnc" id="L605" title="All 2 branches missed.">		if (value == null) {</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">			value = isUsePrefixAsKey() </span>
+<span class="nc bnc" id="L607" title="All 2 branches missed.">					|| isUseSuffixAsKey()</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">					|| isStartNewYear() </span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">					|| isOrgLevelSequence();</span>
+<span class="nc" id="L610">			isSequenceNoLevel.set(value);</span>
+		}
+<span class="nc" id="L612">		return value;</span>
+	}
+	
+	/**
+	 * Is the prefix used as key for the sequence no
+	 * @return true if the prefix starts with prefix key
+	 */
+	public boolean isUsePrefixAsKey() {
+<span class="nc" id="L620">		Boolean value = isUsePrefixAsKey.get();</span>
+<span class="nc bnc" id="L621" title="All 2 branches missed.">		if (value == null) {</span>
+<span class="nc bnc" id="L622" title="All 4 branches missed.">			value = !Util.isEmpty(getPrefix()) &amp;&amp; getPrefix().contains(KEY_CONTEXT_VARIABLE+&quot;@&quot;);</span>
+<span class="nc" id="L623">			isUsePrefixAsKey.set(value);</span>
+		}
+<span class="nc" id="L625">		return value;</span>
+	}
+	
+	/**
+	 * Is the suffix used as key for the sequence no
+	 * @return true if the suffix starts with prefix key
+	 */
+	public boolean isUseSuffixAsKey() {
+<span class="nc" id="L633">		Boolean value = isUseSuffixAsKey.get();</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">		if (value == null) {</span>
+<span class="nc bnc" id="L635" title="All 4 branches missed.">			value = !Util.isEmpty(getSuffix()) &amp;&amp; getSuffix().contains(KEY_CONTEXT_VARIABLE+&quot;@&quot;);</span>
+<span class="nc" id="L636">			isUseSuffixAsKey.set(value);</span>
+		}
+<span class="nc" id="L638">		return value;</span>
+	}
+
+	/**
+	 * 	Get Document No based on Document Type
+	 *	@param C_DocType_ID document type
+	 * 	@param trxName optional Transaction Name
+	 *	@return document no or null
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static String getDocumentNo(int C_DocType_ID, String trxName)
+	{
+<span class="nc" id="L651">		return getDocumentNo (C_DocType_ID, trxName, false);</span>
+	}	//	getDocumentNo
+
+	/**
+	 * 	Get next Document No based on Document Type
+	 *	@param C_DocType_ID document type
+	 * 	@param trxName optional Transaction Name
+	 *  @param definite asking for a definitive or temporary sequence
+	 *	@return document no or null
+	 */
+	public static String getDocumentNo (int C_DocType_ID, String trxName, boolean definite)
+	{
+<span class="nc" id="L663">		return getDocumentNo(C_DocType_ID, trxName, definite, null);</span>
+	}
+
+	/**
+	 * 	Get next Document No based on Document Type
+	 *	@param C_DocType_ID document type
+	 * 	@param trxName optional Transaction Name
+	 *  @param definite asking for a definitive or temporary sequence
+	 *  @param po
+	 *	@return document no or null
+	 */
+	public static String getDocumentNo (int C_DocType_ID, String trxName, boolean definite, PO po)
+	{
+<span class="nc bnc" id="L676" title="All 2 branches missed.">		if (C_DocType_ID == 0)</span>
+		{
+<span class="nc" id="L678">			s_log.severe (&quot;C_DocType_ID=0&quot;);</span>
+<span class="nc" id="L679">			return null;</span>
+		}
+
+<span class="nc" id="L682">		MDocType dt = MDocType.get (Env.getCtx(), C_DocType_ID);	//	wrong for SERVER, but r/o</span>
+<span class="nc bnc" id="L683" title="All 4 branches missed.">		if (dt != null &amp;&amp; !dt.isDocNoControlled())</span>
+		{
+<span class="nc bnc" id="L685" title="All 2 branches missed.">			if (s_log.isLoggable(Level.FINER)) s_log.finer(&quot;DocType_ID=&quot; + C_DocType_ID + &quot; Not DocNo controlled&quot;);</span>
+<span class="nc" id="L686">			return null;</span>
+		}
+<span class="nc bnc" id="L688" title="All 4 branches missed.">		if (definite &amp;&amp; ! dt.isOverwriteSeqOnComplete()) {</span>
+<span class="nc" id="L689">			s_log.warning(&quot;DocType_ID=&quot; + C_DocType_ID + &quot; Not Sequence Overwrite on Complete&quot;);</span>
+<span class="nc" id="L690">			return null;</span>
+		}
+<span class="nc bnc" id="L692" title="All 4 branches missed.">		if (dt == null || dt.getDocNoSequence_ID() == 0)</span>
+		{
+<span class="nc" id="L694">			s_log.warning (&quot;No Sequence for DocType - &quot; + dt);</span>
+<span class="nc" id="L695">			return null;</span>
+		}
+<span class="nc bnc" id="L697" title="All 4 branches missed.">		if (definite &amp;&amp; dt.getDefiniteSequence_ID() == 0)</span>
+		{
+<span class="nc" id="L699">			s_log.warning (&quot;No Definite Sequence for DocType - &quot; + dt);</span>
+<span class="nc" id="L700">			return null;</span>
+		}
+<span class="nc bnc" id="L702" title="All 2 branches missed.">		int seqID = ( definite ? dt.getDefiniteSequence_ID() : dt.getDocNoSequence_ID() );</span>
+<span class="nc" id="L703">		MSequence seq = new MSequence(Env.getCtx(), seqID, trxName);</span>
+		
+<span class="nc bnc" id="L705" title="All 2 branches missed.">		if (CLogMgt.isLevel(Level.FINER))</span>
+<span class="nc" id="L706">			s_log.log(Level.FINER, &quot;DocType_ID=&quot; + C_DocType_ID + &quot; [&quot; + trxName + &quot;]&quot;);</span>
+
+<span class="nc" id="L708">		return getDocumentNoFromSeq(seq, trxName, po);</span>
+	}	//	getDocumentNo
+
+	/**
+	 *	Check/Initialize Client DocumentNo/Value Sequences
+	 *	@param ctx context
+	 *	@param AD_Client_ID client
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 */
+	public static boolean checkClientSequences (Properties ctx, int AD_Client_ID, String trxName)
+	{
+<span class="nc" id="L720">		String sql = &quot;SELECT TableName &quot;</span>
+			+ &quot;FROM AD_Table t &quot;
+			+ &quot;WHERE IsActive='Y' AND IsView='N'&quot;
+			//	Get all Tables with DocumentNo or Value
+			+ &quot; AND AD_Table_ID IN &quot;
+				+ &quot;(SELECT AD_Table_ID FROM AD_Column &quot;
+				+ &quot;WHERE ColumnName = 'DocumentNo' OR ColumnName = 'Value')&quot;
+			//	Ability to run multiple times
+			+ &quot; AND 'DocumentNo_' || TableName NOT IN &quot;
+				+ &quot;(SELECT Name FROM AD_Sequence s &quot;
+				+ &quot;WHERE s.AD_Client_ID=?)&quot;;
+<span class="nc" id="L731">		int counter = 0;</span>
+<span class="nc" id="L732">		boolean success = true;</span>
+		//
+<span class="nc" id="L734">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L735">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L738">			pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L739">			pstmt.setInt(1, AD_Client_ID);</span>
+<span class="nc" id="L740">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L743">				String tableName = rs.getString(1);</span>
+<span class="nc bnc" id="L744" title="All 2 branches missed.">				if (s_log.isLoggable(Level.FINE)) s_log.fine(&quot;Add: &quot; + tableName);</span>
+<span class="nc" id="L745">				MSequence seq = new MSequence (ctx, AD_Client_ID, tableName, trxName);</span>
+<span class="nc bnc" id="L746" title="All 2 branches missed.">				if (seq.save())</span>
+<span class="nc" id="L747">					counter++;</span>
+				else
+				{
+<span class="nc" id="L750">					s_log.severe (&quot;Not created - AD_Client_ID=&quot; + AD_Client_ID</span>
+<span class="nc" id="L751">						+ &quot; - &quot;  + tableName);</span>
+<span class="nc" id="L752">					success = false;</span>
+				}
+			}
+<span class="nc" id="L755">		}</span>
+<span class="nc" id="L756">		catch (Exception e)</span>
+		{
+<span class="nc" id="L758">			s_log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L762">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L763">			rs = null;</span>
+<span class="nc" id="L764">			pstmt = null;</span>
+		}
+<span class="nc bnc" id="L766" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO)) s_log.info (&quot;AD_Client_ID=&quot; + AD_Client_ID</span>
+<span class="nc" id="L767">			+ &quot; - created #&quot; + counter</span>
+<span class="nc" id="L768">			+ &quot; - success=&quot; + success);</span>
+<span class="nc" id="L769">		return success;</span>
+	}	//	checkClientSequences
+
+	/**
+	 * Create Table ID Sequence
+	 * @param ctx
+	 * @param TableName
+	 * @param trxName
+	 * @return true if created
+	 */
+	public static boolean createTableSequence (Properties ctx, String TableName, String trxName) {
+<span class="nc" id="L780">		return createTableSequence (ctx, TableName, trxName, true);</span>
+	}
+
+	/**
+	 * 	Create Table Sequence
+	 * 	@param ctx context
+	 * 	@param TableName table name
+	 *	@param trxName transaction
+	 *  @param tableID true for table id sequence, false for documentno/value sequence
+	 * 	@return true if created
+	 */
+	public static boolean createTableSequence (Properties ctx, String TableName, String trxName, boolean tableID)
+	{
+<span class="nc" id="L793">		boolean SYSTEM_NATIVE_SEQUENCE = MSysConfig.getBooleanValue(MSysConfig.SYSTEM_NATIVE_SEQUENCE,false);</span>
+
+<span class="nc bnc" id="L795" title="All 4 branches missed.">		if (tableID &amp;&amp; SYSTEM_NATIVE_SEQUENCE)</span>
+		{
+<span class="nc" id="L797">			int next_id = DB.getSQLValueEx(trxName, &quot;SELECT CurrentNext FROM AD_Sequence WHERE Name=? AND IsActive='Y' AND IsTableID='Y' AND IsAutoSequence='Y'&quot;, TableName);</span>
+<span class="nc bnc" id="L798" title="All 2 branches missed.">			if (next_id == -1)</span>
+			{
+<span class="nc" id="L800">				MSequence seq = new MSequence (ctx, 0, trxName);</span>
+<span class="nc" id="L801">				seq.setClientOrg(0, 0);</span>
+<span class="nc" id="L802">				seq.setName(TableName);</span>
+<span class="nc" id="L803">				seq.setDescription(&quot;Table &quot; + TableName);</span>
+<span class="nc" id="L804">				seq.setIsTableID(tableID);</span>
+<span class="nc" id="L805">				seq.saveEx();</span>
+<span class="nc" id="L806">				next_id = INIT_NO;</span>
+			}
+<span class="nc bnc" id="L808" title="All 2 branches missed.">			if (! CConnection.get().getDatabase().createSequence(TableName+&quot;_SQ&quot;, 1, INIT_NO, Integer.MAX_VALUE, next_id, trxName))</span>
+<span class="nc" id="L809">				return false;</span>
+
+<span class="nc" id="L811">			return true;</span>
+		}
+
+<span class="nc" id="L814">		MSequence seq = new MSequence (ctx, 0, trxName);</span>
+<span class="nc bnc" id="L815" title="All 2 branches missed.">		if (tableID)</span>
+<span class="nc" id="L816">			seq.setClientOrg(0, 0);</span>
+		else
+<span class="nc" id="L818">			seq.setClientOrg(Env.getAD_Client_ID(Env.getCtx()), 0);</span>
+		
+<span class="nc bnc" id="L820" title="All 2 branches missed.">		if (tableID) {</span>
+<span class="nc" id="L821">			seq.setName(TableName);</span>
+<span class="nc" id="L822">			seq.setDescription(&quot;Table &quot; + TableName);</span>
+<span class="nc" id="L823">		} else {</span>
+<span class="nc" id="L824">			seq.setName(PREFIX_DOCSEQ + TableName);</span>
+<span class="nc" id="L825">			seq.setDescription(&quot;DocumentNo/Value for Table &quot; + TableName);</span>
+		}
+<span class="nc" id="L827">		seq.setIsTableID(tableID);</span>
+<span class="nc" id="L828">		seq.saveEx();</span>
+
+<span class="nc" id="L830">		return true;</span>
+	}	//	createTableSequence
+
+	/**
+	 * 	Get Sequence
+	 *	@param ctx context
+	 *	@param tableName table name
+	 *	@return Sequence
+	 */
+	public static MSequence get (Properties ctx, String tableName)
+	{
+<span class="nc" id="L841">		return get(ctx, tableName, null);</span>
+	}
+
+	/**
+	 *  Get the tableID sequence based on the TableName 
+	 *  @param ctx
+	 *  @param tableName
+	 *  @param trxName
+	 *  @return sequence
+	 */
+	public static MSequence get (Properties ctx, String tableName, String trxName)
+	{
+<span class="nc" id="L853">		return get (ctx, tableName, trxName, true);</span>
+	}
+
+	/**
+	 * 	Get Sequence
+	 *	@param ctx context
+	 *	@param tableName table name
+	 *  @param trxName optional transaction name
+	 *  @param tableID IsTableID flag
+	 *	@return Sequence
+	 */
+	public static MSequence get (Properties ctx, String tableName, String trxName, boolean tableID)
+	{
+<span class="nc bnc" id="L866" title="All 2 branches missed.">		if (! tableID) {</span>
+<span class="nc" id="L867">			tableName = PREFIX_DOCSEQ + tableName;</span>
+		}
+
+<span class="nc" id="L870">		String sql = &quot;SELECT * FROM AD_Sequence &quot;</span>
+			+ &quot;WHERE UPPER(Name)=?&quot;
+			+ &quot; AND IsTableID=?&quot;;
+<span class="nc bnc" id="L873" title="All 2 branches missed.">		if (! tableID)</span>
+<span class="nc" id="L874">			sql = sql + &quot; AND AD_Client_ID=?&quot;;</span>
+<span class="nc" id="L875">		MSequence retValue = null;</span>
+<span class="nc" id="L876">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L877">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L880">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L881">			pstmt.setString(1, tableName.toUpperCase());</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">			pstmt.setString(2, ( tableID ? &quot;Y&quot; : &quot;N&quot; ) );</span>
+<span class="nc bnc" id="L883" title="All 2 branches missed.">			if (! tableID)</span>
+<span class="nc" id="L884">				pstmt.setInt (3, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc" id="L885">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L886" title="All 2 branches missed.">			if (rs.next ())</span>
+<span class="nc" id="L887">				retValue = new MSequence (ctx, rs, trxName);</span>
+<span class="nc bnc" id="L888" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L889">				s_log.log(Level.SEVERE, &quot;More then one sequence for &quot; + tableName);</span>
+<span class="nc" id="L890">		}</span>
+<span class="nc" id="L891">		catch (Exception e)</span>
+		{
+<span class="nc" id="L893">			throw new DBException(e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L897">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L898">			rs = null;</span>
+<span class="nc" id="L899">			pstmt = null;</span>
+		}
+<span class="nc" id="L901">		return retValue;</span>
+	}	//	get
+
+	/**	Sequence for Table Document No's	*/
+	private static final String	PREFIX_DOCSEQ = &quot;DocumentNo_&quot;;
+	/**	Start Number			*/
+	public static final int		INIT_NO = 1000000;	//	1M
+	/**	Start System Number		*/
+	public static final int		INIT_SYS_NO = 200000;   // start number for iDempiere
+	/** Static Logger			*/
+<span class="nc" id="L911">	private static CLogger 		s_log = CLogger.getCLogger(MSequence.class);</span>
+
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param AD_Sequence_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MSequence(Properties ctx, String AD_Sequence_UU, String trxName) {
+<span class="nc" id="L920">        super(ctx, AD_Sequence_UU, trxName);</span>
+<span class="nc bnc" id="L921" title="All 2 branches missed.">		if (Util.isEmpty(AD_Sequence_UU))</span>
+<span class="nc" id="L922">			setInitialDefaults();</span>
+<span class="nc" id="L923">    }</span>
+
+	/**
+	 *	Standard Constructor
+	 *	@param ctx context
+	 *	@param AD_Sequence_ID id
+	 *	@param trxName transaction
+	 */
+	public MSequence (Properties ctx, int AD_Sequence_ID, String trxName)
+	{
+<span class="nc" id="L933">		super(ctx, AD_Sequence_ID, trxName);</span>
+<span class="nc bnc" id="L934" title="All 2 branches missed.">		if (AD_Sequence_ID == 0)</span>
+<span class="nc" id="L935">			setInitialDefaults();</span>
+<span class="nc" id="L936">	}	//	MSequence</span>
+
+	/**
+	 * Set the initial defaults for a new record
+	 */
+	private void setInitialDefaults() {
+<span class="nc" id="L942">		setIsTableID(false);</span>
+<span class="nc" id="L943">		setStartNo (INIT_NO);</span>
+<span class="nc" id="L944">		setCurrentNext (INIT_NO);</span>
+<span class="nc" id="L945">		setCurrentNextSys (INIT_SYS_NO);</span>
+<span class="nc" id="L946">		setIncrementNo (1);</span>
+<span class="nc" id="L947">		setIsAutoSequence (true);</span>
+<span class="nc" id="L948">		setIsAudited(false);</span>
+<span class="nc" id="L949">		setStartNewYear(false);</span>
+<span class="nc" id="L950">	}</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MSequence (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L960">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L961">	}	//	MSequence</span>
+
+	/**
+	 * 	New Document Sequence Constructor
+	 *	@param ctx context
+	 *	@param AD_Client_ID owner
+	 *	@param tableName name
+	 *	@param trxName transaction
+	 */
+	public MSequence (Properties ctx, int AD_Client_ID, String tableName, String trxName)
+	{
+<span class="nc" id="L972">		this (ctx, 0, trxName);</span>
+<span class="nc" id="L973">		setClientOrg(AD_Client_ID, 0);			//	Client Ownership</span>
+<span class="nc" id="L974">		setName(PREFIX_DOCSEQ + tableName);</span>
+<span class="nc" id="L975">		setDescription(&quot;DocumentNo/Value for Table &quot; + tableName);</span>
+<span class="nc" id="L976">	}	//	MSequence;</span>
+
+	/**
+	 * 	New Document Sequence Constructor
+	 *	@param ctx context
+	 *	@param AD_Client_ID owner
+	 *	@param sequenceName name
+	 *	@param StartNo start
+	 *	@param trxName trx
+	 */
+	public MSequence (Properties ctx, int AD_Client_ID, String sequenceName, int StartNo, String trxName)
+	{
+<span class="nc" id="L988">		this (ctx, 0, trxName);</span>
+<span class="nc" id="L989">		setClientOrg(AD_Client_ID, 0);			//	Client Ownership</span>
+<span class="nc" id="L990">		setName(sequenceName);</span>
+<span class="nc" id="L991">		setDescription(sequenceName);</span>
+<span class="nc" id="L992">		setStartNo(StartNo);</span>
+<span class="nc" id="L993">		setCurrentNext(StartNo);</span>
+<span class="nc" id="L994">		setCurrentNextSys(StartNo/10);</span>
+<span class="nc" id="L995">	}	//	MSequence;</span>
+
+	/**
+	 * 	Get Next No and increase current next
+	 *	@return next no to use
+	 *  @deprecated use the static getNextID or getDocumentNo method instead
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public int getNextID()
+	{
+<span class="nc" id="L1005">		int retValue = getCurrentNext();</span>
+<span class="nc bnc" id="L1006" title="All 4 branches missed.">		if (! (MSysConfig.getBooleanValue(MSysConfig.SYSTEM_NATIVE_SEQUENCE,false) &amp;&amp; isTableID())) {</span>
+<span class="nc" id="L1007">			setCurrentNext(retValue + getIncrementNo());</span>
+		}
+<span class="nc" id="L1009">		return retValue;</span>
+	}	//	getNextNo
+
+	/**
+	 * Validate Table Sequence Values
+	 * @return info
+	 */
+	public String validateTableIDValue()
+	{
+<span class="nc" id="L1018">		return validateTableIDValue(null);</span>
+	}
+
+	/**
+	 * 	Validate Table Sequence Values
+	 *  trxName the Transaction
+	 *	@return info
+	 */
+	public String validateTableIDValue(String trxName)
+	{
+<span class="nc bnc" id="L1028" title="All 2 branches missed.">		if (!isTableID())</span>
+<span class="nc" id="L1029">			return null;</span>
+<span class="nc" id="L1030">		String tableName = getName();</span>
+<span class="nc" id="L1031">		int AD_Column_ID = DB.getSQLValue(trxName, &quot;SELECT MAX(c.AD_Column_ID) &quot;</span>
+			+ &quot;FROM AD_Table t&quot;
+			+ &quot; INNER JOIN AD_Column c ON (t.AD_Table_ID=c.AD_Table_ID) &quot;
+<span class="nc" id="L1034">			+ &quot;WHERE t.TableName='&quot; + tableName + &quot;'&quot;</span>
+			+ &quot; AND t.IsView='N'&quot; // ignore for views -- IDEMPIERE-2513
+<span class="nc" id="L1036">			+ &quot; AND c.ColumnName='&quot; + tableName + &quot;_ID'&quot;);</span>
+<span class="nc bnc" id="L1037" title="All 2 branches missed.">		if (AD_Column_ID &lt;= 0)</span>
+<span class="nc" id="L1038">			return null;</span>
+		//
+<span class="nc" id="L1040">		MSystem system = MSystem.get(getCtx());</span>
+<span class="nc" id="L1041">		int IDRangeEnd = 0;</span>
+<span class="nc bnc" id="L1042" title="All 2 branches missed.">		if (system.getIDRangeEnd() != null)</span>
+<span class="nc" id="L1043">			IDRangeEnd = system.getIDRangeEnd().intValue();</span>
+
+<span class="nc" id="L1045">		String changeMsg = null;</span>
+<span class="nc" id="L1046">		String info = null;</span>
+
+		//	Current Next
+<span class="nc" id="L1049">		String sql = &quot;SELECT MAX(&quot; + tableName + &quot;_ID) FROM &quot; + tableName;</span>
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">		if (IDRangeEnd &gt; 0)</span>
+<span class="nc" id="L1051">			sql += &quot; WHERE &quot; + tableName + &quot;_ID &lt; &quot; + IDRangeEnd;</span>
+<span class="nc" id="L1052">		int maxTableID = DB.getSQLValue(trxName, sql);</span>
+<span class="nc bnc" id="L1053" title="All 2 branches missed.">		if (maxTableID &lt; INIT_NO)</span>
+<span class="nc" id="L1054">			maxTableID = INIT_NO - 1;</span>
+<span class="nc" id="L1055">		maxTableID++;		//	Next</span>
+		
+<span class="nc" id="L1057">		int currentNextValue = getCurrentNext();</span>
+<span class="nc bnc" id="L1058" title="All 2 branches missed.">		if (currentNextValue &lt; maxTableID)</span>
+		{
+<span class="nc" id="L1060">			setCurrentNext(maxTableID);</span>
+<span class="nc" id="L1061">			info = &quot;CurrentNext=&quot; + maxTableID;</span>
+<span class="nc" id="L1062">			changeMsg = getName() + &quot; ID  &quot; + currentNextValue + &quot; -&gt; &quot; + maxTableID;</span>
+		}
+
+		//	Get Max System_ID used in Table
+<span class="nc" id="L1066">		sql = &quot;SELECT MAX(&quot; + tableName + &quot;_ID) FROM &quot; + tableName</span>
+<span class="nc" id="L1067">			+ &quot; WHERE &quot; + tableName + &quot;_ID &lt; &quot; + INIT_NO;</span>
+<span class="nc" id="L1068">		int maxTableSysID = DB.getSQLValue(trxName, sql);</span>
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">		if (maxTableSysID &lt;= 0)</span>
+<span class="nc" id="L1070">			maxTableSysID = INIT_SYS_NO;</span>
+<span class="nc" id="L1071">		int currentNextSysValue = getCurrentNextSys();</span>
+<span class="nc bnc" id="L1072" title="All 2 branches missed.">		if (currentNextSysValue &lt; maxTableSysID){</span>
+<span class="nc" id="L1073">			setCurrentNextSys(maxTableSysID);</span>
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">			if (info == null)</span>
+<span class="nc" id="L1075">				info = &quot;CurrentNextSys=&quot; + maxTableSysID;</span>
+			else
+<span class="nc" id="L1077">				info += &quot; - CurrentNextSys=&quot; + maxTableSysID;</span>
+		
+<span class="nc bnc" id="L1079" title="All 2 branches missed.">			if (changeMsg == null) </span>
+<span class="nc" id="L1080">				changeMsg = getName() + &quot; Sys &quot; + currentNextSysValue + &quot; -&gt; &quot; + maxTableSysID;</span>
+			else  
+<span class="nc" id="L1082">				changeMsg += &quot; - &quot; +getName() + &quot; Sys &quot; + currentNextSysValue + &quot; -&gt; &quot; + maxTableSysID;	</span>
+		}
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">		if (info != null)</span>
+<span class="nc bnc" id="L1085" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(getName() + &quot; - &quot; + info);</span>
+		
+<span class="nc" id="L1087">		return changeMsg;</span>
+	}	//	validate
+
+	@Override
+	public int getCurrentNext() {
+<span class="nc bnc" id="L1092" title="All 4 branches missed.">		if (MSysConfig.getBooleanValue(MSysConfig.SYSTEM_NATIVE_SEQUENCE,false) &amp;&amp; isTableID()){</span>
+<span class="nc" id="L1093">		    return DB.getNextID (getAD_Client_ID(),getName(),get_TrxName());</span>
+		} else {
+<span class="nc" id="L1095">		   return super.getCurrentNext();</span>
+		}
+	}
+		 
+    @Override
+	public void setCurrentNext(int CurrentNext) {	
+<span class="nc bnc" id="L1101" title="All 4 branches missed.">		if (MSysConfig.getBooleanValue(MSysConfig.SYSTEM_NATIVE_SEQUENCE,false) &amp;&amp; isTableID()){</span>
+			while (true) {
+<span class="nc" id="L1103">				int id = DB.getNextID(getAD_Client_ID(),getName(),get_TrxName());</span>
+<span class="nc bnc" id="L1104" title="All 4 branches missed.">				if (id &lt; 0 || id &gt;= (CurrentNext-1))</span>
+					break;
+	        }
+<span class="nc" id="L1107">		}else {</span>
+<span class="nc" id="L1108">			super.setCurrentNext(CurrentNext);			</span>
+		}
+<span class="nc" id="L1110">	}</span>
+
+	/**
+	 *	Get next official id through http call
+	 *  @param TableName table name
+	 *  @return next official id or (-1=error)
+	 */
+	public static synchronized int getNextOfficialID_HTTP (String TableName)
+	{
+<span class="nc" id="L1119">		String website = MSysConfig.getValue(MSysConfig.DICTIONARY_ID_WEBSITE); // &quot;http://developer.adempiere.com/cgi-bin/get_ID&quot;;</span>
+<span class="nc" id="L1120">		String prm_USER = MSysConfig.getValue(MSysConfig.DICTIONARY_ID_USER);  </span>
+<span class="nc" id="L1121">		String prm_PASSWORD = MSysConfig.getValue(MSysConfig.DICTIONARY_ID_PASSWORD);  </span>
+<span class="nc" id="L1122">		String prm_TABLE = TableName;</span>
+<span class="nc" id="L1123">		String prm_ALTKEY = &quot;&quot;;  // TODO: generate alt-key based on key of table</span>
+<span class="nc" id="L1124">		String prm_COMMENT = Env.getContext(Env.getCtx(), I_AD_UserPreference.COLUMNNAME_MigrationScriptComment);</span>
+<span class="nc" id="L1125">		String prm_PROJECT = new String(&quot;Adempiere&quot;);</span>
+
+<span class="nc" id="L1127">		return getNextID_HTTP(TableName, website, prm_USER,</span>
+<span class="nc" id="L1128">				prm_PASSWORD, prm_TABLE, prm_ALTKEY, prm_COMMENT, prm_PROJECT);</span>
+	}
+
+	/**
+	 *	Get next centralized id through http call
+	 *  @param TableName table name
+	 *  @return next centralized id or (-1=error)
+	 */
+	public static synchronized int getNextProjectID_HTTP (String TableName)
+	{
+<span class="nc" id="L1138">		String website = MSysConfig.getValue(MSysConfig.PROJECT_ID_WEBSITE); // &quot;http://developer.adempiere.com/cgi-bin/get_ID&quot;;</span>
+<span class="nc" id="L1139">		String prm_USER = MSysConfig.getValue(MSysConfig.PROJECT_ID_USER);  // &quot;globalqss&quot;;</span>
+<span class="nc" id="L1140">		String prm_PASSWORD = MSysConfig.getValue(MSysConfig.PROJECT_ID_PASSWORD);  // &quot;password_inseguro&quot;;</span>
+<span class="nc" id="L1141">		String prm_TABLE = TableName;</span>
+<span class="nc" id="L1142">		String prm_ALTKEY = &quot;&quot;;  // TODO: generate alt-key based on key of table</span>
+<span class="nc" id="L1143">		String prm_COMMENT = Env.getContext(Env.getCtx(), I_AD_UserPreference.COLUMNNAME_MigrationScriptComment);</span>
+<span class="nc" id="L1144">		String prm_PROJECT = MSysConfig.getValue(MSysConfig.PROJECT_ID_PROJECT);</span>
+
+<span class="nc" id="L1146">		return getNextID_HTTP(TableName, website, prm_USER,</span>
+<span class="nc" id="L1147">				prm_PASSWORD, prm_TABLE, prm_ALTKEY, prm_COMMENT, prm_PROJECT);</span>
+	}
+
+	/**
+	 * Get next id through http call
+	 * @param TableName
+	 * @param website
+	 * @param prm_USER
+	 * @param prm_PASSWORD
+	 * @param prm_TABLE
+	 * @param prm_ALTKEY
+	 * @param prm_COMMENT
+	 * @param prm_PROJECT
+	 * @return next id or -1 if there's error
+	 */
+	private static int getNextID_HTTP(String TableName,
+			String website, String prm_USER, String prm_PASSWORD,
+			String prm_TABLE, String prm_ALTKEY, String prm_COMMENT,
+			String prm_PROJECT) {
+<span class="nc" id="L1166">		StringBuilder read = new StringBuilder();</span>
+<span class="nc" id="L1167">		int retValue = -1;</span>
+		try {
+<span class="nc" id="L1169">			String completeUrl = website + &quot;?&quot; + &quot;USER=&quot;</span>
+<span class="nc" id="L1170">					+ URLEncoder.encode(prm_USER, &quot;UTF-8&quot;) + &quot;&amp;PASSWORD=&quot;</span>
+<span class="nc" id="L1171">					+ URLEncoder.encode(prm_PASSWORD, &quot;UTF-8&quot;) + &quot;&amp;PROJECT=&quot;</span>
+<span class="nc" id="L1172">					+ URLEncoder.encode(prm_PROJECT, &quot;UTF-8&quot;) + &quot;&amp;TABLE=&quot;</span>
+<span class="nc" id="L1173">					+ URLEncoder.encode(prm_TABLE, &quot;UTF-8&quot;) + &quot;&amp;ALTKEY=&quot;</span>
+<span class="nc" id="L1174">					+ URLEncoder.encode(prm_ALTKEY, &quot;UTF-8&quot;) + &quot;&amp;COMMENT=&quot;</span>
+<span class="nc" id="L1175">					+ URLEncoder.encode(prm_COMMENT, &quot;UTF-8&quot;);</span>
+
+			// Now use the URL class to parse the user-specified URL into
+			// its various parts: protocol, host, port, filename.  Check the protocol
+<span class="nc" id="L1179">			URL url = new URL(completeUrl);</span>
+<span class="nc" id="L1180">			String protocol = url.getProtocol();</span>
+<span class="nc bnc" id="L1181" title="All 4 branches missed.">			if (!protocol.equals(&quot;https&quot;) &amp;&amp; !protocol.equals(&quot;http&quot;))</span>
+<span class="nc" id="L1182">				throw new IllegalArgumentException(&quot;URL must use 'http:' or 'https:' protocol&quot;);</span>
+<span class="nc" id="L1183">			HttpURLConnection conn = (HttpURLConnection)url.openConnection();</span>
+<span class="nc" id="L1184">			conn.setRequestMethod(&quot;GET&quot;);</span>
+<span class="nc" id="L1185">			conn.setAllowUserInteraction(false);</span>
+<span class="nc" id="L1186">			InputStream is =  conn.getInputStream();</span>
+
+			// Now read the server's response, and write it to the file
+<span class="nc" id="L1189">			byte[] buffer = new byte[4096];</span>
+			int bytes_read;
+<span class="nc bnc" id="L1191" title="All 2 branches missed.">			while((bytes_read = is.read(buffer)) != -1) {</span>
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">				for (int i = 0; i &lt; bytes_read; i++) {</span>
+<span class="nc bnc" id="L1193" title="All 2 branches missed.">					if (buffer[i] != 10)</span>
+<span class="nc" id="L1194">						read.append((char) buffer[i]);</span>
+				}
+			}
+<span class="nc" id="L1197">			conn.disconnect();</span>
+<span class="nc" id="L1198">			retValue = Integer.parseInt(read.toString());</span>
+<span class="nc bnc" id="L1199" title="All 2 branches missed.">			if (retValue &lt;= 0)</span>
+<span class="nc" id="L1200">				retValue = -1;</span>
+<span class="nc" id="L1201">		}</span>
+<span class="nc" id="L1202">		catch (Exception e) {    // Report any errors that arise</span>
+<span class="nc" id="L1203">			System.err.println(e);</span>
+<span class="nc" id="L1204">			retValue = -1;</span>
+		}
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO))s_log.log(Level.INFO, &quot;getNextID_HTTP - &quot; + TableName + &quot;=&quot; + read + &quot;(&quot; + retValue + &quot;)&quot;);</span>
+
+<span class="nc" id="L1208">		return retValue;</span>
+	}
+
+	/** List of table that shouldn't use centralized id */
+<span class="nc" id="L1212">	private static String [] dontUseCentralized = new String[] {</span>
+<span class="nc" id="L1213">			&quot;AD_ACCESSLOG&quot;,</span>
+<span class="nc" id="L1214">			&quot;AD_ALERTPROCESSORLOG&quot;,</span>
+<span class="nc" id="L1215">			&quot;AD_CHANGELOG&quot;,</span>
+<span class="nc" id="L1216">			&quot;AD_ISSUE&quot;,</span>
+<span class="nc" id="L1217">			&quot;AD_LDAPPROCESSORLOG&quot;,</span>
+<span class="nc" id="L1218">			&quot;AD_PACKAGE_IMP&quot;,</span>
+<span class="nc" id="L1219">			&quot;AD_PACKAGE_IMP_BACKUP&quot;,</span>
+<span class="nc" id="L1220">			&quot;AD_PACKAGE_IMP_DETAIL&quot;,</span>
+<span class="nc" id="L1221">			&quot;AD_PACKAGE_IMP_INST&quot;,</span>
+<span class="nc" id="L1222">			&quot;AD_PACKAGE_IMP_PROC&quot;,</span>
+<span class="nc" id="L1223">			&quot;AD_PINSTANCE&quot;,</span>
+<span class="nc" id="L1224">			&quot;AD_PINSTANCE_LOG&quot;,</span>
+<span class="nc" id="L1225">			&quot;AD_PINSTANCE_PARA&quot;,</span>
+<span class="nc" id="L1226">			&quot;AD_PREFERENCE&quot;,</span>
+<span class="nc" id="L1227">			&quot;AD_RECENTITEM&quot;,</span>
+<span class="nc" id="L1228">			&quot;AD_REPLICATION_LOG&quot;,</span>
+<span class="nc" id="L1229">			&quot;AD_SCHEDULERLOG&quot;,</span>
+<span class="nc" id="L1230">			&quot;AD_SESSION&quot;,</span>
+<span class="nc" id="L1231">			&quot;AD_USERPREFERENCE&quot;,</span>
+<span class="nc" id="L1232">			&quot;AD_WLISTBOX_CUSTOMIZATION&quot;,</span>
+<span class="nc" id="L1233">			&quot;AD_WORKFLOWPROCESSORLOG&quot;,</span>
+<span class="nc" id="L1234">			&quot;CM_WEBACCESSLOG&quot;,</span>
+<span class="nc" id="L1235">			&quot;C_ACCTPROCESSORLOG&quot;,</span>
+<span class="nc" id="L1236">			&quot;K_INDEXLOG&quot;,</span>
+<span class="nc" id="L1237">			&quot;R_REQUESTPROCESSORLOG&quot;,</span>
+<span class="nc" id="L1238">			&quot;T_AGING&quot;,</span>
+<span class="nc" id="L1239">			&quot;T_ALTER_COLUMN&quot;,</span>
+<span class="nc" id="L1240">			&quot;T_DISTRIBUTIONRUNDETAIL&quot;,</span>
+<span class="nc" id="L1241">			&quot;T_INVENTORYVALUE&quot;,</span>
+<span class="nc" id="L1242">			&quot;T_INVOICEGL&quot;,</span>
+<span class="nc" id="L1243">			&quot;T_REPLENISH&quot;,</span>
+<span class="nc" id="L1244">			&quot;T_REPORT&quot;,</span>
+<span class="nc" id="L1245">			&quot;T_REPORTSTATEMENT&quot;,</span>
+<span class="nc" id="L1246">			&quot;T_SELECTION&quot;,</span>
+<span class="nc" id="L1247">			&quot;T_SELECTION2&quot;,</span>
+<span class="nc" id="L1248">			&quot;T_SPOOL&quot;,</span>
+<span class="nc" id="L1249">			&quot;T_TRANSACTION&quot;,</span>
+<span class="nc" id="L1250">			&quot;T_TRIALBALANCE&quot;</span>
+		};
+
+	/**
+	 * @param tableName
+	 * @return true if centralized id shouldn't be used for tableName
+	 */
+	public static boolean isExceptionCentralized(String tableName) {
+
+<span class="nc bnc" id="L1259" title="All 2 branches missed.">		for (String exceptionTable : dontUseCentralized) {</span>
+<span class="nc bnc" id="L1260" title="All 2 branches missed.">			if (tableName.equalsIgnoreCase(exceptionTable))</span>
+<span class="nc" id="L1261">				return true;</span>
+		}
+
+		// don't log selects or insert/update for exception tables (i.e. AD_Issue, AD_ChangeLog)
+<span class="nc" id="L1265">		return false;</span>
+	}
+	
+<span class="nc" id="L1268">	private static CCache&lt;String,String&gt; tablesWithEntityType = new CCache&lt;String,String&gt;(Table_Name, &quot;TablesWithEntityType&quot;, 60, 0, false, 0);</span>
+	
+	/**
+	 * @param tableName
+	 * @return true if table has entity type column
+	 */
+	public static synchronized boolean isTableWithEntityType(String tableName) {
+<span class="nc bnc" id="L1275" title="All 2 branches missed.">		if (tablesWithEntityType.size() == 0) {</span>
+<span class="nc" id="L1276">			final String sql = &quot;SELECT TableName FROM AD_Table WHERE AD_Table_ID IN (SELECT AD_Table_ID FROM AD_Column WHERE ColumnName='EntityType') ORDER BY TableName&quot;;</span>
+<span class="nc" id="L1277">			List&lt;List&lt;Object&gt;&gt; list = DB.getSQLArrayObjectsEx(null, sql);</span>
+<span class="nc bnc" id="L1278" title="All 2 branches missed.">			for (List&lt;Object&gt; row : list) {</span>
+<span class="nc" id="L1279">				tablesWithEntityType.put((String)row.get(0), &quot;&quot;);</span>
+			}
+		}
+<span class="nc bnc" id="L1282" title="All 2 branches missed.">		return (tablesWithEntityType.get(tableName) != null);</span>
+	}
+
+	@Override
+	protected boolean beforeSave(boolean newRecord) {
+<span class="nc bnc" id="L1287" title="All 4 branches missed.">		if (isStartNewMonth() &amp;&amp; !isStartNewYear())</span>
+<span class="nc" id="L1288">			setStartNewMonth(false);</span>
+<span class="nc" id="L1289">		return true;</span>
+	}
+
+	/**
+	 * Get preliminary document no by year
+	 * @param tab
+	 * @param AD_Sequence_ID
+	 * @return Preliminary document no
+	 */
+	public static String getPreliminaryNo(GridTab tab, int AD_Sequence_ID) {
+<span class="nc" id="L1299">		String prelim = null;</span>
+<span class="nc bnc" id="L1300" title="All 2 branches missed.">		if (AD_Sequence_ID &gt; 0) {</span>
+<span class="nc" id="L1301">			MSequence seq = new MSequence(Env.getCtx(), AD_Sequence_ID, null);</span>
+<span class="nc" id="L1302">			int currentNext = seq.getCurrentNext();</span>
+<span class="nc" id="L1303">			DefaultEvaluatee evaluatee = new DefaultEvaluatee(tab, tab.getWindowNo(), tab.getTabNo());</span>
+<span class="nc" id="L1304">			SequenceNoKeyParts keyParts = new SequenceNoKeyParts(seq, evaluatee, null);</span>
+
+<span class="nc bnc" id="L1306" title="All 4 branches missed.">			if (seq.getPrefix() != null &amp;&amp; seq.getPrefix().length() &gt; 0) {</span>
+<span class="nc" id="L1307">				keyParts.parsePrefix(seq.getPrefix());</span>
+			}
+<span class="nc bnc" id="L1309" title="All 4 branches missed.">			if (seq.getSuffix() != null &amp;&amp; seq.getSuffix().length() &gt; 0) {</span>
+<span class="nc" id="L1310">				keyParts.parseSuffix(seq.getSuffix());</span>
+			}
+
+<span class="nc bnc" id="L1313" title="All 2 branches missed.">			if (seq.isSequenceNoLevel()) {</span>
+<span class="nc bnc" id="L1314" title="All 4 branches missed.">				if (seq.isStartNewYear() || seq.isStartNewMonth()) {</span>
+<span class="nc" id="L1315">					Date d = (Date)tab.getValue(seq.getDateColumn());</span>
+<span class="nc bnc" id="L1316" title="All 2 branches missed.">					if (d == null)</span>
+<span class="nc" id="L1317">						d = new Date();</span>
+<span class="nc" id="L1318">					SimpleDateFormat sdf = null;</span>
+<span class="nc bnc" id="L1319" title="All 2 branches missed.">					if (seq.isStartNewMonth())</span>
+<span class="nc" id="L1320">						sdf = new SimpleDateFormat(&quot;yyyyMM&quot;);</span>
+					else
+<span class="nc" id="L1322">						sdf = new SimpleDateFormat(&quot;yyyy&quot;);</span>
+<span class="nc" id="L1323">					keyParts.setCalendarYearMonth(sdf.format(d));</span>
+				}
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">				if (seq.isOrgLevelSequence()) {</span>
+<span class="nc" id="L1326">					String orgColumn = seq.getOrgColumn();</span>
+<span class="nc" id="L1327">					Object orgObj = tab.getValue(orgColumn);</span>
+<span class="nc" id="L1328">					int docOrg_ID = 0;</span>
+<span class="nc bnc" id="L1329" title="All 2 branches missed.">					if (orgObj != null)</span>
+<span class="nc" id="L1330">						docOrg_ID = (Integer)orgObj;</span>
+<span class="nc" id="L1331">					keyParts.setAD_Org_ID(docOrg_ID);</span>
+				}
+<span class="nc" id="L1333">				String sql = &quot;SELECT CurrentNext FROM AD_Sequence_No WHERE AD_Sequence_ID=? AND SequenceKey=?&quot;;</span>
+<span class="nc bnc" id="L1334" title="All 2 branches missed.">				if (seq.isOrgLevelSequence())</span>
+<span class="nc" id="L1335">					sql += &quot; AND AD_Org_ID=?&quot;;</span>
+				Object[] params;
+<span class="nc bnc" id="L1337" title="All 2 branches missed.">				if (seq.isOrgLevelSequence())</span>
+<span class="nc" id="L1338">					params = new Object[]{AD_Sequence_ID, keyParts.getKey(), keyParts.getAD_Org_ID()};</span>
+				else
+<span class="nc" id="L1340">					params = new Object[]{AD_Sequence_ID, keyParts.getKey()};</span>
+<span class="nc" id="L1341">				currentNext = DB.getSQLValueEx(null, sql, params);</span>
+<span class="nc bnc" id="L1342" title="All 2 branches missed.">				if (currentNext &lt;= 0)</span>
+<span class="nc" id="L1343">					currentNext = seq.getStartNo();</span>
+			}
+<span class="nc" id="L1345">			String decimalPattern = seq.getDecimalPattern();</span>
+<span class="nc bnc" id="L1346" title="All 4 branches missed.">			if (decimalPattern != null &amp;&amp; decimalPattern.length() &gt; 0)</span>
+<span class="nc" id="L1347">				prelim = new DecimalFormat(decimalPattern).format(currentNext);</span>
+			else
+<span class="nc" id="L1349">				prelim = String.valueOf(currentNext);</span>
+		}
+<span class="nc bnc" id="L1351" title="All 2 branches missed.">		if (prelim == null)</span>
+<span class="nc" id="L1352">			prelim = &quot;?&quot;;</span>
+<span class="nc" id="L1353">		return &quot;&lt;&quot; + prelim + &quot;&gt;&quot;;</span>
+	}
+	
+	@Override
+	public String getOrgColumn() {
+<span class="nc bnc" id="L1358" title="All 2 branches missed.">		if (super.getOrgColumn() == null)</span>
+<span class="nc" id="L1359">			return COLUMNNAME_AD_Org_ID;</span>
+		else
+<span class="nc" id="L1361">			return super.getOrgColumn();</span>
+	}
+	
+	/**
+	 * Parts of the sequence key for SequenceNo level sequences
+	 */
+	private static class SequenceNoKeyParts {
+
+<span class="nc" id="L1369">		private MSequence seq = null;</span>
+<span class="nc" id="L1370">		private PO po = null;</span>
+<span class="nc" id="L1371">		private DefaultEvaluatee evaluatee = null;</span>
+<span class="nc" id="L1372">		private String trxName = null;</span>
+<span class="nc" id="L1373">		private String calendarYearMonth = null;</span>
+<span class="nc" id="L1374">		private int orgId = 0;</span>
+<span class="nc" id="L1375">		private List&lt;String&gt; prefixValues = null;</span>
+<span class="nc" id="L1376">		private List&lt;String&gt; suffixValues = null;</span>
+<span class="nc" id="L1377">		private String key = null;</span>
+
+<span class="nc" id="L1379">		public SequenceNoKeyParts(MSequence seq, PO po, String trxName) {</span>
+<span class="nc" id="L1380">			this.seq = seq;</span>
+<span class="nc" id="L1381">			this.po = po;</span>
+<span class="nc" id="L1382">			this.trxName = trxName;</span>
+<span class="nc" id="L1383">		}</span>
+		
+<span class="nc" id="L1385">		public SequenceNoKeyParts(MSequence seq, DefaultEvaluatee evaluatee, String trxName) {</span>
+<span class="nc" id="L1386">			this.seq = seq;</span>
+<span class="nc" id="L1387">			this.evaluatee = evaluatee;</span>
+<span class="nc" id="L1388">			this.trxName = trxName;</span>
+<span class="nc" id="L1389">		}</span>
+		
+		/**
+		 * Parse prefix from the input string
+		 * @param prefix the input string containing prefix
+		 */
+		public void parsePrefix(String prefix) {
+<span class="nc bnc" id="L1396" title="All 4 branches missed.">			if (prefix == null || prefix.isEmpty())</span>
+<span class="nc" id="L1397">				return;</span>
+<span class="nc" id="L1398">			prefixValues = parseKeys(prefix);</span>
+<span class="nc" id="L1399">		}</span>
+
+		/**
+		 * Parse suffix from the input string
+		 * @param suffix the input string containing suffix
+		 */
+		public void parseSuffix(String suffix) {
+<span class="nc bnc" id="L1406" title="All 4 branches missed.">			if (suffix == null || suffix.isEmpty())</span>
+<span class="nc" id="L1407">				return;</span>
+<span class="nc" id="L1408">			suffixValues = parseKeys(suffix);</span>
+<span class="nc" id="L1409">		}</span>
+
+		/**
+		 * Parse keys from the input string
+		 * @param input the input string containing keys
+		 * @return a list of parsed keys
+		 */
+		private List&lt;String&gt; parseKeys(String input) {
+<span class="nc bnc" id="L1417" title="All 4 branches missed.">			if (input == null || input.isEmpty())</span>
+<span class="nc" id="L1418">				return null;</span>
+			
+			DefaultEvaluatee evaluatee;
+<span class="nc bnc" id="L1421" title="All 2 branches missed.">			if (this.evaluatee != null) {</span>
+<span class="nc" id="L1422">				evaluatee = this.evaluatee;</span>
+<span class="nc" id="L1423">			} else {</span>
+<span class="nc" id="L1424">				evaluatee = new DefaultEvaluatee(po);</span>
+<span class="nc" id="L1425">				evaluatee.setTrxName(trxName);</span>
+			}
+
+<span class="nc" id="L1428">			List&lt;String&gt; results = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1429">			int startIndex = 0;</span>
+<span class="nc" id="L1430">			while (true) {</span>
+<span class="nc" id="L1431">				int start = input.indexOf(&quot;@&quot;, startIndex);</span>
+<span class="nc bnc" id="L1432" title="All 2 branches missed.">				if (start == -1) break;</span>
+
+<span class="nc" id="L1434">				int end = input.indexOf(&quot;@&quot;, start + 1);</span>
+<span class="nc bnc" id="L1435" title="All 2 branches missed.">				if (end == -1) break;</span>
+
+<span class="nc" id="L1437">				String var = input.substring(start, end + 1);</span>
+<span class="nc" id="L1438">				boolean isKey = false;</span>
+				
+				// Check for &quot;KEY_CONTEXT_VARIABLE&quot; suffix
+<span class="nc bnc" id="L1441" title="All 2 branches missed.">				if (var.substring(0, var.length()-1).endsWith(KEY_CONTEXT_VARIABLE)) {</span>
+<span class="nc" id="L1442">					isKey = true;</span>
+<span class="nc" id="L1443">					int kIndex = var.lastIndexOf(KEY_CONTEXT_VARIABLE);</span>
+<span class="nc" id="L1444">					var = var.substring(0, kIndex) + var.substring(kIndex + KEY_CONTEXT_VARIABLE.length());</span>
+				}
+
+				// Parse the variable
+<span class="nc bnc" id="L1448" title="All 2 branches missed.">				if (isKey) {</span>
+<span class="nc" id="L1449">					String value = Env.parseVariable(var, evaluatee, false, false);;</span>
+<span class="nc bnc" id="L1450" title="All 2 branches missed.">					if (!Util.isEmpty(value, true)) {</span>
+<span class="nc" id="L1451">						results.add(value);</span>
+					}
+				}
+
+<span class="nc" id="L1455">				startIndex = end + 1;</span>
+			}
+<span class="nc" id="L1457">			return results;</span>
+		}
+
+		/**
+		 * Set the calendar year/month for the SequenceNo key
+		 * @param calendarYearMonth the calendar year/month as a string
+		 */
+		public void setCalendarYearMonth(String calendarYearMonth) {
+<span class="nc" id="L1465">			this.calendarYearMonth = calendarYearMonth;</span>
+<span class="nc" id="L1466">		}</span>
+
+		/**
+		 * Set AD_Org_ID for the SequenceNo key
+		 * @param orgId AD_Org_ID
+		 */
+		public void setAD_Org_ID(int orgId) {
+<span class="nc" id="L1473">			this.orgId = orgId;</span>
+<span class="nc" id="L1474">		}</span>
+
+		/**
+		 * Get the AD_Org_ID for the SequenceNo key
+		 * @return AD_Org_ID
+		 */
+		public int getAD_Org_ID() {
+<span class="nc" id="L1481">			return orgId;</span>
+		}
+		
+		/**
+		 * Get the parsed SequenceNo key
+		 * @return the SequenceNo key as a string
+		 */
+		public String getKey() {
+<span class="nc bnc" id="L1489" title="All 2 branches missed.">			if (Util.isEmpty(key))</span>
+<span class="nc" id="L1490">				key = parseSequenceNoKey();</span>
+<span class="nc" id="L1491">			return key;</span>
+		}
+		
+		/**
+		 * Parse the SequenceNo key based on prefix, suffix and calendar year/month
+		 * @return the SequenceNo key as a string
+		 */
+		public String parseSequenceNoKey() {
+<span class="nc" id="L1499">			StringBuilder key = new StringBuilder();</span>
+<span class="nc bnc" id="L1500" title="All 4 branches missed.">			if (seq.isUsePrefixAsKey() &amp;&amp; prefixValues != null) {</span>
+<span class="nc bnc" id="L1501" title="All 2 branches missed.">				for (String value : prefixValues) {</span>
+<span class="nc" id="L1502">					key.append(value).append(SEQUENCE_NO_KEY_SEPARATOR);</span>
+				}
+<span class="nc bnc" id="L1504" title="All 2 branches missed.">				if (key.length() &gt; 0) // remove last separator</span>
+<span class="nc" id="L1505">					key.setLength(key.length() - SEQUENCE_NO_KEY_SEPARATOR.length());</span>
+			}
+<span class="nc bnc" id="L1507" title="All 2 branches missed.">			if (seq.isStartNewYear()) {</span>
+<span class="nc bnc" id="L1508" title="All 2 branches missed.">				if (key.length() &gt; 0)</span>
+<span class="nc" id="L1509">					key.append(SEQUENCE_NO_KEY_SEPARATOR);</span>
+<span class="nc" id="L1510">				key.append(calendarYearMonth);</span>
+			}
+<span class="nc bnc" id="L1512" title="All 4 branches missed.">			if (seq.isUseSuffixAsKey() &amp;&amp; suffixValues != null) {</span>
+<span class="nc bnc" id="L1513" title="All 2 branches missed.">				if (key.length() &gt; 0)</span>
+<span class="nc" id="L1514">					key.append(SEQUENCE_NO_KEY_SEPARATOR);</span>
+<span class="nc bnc" id="L1515" title="All 2 branches missed.">				for (String value : suffixValues) {</span>
+<span class="nc" id="L1516">					key.append(value).append(SEQUENCE_NO_KEY_SEPARATOR);</span>
+				}
+<span class="nc bnc" id="L1518" title="All 2 branches missed.">				if (key.length() &gt; 0) // remove last separator</span>
+<span class="nc" id="L1519">					key.setLength(key.length() - SEQUENCE_NO_KEY_SEPARATOR.length());</span>
+			}
+<span class="nc" id="L1521">			return key.toString();</span>
+		}
+	}
+
+}	//	MSequence
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

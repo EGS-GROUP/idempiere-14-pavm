@@ -1,0 +1,453 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AttachmentFileSystem.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">AttachmentFileSystem.java</span></div><h1>AttachmentFileSystem.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2012 Trek Global                                             *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.logging.Level;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.Result;
+import javax.xml.transform.Source;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+
+/**
+ * File system backed implementation of {@link IAttachmentStore}
+ * @author juliana
+ */
+<span class="nc" id="L51">public class AttachmentFileSystem implements IAttachmentStore {</span>
+
+<span class="nc" id="L53">	private static final CLogger log = CLogger.getCLogger(AttachmentFileSystem.class);</span>
+
+    @Override
+    public boolean save(MAttachment attach, MStorageProvider prov) {
+<span class="nc" id="L57">        return save(attach, prov, true);</span>
+    }
+
+	@Override
+	public boolean save(MAttachment attach, MStorageProvider prov, boolean beforeSave) {
+<span class="nc" id="L62">		String attachmentPathRoot = getAttachmentPathRoot(prov);</span>
+<span class="nc bnc" id="L63" title="All 4 branches missed.">		if (attach.m_items == null || attach.m_items.isEmpty()) {</span>
+<span class="nc" id="L64">			attach.setBinaryData(null);</span>
+<span class="nc" id="L65">			return true;</span>
+		}
+
+<span class="nc bnc" id="L68" title="All 2 branches missed.">		if (beforeSave) {</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.ATTACHMENT_SAVE_LIST_IN_AD_ATTACHMENTFILE, true, Env.getAD_Client_ID(Env.getCtx()))) {</span>
+<span class="nc" id="L70">				attach.setBinaryData(null);</span>
+<span class="nc" id="L71">				attach.setTitle(MAttachment.LIST_IN_ATTACHMENT_FILE);</span>
+<span class="nc" id="L72">			} else {</span>
+				// save as XML in AD_Attachment.BinaryData
+				// get list of old entries
+<span class="nc" id="L75">				byte[] data = (byte[]) attach.get_ValueOld(MAttachment.COLUMNNAME_BinaryData);</span>
+<span class="nc" id="L76">				NodeList xmlEntries = null;</span>
+<span class="nc" id="L77">	    		Object oldTitleObj = attach.get_ValueOld(MAttachment.COLUMNNAME_Title);</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">	    		String oldTitle = oldTitleObj != null ? oldTitleObj.toString() : null;</span>
+<span class="nc bnc" id="L79" title="All 6 branches missed.">				if (data != null &amp;&amp; data.length &gt; 0 &amp;&amp; MAttachment.XML.equals(oldTitle))</span>
+<span class="nc" id="L80">					xmlEntries = getEntriesFromXML(data);</span>
+
+<span class="nc" id="L82">				final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();</span>
+				try {
+<span class="nc" id="L84">					final DocumentBuilder builder = factory.newDocumentBuilder();</span>
+<span class="nc" id="L85">					final Document document = builder.newDocument();</span>
+<span class="nc" id="L86">					final Element root = document.createElement(&quot;attachments&quot;);</span>
+<span class="nc" id="L87">					document.appendChild(root);</span>
+<span class="nc" id="L88">					document.setXmlStandalone(true);</span>
+					// create xml entries
+<span class="nc bnc" id="L90" title="All 2 branches missed.">					for (int i = 0; i &lt; attach.m_items.size(); i++) {</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(attach.m_items.get(i).toString());</span>
+<span class="nc" id="L92">						File entryFile = attach.m_items.get(i).getFile();</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">						if (entryFile == null) {</span>
+<span class="nc" id="L94">							String itemName = attach.m_items.get(i).getName();</span>
+<span class="nc bnc" id="L95" title="All 4 branches missed.">							if (itemName.startsWith(&quot;~&quot;) &amp;&amp; itemName.endsWith(&quot;~&quot;)) {</span>
+<span class="nc" id="L96">								itemName = itemName.substring(1, itemName.length()-1);</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">								if (xmlEntries != null) {</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">									for (int x = 0; x &lt; xmlEntries.getLength(); x++) {</span>
+<span class="nc" id="L99">										final Node entryNode = xmlEntries.item(x);</span>
+<span class="nc" id="L100">										final NamedNodeMap attributes = entryNode.getAttributes();</span>
+<span class="nc" id="L101">										final Node fileNode = attributes.getNamedItem(&quot;file&quot;);</span>
+<span class="nc" id="L102">										final Node nameNode = attributes.getNamedItem(&quot;name&quot;);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">										if (itemName.equals(nameNode.getNodeValue())) {</span>
+											// file was not found but we preserve the old location just in case is temporary
+<span class="nc" id="L105">											final Element entry = document.createElement(&quot;entry&quot;);</span>
+<span class="nc" id="L106">											entry.setAttribute(&quot;name&quot;, itemName);</span>
+<span class="nc" id="L107">											entry.setAttribute(&quot;file&quot;, fileNode.getNodeValue());</span>
+<span class="nc" id="L108">											root.appendChild(entry);</span>
+<span class="nc" id="L109">											break;</span>
+										}
+									}
+								}
+<span class="nc" id="L113">								continue;</span>
+							}
+							else
+<span class="nc" id="L116">								throw new AdempiereException(&quot;Attachment file not found: &quot; + itemName);</span>
+						}
+<span class="nc" id="L118">						entryFile = copyToAttachFolder(attach, attachmentPathRoot, entryFile);</span>
+<span class="nc" id="L119">						final Element entry = document.createElement(&quot;entry&quot;);</span>
+<span class="nc" id="L120">						entry.setAttribute(&quot;name&quot;, attach.getEntryName(i));</span>
+<span class="nc" id="L121">						String filePathToStore = entryFile.getAbsolutePath();</span>
+<span class="nc" id="L122">						filePathToStore = filePathToStore.replaceFirst(attachmentPathRoot.replaceAll(&quot;\\\\&quot;,&quot;\\\\\\\\&quot;), attach.ATTACHMENT_FOLDER_PLACEHOLDER);</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">		                if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L124">						    log.fine(filePathToStore);</span>
+<span class="nc" id="L125">						entry.setAttribute(&quot;file&quot;, filePathToStore);</span>
+<span class="nc" id="L126">						root.appendChild(entry);</span>
+					}
+
+<span class="nc" id="L129">					final Source source = new DOMSource(document);</span>
+<span class="nc" id="L130">					final ByteArrayOutputStream bos = new ByteArrayOutputStream();</span>
+<span class="nc" id="L131">					final Result result = new StreamResult(bos);</span>
+<span class="nc" id="L132">					final Transformer xformer = TransformerFactory.newInstance().newTransformer();</span>
+<span class="nc" id="L133">					xformer.transform(source, result);</span>
+<span class="nc" id="L134">					final byte[] xmlData = bos.toByteArray();</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(bos.toString());</span>
+<span class="nc" id="L136">					attach.setBinaryData(xmlData);</span>
+<span class="nc" id="L137">					attach.setTitle(MAttachment.XML);</span>
+<span class="nc" id="L138">					return true;</span>
+<span class="nc" id="L139">				} catch (Exception e) {</span>
+<span class="nc" id="L140">					log.log(Level.SEVERE, &quot;saveLOBData&quot;, e);</span>
+				}
+<span class="nc" id="L142">				attach.setBinaryData(null);</span>
+<span class="nc" id="L143">				return false;</span>
+			}
+		} else {
+<span class="nc bnc" id="L146" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.ATTACHMENT_SAVE_LIST_IN_AD_ATTACHMENTFILE, true, Env.getAD_Client_ID(Env.getCtx()))) {</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">				for (int i = 0; i &lt; attach.m_items.size(); i++) {</span>
+<span class="nc" id="L148">					MAttachmentEntry entry = attach.m_items.get(i);</span>
+<span class="nc" id="L149">					String itemName = entry.getName();</span>
+<span class="nc bnc" id="L150" title="All 4 branches missed.">					if (itemName.startsWith(&quot;~&quot;) &amp;&amp; itemName.endsWith(&quot;~&quot;))</span>
+<span class="nc" id="L151">						itemName = itemName.substring(1, itemName.length()-1);</span>
+<span class="nc" id="L152">					File entryFile = entry.getFile();</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">					if (entryFile == null) {</span>
+<span class="nc" id="L154">						log.warning(&quot;Attachment file not found: &quot; + itemName);</span>
+<span class="nc" id="L155">						continue;</span>
+					}
+<span class="nc" id="L157">					entryFile = copyToAttachFolder(attach, attachmentPathRoot, entryFile);</span>
+<span class="nc" id="L158">					String filePathToStore = entryFile.getAbsolutePath();</span>
+<span class="nc" id="L159">					filePathToStore = filePathToStore.replaceFirst(attachmentPathRoot.replaceAll(&quot;\\\\&quot;,&quot;\\\\\\\\&quot;), attach.ATTACHMENT_FOLDER_PLACEHOLDER);</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">	                if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L161">					    log.fine(filePathToStore);</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(entry.toString());</span>
+<span class="nc" id="L163">					MAttachmentFile af = MAttachmentFile.get(attach, itemName);</span>
+<span class="nc" id="L164">					af.setFilePath(filePathToStore);</span>
+<span class="nc" id="L165">					af.setFileSize(BigDecimal.valueOf(entry.getSize()));</span>
+<span class="nc" id="L166">					af.setSeqNo(i+1);</span>
+<span class="nc" id="L167">					af.setSHA256Checksum(entry.getSHA256Sum());</span>
+<span class="nc" id="L168">					af.setMIMEType(entry.getContentType());</span>
+<span class="nc" id="L169">					af.saveEx(attach.get_TrxName());</span>
+
+				}
+<span class="nc bnc" id="L172" title="All 2 branches missed.">				for (MAttachmentFile oldAF : attach.getAttachmentFiles()) {</span>
+<span class="nc" id="L173">					boolean found = false;</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">					for (MAttachmentEntry entry : attach.m_items) {</span>
+<span class="nc" id="L175">						String entryName = entry.getName();</span>
+<span class="nc bnc" id="L176" title="All 6 branches missed.">						if (entryName != null &amp;&amp; entryName.startsWith(&quot;~&quot;) &amp;&amp; entryName.endsWith(&quot;~&quot;))</span>
+<span class="nc" id="L177">							entryName = entryName.substring(1, entryName.length() - 1);</span>
+<span class="nc bnc" id="L178" title="All 4 branches missed.">						if (oldAF.getFileName() != null &amp;&amp; oldAF.getFileName().equals(entryName)) {							</span>
+<span class="nc" id="L179">							found = true;</span>
+<span class="nc" id="L180">							break;</span>
+						}
+					}
+<span class="nc bnc" id="L183" title="All 2 branches missed.">					if (!found) {</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;delete old attachment file &quot; + oldAF);</span>
+<span class="nc" id="L185">						oldAF.deleteEx(true, attach.get_TrxName());</span>
+					}
+				}
+<span class="nc" id="L188">				attach.setBinaryData(null);</span>
+<span class="nc" id="L189">				attach.setTitle(MAttachment.LIST_IN_ATTACHMENT_FILE);</span>
+			}
+		}
+<span class="nc" id="L192">		return true;</span>
+	}
+
+	/**
+	 * if local file - copy to central attachment folder
+	 * @param attach
+	 * @param attachmentPathRoot
+	 * @param entryFile
+	 * @return
+	 */
+	private File copyToAttachFolder(MAttachment attach, String attachmentPathRoot, File entryFile) {
+<span class="nc" id="L203">		final String path = entryFile.getAbsolutePath();</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed."> 		if (log.isLoggable(Level.FINE)) log.fine(path + &quot; - &quot; + attachmentPathRoot);</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">		if (!path.startsWith(attachmentPathRoot)) {</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;move file: &quot; + path);</span>
+			try {
+				//create destination folder
+<span class="nc" id="L209">				StringBuilder msgfile = new StringBuilder().append(attachmentPathRoot).append(File.separator).append(getAttachmentPathSnippet(attach));</span>
+<span class="nc" id="L210">				final File destFolder = new File(msgfile.toString());</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">				if(!destFolder.exists()){</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">					if(!destFolder.mkdirs()){</span>
+<span class="nc" id="L213">						log.warning(&quot;unable to create folder: &quot; + destFolder.getPath());</span>
+					}
+				}
+<span class="nc" id="L216">				msgfile = new StringBuilder().append(attachmentPathRoot).append(File.separator)</span>
+<span class="nc" id="L217">						.append(getAttachmentPathSnippet(attach)).append(File.separator).append(entryFile.getName());</span>
+<span class="nc" id="L218">				final File destFile = new File(msgfile.toString());</span>
+<span class="nc" id="L219">		        boolean copyOrReplace = true;</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">		        if (destFile.exists()) {</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">		            if (destFile.length() == entryFile.length()) {</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">		                if (Files.mismatch(entryFile.toPath(), destFile.toPath()) == -1L)</span>
+<span class="nc" id="L223">		                    copyOrReplace = false;</span>
+		            }
+		        }
+<span class="nc bnc" id="L226" title="All 2 branches missed.">		        if (copyOrReplace)</span>
+<span class="nc" id="L227">		            Files.copy(entryFile.toPath(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);</span>
+<span class="nc" id="L228">				entryFile = destFile;</span>
+<span class="nc" id="L229">			} catch (IOException e) {</span>
+<span class="nc" id="L230">				log.log(Level.SEVERE, &quot;unable to copy file &quot; + entryFile.getAbsolutePath() + &quot; to &quot;</span>
+<span class="nc" id="L231">						+ attachmentPathRoot + File.separator + </span>
+<span class="nc" id="L232">						getAttachmentPathSnippet(attach) + File.separator + entryFile.getName(), e);</span>
+			}
+		}
+<span class="nc" id="L235">		return entryFile;</span>
+	}
+
+    @Override
+    public boolean loadLOBData(MAttachment attach, MStorageProvider prov) {
+<span class="nc" id="L240">		String attachmentPathRoot = getAttachmentPathRoot(prov);</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">		if (Util.isEmpty(attachmentPathRoot)) {</span>
+<span class="nc" id="L242">			log.severe(&quot;no attachmentPath defined&quot;);</span>
+<span class="nc" id="L243">			return false;</span>
+		}
+        //	Reset
+<span class="nc" id="L246">        attach.m_items = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L247">        byte[] data = null;</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">    	if (! MAttachment.LIST_IN_ATTACHMENT_FILE.equals(attach.getTitle())) {</span>
+<span class="nc" id="L249">            data = attach.getBinaryData();</span>
+<span class="nc bnc" id="L250" title="All 4 branches missed.">            if (data == null || data.length == 0)</span>
+<span class="nc" id="L251">                return true;</span>
+    	}
+
+<span class="nc" id="L254">        return loadEntries(attach, data, attachmentPathRoot);</span>
+    }
+
+    /**
+     * Load attachment entries from XML or from AD_AttachmentFile
+     * @param attach attachment record
+     * @param data xml meta data
+     * @param attachmentPathRoot
+     * @return true if success, false otherwise
+     */
+    private boolean loadEntries(MAttachment attach, byte[] data, String attachmentPathRoot) {
+<span class="nc bnc" id="L265" title="All 2 branches missed.">    	if (MAttachment.LIST_IN_ATTACHMENT_FILE.equals(attach.getTitle())) {</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">    		for (MAttachmentFile attachFile : attach.getAttachmentFiles()) {</span>
+<span class="nc" id="L267">    			String filePath = replaceFolderPlaceHolder(attach, attachmentPathRoot, attachFile.getFilePath());</span>
+<span class="nc" id="L268">    			final File file = new File(filePath);</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">    			if (file.exists()) {</span>
+    				// file data read delayed
+<span class="nc" id="L271">    				IAttachmentLazyDataSource ds = new AttachmentFileLazyDataSource(file);</span>
+<span class="nc" id="L272">    				final MAttachmentEntry entry = new MAttachmentEntry(file.getName(), attach.m_items.size() + 1, ds);</span>
+<span class="nc" id="L273">    				entry.setSHA256Sum(attachFile.getSHA256Checksum());</span>
+<span class="nc" id="L274">    				attach.m_items.add(entry);</span>
+<span class="nc" id="L275">    			} else {</span>
+<span class="nc" id="L276">    				log.severe(&quot;file not found: &quot; + file.getAbsolutePath());</span>
+<span class="nc" id="L277">    				attach.m_items.add(new MAttachmentEntry(&quot;~&quot; + file.getName()  + &quot;~&quot;, &quot;&quot;.getBytes(), attach.m_items.size() + 1));</span>
+    			}
+    		}
+<span class="nc" id="L280">    	} else {</span>
+    		// XML
+<span class="nc bnc" id="L282" title="All 2 branches missed.">    		if (data == null)</span>
+<span class="nc" id="L283">    			return true;</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">    		if (log.isLoggable(Level.FINE)) log.fine(&quot;TextFileSize=&quot; + data.length);</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">    		if (data.length == 0)</span>
+<span class="nc" id="L286">    			return true;</span>
+
+<span class="nc" id="L288">    		NodeList entries = getEntriesFromXML(data);</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">    		for (int i = 0; i &lt; entries.getLength(); i++) {</span>
+<span class="nc" id="L290">    			final Node entryNode = entries.item(i);</span>
+<span class="nc" id="L291">    			final NamedNodeMap attributes = entryNode.getAttributes();</span>
+<span class="nc" id="L292">    			final Node fileNode = attributes.getNamedItem(&quot;file&quot;);</span>
+<span class="nc" id="L293">    			final Node nameNode = attributes.getNamedItem(&quot;name&quot;);</span>
+<span class="nc bnc" id="L294" title="All 4 branches missed.">    			if(fileNode==null || nameNode==null){</span>
+<span class="nc" id="L295">    				log.severe(&quot;no filename for entry &quot; + i);</span>
+<span class="nc" id="L296">    				attach.m_items = null;</span>
+<span class="nc" id="L297">    				return false;</span>
+    			}
+<span class="nc bnc" id="L299" title="All 2 branches missed.">    			if (log.isLoggable(Level.FINE)) log.fine(&quot;name: &quot; + nameNode.getNodeValue());</span>
+<span class="nc" id="L300">    			String filePath = replaceFolderPlaceHolder(attach, attachmentPathRoot, fileNode.getNodeValue());</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">    			if (log.isLoggable(Level.FINE)) log.fine(&quot;filePath: &quot; + filePath);</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">    			if(filePath!=null){</span>
+<span class="nc" id="L303">    				filePath = filePath.replaceFirst(attach.ATTACHMENT_FOLDER_PLACEHOLDER, attachmentPathRoot.replaceAll(&quot;\\\\&quot;,&quot;\\\\\\\\&quot;));</span>
+    				//just to be sure...
+<span class="nc" id="L305">    				String replaceSeparator = File.separator;</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">    				if(!replaceSeparator.equals(&quot;/&quot;)){</span>
+<span class="nc" id="L307">    					replaceSeparator = &quot;\\\\&quot;;</span>
+    				}
+<span class="nc" id="L309">    				filePath = filePath.replaceAll(&quot;/&quot;, replaceSeparator);</span>
+<span class="nc" id="L310">    				filePath = filePath.replaceAll(&quot;\\\\&quot;, replaceSeparator);</span>
+    			}
+<span class="nc bnc" id="L312" title="All 2 branches missed.">    			if (log.isLoggable(Level.FINE)) log.fine(&quot;filePath: &quot; + filePath);</span>
+<span class="nc" id="L313">    			final File file = new File(filePath);</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">    			if (file.exists()) {</span>
+    				// file data read delayed
+<span class="nc" id="L316">    				IAttachmentLazyDataSource ds = new AttachmentFileLazyDataSource(file);</span>
+<span class="nc" id="L317">    				final MAttachmentEntry entry = new MAttachmentEntry(file.getName(), attach.m_items.size() + 1, ds);</span>
+<span class="nc" id="L318">    				attach.m_items.add(entry);</span>
+<span class="nc" id="L319">    			} else {</span>
+<span class="nc" id="L320">    				log.severe(&quot;file not found: &quot; + file.getAbsolutePath());</span>
+<span class="nc" id="L321">    				attach.m_items.add(new MAttachmentEntry(&quot;~&quot; + file.getName()  + &quot;~&quot;, &quot;&quot;.getBytes(), attach.m_items.size() + 1));</span>
+    			}
+    		}
+		}
+
+<span class="nc" id="L326">		return true;</span>
+	}
+
+	/**
+	 * Replace the folder placeholder with the actual attachment path root
+	 * @param attach
+	 * @param attachmentPathRoot
+	 * @param filePath
+	 * @return
+	 */
+	private String replaceFolderPlaceHolder(MAttachment attach, String attachmentPathRoot, String filePath) {
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;filePath: &quot; + filePath);</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		if(filePath!=null){</span>
+<span class="nc" id="L339">			filePath = filePath.replaceFirst(attach.ATTACHMENT_FOLDER_PLACEHOLDER, attachmentPathRoot.replaceAll(&quot;\\\\&quot;,&quot;\\\\\\\\&quot;));</span>
+			//just to be sure...
+<span class="nc" id="L341">			String replaceSeparator = File.separator;</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">			if(!replaceSeparator.equals(&quot;/&quot;)){</span>
+<span class="nc" id="L343">				replaceSeparator = &quot;\\\\&quot;;</span>
+			}
+<span class="nc" id="L345">			filePath = filePath.replaceAll(&quot;/&quot;, replaceSeparator);</span>
+<span class="nc" id="L346">			filePath = filePath.replaceAll(&quot;\\\\&quot;, replaceSeparator);</span>
+		}
+<span class="nc bnc" id="L348" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;filePath: &quot; + filePath);</span>
+<span class="nc" id="L349">		return filePath;</span>
+	}
+
+	/**
+	 * Get the entries from the XML
+	 * @param data
+	 * @return xml node list
+	 */
+	private NodeList getEntriesFromXML(byte[] data) {
+<span class="nc" id="L358">		NodeList entries = null;</span>
+		try {
+<span class="nc" id="L360">			DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();</span>
+<span class="nc" id="L361">			factory.setFeature(&quot;http://apache.org/xml/features/disallow-doctype-decl&quot;, true);</span>
+<span class="nc" id="L362">			final DocumentBuilder builder = factory.newDocumentBuilder();</span>
+<span class="nc" id="L363">			final Document document = builder.parse(new ByteArrayInputStream(data));</span>
+<span class="nc" id="L364">			entries = document.getElementsByTagName(&quot;entry&quot;);</span>
+<span class="nc" id="L365">		} catch (SAXException sxe) {</span>
+			// Error generated during parsing)
+<span class="nc" id="L367">			Exception x = sxe;</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">			if (sxe.getException() != null)</span>
+<span class="nc" id="L369">				x = sxe.getException();</span>
+<span class="nc" id="L370">			log.log(Level.SEVERE, x.getMessage(), x);</span>
+
+<span class="nc" id="L372">		} catch (ParserConfigurationException pce) {</span>
+			// Parser with specified options can't be built
+<span class="nc" id="L374">			log.log(Level.SEVERE, pce.getMessage(), pce);</span>
+
+<span class="nc" id="L376">		} catch (IOException ioe) {</span>
+			// I/O error
+<span class="nc" id="L378">			log.log(Level.SEVERE, ioe.getMessage(), ioe);</span>
+		}
+<span class="nc" id="L380">		return entries;</span>
+	}
+
+	/**
+	 * Returns a path snippet, containing client, org, table and record id.
+	 * @return path snippet
+	 */
+	private String getAttachmentPathSnippet(MAttachment attach){
+		
+<span class="nc" id="L389">		StringBuilder msgreturn = new StringBuilder().append(attach.getAD_Client_ID()).append(File.separator)</span>
+<span class="nc" id="L390">				.append(attach.getAD_Org_ID()).append(File.separator)</span>
+<span class="nc" id="L391">				.append(attach.getAD_Table_ID()).append(File.separator);</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">		if (attach.getRecord_ID() &gt; 0)</span>
+<span class="nc" id="L393">			msgreturn.append(attach.getRecord_ID());</span>
+		else
+<span class="nc" id="L395">			msgreturn.append(attach.getRecord_UU());</span>
+<span class="nc" id="L396">		return msgreturn.toString();</span>
+	}
+
+	@Override
+	public boolean delete(MAttachment attach, MStorageProvider provider) {
+<span class="nc" id="L401">		String attachmentPathRoot = getAttachmentPathRoot(provider);</span>
+<span class="nc" id="L402">		final File folder = new File(attachmentPathRoot + getAttachmentPathSnippet(attach));</span>
+		//delete all attachment files and folder
+<span class="nc bnc" id="L404" title="All 2 branches missed.">		while (attach.m_items.size() &gt; 0) {</span>
+<span class="nc" id="L405">			deleteEntry(attach, provider, attach.m_items.size()-1);</span>
+		}
+<span class="nc bnc" id="L407" title="All 2 branches missed.">		if (folder.exists()) {</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">			if (!folder.delete()) {</span>
+<span class="nc" id="L409">				log.warning(&quot;unable to delete &quot; + folder.getAbsolutePath());</span>
+			}
+		}
+<span class="nc" id="L412">		return true;</span>
+	}
+
+	@Override
+	public boolean deleteEntry(MAttachment attach, MStorageProvider provider, int index) {
+<span class="nc" id="L417">		String attachmentPathRoot = getAttachmentPathRoot(provider);</span>
+<span class="nc" id="L418">		final File folder = new File(attachmentPathRoot + getAttachmentPathSnippet(attach));</span>
+		//remove files
+<span class="nc" id="L420">		final MAttachmentEntry entry = attach.m_items.get(index);</span>
+<span class="nc" id="L421">		final File file = new File(folder, entry.getName());</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;delete: &quot; + file.getAbsolutePath());</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (file.exists()) {</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">			if (!file.delete()) {</span>
+<span class="nc" id="L425">				log.warning(&quot;unable to delete &quot; + file.getAbsolutePath());</span>
+			}
+		}
+<span class="nc" id="L428">		attach.m_items.remove(index);</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">		if (attach.get_ID() &gt; 0) // the attachment has not been deleted</span>
+<span class="nc" id="L430">			attach.saveEx(); // must save here as the operation cannot be rolled back on filesystem</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;Index=&quot; + index + &quot; - NewSize=&quot; + attach.m_items.size());</span>
+<span class="nc" id="L432">		return true;</span>
+	}
+
+	/**
+	 * @param prov
+	 * @return root path
+	 */
+	private String getAttachmentPathRoot(MStorageProvider prov) {
+<span class="nc" id="L440">		String attachmentPathRoot = prov.getFolder();</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">		if (attachmentPathRoot == null)</span>
+<span class="nc" id="L442">			attachmentPathRoot = &quot;&quot;;</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">		if (Util.isEmpty(attachmentPathRoot)) {</span>
+<span class="nc" id="L444">			log.severe(&quot;no attachmentPath defined&quot;);</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">		} else if (!attachmentPathRoot.endsWith(File.separator)){</span>
+<span class="nc" id="L446">			attachmentPathRoot = attachmentPathRoot + File.separator;</span>
+<span class="nc" id="L447">			log.fine(attachmentPathRoot);</span>
+		}
+<span class="nc" id="L449">		return attachmentPathRoot;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

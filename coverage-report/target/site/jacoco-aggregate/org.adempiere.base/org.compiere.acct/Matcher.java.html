@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Matcher.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.acct</a> &gt; <span class="el_source">Matcher.java</span></div><h1>Matcher.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.acct;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.logging.Level;
+
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+
+/**
+ *	Automatic Invoice-Receipt Matching.
+ *
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: Matcher.java,v 1.2 2006/07/30 00:53:33 jjanke Exp $
+ */
+public class Matcher
+{
+	/**
+	 * 	Constructor
+	 *  @param AD_Client_ID Client
+	 * 	@param trxName transaction
+	 */
+<span class="nc" id="L43">	public Matcher (int AD_Client_ID, String trxName)</span>
+	{
+<span class="nc" id="L45">		m_AD_Client_ID = AD_Client_ID;</span>
+<span class="nc" id="L46">		m_trxName = trxName;</span>
+<span class="nc" id="L47">	}	//	Matcher</span>
+
+	/**	Client							*/
+	private int					m_AD_Client_ID;
+	/** Transaction						*/
+<span class="nc" id="L52">	private String				m_trxName = null;</span>
+	/**	Logger							*/
+<span class="nc" id="L54">	private static final CLogger	log = CLogger.getCLogger (Matcher.class);</span>
+
+	/**
+	 * 	Matching
+	 *  &lt;pre&gt;
+	 *  Derive Invoice-Receipt Matching from PO-Invoice and PO-Receipt
+	 * 	Purchase Order (20)
+	 *  - Invoice1 (10)
+	 *  - Invoice2 (10)
+	 *  - Receipt1 (5)
+	 *  - Receipt2 (15)
+	 *
+	 * 	(a) Creates Directs
+	 * 		- Invoice1 - Receipt1 (5)
+	 * 		- Invoice2 - Receipt2 (10)
+	 *
+	 *  (b) Creates Indirects
+	 * 		- Invoice1 - Receipt2 (5)
+	 *  (Not implemented)
+	 *
+	 *
+	 *  &lt;/pre&gt;
+	 *  @return number of records created
+	 */
+	public int match()
+	{
+<span class="nc" id="L80">		int counter = 0;</span>
+		//	(a) Direct Matches
+<span class="nc" id="L82">		String sql = &quot;SELECT m1.AD_Client_ID,m2.AD_Org_ID, &quot;			//	1..2</span>
+					+ &quot;m1.C_InvoiceLine_ID,m2.M_InOutLine_ID,m1.M_Product_ID, &quot;	// 	3..5
+					+ &quot;m1.DateTrx,m2.DateTrx, m1.Qty, m2.Qty &quot;					//	6..9
+					+ &quot;FROM M_MatchPO m1, M_MatchPO m2 &quot;
+					+ &quot;WHERE m1.C_OrderLine_ID=m2.C_OrderLine_ID&quot;
+					+ &quot; AND m1.M_InOutLine_ID IS NULL&quot;
+					+ &quot; AND m2.C_InvoiceLine_ID IS NULL&quot;
+					+ &quot; AND m1.M_Product_ID=m2.M_Product_ID&quot;
+					+ &quot; AND m1.AD_Client_ID=?&quot;						//	#1
+		//	Not existing Inv Matches
+					+ &quot;	AND NOT EXISTS (SELECT * FROM M_MatchInv mi &quot;
+					+ &quot;WHERE mi.C_InvoiceLine_ID=m1.C_InvoiceLine_ID AND mi.M_InOutLine_ID=m2.M_InOutLine_ID)&quot;;
+<span class="nc" id="L94">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L95">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L98">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L99">			pstmt.setInt(1, m_AD_Client_ID);</span>
+<span class="nc" id="L100">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L103">				BigDecimal qty1 = rs.getBigDecimal(8);</span>
+<span class="nc" id="L104">				BigDecimal qty2 = rs.getBigDecimal(9);</span>
+<span class="nc" id="L105">				BigDecimal Qty = qty1.min(qty2);</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">				if  (Qty.compareTo(Env.ZERO)==0)</span>
+<span class="nc" id="L107">					continue;</span>
+<span class="nc" id="L108">				Timestamp dateTrx1 = rs.getTimestamp(6);</span>
+<span class="nc" id="L109">				Timestamp dateTrx2 = rs.getTimestamp(7);</span>
+<span class="nc" id="L110">				Timestamp DateTrx = dateTrx1;</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">				if (dateTrx1.before(dateTrx2))</span>
+<span class="nc" id="L112">					DateTrx = dateTrx2;</span>
+				//
+<span class="nc" id="L114">				int AD_Client_ID = rs.getInt(1);</span>
+<span class="nc" id="L115">				int AD_Org_ID = rs.getInt(2);</span>
+<span class="nc" id="L116">				int C_InvoiceLine_ID = rs.getInt(3);</span>
+<span class="nc" id="L117">				int M_InOutLine_ID = rs.getInt(4);</span>
+<span class="nc" id="L118">				int M_Product_ID = rs.getInt(5);</span>
+				//
+<span class="nc" id="L120">				if (createMatchInv(AD_Client_ID, AD_Org_ID,</span>
+<span class="nc" id="L121">					M_InOutLine_ID, C_InvoiceLine_ID,</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">					M_Product_ID, DateTrx, Qty))</span>
+<span class="nc" id="L123">					counter++;</span>
+			}
+<span class="nc" id="L125">		}</span>
+<span class="nc" id="L126">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L128">			log.log(Level.SEVERE, &quot;match&quot;, e);</span>
+		}
+		finally {
+<span class="nc" id="L131">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L132">			rs = null; pstmt = null;</span>
+		}
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Matcher.match - Client_ID=&quot; + m_AD_Client_ID</span>
+<span class="nc" id="L135">			+ &quot;, Records created=&quot; + counter);</span>
+<span class="nc" id="L136">		return counter;</span>
+	}	//	match
+
+	/**
+	 * 	Create MatchInv record
+	 *  @param AD_Client_ID Client
+	 *  @param AD_Org_ID Org
+	 *  @param M_InOutLine_ID Receipt
+	 *  @param C_InvoiceLine_ID Invoice
+	 *  @param M_Product_ID Product
+	 *  @param DateTrx Date
+	 *  @param Qty Qty
+	 *  @return true if record created
+	 */
+	private boolean createMatchInv (int AD_Client_ID, int AD_Org_ID,
+		int M_InOutLine_ID, int C_InvoiceLine_ID,
+		int M_Product_ID, Timestamp DateTrx, BigDecimal Qty)
+	{
+<span class="nc bnc" id="L154" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;InvLine=&quot; + C_InvoiceLine_ID + &quot;,Rec=&quot; + M_InOutLine_ID + &quot;, Qty=&quot; + Qty + &quot;, &quot; + DateTrx);</span>
+		
+<span class="nc" id="L156">		int M_MatchInv_ID = DB.getNextID (AD_Client_ID, &quot;M_MatchInv&quot;, m_trxName);</span>
+		//
+<span class="nc" id="L158">		StringBuilder sql = new StringBuilder(&quot;INSERT INTO M_MatchInv (&quot;)</span>
+<span class="nc" id="L159">			.append(&quot;M_MatchInv_ID, &quot;)</span>
+<span class="nc" id="L160">			.append(&quot;AD_Client_ID,AD_Org_ID,IsActive,Created,CreatedBy,Updated,UpdatedBy, &quot;)</span>
+<span class="nc" id="L161">			.append(&quot;M_InOutLine_ID,C_InvoiceLine_ID, &quot;)</span>
+<span class="nc" id="L162">			.append(&quot;M_Product_ID,DateTrx,Qty, &quot;)</span>
+<span class="nc" id="L163">			.append(&quot;Processing,Processed,Posted) VALUES (&quot;)</span>
+<span class="nc" id="L164">			.append(M_MatchInv_ID).append(&quot;, &quot;)</span>
+<span class="nc" id="L165">			.append(AD_Client_ID).append(&quot;,&quot;).append(AD_Org_ID).append(&quot;,'Y',getDate(),0,getDate(),0, &quot;)</span>
+<span class="nc" id="L166">			.append(M_InOutLine_ID).append(&quot;,&quot;).append(C_InvoiceLine_ID).append(&quot;, &quot;)</span>
+<span class="nc" id="L167">			.append(M_Product_ID).append(&quot;,&quot;).append(DB.TO_DATE(DateTrx,true)).append(&quot;,&quot;).append(Qty)</span>
+<span class="nc" id="L168">			.append(&quot;, 'N','Y','N')&quot;);</span>
+<span class="nc" id="L169">		int no = DB.executeUpdate(sql.toString(), m_trxName);</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">		return no == 1;</span>
+	}	//	createMatchInv
+	
+}	//	Matcher
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

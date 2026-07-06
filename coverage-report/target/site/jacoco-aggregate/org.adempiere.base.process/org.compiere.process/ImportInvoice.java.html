@@ -1,0 +1,817 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ImportInvoice.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">ImportInvoice.java</span></div><h1>ImportInvoice.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.logging.Level;
+
+import org.compiere.model.MBPartner;
+import org.compiere.model.MBPartnerLocation;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MInvoiceLine;
+import org.compiere.model.MLocation;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MUser;
+import org.compiere.model.X_I_Invoice;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+
+/**
+ *	Import Invoice from I_Invoice
+ *
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: ImportInvoice.java,v 1.1 2007/09/05 09:27:31 cruiz Exp $
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L44">public class ImportInvoice extends SvrProcess</span>
+{
+	/**	Client to be imported to		*/
+<span class="nc" id="L47">	private int				m_AD_Client_ID = 0;</span>
+	/**	Organization to be imported to		*/
+<span class="nc" id="L49">	private int				m_AD_Org_ID = 0;</span>
+	/**	Delete old Imported				*/
+<span class="nc" id="L51">	private boolean			m_deleteOldImported = false;</span>
+	/**	Document Action					*/
+<span class="nc" id="L53">	private String			m_docAction = MInvoice.DOCACTION_Prepare;</span>
+
+
+	/** Effective						*/
+<span class="nc" id="L57">	private Timestamp		m_DateValue = null;</span>
+
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L64">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L67">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">			if (name.equals(&quot;AD_Client_ID&quot;))</span>
+<span class="nc" id="L69">				m_AD_Client_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">			else if (name.equals(&quot;AD_Org_ID&quot;))</span>
+<span class="nc" id="L71">				m_AD_Org_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">			else if (name.equals(&quot;DeleteOldImported&quot;))</span>
+<span class="nc" id="L73">				m_deleteOldImported = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">			else if (name.equals(&quot;DocAction&quot;))</span>
+<span class="nc" id="L75">				m_docAction = (String)para[i].getParameter();</span>
+			else
+<span class="nc" id="L77">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+<span class="nc bnc" id="L79" title="All 2 branches missed.">		if (m_DateValue == null)</span>
+<span class="nc" id="L80">			m_DateValue = new Timestamp (System.currentTimeMillis());</span>
+<span class="nc" id="L81">	}	//	prepare</span>
+
+
+	/**
+	 *  Perform process.
+	 *  @return clear Message
+	 *  @throws Exception
+	 */
+	protected String doIt() throws java.lang.Exception
+	{
+<span class="nc" id="L91">		StringBuilder sql = null;</span>
+<span class="nc" id="L92">		int no = 0;</span>
+<span class="nc" id="L93">		StringBuilder clientCheck = new StringBuilder(&quot; AND AD_Client_ID=&quot;).append(m_AD_Client_ID);</span>
+
+		//	****	Prepare	****
+
+		//	Delete Old Imported
+<span class="nc bnc" id="L98" title="All 2 branches missed.">		if (m_deleteOldImported)</span>
+		{
+<span class="nc" id="L100">			sql = new StringBuilder (&quot;DELETE FROM I_Invoice &quot;)</span>
+<span class="nc" id="L101">				  .append(&quot;WHERE I_IsImported='Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L102">			no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Delete Old Impored =&quot; + no);</span>
+		}
+
+		//	Set Client, Org, IsActive, Created/Updated
+<span class="nc" id="L107">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L108">			  .append(&quot;SET AD_Client_ID = COALESCE (AD_Client_ID,&quot;).append (m_AD_Client_ID).append (&quot;),&quot;)</span>
+<span class="nc" id="L109">			  .append(&quot; AD_Org_ID = COALESCE (AD_Org_ID,&quot;).append (m_AD_Org_ID).append (&quot;),&quot;)</span>
+<span class="nc" id="L110">			  .append(&quot; IsActive = COALESCE (IsActive, 'Y'),&quot;)</span>
+<span class="nc" id="L111">			  .append(&quot; Created = COALESCE (Created, getDate()),&quot;)</span>
+<span class="nc" id="L112">			  .append(&quot; CreatedBy = COALESCE (CreatedBy, 0),&quot;)</span>
+<span class="nc" id="L113">			  .append(&quot; Updated = COALESCE (Updated, getDate()),&quot;)</span>
+<span class="nc" id="L114">			  .append(&quot; UpdatedBy = COALESCE (UpdatedBy, 0),&quot;)</span>
+<span class="nc" id="L115">			  .append(&quot; I_ErrorMsg = ' ',&quot;)</span>
+<span class="nc" id="L116">			  .append(&quot; I_IsImported = 'N' &quot;)</span>
+<span class="nc" id="L117">			  .append(&quot;WHERE I_IsImported&lt;&gt;'Y' OR I_IsImported IS NULL&quot;);</span>
+<span class="nc" id="L118">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;Reset=&quot; + no);</span>
+
+<span class="nc" id="L121">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L122">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Org, '&quot;)</span>
+<span class="nc" id="L123">			.append(&quot;WHERE (AD_Org_ID IS NULL OR AD_Org_ID=0&quot;)</span>
+<span class="nc" id="L124">			.append(&quot; OR EXISTS (SELECT * FROM AD_Org oo WHERE o.AD_Org_ID=oo.AD_Org_ID AND (oo.IsSummary='Y' OR oo.IsActive='N')))&quot;)</span>
+<span class="nc" id="L125">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L126">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L128">			log.warning (&quot;Invalid Org=&quot; + no);</span>
+
+		//	Document Type - PO - SO
+<span class="nc" id="L131">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L132">			  .append(&quot;SET C_DocType_ID=(SELECT C_DocType_ID FROM C_DocType d WHERE d.Name=o.DocTypeName&quot;)</span>
+<span class="nc" id="L133">			  .append(&quot; AND d.DocBaseType IN ('API','APC') AND o.AD_Client_ID=d.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L134">			  .append(&quot;WHERE C_DocType_ID IS NULL AND IsSOTrx='N' AND DocTypeName IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L135">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set PO DocType=&quot; + no);</span>
+<span class="nc" id="L138">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L139">			  .append(&quot;SET C_DocType_ID=(SELECT C_DocType_ID FROM C_DocType d WHERE d.Name=o.DocTypeName&quot;)</span>
+<span class="nc" id="L140">			  .append(&quot; AND d.DocBaseType IN ('ARI','ARC') AND o.AD_Client_ID=d.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L141">			  .append(&quot;WHERE C_DocType_ID IS NULL AND IsSOTrx='Y' AND DocTypeName IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L142">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set SO DocType=&quot; + no);</span>
+<span class="nc" id="L145">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L146">			  .append(&quot;SET C_DocType_ID=(SELECT C_DocType_ID FROM C_DocType d WHERE d.Name=o.DocTypeName&quot;)</span>
+<span class="nc" id="L147">			  .append(&quot; AND d.DocBaseType IN ('API','ARI','APC','ARC') AND o.AD_Client_ID=d.AD_Client_ID) &quot;)</span>
+			//+ &quot;WHERE C_DocType_ID IS NULL AND IsSOTrx IS NULL AND DocTypeName IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);
+<span class="nc" id="L149">			  .append(&quot;WHERE C_DocType_ID IS NULL AND DocTypeName IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L150">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set DocType=&quot; + no);</span>
+<span class="nc" id="L153">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L154">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid DocTypeName, ' &quot;)</span>
+<span class="nc" id="L155">			  .append(&quot;WHERE C_DocType_ID IS NULL AND DocTypeName IS NOT NULL&quot;)</span>
+<span class="nc" id="L156">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L157">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L159">			log.warning (&quot;Invalid DocTypeName=&quot; + no);</span>
+		//	DocType Default
+<span class="nc" id="L161">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L162">			  .append(&quot;SET C_DocType_ID=(SELECT MAX(C_DocType_ID) FROM C_DocType d WHERE d.IsDefault='Y'&quot;)</span>
+<span class="nc" id="L163">			  .append(&quot; AND d.DocBaseType='API' AND o.AD_Client_ID=d.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L164">			  .append(&quot;WHERE C_DocType_ID IS NULL AND IsSOTrx='N' AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L165">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set PO Default DocType=&quot; + no);</span>
+<span class="nc" id="L168">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L169">			  .append(&quot;SET C_DocType_ID=(SELECT MAX(C_DocType_ID) FROM C_DocType d WHERE d.IsDefault='Y'&quot;)</span>
+<span class="nc" id="L170">			  .append(&quot; AND d.DocBaseType='ARI' AND o.AD_Client_ID=d.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L171">			  .append(&quot;WHERE C_DocType_ID IS NULL AND IsSOTrx='Y' AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L172">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set SO Default DocType=&quot; + no);</span>
+<span class="nc" id="L175">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L176">			  .append(&quot;SET C_DocType_ID=(SELECT MAX(C_DocType_ID) FROM C_DocType d WHERE d.IsDefault='Y'&quot;)</span>
+<span class="nc" id="L177">			  .append(&quot; AND d.DocBaseType IN('ARI','API') AND o.AD_Client_ID=d.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L178">			  .append(&quot;WHERE C_DocType_ID IS NULL AND IsSOTrx IS NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L179">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Default DocType=&quot; + no);</span>
+<span class="nc" id="L182">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L183">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No DocType, ' &quot;)</span>
+<span class="nc" id="L184">			  .append(&quot;WHERE C_DocType_ID IS NULL&quot;)</span>
+<span class="nc" id="L185">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L186">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L188">			log.warning (&quot;No DocType=&quot; + no);</span>
+
+		//	Set IsSOTrx
+<span class="nc" id="L191">		sql = new StringBuilder (&quot;UPDATE I_Invoice o SET IsSOTrx='Y' &quot;)</span>
+<span class="nc" id="L192">			  .append(&quot;WHERE EXISTS (SELECT * FROM C_DocType d WHERE o.C_DocType_ID=d.C_DocType_ID AND d.DocBaseType='ARI' AND o.AD_Client_ID=d.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L193">			  .append(&quot; AND C_DocType_ID IS NOT NULL&quot;)</span>
+<span class="nc" id="L194">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L195">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set IsSOTrx=Y=&quot; + no);</span>
+<span class="nc" id="L197">		sql = new StringBuilder (&quot;UPDATE I_Invoice o SET IsSOTrx='N' &quot;)</span>
+<span class="nc" id="L198">			  .append(&quot;WHERE EXISTS (SELECT * FROM C_DocType d WHERE o.C_DocType_ID=d.C_DocType_ID AND d.DocBaseType='API' AND o.AD_Client_ID=d.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L199">			  .append(&quot; AND C_DocType_ID IS NOT NULL&quot;)</span>
+<span class="nc" id="L200">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L201">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set IsSOTrx=N=&quot; + no);</span>
+
+		// Set Currency
+<span class="nc" id="L205">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L206">			.append(&quot;SET C_Currency_ID=(SELECT C_Currency_ID FROM C_Currency c&quot;)</span>
+<span class="nc" id="L207">			.append(&quot; WHERE o.ISO_Code=c.ISO_Code AND c.AD_Client_ID IN (0,o.AD_Client_ID)) &quot;)</span>
+<span class="nc" id="L208">			.append(&quot;WHERE C_Currency_ID IS NULL AND o.ISO_Code IS NOT NULL&quot;)</span>
+<span class="nc" id="L209">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L210">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;Set Currency=&quot; + no);</span>
+		
+<span class="nc" id="L214">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L215">				.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No Currency,' &quot;)</span>
+<span class="nc" id="L216">				.append(&quot;WHERE C_Currency_ID IS NULL AND ISO_Code IS NOT NULL&quot;)</span>
+<span class="nc" id="L217">				.append(&quot; AND I_IsImported&lt;&gt;'E' &quot;)</span>
+<span class="nc" id="L218">				.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L219">			no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L221">			log.warning(&quot;No Currency=&quot; + no);</span>
+			
+		//	Price List
+<span class="nc" id="L224">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L225">			  .append(&quot;SET M_PriceList_ID=(SELECT MAX(M_PriceList_ID) FROM M_PriceList p WHERE p.IsDefault='Y'&quot;)</span>
+<span class="nc" id="L226">			  .append(&quot; AND p.C_Currency_ID=o.C_Currency_ID AND p.IsSOPriceList=o.IsSOTrx AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L227">			  .append(&quot;WHERE M_PriceList_ID IS NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L228">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Default Currency PriceList=&quot; + no);</span>
+<span class="nc" id="L230">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L231">			  .append(&quot;SET M_PriceList_ID=(SELECT MAX(M_PriceList_ID) FROM M_PriceList p WHERE p.IsDefault='Y'&quot;)</span>
+<span class="nc" id="L232">			  .append(&quot; AND p.IsSOPriceList=o.IsSOTrx AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L233">			  .append(&quot;WHERE M_PriceList_ID IS NULL AND C_Currency_ID IS NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L234">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Default PriceList=&quot; + no);</span>
+<span class="nc" id="L236">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L237">			  .append(&quot;SET M_PriceList_ID=(SELECT MAX(M_PriceList_ID) FROM M_PriceList p &quot;)</span>
+<span class="nc" id="L238">			  .append(&quot; WHERE p.C_Currency_ID=o.C_Currency_ID AND p.IsSOPriceList=o.IsSOTrx AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L239">			  .append(&quot;WHERE M_PriceList_ID IS NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L240">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Currency PriceList=&quot; + no);</span>
+<span class="nc" id="L242">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L243">			  .append(&quot;SET M_PriceList_ID=(SELECT MAX(M_PriceList_ID) FROM M_PriceList p &quot;)</span>
+<span class="nc" id="L244">			  .append(&quot; WHERE p.IsSOPriceList=o.IsSOTrx AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L245">			  .append(&quot;WHERE M_PriceList_ID IS NULL AND C_Currency_ID IS NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L246">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set PriceList=&quot; + no);</span>
+		//
+<span class="nc" id="L249">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L250">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No PriceList, ' &quot;)</span>
+<span class="nc" id="L251">			  .append(&quot;WHERE M_PriceList_ID IS NULL&quot;)</span>
+<span class="nc" id="L252">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L253">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L255">			log.warning(&quot;No PriceList=&quot; + no);</span>
+
+		//	Payment Term
+<span class="nc" id="L258">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L259">			  .append(&quot;SET C_PaymentTerm_ID=(SELECT C_PaymentTerm_ID FROM C_PaymentTerm p&quot;)</span>
+<span class="nc" id="L260">			  .append(&quot; WHERE o.PaymentTermValue=p.Value AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L261">			  .append(&quot;WHERE C_PaymentTerm_ID IS NULL AND PaymentTermValue IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L262">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set PaymentTerm=&quot; + no);</span>
+<span class="nc" id="L264">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L265">			  .append(&quot;SET C_PaymentTerm_ID=(SELECT MAX(C_PaymentTerm_ID) FROM C_PaymentTerm p&quot;)</span>
+<span class="nc" id="L266">			  .append(&quot; WHERE p.IsDefault='Y' AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L267">			  .append(&quot;WHERE C_PaymentTerm_ID IS NULL AND o.PaymentTermValue IS NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L268">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Default PaymentTerm=&quot; + no);</span>
+		//
+<span class="nc" id="L271">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L272">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No PaymentTerm, ' &quot;)</span>
+<span class="nc" id="L273">			  .append(&quot;WHERE C_PaymentTerm_ID IS NULL&quot;)</span>
+<span class="nc" id="L274">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L275">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L277">			log.warning (&quot;No PaymentTerm=&quot; + no);</span>
+
+		// globalqss - Add project and activity
+		//	Project
+<span class="nc" id="L281">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L282">			  .append(&quot;SET C_Project_ID=(SELECT C_Project_ID FROM C_Project p&quot;)</span>
+<span class="nc" id="L283">			  .append(&quot; WHERE o.ProjectValue=p.Value AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L284">			  .append(&quot;WHERE C_Project_ID IS NULL AND ProjectValue IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L285">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Project=&quot; + no);</span>
+<span class="nc" id="L287">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L288">				  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Project, ' &quot;)</span>
+<span class="nc" id="L289">				  .append(&quot;WHERE C_Project_ID IS NULL AND (ProjectValue IS NOT NULL)&quot;)</span>
+<span class="nc" id="L290">				  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L291">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L293">			log.warning (&quot;Invalid Project=&quot; + no);</span>
+		//	Activity
+<span class="nc" id="L295">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L296">			  .append(&quot;SET C_Activity_ID=(SELECT C_Activity_ID FROM C_Activity p&quot;)</span>
+<span class="nc" id="L297">			  .append(&quot; WHERE o.ActivityValue=p.Value AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L298">			  .append(&quot;WHERE C_Activity_ID IS NULL AND ActivityValue IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L299">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Activity=&quot; + no);</span>
+<span class="nc" id="L301">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L302">				  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Activity, ' &quot;)</span>
+<span class="nc" id="L303">				  .append(&quot;WHERE C_Activity_ID IS NULL AND (ActivityValue IS NOT NULL)&quot;)</span>
+<span class="nc" id="L304">				  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L305">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L307">			log.warning (&quot;Invalid Activity=&quot; + no);</span>
+		// globalqss - add charge
+		//	Charge
+<span class="nc" id="L310">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L311">			  .append(&quot;SET C_Charge_ID=(SELECT C_Charge_ID FROM C_Charge p&quot;)</span>
+<span class="nc" id="L312">			  .append(&quot; WHERE o.ChargeName=p.Name AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L313">			  .append(&quot;WHERE C_Charge_ID IS NULL AND ChargeName IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L314">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Charge=&quot; + no);</span>
+<span class="nc" id="L316">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L317">				  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Charge, ' &quot;)</span>
+<span class="nc" id="L318">				  .append(&quot;WHERE C_Charge_ID IS NULL AND (ChargeName IS NOT NULL)&quot;)</span>
+<span class="nc" id="L319">				  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L320">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L322">			log.warning (&quot;Invalid Charge=&quot; + no);</span>
+		//
+		
+		//	BP from EMail
+<span class="nc" id="L326">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L327">			  .append(&quot;SET (C_BPartner_ID,AD_User_ID)=(SELECT C_BPartner_ID,AD_User_ID FROM AD_User u&quot;)</span>
+<span class="nc" id="L328">			  .append(&quot; WHERE o.EMail=u.EMail AND o.AD_Client_ID=u.AD_Client_ID AND u.C_BPartner_ID IS NOT NULL) &quot;)</span>
+<span class="nc" id="L329">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND EMail IS NOT NULL&quot;)</span>
+<span class="nc" id="L330">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L331">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set BP from EMail=&quot; + no);</span>
+		//	BP from ContactName
+<span class="nc" id="L334">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L335">			  .append(&quot;SET (C_BPartner_ID,AD_User_ID)=(SELECT C_BPartner_ID,AD_User_ID FROM AD_User u&quot;)</span>
+<span class="nc" id="L336">			  .append(&quot; WHERE o.ContactName=u.Name AND o.AD_Client_ID=u.AD_Client_ID AND u.C_BPartner_ID IS NOT NULL) &quot;)</span>
+<span class="nc" id="L337">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND ContactName IS NOT NULL&quot;)</span>
+<span class="nc" id="L338">			  .append(&quot; AND EXISTS (SELECT Name FROM AD_User u WHERE o.ContactName=u.Name AND o.AD_Client_ID=u.AD_Client_ID AND u.C_BPartner_ID IS NOT NULL GROUP BY Name HAVING COUNT(*)=1)&quot;)</span>
+<span class="nc" id="L339">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L340">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set BP from ContactName=&quot; + no);</span>
+		//	BP from Value
+<span class="nc" id="L343">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L344">			  .append(&quot;SET C_BPartner_ID=(SELECT MAX(C_BPartner_ID) FROM C_BPartner bp&quot;)</span>
+<span class="nc" id="L345">			  .append(&quot; WHERE o.BPartnerValue=bp.Value AND o.AD_Client_ID=bp.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L346">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND BPartnerValue IS NOT NULL&quot;)</span>
+<span class="nc" id="L347">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L348">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set BP from Value=&quot; + no);</span>
+		//	Default BP
+<span class="nc" id="L351">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L352">			  .append(&quot;SET C_BPartner_ID=(SELECT C_BPartnerCashTrx_ID FROM AD_ClientInfo c&quot;)</span>
+<span class="nc" id="L353">			  .append(&quot; WHERE o.AD_Client_ID=c.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L354">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND BPartnerValue IS NULL AND Name IS NULL&quot;)</span>
+<span class="nc" id="L355">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L356">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Default BP=&quot; + no);</span>
+
+		//	Set Country
+<span class="nc" id="L360">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L361">			  .append(&quot;SET C_Country_ID=(SELECT C_Country_ID FROM C_Country c&quot;)</span>
+<span class="nc" id="L362">			  .append(&quot; WHERE o.CountryCode=c.CountryCode AND c.AD_Client_ID IN (0, o.AD_Client_ID)) &quot;)</span>
+<span class="nc" id="L363">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND C_Country_ID IS NULL AND CountryCode IS NOT NULL&quot;)</span>
+<span class="nc" id="L364">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L365">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Country=&quot; + no);</span>
+		//
+<span class="nc" id="L368">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L369">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Country, ' &quot;)</span>
+<span class="nc" id="L370">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND C_Country_ID IS NULL&quot;)</span>
+<span class="nc" id="L371">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L372">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L374">			log.warning (&quot;Invalid Country=&quot; + no);</span>
+
+		//	Set Region
+<span class="nc" id="L377">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L378">			  .append(&quot;Set RegionName=(SELECT MAX(Name) FROM C_Region r&quot;)</span>
+<span class="nc" id="L379">			  .append(&quot; WHERE r.IsDefault='Y' AND r.C_Country_ID=o.C_Country_ID&quot;)</span>
+<span class="nc" id="L380">			  .append(&quot; AND r.AD_Client_ID IN (0, o.AD_Client_ID)) &quot;)</span>
+<span class="nc" id="L381">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND C_Region_ID IS NULL AND RegionName IS NULL&quot;)</span>
+<span class="nc" id="L382">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L383">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Region Default=&quot; + no);</span>
+		//
+<span class="nc" id="L386">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L387">			  .append(&quot;Set C_Region_ID=(SELECT C_Region_ID FROM C_Region r&quot;)</span>
+<span class="nc" id="L388">			  .append(&quot; WHERE r.Name=o.RegionName AND r.C_Country_ID=o.C_Country_ID&quot;)</span>
+<span class="nc" id="L389">			  .append(&quot; AND r.AD_Client_ID IN (0, o.AD_Client_ID)) &quot;)</span>
+<span class="nc" id="L390">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND C_Region_ID IS NULL AND RegionName IS NOT NULL&quot;)</span>
+<span class="nc" id="L391">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L392">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Region=&quot; + no);</span>
+		//
+<span class="nc" id="L395">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L396">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Region, ' &quot;)</span>
+<span class="nc" id="L397">			  .append(&quot;WHERE C_BPartner_ID IS NULL AND C_Region_ID IS NULL &quot;)</span>
+<span class="nc" id="L398">			  .append(&quot; AND EXISTS (SELECT * FROM C_Country c&quot;)</span>
+<span class="nc" id="L399">			  .append(&quot; WHERE c.C_Country_ID=o.C_Country_ID AND c.HasRegion='Y')&quot;)</span>
+<span class="nc" id="L400">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L401">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L403">			log.warning (&quot;Invalid Region=&quot; + no);</span>
+
+		//	Existing Location ? Exact Match
+<span class="nc" id="L406">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L407">			  .append(&quot;SET C_BPartner_Location_ID=(SELECT C_BPartner_Location_ID&quot;)</span>
+<span class="nc" id="L408">			  .append(&quot; FROM C_BPartner_Location bpl INNER JOIN C_Location l ON (bpl.C_Location_ID=l.C_Location_ID)&quot;)</span>
+<span class="nc" id="L409">			  .append(&quot; WHERE o.C_BPartner_ID=bpl.C_BPartner_ID AND bpl.AD_Client_ID=o.AD_Client_ID&quot;)</span>
+<span class="nc" id="L410">			  .append(&quot; AND ((o.Address1 IS NULL AND l.Address1 IS NULL) OR o.Address1=l.Address1)&quot;)</span>
+<span class="nc" id="L411">			  .append(&quot; AND ((o.Address2 IS NULL AND l.Address2 IS NULL) OR o.Address2=l.Address2)&quot;)</span>
+<span class="nc" id="L412">			  .append(&quot; AND ((o.City IS NULL AND l.City IS NULL) OR o.City=l.City)&quot;)</span>
+<span class="nc" id="L413">			  .append(&quot; AND ((o.Postal IS NULL AND l.Postal IS NULL) OR o.Postal=l.Postal)&quot;)</span>
+<span class="nc" id="L414">			  .append(&quot; AND COALESCE(o.C_Region_ID,0)=COALESCE(l.C_Region_ID,0)&quot;)</span>
+<span class="nc" id="L415">			  .append(&quot; AND COALESCE(o.C_Country_ID,0)=COALESCE(l.C_Country_ID,0)) &quot;)</span>
+<span class="nc" id="L416">			  .append(&quot;WHERE C_BPartner_ID IS NOT NULL AND C_BPartner_Location_ID IS NULL&quot;)</span>
+<span class="nc" id="L417">			  .append(&quot; AND I_IsImported='N'&quot;).append (clientCheck);</span>
+<span class="nc" id="L418">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Found Location=&quot; + no);</span>
+		//	Set Location from BPartner
+<span class="nc" id="L421">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L422">			  .append(&quot;SET C_BPartner_Location_ID=(SELECT MAX(C_BPartner_Location_ID) FROM C_BPartner_Location l&quot;)</span>
+<span class="nc" id="L423">			  .append(&quot; WHERE l.C_BPartner_ID=o.C_BPartner_ID AND o.AD_Client_ID=l.AD_Client_ID&quot;)</span>
+<span class="nc" id="L424">			  .append(&quot; AND ((l.IsBillTo='Y' AND o.IsSOTrx='Y') OR o.IsSOTrx='N')&quot;)</span>
+<span class="nc" id="L425">			  .append(&quot;) &quot;)</span>
+<span class="nc" id="L426">			  .append(&quot;WHERE C_BPartner_ID IS NOT NULL AND C_BPartner_Location_ID IS NULL&quot;)</span>
+<span class="nc" id="L427">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L428">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set BP Location from BP=&quot; + no);</span>
+		//
+<span class="nc" id="L431">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L432">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No BP Location, ' &quot;)</span>
+<span class="nc" id="L433">			  .append(&quot;WHERE C_BPartner_ID IS NOT NULL AND C_BPartner_Location_ID IS NULL&quot;)</span>
+<span class="nc" id="L434">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L435">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L437">			log.warning (&quot;No BP Location=&quot; + no);</span>
+
+		//	Product
+<span class="nc" id="L440">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L441">			  .append(&quot;SET M_Product_ID=(SELECT MAX(M_Product_ID) FROM M_Product p&quot;)</span>
+<span class="nc" id="L442">			  .append(&quot; WHERE o.ProductValue=p.Value AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L443">			  .append(&quot;WHERE M_Product_ID IS NULL AND ProductValue IS NOT NULL&quot;)</span>
+<span class="nc" id="L444">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L445">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Product from Value=&quot; + no);</span>
+<span class="nc" id="L447">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L448">			  .append(&quot;SET M_Product_ID=(SELECT MAX(M_Product_ID) FROM M_Product p&quot;)</span>
+<span class="nc" id="L449">			  .append(&quot; WHERE o.UPC=p.UPC AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L450">			  .append(&quot;WHERE M_Product_ID IS NULL AND UPC IS NOT NULL&quot;)</span>
+<span class="nc" id="L451">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L452">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Product from UPC=&quot; + no);</span>
+<span class="nc" id="L454">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L455">			  .append(&quot;SET M_Product_ID=(SELECT MAX(M_Product_ID) FROM M_Product p&quot;)</span>
+<span class="nc" id="L456">			  .append(&quot; WHERE o.SKU=p.SKU AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L457">			  .append(&quot;WHERE M_Product_ID IS NULL AND SKU IS NOT NULL&quot;)</span>
+<span class="nc" id="L458">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L459">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L460" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Product fom SKU=&quot; + no);</span>
+<span class="nc" id="L461">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L462">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Product, ' &quot;)</span>
+<span class="nc" id="L463">			  .append(&quot;WHERE M_Product_ID IS NULL AND (ProductValue IS NOT NULL OR UPC IS NOT NULL OR SKU IS NOT NULL)&quot;)</span>
+<span class="nc" id="L464">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L465">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L467">			log.warning (&quot;Invalid Product=&quot; + no);</span>
+
+		// globalqss - charge and product are exclusive
+<span class="nc" id="L470">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L471">				  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Product and Charge, ' &quot;)</span>
+<span class="nc" id="L472">				  .append(&quot;WHERE M_Product_ID IS NOT NULL AND C_Charge_ID IS NOT NULL &quot;)</span>
+<span class="nc" id="L473">				  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L474">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L476">			log.warning (&quot;Invalid Product and Charge exclusive=&quot; + no);</span>
+
+			//	Tax
+<span class="nc" id="L479">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L480">			  .append(&quot;SET C_Tax_ID=(SELECT MAX(C_Tax_ID) FROM C_Tax t&quot;)</span>
+<span class="nc" id="L481">			  .append(&quot; WHERE o.TaxIndicator=t.TaxIndicator AND o.AD_Client_ID=t.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L482">			  .append(&quot;WHERE C_Tax_ID IS NULL AND TaxIndicator IS NOT NULL&quot;)</span>
+<span class="nc" id="L483">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L484">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L485" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Tax=&quot; + no);</span>
+<span class="nc" id="L486">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L487">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Tax, ' &quot;)</span>
+<span class="nc" id="L488">			  .append(&quot;WHERE C_Tax_ID IS NULL AND TaxIndicator IS NOT NULL&quot;)</span>
+<span class="nc" id="L489">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L490">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L491" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L492">			log.warning (&quot;Invalid Tax=&quot; + no);</span>
+		
+		// Set 1099 Box
+<span class="nc" id="L495">		sql = new StringBuilder (&quot;UPDATE I_Invoice o &quot;)</span>
+<span class="nc" id="L496">				.append(&quot;SET C_1099Box_ID=(SELECT C_1099Box_ID FROM C_1099Box a&quot;)</span>
+<span class="nc" id="L497">				.append(&quot; WHERE o.C_1099Box_Value=a.Value AND a.AD_Client_ID = o.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L498">				.append(&quot; WHERE C_1099Box_ID IS NULL and C_1099Box_Value IS NOT NULL&quot;)</span>
+<span class="nc" id="L499">				.append(&quot; AND I_IsImported&lt;&gt;'Y' AND IsSOTrx='N'&quot;).append (clientCheck);</span>
+<span class="nc" id="L500">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L501">		log.fine(&quot;Set C_1099Box_ID=&quot; + no);</span>
+<span class="nc" id="L502">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L503">				.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid C_1099Box_Value, ' &quot;)</span>
+<span class="nc" id="L504">				.append(&quot;WHERE C_1099Box_ID IS NULL AND (C_1099Box_Value IS NOT NULL)&quot;)</span>
+<span class="nc" id="L505">				.append(&quot; AND I_IsImported&lt;&gt;'Y' AND IsSOTrx='N'&quot;).append (clientCheck);</span>
+<span class="nc" id="L506">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L507" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L508">			log.warning (&quot;Invalid C_1099Box_Value=&quot; + no);</span>
+		
+<span class="nc" id="L510">		commitEx();</span>
+		
+		//	-- New BPartner ---------------------------------------------------
+
+		//	Go through Invoice Records w/o C_BPartner_ID
+<span class="nc" id="L515">		sql = new StringBuilder (&quot;SELECT * FROM I_Invoice &quot;)</span>
+<span class="nc" id="L516">			  .append(&quot;WHERE I_IsImported='N' AND C_BPartner_ID IS NULL&quot;).append (clientCheck);</span>
+<span class="nc" id="L517">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L518">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L521">			pstmt = DB.prepareStatement (sql.toString(), get_TrxName());</span>
+<span class="nc" id="L522">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L525">				X_I_Invoice imp = new X_I_Invoice (getCtx(), rs, get_TrxName());</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">				if (imp.getBPartnerValue () == null)</span>
+				{
+<span class="nc bnc" id="L528" title="All 2 branches missed.">					if (imp.getEMail () != null)</span>
+<span class="nc" id="L529">						imp.setBPartnerValue (imp.getEMail ());</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">					else if (imp.getName () != null)</span>
+<span class="nc" id="L531">						imp.setBPartnerValue (imp.getName ());</span>
+					else
+						continue;
+				}
+<span class="nc bnc" id="L535" title="All 2 branches missed.">				if (imp.getName () == null)</span>
+				{
+<span class="nc bnc" id="L537" title="All 2 branches missed.">					if (imp.getContactName () != null)</span>
+<span class="nc" id="L538">						imp.setName (imp.getContactName ());</span>
+					else
+<span class="nc" id="L540">						imp.setName (imp.getBPartnerValue ());</span>
+				}
+				//	BPartner
+<span class="nc" id="L543">				MBPartner bp = MBPartner.get (getCtx(), imp.getBPartnerValue(), get_TrxName());</span>
+<span class="nc bnc" id="L544" title="All 2 branches missed.">				if (bp == null)</span>
+				{
+<span class="nc" id="L546">					bp = new MBPartner (getCtx (), -1, get_TrxName());</span>
+<span class="nc" id="L547">					bp.setClientOrg (imp.getAD_Client_ID (), imp.getAD_Org_ID ());</span>
+<span class="nc" id="L548">					bp.setValue (imp.getBPartnerValue ());</span>
+<span class="nc" id="L549">					bp.setName (imp.getName ());</span>
+<span class="nc bnc" id="L550" title="All 2 branches missed.">					if (!bp.save ())</span>
+<span class="nc" id="L551">						continue;</span>
+				}
+<span class="nc" id="L553">				imp.setC_BPartner_ID (bp.getC_BPartner_ID ());</span>
+				
+				//	BP Location
+<span class="nc" id="L556">				MBPartnerLocation bpl = null; </span>
+<span class="nc" id="L557">				MBPartnerLocation[] bpls = bp.getLocations(true);</span>
+<span class="nc bnc" id="L558" title="All 4 branches missed.">				for (int i = 0; bpl == null &amp;&amp; i &lt; bpls.length; i++)</span>
+				{
+<span class="nc bnc" id="L560" title="All 2 branches missed.">					if (imp.getC_BPartner_Location_ID() == bpls[i].getC_BPartner_Location_ID())</span>
+<span class="nc" id="L561">						bpl = bpls[i];</span>
+					//	Same Location ID
+<span class="nc bnc" id="L563" title="All 2 branches missed.">					else if (imp.getC_Location_ID() == bpls[i].getC_Location_ID())</span>
+<span class="nc" id="L564">						bpl = bpls[i];</span>
+					//	Same Location Info
+<span class="nc bnc" id="L566" title="All 2 branches missed.">					else if (imp.getC_Location_ID() == 0)</span>
+					{
+<span class="nc" id="L568">						MLocation loc = bpls[i].getLocation(false);</span>
+<span class="nc" id="L569">						if (loc.equals(imp.getC_Country_ID(), imp.getC_Region_ID(), </span>
+<span class="nc" id="L570">								imp.getPostal(), &quot;&quot;, imp.getCity(), </span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">								imp.getAddress1(), imp.getAddress2()))</span>
+<span class="nc" id="L572">							bpl = bpls[i];</span>
+					}
+				}
+<span class="nc bnc" id="L575" title="All 2 branches missed.">				if (bpl == null)</span>
+				{
+					//	New Location
+<span class="nc" id="L578">					MLocation loc = new MLocation (getCtx (), 0, get_TrxName());</span>
+<span class="nc" id="L579">					loc.setAddress1 (imp.getAddress1 ());</span>
+<span class="nc" id="L580">					loc.setAddress2 (imp.getAddress2 ());</span>
+<span class="nc" id="L581">					loc.setCity (imp.getCity ());</span>
+<span class="nc" id="L582">					loc.setPostal (imp.getPostal ());</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">					if (imp.getC_Region_ID () != 0)</span>
+<span class="nc" id="L584">						loc.setC_Region_ID (imp.getC_Region_ID ());</span>
+<span class="nc" id="L585">					loc.setC_Country_ID (imp.getC_Country_ID ());</span>
+<span class="nc bnc" id="L586" title="All 2 branches missed.">					if (!loc.save ())</span>
+<span class="nc" id="L587">						continue;</span>
+					//
+<span class="nc" id="L589">					bpl = new MBPartnerLocation (bp);</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">					bpl.setC_Location_ID (imp.getC_Location_ID() &gt; 0 ? imp.getC_Location_ID() : loc.getC_Location_ID());</span>
+<span class="nc bnc" id="L591" title="All 2 branches missed.">					if (!bpl.save ())</span>
+<span class="nc" id="L592">						continue;</span>
+				}
+<span class="nc" id="L594">				imp.setC_Location_ID (bpl.getC_Location_ID ());</span>
+<span class="nc" id="L595">				imp.setC_BPartner_Location_ID (bpl.getC_BPartner_Location_ID ());</span>
+				
+				//	User/Contact
+<span class="nc bnc" id="L598" title="All 2 branches missed.">				if (imp.getContactName () != null </span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">					|| imp.getEMail () != null </span>
+<span class="nc bnc" id="L600" title="All 2 branches missed.">					|| imp.getPhone () != null)</span>
+				{
+<span class="nc" id="L602">					MUser[] users = bp.getContacts(true);</span>
+<span class="nc" id="L603">					MUser user = null;</span>
+<span class="nc bnc" id="L604" title="All 4 branches missed.">					for (int i = 0; user == null &amp;&amp; i &lt; users.length;  i++)</span>
+					{
+<span class="nc" id="L606">						String name = users[i].getName();</span>
+<span class="nc bnc" id="L607" title="All 2 branches missed.">						if (name.equals(imp.getContactName()) </span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">							|| name.equals(imp.getName()))</span>
+						{
+<span class="nc" id="L610">							user = users[i];</span>
+<span class="nc" id="L611">							imp.setAD_User_ID (user.getAD_User_ID ());</span>
+						}
+					}
+<span class="nc bnc" id="L614" title="All 2 branches missed.">					if (user == null)</span>
+					{
+<span class="nc" id="L616">						user = new MUser (bp);</span>
+<span class="nc bnc" id="L617" title="All 2 branches missed.">						if (imp.getContactName () == null)</span>
+<span class="nc" id="L618">							user.setName (imp.getName ());</span>
+						else
+<span class="nc" id="L620">							user.setName (imp.getContactName ());</span>
+<span class="nc" id="L621">						user.setEMail (imp.getEMail ());</span>
+<span class="nc" id="L622">						user.setPhone (imp.getPhone ());</span>
+<span class="nc bnc" id="L623" title="All 2 branches missed.">						if (user.save ())</span>
+<span class="nc" id="L624">							imp.setAD_User_ID (user.getAD_User_ID ());</span>
+					}
+				}
+<span class="nc" id="L627">				imp.saveEx();</span>
+			}	//	for all new BPartners
+			//
+<span class="nc" id="L630">		}</span>
+<span class="nc" id="L631">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L633">			log.log(Level.SEVERE, &quot;CreateBP&quot;, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L637">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L638">			rs = null;</span>
+<span class="nc" id="L639">			pstmt = null;</span>
+		}
+<span class="nc" id="L641">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L642">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No BPartner, ' &quot;)</span>
+<span class="nc" id="L643">			  .append(&quot;WHERE C_BPartner_ID IS NULL&quot;)</span>
+<span class="nc" id="L644">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L645">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L647">			log.warning (&quot;No BPartner=&quot; + no);</span>
+		
+<span class="nc" id="L649">		commitEx();</span>
+		
+		//	-- New Invoices -----------------------------------------------------
+
+<span class="nc" id="L653">		int noInsert = 0;</span>
+<span class="nc" id="L654">		int noInsertLine = 0;</span>
+
+		//	Go through Invoice Records w/o
+<span class="nc" id="L657">		sql = new StringBuilder (&quot;SELECT * FROM I_Invoice &quot;)</span>
+<span class="nc" id="L658">			  .append(&quot;WHERE I_IsImported='N'&quot;).append (clientCheck)</span>
+<span class="nc" id="L659">			.append(&quot; ORDER BY C_BPartner_ID, C_BPartner_Location_ID, I_Invoice_ID&quot;);</span>
+		try
+		{
+<span class="nc" id="L662">			pstmt = DB.prepareStatement (sql.toString(), get_TrxName());</span>
+<span class="nc" id="L663">			rs = pstmt.executeQuery ();</span>
+			//	Group Change
+<span class="nc" id="L665">			int oldC_BPartner_ID = 0;</span>
+<span class="nc" id="L666">			int oldC_BPartner_Location_ID = 0;</span>
+<span class="nc" id="L667">			String oldDocumentNo = &quot;&quot;;</span>
+			//
+<span class="nc" id="L669">			MInvoice invoice = null;</span>
+<span class="nc" id="L670">			int lineNo = 0;</span>
+<span class="nc bnc" id="L671" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L673">				X_I_Invoice imp = new X_I_Invoice (getCtx (), rs, get_TrxName());</span>
+<span class="nc" id="L674">				String cmpDocumentNo = imp.getDocumentNo();</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">				if (cmpDocumentNo == null)</span>
+<span class="nc" id="L676">					cmpDocumentNo = &quot;&quot;;</span>
+				//	New Invoice
+<span class="nc bnc" id="L678" title="All 2 branches missed.">				if (oldC_BPartner_ID != imp.getC_BPartner_ID() </span>
+<span class="nc bnc" id="L679" title="All 2 branches missed.">					|| oldC_BPartner_Location_ID != imp.getC_BPartner_Location_ID()</span>
+<span class="nc bnc" id="L680" title="All 2 branches missed.">					|| !oldDocumentNo.equals(cmpDocumentNo)	)</span>
+				{
+<span class="nc bnc" id="L682" title="All 2 branches missed.">					if (invoice != null)</span>
+					{
+<span class="nc bnc" id="L684" title="All 2 branches missed.">						if (!invoice.processIt(m_docAction)) {</span>
+<span class="nc" id="L685">							log.warning(&quot;Invoice Process Failed: &quot; + invoice + &quot; - &quot; + invoice.getProcessMsg());</span>
+<span class="nc" id="L686">							throw new IllegalStateException(&quot;Invoice Process Failed: &quot; + invoice + &quot; - &quot; + invoice.getProcessMsg());</span>
+							
+						}
+<span class="nc" id="L689">						invoice.saveEx();</span>
+					}
+					//	Group Change
+<span class="nc" id="L692">					oldC_BPartner_ID = imp.getC_BPartner_ID();</span>
+<span class="nc" id="L693">					oldC_BPartner_Location_ID = imp.getC_BPartner_Location_ID();</span>
+<span class="nc" id="L694">					oldDocumentNo = imp.getDocumentNo();</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">					if (oldDocumentNo == null)</span>
+<span class="nc" id="L696">						oldDocumentNo = &quot;&quot;;</span>
+					//
+<span class="nc" id="L698">					invoice = new MInvoice (getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L699">					invoice.setClientOrg (imp.getAD_Client_ID(), imp.getAD_Org_ID());</span>
+<span class="nc" id="L700">					invoice.setC_DocTypeTarget_ID(imp.getC_DocType_ID());</span>
+<span class="nc" id="L701">					invoice.setIsSOTrx(imp.isSOTrx());</span>
+<span class="nc bnc" id="L702" title="All 2 branches missed.">					if (imp.getDocumentNo() != null)</span>
+<span class="nc" id="L703">						invoice.setDocumentNo(imp.getDocumentNo());</span>
+					//
+<span class="nc" id="L705">					invoice.setC_BPartner_ID(imp.getC_BPartner_ID());</span>
+<span class="nc" id="L706">					invoice.setC_BPartner_Location_ID(imp.getC_BPartner_Location_ID());</span>
+<span class="nc bnc" id="L707" title="All 2 branches missed.">					if (imp.getAD_User_ID() != 0)</span>
+<span class="nc" id="L708">						invoice.setAD_User_ID(imp.getAD_User_ID());</span>
+					//
+<span class="nc bnc" id="L710" title="All 2 branches missed.">					if (imp.getDescription() != null)</span>
+<span class="nc" id="L711">						invoice.setDescription(imp.getDescription());</span>
+<span class="nc" id="L712">					invoice.setC_PaymentTerm_ID(imp.getC_PaymentTerm_ID());</span>
+<span class="nc" id="L713">					invoice.setM_PriceList_ID(imp.getM_PriceList_ID());</span>
+					//	SalesRep from Import or the person running the import
+<span class="nc bnc" id="L715" title="All 2 branches missed.">					if (imp.getSalesRep_ID() != 0)</span>
+<span class="nc" id="L716">						invoice.setSalesRep_ID(imp.getSalesRep_ID());</span>
+<span class="nc bnc" id="L717" title="All 2 branches missed.">					if (invoice.getSalesRep_ID() == 0)</span>
+<span class="nc" id="L718">						invoice.setSalesRep_ID(getAD_User_ID());</span>
+					//
+<span class="nc bnc" id="L720" title="All 2 branches missed.">					if (imp.getAD_OrgTrx_ID() != 0)</span>
+<span class="nc" id="L721">						invoice.setAD_OrgTrx_ID(imp.getAD_OrgTrx_ID());</span>
+<span class="nc bnc" id="L722" title="All 2 branches missed.">					if (imp.getC_Activity_ID() != 0)</span>
+<span class="nc" id="L723">						invoice.setC_Activity_ID(imp.getC_Activity_ID());</span>
+<span class="nc bnc" id="L724" title="All 2 branches missed.">					if (imp.getC_Campaign_ID() != 0)</span>
+<span class="nc" id="L725">						invoice.setC_Campaign_ID(imp.getC_Campaign_ID());</span>
+<span class="nc bnc" id="L726" title="All 2 branches missed.">					if (imp.getC_Project_ID() != 0)</span>
+<span class="nc" id="L727">						invoice.setC_Project_ID(imp.getC_Project_ID());</span>
+					//
+<span class="nc bnc" id="L729" title="All 2 branches missed.">					if (imp.getDateInvoiced() != null)</span>
+<span class="nc" id="L730">						invoice.setDateInvoiced(imp.getDateInvoiced());</span>
+<span class="nc bnc" id="L731" title="All 2 branches missed.">					if (imp.getDateAcct() != null)</span>
+<span class="nc" id="L732">						invoice.setDateAcct(imp.getDateAcct());</span>
+					//
+<span class="nc" id="L734">					invoice.saveEx();</span>
+<span class="nc" id="L735">					noInsert++;</span>
+<span class="nc" id="L736">					lineNo = 10;</span>
+				}
+<span class="nc" id="L738">				imp.setC_Invoice_ID (invoice.getC_Invoice_ID());</span>
+				//	New InvoiceLine
+<span class="nc" id="L740">				MInvoiceLine line = new MInvoiceLine (invoice);</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">				if (imp.getLineDescription() != null)</span>
+<span class="nc" id="L742">					line.setDescription(imp.getLineDescription());</span>
+<span class="nc" id="L743">				line.setLine(lineNo);</span>
+<span class="nc" id="L744">				lineNo += 10;</span>
+<span class="nc bnc" id="L745" title="All 2 branches missed.">				if (imp.getM_Product_ID() != 0)</span>
+<span class="nc" id="L746">					line.setM_Product_ID(imp.getM_Product_ID(), true);</span>
+				// globalqss - import invoice with charges
+<span class="nc bnc" id="L748" title="All 2 branches missed.">				if (imp.getC_Charge_ID() != 0)</span>
+<span class="nc" id="L749">					line.setC_Charge_ID(imp.getC_Charge_ID());</span>
+				// globalqss - [2855673] - assign dimensions to lines also in case they're different 
+<span class="nc bnc" id="L751" title="All 2 branches missed.">				if (imp.getC_Activity_ID() != 0)</span>
+<span class="nc" id="L752">					line.setC_Activity_ID(imp.getC_Activity_ID());</span>
+<span class="nc bnc" id="L753" title="All 2 branches missed.">				if (imp.getC_Campaign_ID() != 0)</span>
+<span class="nc" id="L754">					line.setC_Campaign_ID(imp.getC_Campaign_ID());</span>
+<span class="nc bnc" id="L755" title="All 2 branches missed.">				if (imp.getC_Project_ID() != 0)</span>
+<span class="nc" id="L756">					line.setC_Project_ID(imp.getC_Project_ID());</span>
+				//
+<span class="nc" id="L758">				line.setQty(imp.getQtyOrdered());</span>
+<span class="nc" id="L759">				line.setPrice();</span>
+<span class="nc" id="L760">				BigDecimal price = imp.getPriceActual();</span>
+<span class="nc bnc" id="L761" title="All 4 branches missed.">				if (price != null &amp;&amp; Env.ZERO.compareTo(price) != 0)</span>
+<span class="nc" id="L762">					line.setPrice(price);</span>
+<span class="nc bnc" id="L763" title="All 2 branches missed.">				if (imp.getC_Tax_ID() != 0)</span>
+<span class="nc" id="L764">					line.setC_Tax_ID(imp.getC_Tax_ID());</span>
+				else
+				{
+<span class="nc" id="L767">					line.setTax();</span>
+<span class="nc" id="L768">					imp.setC_Tax_ID(line.getC_Tax_ID());</span>
+				}
+<span class="nc" id="L770">				BigDecimal taxAmt = imp.getTaxAmt();</span>
+<span class="nc bnc" id="L771" title="All 4 branches missed.">				if (taxAmt != null &amp;&amp; Env.ZERO.compareTo(taxAmt) != 0)</span>
+<span class="nc" id="L772">					line.setTaxAmt(taxAmt);</span>
+<span class="nc" id="L773">				line.setC_1099Box_ID(imp.getC_1099Box_ID());</span>
+<span class="nc" id="L774">				line.saveEx();</span>
+				//
+<span class="nc" id="L776">				imp.setC_InvoiceLine_ID(line.getC_InvoiceLine_ID());</span>
+<span class="nc" id="L777">				imp.setI_IsImported(true);</span>
+<span class="nc" id="L778">				imp.setProcessed(true);</span>
+				//
+<span class="nc bnc" id="L780" title="All 2 branches missed.">				if (imp.save())</span>
+<span class="nc" id="L781">					noInsertLine++;</span>
+			}
+<span class="nc bnc" id="L783" title="All 2 branches missed.">			if (invoice != null)</span>
+			{
+<span class="nc bnc" id="L785" title="All 2 branches missed.">				if(!invoice.processIt (m_docAction)) {</span>
+<span class="nc" id="L786">					log.warning(&quot;Invoice Process Failed: &quot; + invoice + &quot; - &quot; + invoice.getProcessMsg());</span>
+<span class="nc" id="L787">					throw new IllegalStateException(&quot;Invoice Process Failed: &quot; + invoice + &quot; - &quot; + invoice.getProcessMsg());</span>
+					
+				}
+<span class="nc" id="L790">				invoice.saveEx();</span>
+			}
+<span class="nc" id="L792">		}</span>
+<span class="nc" id="L793">		catch (Exception e)</span>
+		{
+<span class="nc" id="L795">			log.log(Level.SEVERE, &quot;CreateInvoice&quot;, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L799">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L800">			rs = null;</span>
+<span class="nc" id="L801">			pstmt = null;</span>
+		}
+
+		//	Set Error to indicator to not imported
+<span class="nc" id="L805">		sql = new StringBuilder (&quot;UPDATE I_Invoice &quot;)</span>
+<span class="nc" id="L806">			.append(&quot;SET I_IsImported='N', Updated=getDate() &quot;)</span>
+<span class="nc" id="L807">			.append(&quot;WHERE I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L808">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L809">		addLog (0, null, new BigDecimal (no), &quot;@Errors@&quot;);</span>
+		//
+<span class="nc" id="L811">		addLog (0, null, new BigDecimal (noInsert), &quot;@C_Invoice_ID@: @Inserted@&quot;);</span>
+<span class="nc" id="L812">		addLog (0, null, new BigDecimal (noInsertLine), &quot;@C_InvoiceLine_ID@: @Inserted@&quot;);</span>
+<span class="nc" id="L813">		return &quot;&quot;;</span>
+	}	//	doIt
+
+}	//	ImportInvoice
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

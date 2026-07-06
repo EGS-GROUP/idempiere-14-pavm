@@ -1,0 +1,433 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MTax.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MTax.java</span></div><h1>MTax.java</h1><pre class="source lang-java linenums"><span class="nc" id="L1">/******************************************************************************</span>
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.ResultSet;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.compiere.util.CCache;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+import org.idempiere.cache.ImmutableIntPOCache;
+import org.idempiere.cache.ImmutablePOSupport;
+
+/**
+ *  Tax Model
+ *
+ *	@author Jorg Janke
+ *	@version $Id: MTax.java,v 1.3 2006/07/30 00:51:02 jjanke Exp $
+ * 	red1 - FR: [ 2214883 ] Remove SQL code and Replace for Query
+ *  trifonnt - BF [2913276] - Allow only one Default Tax Rate per Tax Category
+ *  mjmckay - BF [2948632] - Allow edits to the Default Tax Rate 
+ */
+public class MTax extends X_C_Tax implements ImmutablePOSupport
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -7971399495606742382L;
+	/**	Cache						*/
+<span class="nc" id="L51">	private static ImmutableIntPOCache&lt;Integer,MTax&gt;		s_cache	= new ImmutableIntPOCache&lt;Integer,MTax&gt;(Table_Name, 5);</span>
+	/**	Cache of Client						*/
+<span class="nc" id="L53">	private static CCache&lt;Integer,MTax[]&gt;	s_cacheAll = new CCache&lt;Integer,MTax[]&gt;(Table_Name, Table_Name+&quot;_Of_Client&quot;, 5);</span>
+	
+	/**	Child Taxes			*/
+<span class="nc" id="L56">	private MTax[]			m_childTaxes = null;</span>
+	/** Postal Codes		*/
+<span class="nc" id="L58">	private MTaxPostal[]	m_postals = null;</span>
+	
+	/**
+	 * 	Get All Tax codes for client of this session/context
+	 *	@param ctx context
+	 *	@return array of MTax
+	 */
+	public static MTax[] getAll (Properties ctx)
+	{
+<span class="nc" id="L67">		int AD_Client_ID = Env.getAD_Client_ID(ctx);</span>
+<span class="nc" id="L68">		MTax[] retValue = (MTax[])s_cacheAll.get(AD_Client_ID);</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">		if (retValue != null)</span>
+		{
+<span class="nc bnc" id="L71" title="All 2 branches missed.">			if (ctx == Env.getCtx())</span>
+<span class="nc" id="L72">				return retValue;</span>
+			else
+<span class="nc" id="L74">				return Arrays.stream(retValue).map(e -&gt; {return new MTax(ctx, e).markImmutable();}).toArray(MTax[]::new);</span>
+		}
+
+		//	Create it
+<span class="nc" id="L78">		List&lt;MTax&gt; list = new Query(ctx, I_C_Tax.Table_Name, null, null)</span>
+<span class="nc" id="L79">								.setClient_ID()</span>
+<span class="nc" id="L80">								.setOrderBy(&quot;C_CountryGroupFrom_ID, C_Country_ID, C_Region_ID, C_CountryGroupTo_ID, To_Country_ID, To_Region_ID, ValidFrom DESC&quot;)</span>
+<span class="nc" id="L81">								.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L82">								.list();</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">		for (MTax tax : list)</span>
+		{
+<span class="nc" id="L85">			s_cache.put(tax.get_ID(), tax, e -&gt; new MTax(Env.getCtx(), e));</span>
+		}
+<span class="nc" id="L87">		retValue = list.toArray(new MTax[list.size()]);</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">		if (ctx == Env.getCtx())</span>
+<span class="nc" id="L89">			s_cacheAll.put(AD_Client_ID, retValue);</span>
+		else
+<span class="nc" id="L91">			s_cacheAll.put(AD_Client_ID, Arrays.stream(retValue).map(e -&gt; {return new MTax(Env.getCtx(), e);}).toArray(MTax[]::new));</span>
+<span class="nc" id="L92">		return retValue;</span>
+	}	//	getAll
+
+	/**
+	 * 	Get Tax from Cache (immutable)
+	 *	@param C_Tax_ID id
+	 *	@return MTax
+	 */
+	public static MTax get (int C_Tax_ID)
+	{
+<span class="nc" id="L102">		return get(Env.getCtx(), C_Tax_ID);</span>
+	}
+	
+	/**
+	 * 	Get Tax from Cache (immutable)
+	 *	@param ctx context
+	 *	@param C_Tax_ID id
+	 *	@return MTax
+	 */
+	public static MTax get (Properties ctx, int C_Tax_ID)
+	{
+<span class="nc" id="L113">		Integer key = Integer.valueOf(C_Tax_ID);</span>
+<span class="nc" id="L114">		MTax retValue = s_cache.get (ctx, key, e -&gt; new MTax(ctx, e));</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		if (retValue != null)</span>
+<span class="nc" id="L116">			return retValue;</span>
+<span class="nc" id="L117">		retValue = new MTax (ctx, C_Tax_ID, (String)null);</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">		if (retValue.get_ID () == C_Tax_ID)</span>
+		{
+<span class="nc" id="L120">			s_cache.put (key, retValue, e -&gt; new MTax(Env.getCtx(), e));</span>
+<span class="nc" id="L121">			return retValue;</span>
+		}
+<span class="nc" id="L123">		return null;</span>
+	}	//	get
+
+	/**
+	 * Get updateable copy of MTax from cache
+	 * @param ctx
+	 * @param C_Tax_ID
+	 * @param trxName
+	 * @return MTax
+	 */
+	public static MTax getCopy(Properties ctx, int C_Tax_ID, String trxName)
+	{
+<span class="nc" id="L135">		MTax tax = get(C_Tax_ID);</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">		if (tax != null)</span>
+<span class="nc" id="L137">			tax = new MTax(ctx, tax, trxName);</span>
+<span class="nc" id="L138">		return tax;</span>
+	}
+	
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param C_Tax_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MTax(Properties ctx, String C_Tax_UU, String trxName) {
+<span class="nc" id="L148">        super(ctx, C_Tax_UU, trxName);</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (Util.isEmpty(C_Tax_UU))</span>
+<span class="nc" id="L150">			setInitialDefaults();</span>
+<span class="nc" id="L151">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param C_Tax_ID id
+	 *	@param trxName transaction
+	 */
+	public MTax (Properties ctx, int C_Tax_ID, String trxName)
+	{
+<span class="nc" id="L161">		super (ctx, C_Tax_ID, trxName);</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">		if (C_Tax_ID == 0)</span>
+<span class="nc" id="L163">			setInitialDefaults();</span>
+<span class="nc" id="L164">	}	//	MTax</span>
+
+	/**
+	 * Set the initial defaults for a new record
+	 */
+	private void setInitialDefaults() {
+<span class="nc" id="L170">		setIsDefault (false);</span>
+<span class="nc" id="L171">		setIsDocumentLevel (true);</span>
+<span class="nc" id="L172">		setIsSummary (false);</span>
+<span class="nc" id="L173">		setIsTaxExempt (false);</span>
+<span class="nc" id="L174">		setRate (Env.ZERO);</span>
+<span class="nc" id="L175">		setRequiresTaxCertificate (false);</span>
+<span class="nc" id="L176">		setSOPOType (SOPOTYPE_Both);</span>
+<span class="nc" id="L177">		setValidFrom (TimeUtil.getDay(1990,1,1));</span>
+<span class="nc" id="L178">		setIsSalesTax(false);</span>
+<span class="nc" id="L179">	}</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MTax (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L189">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L190">	}	//	MTax</span>
+
+	/**
+	 * 	New record Constructor
+	 *	@param ctx
+	 *	@param Name
+	 *	@param Rate
+	 *	@param C_TaxCategory_ID
+	 *	@param trxName transaction
+	 */
+	public MTax (Properties ctx, String Name, BigDecimal Rate, int C_TaxCategory_ID, String trxName)
+	{
+<span class="nc" id="L202">		this (ctx, 0, trxName);</span>
+<span class="nc" id="L203">		setName (Name);</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">		setRate (Rate == null ? Env.ZERO : Rate);</span>
+<span class="nc" id="L205">		setC_TaxCategory_ID (C_TaxCategory_ID);	//	FK</span>
+<span class="nc" id="L206">	}	//	MTax</span>
+
+	/**
+	 * Copy constructor
+	 * @param copy
+	 */
+	public MTax(MTax copy) 
+	{
+<span class="nc" id="L214">		this(Env.getCtx(), copy);</span>
+<span class="nc" id="L215">	}</span>
+
+	/**
+	 * Copy constructor
+	 * @param ctx
+	 * @param copy
+	 */
+	public MTax(Properties ctx, MTax copy) 
+	{
+<span class="nc" id="L224">		this(ctx, copy, (String) null);</span>
+<span class="nc" id="L225">	}</span>
+
+	/**
+	 * Copy constructor
+	 * @param ctx
+	 * @param copy
+	 * @param trxName
+	 */
+	public MTax(Properties ctx, MTax copy, String trxName) 
+	{
+<span class="nc" id="L235">		this(ctx, 0, trxName);</span>
+<span class="nc" id="L236">		copyPO(copy);</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">		this.m_childTaxes = copy.m_childTaxes != null ? Arrays.stream(copy.m_childTaxes).map(e -&gt; {return new MTax(ctx, e, trxName);}).toArray(MTax[]::new) : null;</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">		this.m_postals = copy.m_postals != null ? Arrays.stream(copy.m_postals).map(e -&gt; {return new MTaxPostal(ctx, e, trxName);}).toArray(MTaxPostal[]::new) : null;</span>
+<span class="nc" id="L239">	}</span>
+
+
+	/**
+	 * 	Get Child Taxes
+	 * 	@param requery true to reload from DB
+	 *	@return array of taxes or null
+	 */
+	public MTax[] getChildTaxes (boolean requery)
+	{
+<span class="nc bnc" id="L249" title="All 2 branches missed.">		if (!isSummary())</span>
+<span class="nc" id="L250">			return null;</span>
+<span class="nc bnc" id="L251" title="All 4 branches missed.">		if (m_childTaxes != null &amp;&amp; !requery)</span>
+<span class="nc" id="L252">			return m_childTaxes;</span>
+		//
+<span class="nc" id="L254">		final String whereClause = COLUMNNAME_Parent_Tax_ID+&quot;=?&quot;;</span>
+<span class="nc" id="L255">		List&lt;MTax&gt; list = new Query(getCtx(), I_C_Tax.Table_Name, whereClause,  get_TrxName())</span>
+<span class="nc" id="L256">			.setParameters(getC_Tax_ID())</span>
+<span class="nc" id="L257">			.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L258">			.setClient_ID()</span>
+<span class="nc" id="L259">			.list();	</span>
+<span class="nc bnc" id="L260" title="All 4 branches missed.">		if (list.size() &gt; 0 &amp;&amp; is_Immutable())</span>
+<span class="nc" id="L261">			list.stream().forEach(e -&gt; e.markImmutable());</span>
+	 
+<span class="nc" id="L263">		m_childTaxes = new MTax[list.size ()];</span>
+<span class="nc" id="L264">		list.toArray (m_childTaxes);</span>
+<span class="nc" id="L265">		return m_childTaxes;</span>
+	}	//	getChildTaxes
+	
+	/**
+	 * Get Postal Qualifiers
+	 * @param requery true to reload from DB
+	 * @return array of MTaxPostal
+	 */
+	public MTaxPostal[] getPostals (boolean requery)
+	{
+<span class="nc bnc" id="L275" title="All 4 branches missed.">		if (m_postals != null &amp;&amp; !requery)</span>
+<span class="nc" id="L276">			return m_postals;</span>
+
+<span class="nc" id="L278">		final String whereClause = MTaxPostal.COLUMNNAME_C_Tax_ID+&quot;=?&quot;;</span>
+<span class="nc" id="L279">		List&lt;MTaxPostal&gt; list = new Query(getCtx(), I_C_TaxPostal.Table_Name, whereClause,  get_TrxName())</span>
+<span class="nc" id="L280">			.setParameters(getC_Tax_ID())</span>
+<span class="nc" id="L281">			.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L282">			.setOrderBy(I_C_TaxPostal.COLUMNNAME_Postal+&quot;, &quot;+I_C_TaxPostal.COLUMNNAME_Postal_To)</span>
+<span class="nc" id="L283">			.list();	</span>
+<span class="nc bnc" id="L284" title="All 4 branches missed.">		if (list.size() &gt; 0 &amp;&amp; is_Immutable())</span>
+<span class="nc" id="L285">			list.stream().forEach(e -&gt; e.markImmutable());</span>
+
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		if (list.size() &gt; 0) { </span>
+<span class="nc" id="L288">			m_postals = new MTaxPostal[list.size ()];</span>
+<span class="nc" id="L289">			list.toArray (m_postals);</span>
+		}
+<span class="nc" id="L291">		return m_postals;</span>
+	}	//	getPostals
+	
+	/**
+	 * Is this tax uses postal code criteria
+	 * @return true if uses postal code criteria
+	 */
+	public boolean isPostal()
+	{
+<span class="nc bnc" id="L300" title="All 2 branches missed.">		if (getPostals(false) == null)</span>
+<span class="nc" id="L301">			return false;</span>
+		
+<span class="nc bnc" id="L303" title="All 2 branches missed.">		return getPostals(false).length &gt; 0;</span>
+	}	//	isPostal
+	
+	/**
+	 * Is Zero Tax
+	 * @return true if tax rate is 0
+	 */
+	public boolean isZeroTax()
+	{
+<span class="nc bnc" id="L312" title="All 2 branches missed.">		return getRate().signum() == 0;</span>
+	}	//	isZeroTax
+	
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L318">		StringBuilder sb = new StringBuilder(&quot;MTax[&quot;)</span>
+<span class="nc" id="L319">			.append(get_ID())</span>
+<span class="nc" id="L320">			.append(&quot;, Name = &quot;).append(getName())</span>
+<span class="nc" id="L321">			.append(&quot;, SO/PO=&quot;).append(getSOPOType())</span>
+<span class="nc" id="L322">			.append(&quot;, Rate=&quot;).append(getRate())</span>
+<span class="nc" id="L323">			.append(&quot;, C_TaxCategory_ID=&quot;).append(getC_TaxCategory_ID())</span>
+<span class="nc" id="L324">			.append(&quot;, Summary=&quot;).append(isSummary())</span>
+<span class="nc" id="L325">			.append(&quot;, Parent=&quot;).append(getParent_Tax_ID())</span>
+<span class="nc" id="L326">			.append(&quot;, Country=&quot;).append(getC_Country_ID()).append(&quot;|&quot;).append(getTo_Country_ID())</span>
+<span class="nc" id="L327">			.append(&quot;, Region=&quot;).append(getC_Region_ID()).append(&quot;|&quot;).append(getTo_Region_ID())</span>
+<span class="nc" id="L328">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L329">		return sb.toString();</span>
+	}	//	toString
+
+	
+	/**
+	 * 	Calculate Tax Amount
+	 *	@param amount base amount to calculate tax amount
+	 *	@param taxIncluded if true tax amount is already included in the amount parameter and we need to extract tax amount from it.  
+	 *	@param scale rounding scale for tax amount 
+	 *	@return tax amount
+	 */
+	public BigDecimal calculateTax (BigDecimal amount, boolean taxIncluded, int scale)
+	{
+		//	Null Tax
+<span class="nc bnc" id="L343" title="All 2 branches missed.">		if (isZeroTax())</span>
+<span class="nc" id="L344">			return Env.ZERO;</span>
+
+		MTax[] taxarray;
+<span class="nc bnc" id="L347" title="All 2 branches missed.">		if (isSummary())</span>
+<span class="nc" id="L348">			taxarray = getChildTaxes(false);</span>
+		else
+<span class="nc" id="L350">			taxarray = new MTax[] {this};</span>
+
+<span class="nc" id="L352">		BigDecimal tax = Env.ZERO;		</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">		for (MTax taxc : taxarray) {</span>
+<span class="nc" id="L354">			BigDecimal multiplier = taxc.getRate().divide(Env.ONEHUNDRED, 12, RoundingMode.HALF_UP);		</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">			if (!taxIncluded)	//	$100 * 6 / 100 == $6 == $100 * 0.06</span>
+			{
+<span class="nc" id="L357">				BigDecimal itax = amount.multiply(multiplier).setScale(scale, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L358">				tax = tax.add(itax);</span>
+<span class="nc" id="L359">			}</span>
+			else			//	$106 - ($106 / (100+6)/100) == $6 == $106 - ($106/1.06)
+			{
+<span class="nc" id="L362">				multiplier = multiplier.add(Env.ONE);</span>
+<span class="nc" id="L363">				BigDecimal base = amount.divide(multiplier, 12, RoundingMode.HALF_UP); </span>
+<span class="nc" id="L364">				BigDecimal itax = amount.subtract(base).setScale(scale, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L365">				tax = tax.add(itax);</span>
+			}
+		}
+<span class="nc bnc" id="L368" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;calculateTax &quot; + amount </span>
+<span class="nc" id="L369">			+ &quot; (incl=&quot; + taxIncluded + &quot;,scale=&quot; + scale </span>
+<span class="nc" id="L370">			+ &quot;) = &quot; + tax + &quot; [&quot; + tax + &quot;]&quot;);</span>
+<span class="nc" id="L371">		return tax;</span>
+	}	//	calculateTax
+
+	@Override
+	protected boolean beforeSave(boolean newRecord) {
+<span class="nc bnc" id="L376" title="All 2 branches missed.">		if (isDefault()) {</span>
+			// Ensure that only one tax rate is set as Default for a tax category
+<span class="nc" id="L378">			String whereClause = MTax.COLUMNNAME_C_TaxCategory_ID+&quot;=? AND &quot; + </span>
+								 MTax.COLUMNNAME_C_Tax_ID+&quot;&lt;&gt;? AND &quot;+
+								 &quot;IsDefault='Y'&quot;;
+<span class="nc" id="L381">			List&lt;MTax&gt; list = new Query(getCtx(), I_C_Tax.Table_Name, whereClause,  get_TrxName())</span>
+<span class="nc" id="L382">				.setParameters(getC_TaxCategory_ID(), getC_Tax_ID())</span>
+<span class="nc" id="L383">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L384">				.list();</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">			if (list.size() &gt;= 1) {</span>
+<span class="nc" id="L386">				log.saveError(&quot;Error&quot;, Msg.parseTranslation(getCtx(), Msg.getMsg(Env.getCtx(),&quot;OnlyOneTaxPerCategoryMarkedDefault&quot;)));</span>
+<span class="nc" id="L387">				return false;</span>
+			}
+		}
+		// Ensure parent tax id is zero for summary tax
+<span class="nc bnc" id="L391" title="All 2 branches missed.">		if (isSummary()) {</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">			if (getParent_Tax_ID() &gt; 0) {</span>
+<span class="nc" id="L393">				setParent_Tax_ID(0);</span>
+			}
+		}
+<span class="nc" id="L396">		return super.beforeSave(newRecord);</span>
+	}
+	
+	@Override
+	protected boolean afterSave (boolean newRecord, boolean success)
+	{
+		// Create accounting record
+<span class="nc bnc" id="L403" title="All 4 branches missed.">		if (newRecord &amp;&amp; success)</span>
+<span class="nc" id="L404">			insert_Accounting(&quot;C_Tax_Acct&quot;, &quot;C_AcctSchema_Default&quot;, null);</span>
+
+<span class="nc" id="L406">		return success;</span>
+	}	//	afterSave
+
+	@Override
+	public MTax markImmutable() {
+<span class="nc bnc" id="L411" title="All 2 branches missed.">		if (is_Immutable()) </span>
+<span class="nc" id="L412">			return this;</span>
+		
+<span class="nc" id="L414">		makeImmutable();</span>
+<span class="nc bnc" id="L415" title="All 4 branches missed.">		if (m_childTaxes != null &amp;&amp; m_childTaxes.length &gt; 0)</span>
+<span class="nc" id="L416">			Arrays.stream(m_childTaxes).forEach(e -&gt; e.markImmutable());</span>
+<span class="nc bnc" id="L417" title="All 4 branches missed.">		if (m_postals != null &amp;&amp; m_postals.length &gt; 0)</span>
+<span class="nc" id="L418">			Arrays.stream(m_postals).forEach(e -&gt; e.markImmutable());</span>
+		
+<span class="nc" id="L420">		return this;</span>
+	}
+	
+	/**
+	 * @return 
+	 * - true if tax is posted to the product asset account and added to product cost (non deductible input tax).&lt;br/&gt; 
+	 * - false if tax is posted to a separate GL account from product asset account (deductible input tax).
+	 */
+	public boolean isDistributeTaxWithLineItem()
+	{
+<span class="nc" id="L430">		return TAXPOSTINGINDICATOR_DistributeTaxWithRelevantExpense.equals(getTaxPostingIndicator());</span>
+	}
+}	//	MTax
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

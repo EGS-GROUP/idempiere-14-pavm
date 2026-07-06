@@ -1,0 +1,359 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Incremental2PackActivator.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.plugin.utils</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.plugin.utils</a> &gt; <span class="el_source">Incremental2PackActivator.java</span></div><h1>Incremental2PackActivator.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2013 Heng Sin Low                                            *
+ * Copyright (C) 2013 Trek Global                 							  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.plugin.utils;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+import java.util.stream.Collectors;
+
+import org.adempiere.base.event.EventManager;
+import org.adempiere.base.event.IEventTopics;
+import org.adempiere.util.ServerContext;
+import org.compiere.Adempiere;
+import org.compiere.model.MPackageImp;
+import org.compiere.model.MSession;
+import org.compiere.model.Query;
+import org.compiere.model.ServerStateChangeEvent;
+import org.compiere.model.ServerStateChangeListener;
+import org.compiere.model.X_AD_Package_Imp;
+import org.compiere.util.AdempiereSystemError;
+import org.compiere.util.CLogger;
+import org.compiere.util.CacheMgt;
+import org.compiere.util.Env;
+import org.compiere.util.Trx;
+import org.osgi.framework.BundleContext;
+import org.osgi.service.event.Event;
+
+/**
+ * 
+ * @author hengsin
+ *
+ */
+<span class="nc" id="L52">public class Incremental2PackActivator extends AbstractActivator {</span>
+
+<span class="nc" id="L54">	protected final static CLogger logger = CLogger.getCLogger(Incremental2PackActivator.class.getName());</span>
+
+	public String getName() {
+<span class="nc" id="L57">		return context.getBundle().getSymbolicName();</span>
+	}
+
+	@Override
+	public String getVersion() {
+<span class="nc" id="L62">		String version = (String) context.getBundle().getHeaders().get(&quot;Bundle-Version&quot;);</span>
+		// e.g. 1.0.0.qualifier, check only the &quot;1.0.0&quot; part
+<span class="nc" id="L64">		String[] components = version.split(&quot;[.]&quot;);</span>
+<span class="nc" id="L65">		StringBuilder versionBuilder = new StringBuilder(components[0]);</span>
+<span class="nc bnc" id="L66" title="All 2 branches missed.">		if (components.length &gt;= 3) {</span>
+<span class="nc" id="L67">			versionBuilder.append(&quot;.&quot;).append(components[1]).append(&quot;.&quot;).append(components[2]);</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">		} else if (components.length == 2) {</span>
+<span class="nc" id="L69">			versionBuilder.append(&quot;.&quot;).append(components[1]).append(&quot;.0&quot;);</span>
+<span class="nc" id="L70">		} else {</span>
+<span class="nc" id="L71">			versionBuilder.append(&quot;.0.0&quot;);</span>
+		}
+<span class="nc" id="L73">		return versionBuilder.toString();</span>
+	}
+
+	public String getDescription() {
+<span class="nc" id="L77">		return getName();</span>
+	}
+
+	private void installPackage() {
+<span class="nc" id="L81">		String where = &quot;Name=? AND PK_Status = ?&quot;;</span>
+<span class="nc" id="L82">		Query q = new Query(Env.getCtx(), X_AD_Package_Imp.Table_Name,</span>
+<span class="nc" id="L83">				where.toString(), null);</span>
+<span class="nc" id="L84">		q.setParameters(new Object[] { getName(), MPackageImp.PACKAGE_STATUS_COMPLETED });</span>
+<span class="nc" id="L85">		List&lt;X_AD_Package_Imp&gt; pkgs = q.list();</span>
+<span class="nc" id="L86">		List&lt;String&gt; installedVersions = new ArrayList&lt;String&gt;();</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">		if (pkgs != null &amp;&amp; !pkgs.isEmpty()) {</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">			for(X_AD_Package_Imp pkg : pkgs) {</span>
+<span class="nc" id="L89">				String packageVersionPart = pkg.getPK_Version();</span>
+<span class="nc" id="L90">				String[] part = packageVersionPart.split(&quot;[.]&quot;);</span>
+<span class="nc bnc" id="L91" title="All 6 branches missed.">				if (part.length &gt; 3 &amp;&amp; (packageVersionPart.indexOf(&quot;.v&quot;) &gt; 0 || packageVersionPart.indexOf(&quot;.qualifier&quot;) &gt; 0)) {</span>
+<span class="nc" id="L92">					packageVersionPart = part[0]+&quot;.&quot;+part[1]+&quot;.&quot;+part[2];</span>
+				}
+<span class="nc" id="L94">				installedVersions.add(packageVersionPart);				</span>
+			}
+		}
+<span class="nc" id="L97">		packIn(installedVersions);</span>
+<span class="nc" id="L98">		afterPackIn();</span>
+<span class="nc" id="L99">	}</span>
+	
+	private static class TwoPackEntry {
+		private URL url;
+		private String version;
+<span class="nc" id="L104">		private TwoPackEntry(URL url, String version) {</span>
+<span class="nc" id="L105">			this.url=url;</span>
+<span class="nc" id="L106">			this.version = version;</span>
+<span class="nc" id="L107">		}</span>
+		@Override
+		public String toString() {
+<span class="nc" id="L110">			return &quot;TwoPackEntry [url=&quot; + url + &quot;, version=&quot; + version + &quot;]&quot;;</span>
+		}		
+	}
+	
+	protected void packIn(List&lt;String&gt; installedVersions) {
+<span class="nc" id="L115">		List&lt;TwoPackEntry&gt; list = new ArrayList&lt;TwoPackEntry&gt;();</span>
+				
+		//2Pack_1.0.0.zip, 2Pack_1.0.1.zip, etc
+<span class="nc" id="L118">		Enumeration&lt;URL&gt; urls = context.getBundle().findEntries(&quot;/META-INF&quot;, &quot;2Pack_*.zip&quot;, false);</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">		if (urls == null)</span>
+<span class="nc" id="L120">			return;</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">		while(urls.hasMoreElements()) {</span>
+<span class="nc" id="L122">			URL u = urls.nextElement();</span>
+<span class="nc" id="L123">			String version = extractVersionString(u);</span>
+<span class="nc" id="L124">			list.add(new TwoPackEntry(u, version));</span>
+		}
+		
+<span class="nc" id="L127">		X_AD_Package_Imp firstImp = new Query(Env.getCtx(), X_AD_Package_Imp.Table_Name, &quot;Name=? AND PK_Version=? AND PK_Status=?&quot;, null)</span>
+<span class="nc" id="L128">				.setParameters(getName(), &quot;0.0.0&quot;, MPackageImp.PACKAGE_STATUS_COMPLETED)</span>
+<span class="nc" id="L129">				.setClient_ID()</span>
+<span class="nc" id="L130">				.first();</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">		if (firstImp == null) {</span>
+<span class="nc" id="L132">			Trx trx = Trx.get(Trx.createTrxName(), true);</span>
+<span class="nc" id="L133">			trx.setDisplayName(getClass().getName()+&quot;_packIn&quot;);</span>
+			try {
+<span class="nc" id="L135">				Env.getCtx().put(Env.AD_CLIENT_ID, 0);</span>
+				
+<span class="nc" id="L137">				firstImp = new X_AD_Package_Imp(Env.getCtx(), 0, trx.getTrxName());</span>
+<span class="nc" id="L138">				firstImp.setName(getName());</span>
+<span class="nc" id="L139">				firstImp.setPK_Version(&quot;0.0.0&quot;);</span>
+<span class="nc" id="L140">				firstImp.setPK_Status(MPackageImp.PACKAGE_STATUS_COMPLETED);</span>
+<span class="nc" id="L141">				firstImp.setProcessed(true);</span>
+<span class="nc" id="L142">				firstImp.saveEx();</span>
+				
+<span class="nc bnc" id="L144" title="All 4 branches missed.">				if (list.size() &gt; 0 &amp;&amp; installedVersions.size() &gt; 0) {</span>
+<span class="nc" id="L145">					List&lt;TwoPackEntry&gt; newList = new ArrayList&lt;TwoPackEntry&gt;();</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">					for(TwoPackEntry entry : list) {</span>
+<span class="nc" id="L147">						boolean patch = false;</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">						for(String v : installedVersions) {</span>
+<span class="nc" id="L149">							Version v1 = new Version(entry.version);</span>
+<span class="nc" id="L150">							Version v2 = new Version(v);</span>
+<span class="nc" id="L151">							int c = v2.compareTo(v1);</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">							if (c == 0) {</span>
+<span class="nc" id="L153">								patch = false;</span>
+<span class="nc" id="L154">								break;</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">							} else if (c &gt; 0) {</span>
+<span class="nc" id="L156">								patch = true;</span>
+							}
+						}
+<span class="nc bnc" id="L159" title="All 2 branches missed.">						if (patch) {</span>
+<span class="nc" id="L160">							logger.log(Level.WARNING, &quot;Patch Meta Data for &quot; + getName() + &quot; &quot; + entry.version + &quot; ...&quot;);</span>
+							
+<span class="nc" id="L162">							X_AD_Package_Imp pi = new X_AD_Package_Imp(Env.getCtx(), 0, trx.getTrxName());</span>
+<span class="nc" id="L163">							pi.setName(getName());</span>
+<span class="nc" id="L164">							pi.setPK_Version(entry.version);</span>
+<span class="nc" id="L165">							pi.setPK_Status(MPackageImp.PACKAGE_STATUS_COMPLETED);</span>
+<span class="nc" id="L166">							pi.setProcessed(true);</span>
+<span class="nc" id="L167">							pi.saveEx();</span>
+													
+<span class="nc" id="L169">						} else {</span>
+<span class="nc" id="L170">							newList.add(entry);</span>
+						}
+					}
+<span class="nc" id="L173">					list = newList;</span>
+				}
+<span class="nc" id="L175">				trx.commit(true);</span>
+<span class="nc" id="L176">			} catch (Exception e) {</span>
+<span class="nc" id="L177">				trx.rollback();</span>
+<span class="nc" id="L178">				logger.log(Level.WARNING, e.getLocalizedMessage(), e);</span>
+			} finally {
+<span class="nc" id="L180">				trx.close();</span>
+			}
+		}
+		try {
+<span class="nc" id="L184">			Collections.sort(list, new Comparator&lt;TwoPackEntry&gt;() {</span>
+				@Override
+				public int compare(TwoPackEntry o1, TwoPackEntry o2) {
+<span class="nc" id="L187">					return new Version(o1.version).compareTo(new Version(o2.version));</span>
+				}
+			});		
+<span class="nc" id="L190">		} catch (Exception e) {</span>
+<span class="nc" id="L191">			logger.log(Level.WARNING, &quot;Exception sorting 2packs on &quot; + getName(), e);</span>
+<span class="nc" id="L192">			return;</span>
+		}
+
+<span class="nc" id="L195">		boolean success = true;</span>
+<span class="nc" id="L196">		boolean cacheReset = false;</span>
+
+<span class="nc bnc" id="L198" title="All 2 branches missed.">		if (!list.isEmpty()) {</span>
+<span class="nc" id="L199">			String csv = list.stream().map(e -&gt; e.url.toString()).collect(Collectors.joining(&quot;,&quot;));</span>
+<span class="nc" id="L200">			Event event = EventManager.newEvent(IEventTopics.PRE_INCREMENTAL_PACK_IN, </span>
+<span class="nc" id="L201">				new String[] {getName(), csv}, true);</span>
+<span class="nc" id="L202">			EventManager.getInstance().sendEvent(event);</span>
+		}
+		
+		try {
+<span class="nc bnc" id="L206" title="All 2 branches missed.">			if (getDBLock()) {</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">				for(TwoPackEntry entry : list) {</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">					if (!installedVersions.contains(entry.version)) {</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">						if (packIn(entry.url))</span>
+<span class="nc" id="L210">							cacheReset = true;</span>
+						else {
+<span class="nc" id="L212">							success = false;</span>
+<span class="nc" id="L213">							break; // stop processing further packages if one fail							</span>
+						}
+					}
+				}
+<span class="nc" id="L217">			} else {</span>
+<span class="nc" id="L218">				logger.log(Level.WARNING, &quot;Could not acquire the DB lock to install:&quot; + getName());</span>
+			}
+<span class="nc" id="L220">		} catch (AdempiereSystemError e) {</span>
+<span class="nc" id="L221">			e.printStackTrace();</span>
+		} finally {
+<span class="nc" id="L223">			releaseLock();</span>
+		}
+
+<span class="nc bnc" id="L226" title="All 2 branches missed.">		if (!list.isEmpty()) {</span>
+<span class="nc" id="L227">			Event event = EventManager.newEvent(IEventTopics.POST_INCREMENTAL_PACK_IN, new Object[] {getName(), success}, true);</span>
+<span class="nc" id="L228">			EventManager.getInstance().postEvent(event);</span>
+		}
+
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		if (logger.isLoggable(Level.INFO))</span>
+<span class="nc" id="L232">			logger.log(Level.INFO, &quot;Cache Reset: &quot; + cacheReset);</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">		if (cacheReset)</span>
+<span class="nc" id="L234">			CacheMgt.get().reset();</span>
+<span class="nc" id="L235">	}</span>
+
+	private String extractVersionString(URL u) {
+<span class="nc" id="L238">		String p = u.getPath();</span>
+<span class="nc" id="L239">		int upos=p.lastIndexOf(&quot;2Pack_&quot;);</span>
+<span class="nc" id="L240">		int dpos=p.lastIndexOf(&quot;.&quot;);</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">		if (p.indexOf(&quot;_&quot;) != p.lastIndexOf(&quot;_&quot;))</span>
+<span class="nc" id="L242">			dpos=p.lastIndexOf(&quot;_&quot;);</span>
+<span class="nc" id="L243">		String v = p.substring(upos+&quot;2Pack_&quot;.length(), dpos);</span>
+<span class="nc" id="L244">		return v;</span>
+	}
+
+	protected boolean packIn(URL packout) {
+<span class="nc bnc" id="L248" title="All 4 branches missed.">		if (packout != null &amp;&amp; service != null) {</span>
+<span class="nc" id="L249">			MSession localSession = null;</span>
+			//Create Session to be able to create records in AD_ChangeLog
+<span class="nc bnc" id="L251" title="All 2 branches missed.">			if (Env.getContextAsInt(Env.getCtx(), Env.AD_SESSION_ID) &lt;= 0) {</span>
+<span class="nc" id="L252">				localSession = MSession.get(Env.getCtx());</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">				if(localSession == null) {</span>
+<span class="nc" id="L254">					localSession = MSession.create(Env.getCtx());</span>
+<span class="nc" id="L255">				} else {</span>
+<span class="nc" id="L256">					localSession = new MSession(Env.getCtx(), localSession.getAD_Session_ID(), null);</span>
+				}
+<span class="nc" id="L258">				localSession.setWebSession(&quot;Incremental2PackActivator&quot;);</span>
+<span class="nc" id="L259">				localSession.saveEx();</span>
+			}
+<span class="nc" id="L261">			String path = packout.getPath();</span>
+<span class="nc" id="L262">			String suffix = &quot;_&quot;+path.substring(path.lastIndexOf(&quot;2Pack_&quot;));</span>
+<span class="nc" id="L263">			logger.log(Level.WARNING, &quot;Installing &quot; + getName() + &quot; &quot; + path + &quot; ...&quot;);</span>
+<span class="nc" id="L264">			FileOutputStream zipstream = null;</span>
+<span class="nc" id="L265">			InputStream stream = null;</span>
+			try {
+				// copy the resource to a temporary file to process it with 2pack
+<span class="nc" id="L268">				stream = packout.openStream();</span>
+<span class="nc" id="L269">				File zipfile = File.createTempFile(getName()+&quot;_&quot;, suffix);</span>
+<span class="nc" id="L270">				zipstream = new FileOutputStream(zipfile);</span>
+<span class="nc" id="L271">			    byte[] buffer = new byte[1024];</span>
+			    int read;
+<span class="nc bnc" id="L273" title="All 2 branches missed.">			    while((read = stream.read(buffer)) != -1){</span>
+<span class="nc" id="L274">			    	zipstream.write(buffer, 0, read);</span>
+			    }
+			    // call 2pack
+<span class="nc bnc" id="L277" title="All 2 branches missed.">				if (!merge(zipfile, extractVersionString(packout)))</span>
+<span class="nc" id="L278">					return false;</span>
+<span class="nc" id="L279">			} catch (Throwable e) {</span>
+<span class="nc" id="L280">				logger.log(Level.WARNING, &quot;Pack in failed.&quot;, e);</span>
+<span class="nc" id="L281">				return false;</span>
+			} finally{
+<span class="nc bnc" id="L283" title="All 2 branches missed.">				if (zipstream != null) {</span>
+					try {
+<span class="nc" id="L285">						zipstream.close();</span>
+<span class="nc" id="L286">					} catch (Exception e2) {}</span>
+				}
+<span class="nc bnc" id="L288" title="All 2 branches missed.">				if (stream != null) {</span>
+					try {
+<span class="nc" id="L290">						stream.close();</span>
+<span class="nc" id="L291">					} catch (Exception e2) {}</span>
+				}
+<span class="nc bnc" id="L293" title="All 2 branches missed.">				if (localSession != null)</span>
+<span class="nc" id="L294">					localSession.logout();</span>
+			}
+<span class="nc" id="L296">			logger.log(Level.WARNING, getName() + &quot; &quot; + packout.getPath() + &quot; installed&quot;);</span>
+		} 
+<span class="nc" id="L298">		return true;</span>
+	}
+
+	protected BundleContext getContext() {
+<span class="nc" id="L302">		return context;</span>
+	}
+
+	protected void setContext(BundleContext context) {
+<span class="nc" id="L306">		this.context = context;</span>
+<span class="nc" id="L307">	}</span>
+
+	protected void afterPackIn() {
+<span class="nc" id="L310">	};</span>
+
+	protected void setupPackInContext() {
+<span class="nc" id="L313">		Properties serverContext = new Properties();</span>
+<span class="nc" id="L314">		serverContext.setProperty(Env.AD_CLIENT_ID, &quot;0&quot;);</span>
+<span class="nc" id="L315">		ServerContext.setCurrentInstance(serverContext);</span>
+<span class="nc" id="L316">	};</span>
+
+	@Override
+	protected void frameworkStarted() {
+<span class="nc bnc" id="L320" title="All 2 branches missed.">		if (service != null) {</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">			if (Adempiere.isStarted()) {</span>
+<span class="nc" id="L322">				Adempiere.getThreadPoolExecutor().execute(new Runnable() {			</span>
+					@Override
+					public void run() {
+<span class="nc" id="L325">						ClassLoader cl = Thread.currentThread().getContextClassLoader();</span>
+						try {
+<span class="nc" id="L327">							Thread.currentThread().setContextClassLoader(Incremental2PackActivator.class.getClassLoader());</span>
+<span class="nc" id="L328">							setupPackInContext();</span>
+<span class="nc" id="L329">							installPackage();</span>
+<span class="nc" id="L330">						} finally {</span>
+<span class="nc" id="L331">							ServerContext.dispose();</span>
+<span class="nc" id="L332">							service = null;</span>
+<span class="nc" id="L333">							Thread.currentThread().setContextClassLoader(cl);</span>
+						}
+<span class="nc" id="L335">					}</span>
+				});
+<span class="nc" id="L337">			} else {</span>
+<span class="nc" id="L338">				Adempiere.addServerStateChangeListener(new ServerStateChangeListener() {				</span>
+					@Override
+					public void stateChange(ServerStateChangeEvent event) {
+<span class="nc bnc" id="L341" title="All 4 branches missed.">						if (event.getEventType() == ServerStateChangeEvent.SERVER_START &amp;&amp; service != null) {</span>
+<span class="nc" id="L342">							ClassLoader cl = Thread.currentThread().getContextClassLoader();</span>
+							try {
+<span class="nc" id="L344">								Thread.currentThread().setContextClassLoader(Incremental2PackActivator.class.getClassLoader());</span>
+<span class="nc" id="L345">								setupPackInContext();</span>
+<span class="nc" id="L346">								installPackage();</span>
+<span class="nc" id="L347">							} finally {</span>
+<span class="nc" id="L348">								ServerContext.dispose();</span>
+<span class="nc" id="L349">								service = null;</span>
+<span class="nc" id="L350">								Thread.currentThread().setContextClassLoader(cl);</span>
+							}
+						}					
+<span class="nc" id="L353">					}</span>
+				});
+			}
+		}
+<span class="nc" id="L357">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>LoginServlet.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.web</a> &gt; <span class="el_source">LoginServlet.java</span></div><h1>LoginServlet.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - hengsin                         								   *
+ **********************************************************************/
+package org.compiere.web;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+
+import org.adempiere.util.LogAuthFailure;
+import org.compiere.model.MUser;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+
+/**
+ * Login Servlet for iDempiere Monitor
+ * Handles form-based authentication with CSRF protection and rate limiting
+ * 
+ * @author iDempiere Community
+ */
+<span class="nc" id="L51">public class LoginServlet extends HttpServlet {</span>
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -6773644128475237855L;
+
+	/** Logger */
+<span class="nc" id="L58">	private static final CLogger log = CLogger.getCLogger(LoginServlet.class);</span>
+	
+	/** Session attribute for authenticated user */
+	public static final String AUTHENTICATED_USER = &quot;AuthenticatedUser&quot;;
+	
+	/** Session attribute for authentication timestamp */
+	public static final String AUTH_TIMESTAMP = &quot;AuthTimestamp&quot;;
+	
+	/** Rate limiting: track failed login attempts per IP */
+<span class="nc" id="L67">	private static final Map&lt;String, LoginAttempt&gt; loginAttempts = new ConcurrentHashMap&lt;&gt;();</span>
+	
+	/** Maximum failed login attempts before temporary lockout */
+	private static final int MAX_FAILED_ATTEMPTS = 5;
+	
+	/** Lockout duration in milliseconds (5 minutes) */
+	private static final long LOCKOUT_DURATION = 5 * 60 * 1000;
+
+	/** Logger for authentication failures */
+<span class="nc" id="L76">	private static LogAuthFailure logAuthFailure = new LogAuthFailure();</span>
+
+	/**
+	 * Handle GET requests - redirect to login page
+	 */
+	@Override
+	protected void doGet(HttpServletRequest request, HttpServletResponse response) 
+			throws ServletException, IOException {
+<span class="nc" id="L84">		String returnUrl = request.getParameter(&quot;returnUrl&quot;);</span>
+<span class="nc bnc" id="L85" title="All 4 branches missed.">		if (returnUrl != null &amp;&amp; !returnUrl.isEmpty()) {</span>
+<span class="nc" id="L86">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor/login.jsp?returnUrl=&quot; + </span>
+<span class="nc" id="L87">					java.net.URLEncoder.encode(returnUrl, &quot;UTF-8&quot;));</span>
+<span class="nc" id="L88">		} else {</span>
+<span class="nc" id="L89">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor/login.jsp&quot;);</span>
+		}
+<span class="nc" id="L91">	}</span>
+	
+	/**
+	 * Handle POST requests - process login
+	 */
+	@Override
+	protected void doPost(HttpServletRequest request, HttpServletResponse response) 
+			throws ServletException, IOException {
+		
+<span class="nc" id="L100">		String clientIP = getClientIP(request);</span>
+		
+		// Check rate limiting
+<span class="nc bnc" id="L103" title="All 2 branches missed.">		if (isLockedOut(clientIP)) {</span>
+<span class="nc" id="L104">			log.warning(&quot;Login attempt from locked out IP: &quot; + clientIP);</span>
+<span class="nc" id="L105">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor/login.jsp?error=locked&quot;);</span>
+<span class="nc" id="L106">			return;</span>
+		}
+		
+		// Validate CSRF token
+<span class="nc" id="L110">		String csrfToken = request.getParameter(&quot;csrfToken&quot;);</span>
+<span class="nc" id="L111">		HttpSession session = request.getSession(false);</span>
+		
+<span class="nc bnc" id="L113" title="All 4 branches missed.">		if (session == null || csrfToken == null || </span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">				!csrfToken.equals(session.getAttribute(&quot;CSRF_TOKEN&quot;))) {</span>
+<span class="nc" id="L115">			log.warning(&quot;CSRF token validation failed from IP: &quot; + clientIP);</span>
+<span class="nc" id="L116">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor/login.jsp?error=invalid&quot;);</span>
+<span class="nc" id="L117">			return;</span>
+		}
+		
+		// Remove CSRF token after use (one-time token)
+<span class="nc" id="L121">		session.removeAttribute(&quot;CSRF_TOKEN&quot;);</span>
+		
+		// Get credentials
+<span class="nc" id="L124">		String username = request.getParameter(&quot;username&quot;);</span>
+<span class="nc" id="L125">		String password = request.getParameter(&quot;password&quot;);</span>
+<span class="nc" id="L126">		String returnUrl = request.getParameter(&quot;returnUrl&quot;);</span>
+		
+<span class="nc bnc" id="L128" title="All 4 branches missed.">		if (username == null || password == null || </span>
+<span class="nc bnc" id="L129" title="All 4 branches missed.">				username.trim().isEmpty() || password.trim().isEmpty()) {</span>
+<span class="nc" id="L130">			log.warning(&quot;Empty credentials from IP: &quot; + clientIP);</span>
+<span class="nc" id="L131">			recordFailedAttempt(clientIP);</span>
+<span class="nc" id="L132">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor/login.jsp?error=invalid&quot;);</span>
+<span class="nc" id="L133">			return;</span>
+		}
+		
+		// Validate user credentials
+<span class="nc" id="L137">		MUser user = null;</span>
+		try {
+<span class="nc" id="L139">			user = MUser.get(Env.getCtx(), username, password, false);</span>
+<span class="nc" id="L140">		} catch (Exception e) {</span>
+<span class="nc" id="L141">			log.log(Level.SEVERE, &quot;Error validating user: &quot; + username, e);</span>
+		}
+		
+<span class="nc bnc" id="L144" title="All 2 branches missed.">		if (user == null) {</span>
+<span class="nc" id="L145">			log.warning(&quot;Invalid login attempt for user: &quot; + username + &quot; from IP: &quot; + clientIP);</span>
+<span class="nc" id="L146">			recordFailedAttempt(clientIP);</span>
+<span class="nc" id="L147">			logAuthFailure.log(clientIP, &quot;/idempiereMonitor&quot;, username, &quot;Invalid login attempt&quot;);</span>
+<span class="nc" id="L148">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor/login.jsp?error=invalid&quot;);</span>
+<span class="nc" id="L149">			return;</span>
+		}
+		
+		// Check if user has access to monitor
+<span class="nc bnc" id="L153" title="All 4 branches missed.">		if (!user.isAdministrator() &amp;&amp; !user.hasURLFormAccess(&quot;/idempiereMonitor&quot;)) {</span>
+<span class="nc" id="L154">			log.warning(&quot;User &quot; + username + &quot; attempted to access monitor without permission from IP: &quot; + clientIP);</span>
+<span class="nc" id="L155">			recordFailedAttempt(clientIP);</span>
+<span class="nc" id="L156">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor/login.jsp?error=access&quot;);</span>
+<span class="nc" id="L157">			return;</span>
+		}
+		
+		// Authentication successful - clear failed attempts
+<span class="nc" id="L161">		loginAttempts.remove(clientIP);</span>
+		
+		// Create new session to prevent session fixation attacks
+<span class="nc" id="L164">		session.invalidate();</span>
+<span class="nc" id="L165">		session = request.getSession(true);</span>
+		
+		// Set secure session attributes
+<span class="nc" id="L168">		session.setAttribute(AUTHENTICATED_USER, username);</span>
+<span class="nc" id="L169">		session.setAttribute(AUTH_TIMESTAMP, System.currentTimeMillis());</span>
+		
+		// Set session timeout (15 minutes)
+<span class="nc" id="L172">		session.setMaxInactiveInterval(15 * 60);</span>
+		
+<span class="nc" id="L174">		log.info(&quot;Successful login for user: &quot; + username + &quot; from IP: &quot; + clientIP);</span>
+		
+		// Redirect to original URL or default monitor page
+<span class="nc bnc" id="L177" title="All 6 branches missed.">		if (returnUrl != null &amp;&amp; !returnUrl.isEmpty() &amp;&amp; isValidReturnUrl(returnUrl)) {</span>
+<span class="nc" id="L178">			response.sendRedirect(returnUrl);</span>
+<span class="nc" id="L179">		} else {</span>
+<span class="nc" id="L180">			response.sendRedirect(request.getContextPath() + &quot;/idempiereMonitor&quot;);</span>
+		}
+<span class="nc" id="L182">	}</span>
+	
+	/**
+	 * Get client IP address, considering proxy headers
+	 */
+	private String getClientIP(HttpServletRequest request) {
+<span class="nc" id="L188">		String ip = request.getHeader(&quot;X-Forwarded-For&quot;);</span>
+<span class="nc bnc" id="L189" title="All 6 branches missed.">		if (ip == null || ip.isEmpty() || &quot;unknown&quot;.equalsIgnoreCase(ip)) {</span>
+<span class="nc" id="L190">			ip = request.getHeader(&quot;X-Real-IP&quot;);</span>
+		}
+<span class="nc bnc" id="L192" title="All 6 branches missed.">		if (ip == null || ip.isEmpty() || &quot;unknown&quot;.equalsIgnoreCase(ip)) {</span>
+<span class="nc" id="L193">			ip = request.getRemoteAddr();</span>
+		}
+		// If multiple IPs in X-Forwarded-For, take the first one
+<span class="nc bnc" id="L196" title="All 4 branches missed.">		if (ip != null &amp;&amp; ip.contains(&quot;,&quot;)) {</span>
+<span class="nc" id="L197">			ip = ip.split(&quot;,&quot;)[0].trim();</span>
+		}
+<span class="nc" id="L199">		return ip;</span>
+	}
+	
+	/**
+	 * Check if IP is currently locked out
+	 */
+	private boolean isLockedOut(String ip) {
+<span class="nc" id="L206">		LoginAttempt attempt = loginAttempts.get(ip);</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">		if (attempt == null) {</span>
+<span class="nc" id="L208">			return false;</span>
+		}
+		
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if (attempt.failedAttempts.get() &gt;= MAX_FAILED_ATTEMPTS) {</span>
+<span class="nc" id="L212">			long timeSinceLockout = System.currentTimeMillis() - attempt.lastAttemptTime.get();</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">			if (timeSinceLockout &lt; LOCKOUT_DURATION) {</span>
+<span class="nc" id="L214">				return true;</span>
+			} else {
+				// Lockout period expired, reset
+<span class="nc" id="L217">				loginAttempts.remove(ip);</span>
+<span class="nc" id="L218">				return false;</span>
+			}
+		}
+<span class="nc" id="L221">		return false;</span>
+	}
+	
+	/**
+	 * Record a failed login attempt
+	 */
+	private void recordFailedAttempt(String ip) {
+<span class="nc" id="L228">		LoginAttempt attempt = loginAttempts.computeIfAbsent(ip, k -&gt; new LoginAttempt());</span>
+<span class="nc" id="L229">		attempt.failedAttempts.incrementAndGet();</span>
+<span class="nc" id="L230">		attempt.lastAttemptTime.set(System.currentTimeMillis());</span>
+		
+<span class="nc bnc" id="L232" title="All 2 branches missed.">		if (attempt.failedAttempts.get() &gt;= MAX_FAILED_ATTEMPTS) {</span>
+<span class="nc" id="L233">			log.warning(&quot;IP &quot; + ip + &quot; has been locked out after &quot; + MAX_FAILED_ATTEMPTS + &quot; failed attempts&quot;);</span>
+		}
+<span class="nc" id="L235">	}</span>
+	
+	/**
+	 * Validate return URL to prevent open redirect vulnerabilities
+	 */
+	private boolean isValidReturnUrl(String returnUrl) {
+<span class="nc bnc" id="L241" title="All 4 branches missed.">		if (returnUrl == null || returnUrl.isEmpty()) {</span>
+<span class="nc" id="L242">			return false;</span>
+		}
+		// Only allow relative URLs within the same application
+<span class="nc bnc" id="L245" title="All 4 branches missed.">		return returnUrl.startsWith(&quot;/&quot;) &amp;&amp; !returnUrl.startsWith(&quot;//&quot;);</span>
+	}
+	
+	/**
+	 * Inner class to track login attempts
+	 */
+<span class="nc" id="L251">	private static class LoginAttempt {</span>
+<span class="nc" id="L252">		AtomicInteger failedAttempts = new AtomicInteger(0);</span>
+<span class="nc" id="L253">		AtomicLong lastAttemptTime = new AtomicLong(0);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

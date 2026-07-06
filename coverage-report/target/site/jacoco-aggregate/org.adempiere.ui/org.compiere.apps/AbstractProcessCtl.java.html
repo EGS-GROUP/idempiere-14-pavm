@@ -1,0 +1,381 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AbstractProcessCtl.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.apps</a> &gt; <span class="el_source">AbstractProcessCtl.java</span></div><h1>AbstractProcessCtl.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.apps;
+
+import java.util.logging.Level;
+
+import org.adempiere.util.IProcessUI;
+import org.adempiere.util.ProcessUtil;
+import org.compiere.model.MPInstance;
+import org.compiere.model.MPInstance.PInstanceInfo;
+import org.compiere.model.MRule;
+import org.compiere.print.ReportCtl;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.ProcessInfoUtil;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.Ini;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.compiere.wf.MWFProcess;
+
+/**
+ *	Process Controller Interface.
+ *
+ *  @author 	Jorg Janke
+ *  @version 	$Id: ProcessCtl.java,v 1.2 2006/07/30 00:51:27 jjanke Exp $
+ *  @author Low Heng Sin
+ *  - Added support for having description and parameter in one dialog
+ *  - Added support to run db process remotely on server
+ * 
+ *  @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 				&lt;li&gt;BF [ 1757523 ] Server Processes are using Server's context
+ * 				&lt;li&gt;FR [ 1807922 ] Pocess threads should have a better name
+ * 				&lt;li&gt;BF [ 1960523 ] Server Process functionality not working
+ */
+public abstract class AbstractProcessCtl implements Runnable
+{
+	/**
+	 *  Constructor
+	 *  @param aProcessUI
+	 *  @param WindowNo
+	 *  @param pi Process info
+	 *  @param trx Transaction
+	 */
+<span class="nc" id="L60">	public AbstractProcessCtl (IProcessUI aProcessUI, int WindowNo, ProcessInfo pi, Trx trx)</span>
+	{
+<span class="nc" id="L62">		windowno = WindowNo;</span>
+<span class="nc" id="L63">		m_processUI = aProcessUI;</span>
+<span class="nc" id="L64">		m_pi = pi;</span>
+<span class="nc" id="L65">		m_trx = trx;</span>
+<span class="nc" id="L66">	}</span>
+
+	/** Windowno */
+	private int windowno;
+	/** Interface to UI (null when process is running as background job, for e.g by scheduler) */
+	private IProcessUI m_processUI;
+	/** Process Info */
+	private ProcessInfo m_pi;
+	private Trx	m_trx;
+	
+	/**	Static Logger	*/
+<span class="nc" id="L77">	private static final CLogger	log	= CLogger.getCLogger (AbstractProcessCtl.class);</span>
+	
+	/**
+	 * Run this process in a new thread
+	 */
+	public void start()
+	{
+<span class="nc" id="L84">		Thread thread = new Thread(this);</span>
+		// Set thread name - teo_sarca FR [ 1807922 ]
+<span class="nc bnc" id="L86" title="All 2 branches missed.">		if (m_pi != null)</span>
+<span class="nc" id="L87">			thread.setName(m_pi.getTitle()+&quot;-&quot;+m_pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L88">		thread.start();</span>
+<span class="nc" id="L89">	}</span>
+	
+	/**
+	 *	Execute Process Instance and Lock UI.&lt;br/&gt;
+	 *  Calls lockUI and unlockUI if parent is a ASyncProcess
+	 *  &lt;pre&gt;
+	 *      - Get Process Information
+	 *      - Call Class
+	 *      - Submit SQL Procedure
+	 *      - Run SQL Procedure
+	 *	&lt;/pre&gt;
+	 */
+	public void run ()
+	{
+<span class="nc bnc" id="L103" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;AD_PInstance_ID=&quot; + m_pi.getAD_PInstance_ID()</span>
+<span class="nc" id="L104">			+ &quot;, Record_ID=&quot; + m_pi.getRecord_ID());</span>
+
+		//  Lock
+<span class="nc" id="L107">		lock();</span>
+
+		//	Get Process Information: Name, Procedure Name, ClassName, IsReport, IsDirectPrint
+<span class="nc" id="L110">		String 	ProcedureName = &quot;&quot;;</span>
+<span class="nc" id="L111">		String  JasperReport = &quot;&quot;;</span>
+<span class="nc" id="L112">		int     AD_ReportView_ID = 0;</span>
+<span class="nc" id="L113">		int		AD_Workflow_ID = 0;</span>
+<span class="nc" id="L114">		boolean IsReport = false;</span>
+<span class="nc" id="L115">		boolean	IsDirectPrint = false;</span>
+<span class="nc" id="L116">		boolean isPrintPreview = m_pi.isPrintPreview();</span>
+
+		try
+		{
+<span class="nc" id="L120">			PInstanceInfo info = MPInstance.getPInstanceInfo(m_pi.getAD_PInstance_ID());</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			if (info != null)</span>
+			{
+<span class="nc" id="L123">				m_pi.setTitle (info.name);</span>
+<span class="nc" id="L124">				updateProgressWindowTitle(m_pi.getTitle());</span>
+<span class="nc" id="L125">				ProcedureName = info.procedureName;</span>
+<span class="nc" id="L126">				m_pi.setClassName (info.className);</span>
+<span class="nc" id="L127">				m_pi.setAD_Process_ID (info.AD_Process_ID);</span>
+<span class="nc" id="L128">				m_pi.setAD_Process_UU(info.AD_Process_UU);</span>
+				//	Report
+<span class="nc bnc" id="L130" title="All 2 branches missed.">				if (info.isReport)</span>
+				{
+<span class="nc" id="L132">					IsReport = true;</span>
+<span class="nc bnc" id="L133" title="All 4 branches missed.">					if (info.isDirectPrint &amp;&amp; !Ini.isPropertyBool(Ini.P_PRINTPREVIEW)</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">							&amp;&amp; !isPrintPreview )</span>
+<span class="nc" id="L135">						IsDirectPrint = true;</span>
+				}
+<span class="nc" id="L137">				AD_ReportView_ID = info.AD_ReportView_ID;</span>
+<span class="nc" id="L138">				AD_Workflow_ID = info.AD_Workflow_ID;</span>
+				//
+<span class="nc" id="L140">				int estimate = info.estimate;</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">				if (estimate != 0)</span>
+				{
+<span class="nc" id="L143">					m_pi.setEstSeconds (estimate + 1);     //  admin overhead</span>
+<span class="nc" id="L144">					updateProgressWindowTimerEstimate(m_pi.getEstSeconds());</span>
+				}
+<span class="nc" id="L146">				JasperReport = info.jasperReport;</span>
+<span class="nc" id="L147">			}</span>
+			else
+<span class="nc" id="L149">				log.log(Level.SEVERE, &quot;No AD_PInstance_ID=&quot; + m_pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L150">		}</span>
+<span class="nc" id="L151">		catch (Throwable e)</span>
+		{
+<span class="nc" id="L153">			m_pi.setSummary (Msg.getMsg(Env.getCtx(), &quot;ProcessNoProcedure&quot;) + &quot; &quot; + e.getLocalizedMessage(), true);</span>
+<span class="nc" id="L154">			unlock();</span>
+<span class="nc" id="L155">			log.log(Level.SEVERE, &quot;run&quot;, e);</span>
+<span class="nc" id="L156">			return;</span>
+		}
+
+		//  Not Database Procedure
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		if (ProcedureName == null)</span>
+<span class="nc" id="L161">			ProcedureName = &quot;&quot;;</span>
+		
+		/**
+		 *	Workflow
+		 */
+<span class="nc bnc" id="L166" title="All 2 branches missed.">		if (AD_Workflow_ID &gt; 0)	</span>
+		{
+<span class="nc" id="L168">			MPInstance pinstance = new MPInstance(Env.getCtx(), m_pi.getAD_PInstance_ID(), null);</span>
+<span class="nc" id="L169">			pinstance.setIsProcessing(true);</span>
+<span class="nc" id="L170">			pinstance.saveEx();</span>
+			try {
+<span class="nc" id="L172">				startWorkflow (AD_Workflow_ID);</span>
+<span class="nc" id="L173">				String errmsg = m_pi.getSummary();</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">				pinstance.setResult(!m_pi.isError());</span>
+<span class="nc" id="L175">				pinstance.setErrorMsg(errmsg);	</span>
+<span class="nc" id="L176">				pinstance.setJsonData(m_pi.getJsonData());</span>
+<span class="nc" id="L177">				pinstance.saveEx();</span>
+<span class="nc" id="L178">				unlock();</span>
+<span class="nc" id="L179">			}</span>
+			finally {
+<span class="nc" id="L181">				pinstance.setIsProcessing(false);</span>
+<span class="nc" id="L182">				pinstance.saveEx();</span>
+			}
+<span class="nc" id="L184">			return;</span>
+		}
+
+		// Clear Jasper Report class if it is set to the default Jasper report starter class
+<span class="nc" id="L188">		boolean isJasper = false;</span>
+<span class="nc bnc" id="L189" title="All 4 branches missed.">		if (JasperReport != null &amp;&amp; JasperReport.trim().length() &gt; 0) {</span>
+<span class="nc" id="L190">			isJasper = true;</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">			if (   ProcessUtil.JASPER_STARTER_CLASS.equals(m_pi.getClassName())</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">				|| ProcessUtil.JASPER_STARTER_CLASS_DEPRECATED.equals(m_pi.getClassName())) {</span>
+<span class="nc" id="L193">				m_pi.setClassName(null);</span>
+			}
+		}
+		
+		/**
+		 *	Call Process Class
+		 */
+<span class="nc bnc" id="L200" title="All 2 branches missed.">		if (m_pi.getClassName() != null)</span>
+		{
+<span class="nc bnc" id="L202" title="All 2 branches missed.">			if (isJasper)</span>
+			{
+<span class="nc" id="L204">				m_pi.setReportingProcess(true);</span>
+			}
+			
+			//	Run Class
+<span class="nc bnc" id="L208" title="All 2 branches missed.">			if (!startProcess())</span>
+			{
+<span class="nc" id="L210">				unlock();</span>
+<span class="nc" id="L211">				return;</span>
+			}
+
+			//  No Optional SQL procedure ... done
+<span class="nc bnc" id="L215" title="All 4 branches missed.">			if (!IsReport &amp;&amp; ProcedureName.length() == 0)</span>
+			{
+<span class="nc" id="L217">				unlock ();</span>
+<span class="nc" id="L218">				return;</span>
+			}
+			//  No Optional Report ... done
+<span class="nc bnc" id="L221" title="All 6 branches missed.">			if (IsReport &amp;&amp; AD_ReportView_ID == 0 &amp;&amp; ! isJasper)</span>
+			{
+<span class="nc" id="L223">				unlock ();</span>
+<span class="nc" id="L224">				return;</span>
+			}
+		}
+
+		/**
+		 *	Report submission
+		 */
+		//	Optional Pre-Report DB Process
+<span class="nc bnc" id="L232" title="All 4 branches missed.">		if (IsReport &amp;&amp; ProcedureName.length() &gt; 0)</span>
+		{
+<span class="nc" id="L234">			m_pi.setReportingProcess(true);</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">			if (!startDBProcess(ProcedureName))</span>
+			{
+<span class="nc" id="L237">				unlock();</span>
+<span class="nc" id="L238">				return;</span>
+			}
+		}	//	Pre-Report
+
+<span class="nc bnc" id="L242" title="All 2 branches missed.">		if (isJasper)</span>
+		{
+<span class="nc" id="L244">			m_pi.setReportingProcess(true);</span>
+<span class="nc" id="L245">			m_pi.setClassName(ProcessUtil.JASPER_STARTER_CLASS);</span>
+<span class="nc" id="L246">			startProcess();</span>
+<span class="nc" id="L247">			MPInstance pinstance = new MPInstance(Env.getCtx(), m_pi.getAD_PInstance_ID(), null);</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if (m_pi.getReportType() != null)</span>
+<span class="nc" id="L249">				pinstance.setReportType(m_pi.getReportType());</span>
+<span class="nc" id="L250">			String errmsg = pinstance.getErrorMsg();</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">			if (Util.isEmpty(errmsg, true))</span>
+<span class="nc" id="L252">				errmsg = &quot;Rows=&quot; + String.valueOf(m_pi.getRowCount());</span>
+			else
+<span class="nc" id="L254">				errmsg += &quot; Rows=&quot; + m_pi.getRowCount();</span>
+<span class="nc" id="L255">			pinstance.setErrorMsg(errmsg);</span>
+<span class="nc" id="L256">			pinstance.saveEx();</span>
+<span class="nc" id="L257">			unlock();</span>
+<span class="nc" id="L258">			return;</span>
+		}
+		
+<span class="nc bnc" id="L261" title="All 2 branches missed.">		if (IsReport)</span>
+		{
+<span class="nc" id="L263">			m_pi.setReportingProcess(true);</span>
+			//	Start Report	-----------------------------------------------
+<span class="nc" id="L265">			boolean ok = ReportCtl.start(m_processUI, windowno, m_pi, IsDirectPrint);</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">			m_pi.setSummary(Msg.getCleanMsg(Env.getCtx(), &quot;Report&quot;), !ok);</span>
+<span class="nc" id="L267">			MPInstance pinstance = new MPInstance(Env.getCtx(), m_pi.getAD_PInstance_ID(), null);</span>
+<span class="nc" id="L268">			String errmsg = pinstance.getErrorMsg();</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">			if (Util.isEmpty(errmsg, true))</span>
+<span class="nc" id="L270">				errmsg = &quot;Rows=&quot; + String.valueOf(m_pi.getRowCount());</span>
+			else
+<span class="nc" id="L272">				errmsg += &quot; Rows=&quot; + m_pi.getRowCount();</span>
+<span class="nc" id="L273">			pinstance.setErrorMsg(errmsg);</span>
+<span class="nc" id="L274">			pinstance.saveEx();</span>
+<span class="nc" id="L275">			unlock ();</span>
+<span class="nc" id="L276">		}</span>
+		/**
+		 * 	Run DB Process
+		 */
+		else
+		{
+<span class="nc bnc" id="L282" title="All 2 branches missed.">			if (!startDBProcess (ProcedureName))</span>
+			{
+<span class="nc" id="L284">				unlock();</span>
+<span class="nc" id="L285">				return;</span>
+			}
+			//	Success - getResult
+<span class="nc" id="L288">			ProcessInfoUtil.setSummaryFromDB(m_pi);</span>
+<span class="nc" id="L289">			unlock();</span>
+		}
+<span class="nc" id="L291">	}   //  run</span>
+
+	protected abstract void updateProgressWindowTimerEstimate(int estSeconds);
+
+	protected abstract void updateProgressWindowTitle(String title);
+
+	/**
+	 *  Lock UI and show in progress dialog
+	 */
+	protected abstract void lock ();
+
+	/**
+	 *  Unlock UI and dispose in progress dialog.&lt;br/&gt;
+	 */
+	protected abstract void unlock ();
+	
+	protected int getWindowNo() 
+	{
+<span class="nc" id="L309">		return windowno;</span>
+	}
+	
+	protected ProcessInfo getProcessInfo()
+	{
+<span class="nc" id="L314">		return m_pi;</span>
+	}
+	
+	protected IProcessUI getProcessMonitor()
+	{
+<span class="nc" id="L319">		return m_processUI;</span>
+	}
+	
+	protected IProcessUI getParent()
+	{
+<span class="nc" id="L324">		return getProcessMonitor();</span>
+	}
+	
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	protected boolean isServerProcess()
+	{
+<span class="nc" id="L330">		return false;</span>
+	}
+	
+	/**
+	 *  Start Workflow.
+	 *
+	 *  @param AD_Workflow_ID workflow
+	 *  @return     true if started
+	 */
+	private boolean startWorkflow (int AD_Workflow_ID)
+	{
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(AD_Workflow_ID + &quot; - &quot; + m_pi);</span>
+<span class="nc" id="L342">		boolean started = false;</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">		if (m_trx != null)</span>
+<span class="nc" id="L344">			m_pi.setTransactionName(m_trx.getTrxName());</span>
+<span class="nc" id="L345">		MWFProcess wfProcess = ProcessUtil.startWorkFlow(Env.getCtx(), m_pi, AD_Workflow_ID);</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		started = wfProcess != null;</span>
+<span class="nc" id="L347">		return started;</span>
+	}   //  startWorkflow
+
+	/**
+	 *  Start Java Process Class.&lt;br/&gt;
+	 *  Instantiate the class implementing the interface ProcessCall.
+	 *
+	 *  @return     true if success
+	 */
+	private boolean startProcess ()
+	{
+<span class="nc bnc" id="L358" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(m_pi.toString());</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (m_pi.getClassName().toLowerCase().startsWith(MRule.SCRIPT_PREFIX)) {</span>
+<span class="nc" id="L360">			m_pi.setProcessUI(m_processUI);</span>
+<span class="nc" id="L361">			return ProcessUtil.startScriptProcess(Env.getCtx(), m_pi, m_trx);</span>
+		} else {
+<span class="nc" id="L363">			return ProcessUtil.startJavaProcess(Env.getCtx(), m_pi, m_trx, true, m_processUI);</span>
+		}
+	}   //  startProcess
+
+	/**
+	 *  Start Database Process
+	 *  @param ProcedureName PL/SQL procedure name
+	 *  @return true if success
+	 */
+	private boolean startDBProcess (String ProcedureName)
+	{
+		//  execute on this thread/connection
+<span class="nc bnc" id="L375" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(ProcedureName + &quot;(&quot; + m_pi.getAD_PInstance_ID() + &quot;)&quot;);</span>
+<span class="nc" id="L376">		return ProcessUtil.startDatabaseProcedure(m_pi, ProcedureName, m_trx);</span>
+	}   //  startDBProcess
+
+	
+}	//	ProcessCtl
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

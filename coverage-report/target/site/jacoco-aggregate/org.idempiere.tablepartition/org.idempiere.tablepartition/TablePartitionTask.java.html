@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>TablePartitionTask.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.idempiere.tablepartition</a> &gt; <a href="index.source.html" class="el_package">org.idempiere.tablepartition</a> &gt; <span class="el_source">TablePartitionTask.java</span></div><h1>TablePartitionTask.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Elaine Tan - etantg       								   		   *
+ **********************************************************************/
+package org.idempiere.tablepartition;
+
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.db.partition.ITablePartitionService;
+import org.compiere.model.MColumn;
+import org.compiere.model.MTable;
+import org.compiere.process.ProcessInfo;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+
+/**
+ * Create/update table partition task
+ */
+public class TablePartitionTask {
+
+	private MTable table;
+	private ProcessInfo pi;
+	private Trx trx;
+	private ITablePartitionService partitionService;
+<span class="nc" id="L49">	private CLogger log = CLogger.getCLogger (getClass());</span>
+	
+	/**
+	 * @param table
+	 * @param pi
+	 * @param partitionService
+	 */
+<span class="nc" id="L56">	public TablePartitionTask(MTable table, ProcessInfo pi, ITablePartitionService partitionService)</span>
+	{
+<span class="nc" id="L58">		this.table = table;</span>
+<span class="nc" id="L59">		this.pi = pi;</span>
+<span class="nc" id="L60">		this.partitionService = partitionService; </span>
+<span class="nc" id="L61">	}</span>
+	
+	/**
+	 * Execute create/update table partition task
+	 * @return true if success
+	 */
+	public boolean executeTask()
+	{
+<span class="nc" id="L69">		boolean isError = false;</span>
+<span class="nc" id="L70">		boolean isUpdated = false;</span>
+<span class="nc" id="L71">		String trxName = Trx.createTrxName(&quot;TablePartition-&quot;);</span>
+<span class="nc" id="L72">		trx = Trx.get(trxName, true);</span>
+<span class="nc" id="L73">		trx.setDisplayName(getClass().getName()+&quot;_runProcess&quot;);</span>
+		
+		try 
+		{
+<span class="nc" id="L77">			table.set_TrxName(trxName);</span>
+<span class="nc" id="L78">			addLog(Msg.getElement(Env.getCtx(), &quot;TableName&quot;) + &quot;: &quot; + table.getTableName());</span>
+			
+<span class="nc" id="L80">			List&lt;MColumn&gt; partitionKeyColumns = table.getPartitionKeyColumns(true);</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">			if (partitionKeyColumns.isEmpty())</span>
+<span class="nc" id="L82">				throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;PartitionKeyRequired&quot;));</span>
+			
+<span class="nc bnc" id="L84" title="All 2 branches missed.">			if (!isPartitionedTable())</span>
+			{
+<span class="nc bnc" id="L86" title="All 2 branches missed.">				if (!createPartitionedTable())</span>
+<span class="nc" id="L87">					throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;FailedCreatePartitionedTable&quot;));</span>
+			}
+				
+<span class="nc" id="L90">			isUpdated = addPartitionAndMigrateData();</span>
+		
+<span class="nc" id="L92">			trx.commit();</span>
+<span class="nc" id="L93">		}</span>
+<span class="nc" id="L94">		catch (Exception e)</span>
+		{
+<span class="nc" id="L96">			log.log(Level.SEVERE, e.getMessage(), e);</span>
+<span class="nc" id="L97">			isError = true;</span>
+<span class="nc" id="L98">			addLog(Msg.getMsg(Env.getCtx(), &quot;Error&quot;) + e.getLocalizedMessage());</span>
+<span class="nc" id="L99">			trx.rollback();			</span>
+		}
+		finally
+		{			
+<span class="nc" id="L103">			trx.close();</span>
+<span class="nc" id="L104">			trx = null;</span>
+		}
+		
+<span class="nc bnc" id="L107" title="All 6 branches missed.">		if (!isError &amp;&amp; isUpdated &amp;&amp; !runPostPartitionProcess())</span>
+		{
+<span class="nc" id="L109">			isError = true;</span>
+<span class="nc" id="L110">			addLog(Msg.getMsg(Env.getCtx(), &quot;FailedRunPostMigrationData&quot;));</span>
+		}
+		
+<span class="nc bnc" id="L113" title="All 2 branches missed.">		if (isUpdated)</span>
+<span class="nc" id="L114">			table.getTablePartitions(true, trxName);</span>
+		
+<span class="nc bnc" id="L116" title="All 2 branches missed.">		return !isError;</span>
+	}
+	
+	/**
+	 * Add process log
+	 * @param msg
+	 */
+	private void addLog(String msg)
+	{
+<span class="nc bnc" id="L125" title="All 4 branches missed.">		if (pi != null &amp;&amp; msg != null)</span>
+<span class="nc" id="L126">			pi.addLog(0, null, null, msg);</span>
+<span class="nc" id="L127">	}</span>
+
+	/**
+	 * @return transaction name
+	 */
+	private String getTrxName()
+	{
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		if (trx != null)</span>
+<span class="nc" id="L135">			return trx.getTrxName();</span>
+<span class="nc" id="L136">		return null;</span>
+	}
+	
+	private boolean isPartitionedTable() {
+<span class="nc" id="L140">		return partitionService.isPartitionedTable(table, getTrxName());</span>
+	}
+
+	private boolean createPartitionedTable() {
+<span class="nc" id="L144">		return partitionService.createPartitionedTable(table, getTrxName(), pi);</span>
+	}
+
+	private boolean addPartitionAndMigrateData() {
+<span class="nc" id="L148">		return partitionService.addPartitionAndMigrateData(table, getTrxName(), pi);</span>
+	}
+
+	private boolean runPostPartitionProcess() {
+<span class="nc" id="L152">		return partitionService.runPostPartitionProcess(table, getTrxName(), pi);</span>
+	}	
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

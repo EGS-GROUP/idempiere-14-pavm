@@ -1,0 +1,922 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Trx.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">Trx.java</span></div><h1>Trx.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Savepoint;
+import java.util.Collection;
+import java.util.Date;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.Adempiere;
+import org.compiere.db.StatementProxy;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.PO;
+
+/**
+ *	Transaction Management.&lt;br/&gt;
+ *	- Create new Transaction by Trx.get(name);&lt;br/&gt;
+ *	- ..transactions..&lt;br/&gt;
+ *	- commit();&lt;br/&gt;
+ *	----	start();&lt;br/&gt;
+ *	----	commit();&lt;br/&gt;
+ *	- close();
+ *  @author Jorg Janke
+ *  @author Low Heng Sin
+ *  &lt;li&gt;added rollback(boolean) and commit(boolean) [20070105]
+ *  &lt;li&gt;remove unnecessary use of savepoint
+ *  &lt;li&gt;use UUID for safer transaction name generation
+ *  @author Teo Sarca, http://www.arhipac.ro
+ *  			&lt;li&gt;FR [ 2080217 ] Implement TrxRunnable
+ *  			&lt;li&gt;BF [ 2876927 ] Oracle JDBC driver problem
+ *  				https://sourceforge.net/p/adempiere/bugs/2173/
+ *  @author Teo Sarca, teo.sarca@gmail.com
+ *  		&lt;li&gt;BF [ 2849122 ] PO.AfterSave is not rollback on error - add releaseSavepoint method
+ *  			https://sourceforge.net/p/adempiere/bugs/2073/
+ */
+public class Trx
+{
+	/**
+	 * 	Get or Create New Transaction
+	 *	@param trxName trx name
+	 *	@param createNew if false, null is returned if trxName not an existing transaction
+	 *	@return Transaction or null
+	 */
+	public static Trx get (String trxName, boolean createNew)
+	{
+<span class="nc bnc" id="L71" title="All 4 branches missed.">		if (trxName == null || trxName.length() == 0)</span>
+<span class="nc" id="L72">			throw new IllegalArgumentException (&quot;No Transaction Name&quot;);</span>
+
+<span class="nc" id="L74">		Trx retValue = (Trx)s_cache.get(trxName);</span>
+<span class="nc bnc" id="L75" title="All 4 branches missed.">		if (retValue == null &amp;&amp; createNew)</span>
+		{
+<span class="nc" id="L77">			retValue = new Trx (trxName);</span>
+<span class="nc" id="L78">			s_cache.put(trxName, retValue);</span>
+		}
+<span class="nc" id="L80">		return retValue;</span>
+	}	//	get
+	
+	/**
+	 * 	Get Transaction in a Connection
+	 *	@param trxName trx name
+	 *	@param createNew if false, null is returned if not found
+	 *	@param con Connection
+	 *	@return Transaction or null
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static Trx get (String trxName, boolean createNew, Connection con)
+	{
+<span class="nc bnc" id="L94" title="All 4 branches missed.">		if (trxName == null || trxName.length() == 0)</span>
+<span class="nc" id="L95">			throw new IllegalArgumentException (&quot;No Transaction Name&quot;);</span>
+
+<span class="nc" id="L97">		Trx retValue = (Trx)s_cache.get(trxName);</span>
+<span class="nc bnc" id="L98" title="All 4 branches missed.">		if (retValue == null &amp;&amp; createNew)</span>
+		{
+<span class="nc" id="L100">			retValue = new Trx (trxName, con);</span>
+<span class="nc" id="L101">			s_cache.put(trxName, retValue);</span>
+		}
+<span class="nc" id="L103">		return retValue;</span>
+	}	//	get
+	
+	/**	Transaction Cache */
+<span class="nc" id="L107">	private static final Map&lt;String,Trx&gt; s_cache = new ConcurrentHashMap&lt;String, Trx&gt;(); </span>
+	/** Transaction timeout monitor */
+<span class="nc" id="L109">	private static final Trx.TrxMonitor s_monitor = new Trx.TrxMonitor();</span>
+	/** Transaction event listeners */
+<span class="nc" id="L111">	private ConcurrentLinkedQueue&lt;TrxEventListener&gt; listeners = new ConcurrentLinkedQueue&lt;TrxEventListener&gt;();</span>
+	
+	protected Exception trace;
+	
+	private String m_displayName;
+	
+<span class="nc" id="L117">	private boolean m_changesMadeByEventListener = false;</span>
+
+	/**
+	 * Start transaction timeout monitor (run every 5 minutes) 
+	 */
+	public static void startTrxMonitor()
+	{
+<span class="nc" id="L124">		Adempiere.getThreadPoolExecutor().scheduleWithFixedDelay(s_monitor, 5, 5, TimeUnit.MINUTES);</span>
+<span class="nc" id="L125">	}</span>
+
+	/**
+	 * 	Create unique Transaction Name
+	 *	@param prefix optional prefix
+	 *	@return unique transaction name
+	 */
+	public static String createTrxName (String prefix)
+	{
+<span class="nc" id="L134">		String displayName = null;</span>
+<span class="nc bnc" id="L135" title="All 4 branches missed.">		if (prefix == null || prefix.length() == 0) {</span>
+<span class="nc" id="L136">			prefix = &quot;Trx&quot;;</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.TRX_AUTOSET_DISPLAY_NAME, false)) {</span>
+<span class="nc" id="L138">				StackWalker walker = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);</span>
+<span class="nc" id="L139">				Optional&lt;String&gt; stackName = walker.walk(frames -&gt; frames.map(</span>
+<span class="nc" id="L140">						stackFrame -&gt; stackFrame.getClassName() + &quot;.&quot; +</span>
+<span class="nc" id="L141">									  stackFrame.getMethodName() + &quot;:&quot; +</span>
+<span class="nc" id="L142">									  stackFrame.getLineNumber())</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">						.filter(f -&gt; ! f.startsWith(Trx.class.getName() + &quot;.&quot;))</span>
+<span class="nc" id="L144">						.findFirst());</span>
+<span class="nc" id="L145">				displayName = (stackName.orElse(null));</span>
+			}
+		}
+<span class="nc" id="L148">		prefix += &quot;_&quot; + Util.generateUUIDv7(); //System.currentTimeMillis();</span>
+		//create transaction entry
+<span class="nc" id="L150">		Trx trx = Trx.get(prefix, true);</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">		if (displayName != null)</span>
+<span class="nc" id="L152">			trx.setDisplayName(displayName);</span>
+<span class="nc" id="L153">		return prefix;</span>
+	}	//	createTrxName
+
+	/**
+	 * 	Create unique Transaction Name
+	 *	@return unique name
+	 */
+	public static String createTrxName ()
+	{
+<span class="nc" id="L162">		return createTrxName(null);</span>
+	}	//	createTrxName
+		
+	/**
+	 * 	Private Constructor.&lt;br/&gt;
+	 *  Use {@link #get(String, boolean)} to create new Transaction instance.
+	 * 	@param trxName unique name
+	 */
+<span class="nc" id="L170">	private Trx (String trxName)</span>
+	{
+<span class="nc" id="L172">		setTrxName (trxName);</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">		if (trxName.length() &lt; 36)</span>
+		{
+<span class="nc" id="L175">			String msg = &quot;Illegal transaction name format, not prefix+UUID or UUID: &quot; + trxName;</span>
+<span class="nc" id="L176">			log.log(Level.SEVERE, msg, new Exception(msg));</span>
+		}
+<span class="nc" id="L178">	}	//	Trx</span>
+
+	/**
+	 * 	Transaction Constructor
+	 * 	@param trxName unique name
+	 *  @param con optional connection ( ignore for remote transaction )
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	private Trx (String trxName, Connection con)
+	{
+<span class="nc" id="L188">		this(trxName);</span>
+<span class="nc" id="L189">		setConnection (con);</span>
+<span class="nc" id="L190">	}	//	Trx</span>
+
+	/** Logger					*/
+<span class="nc" id="L193">	private CLogger 		log = CLogger.getCLogger(getClass());</span>
+	
+<span class="nc" id="L195">	private	Connection 	m_connection = null;</span>
+<span class="nc" id="L196">	private	String 		m_trxName = null;</span>
+<span class="nc" id="L197">	private boolean		m_active = false;</span>
+
+	private long m_startTime;
+
+	/** transaction timeout, in seconds **/
+<span class="nc" id="L202">	private int m_timeout = 60 * 120; //120 minutes</span>
+
+	/**
+	 * Get connection
+	 * @return connection
+	 */
+	public Connection getConnection()
+	{
+<span class="nc" id="L210">		return getConnection(true);</span>
+	}
+
+	/**
+	 * 	Get or Create New Connection
+	 *  @param createNew if true, create new connection if the trx does not have one created yet
+	 *	@return connection
+	 */
+	public synchronized Connection getConnection(boolean createNew)
+	{
+<span class="nc bnc" id="L220" title="All 2 branches missed.">		if (log.isLoggable(Level.ALL))log.log(Level.ALL, &quot;Active=&quot; + isActive() + &quot;, Connection=&quot; + m_connection);</span>
+
+<span class="nc bnc" id="L222" title="All 2 branches missed.">		if (m_connection == null)	//	get new Connection</span>
+		{
+<span class="nc bnc" id="L224" title="All 2 branches missed.">			if (createNew)</span>
+			{
+<span class="nc bnc" id="L226" title="All 2 branches missed.">				if (!s_cache.containsKey(m_trxName))</span>
+				{
+<span class="nc" id="L228">					new Exception(&quot;Illegal to getConnection for Trx that is not register.&quot;).printStackTrace();</span>
+<span class="nc" id="L229">					return null;</span>
+				}
+<span class="nc" id="L231">				setConnection(DB.createConnection(false, Connection.TRANSACTION_READ_COMMITTED));</span>
+<span class="nc" id="L232">			}</span>
+			else
+<span class="nc" id="L234">				return null;</span>
+		}
+<span class="nc bnc" id="L236" title="All 2 branches missed.">		if (!isActive())</span>
+<span class="nc" id="L237">			start();</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">		if (MSysConfig.getBooleanValue(MSysConfig.TRACE_ALL_TRX_CONNECTION_GET, false))</span>
+<span class="nc" id="L239">			trace = new Exception();</span>
+<span class="nc" id="L240">		return m_connection;</span>
+	}	//	getConnection
+
+	/**
+	 * 	Set Connection
+	 *	@param conn connection
+	 */
+	private void setConnection (Connection conn)
+	{
+<span class="nc bnc" id="L249" title="All 2 branches missed.">		if (conn == null)</span>
+<span class="nc" id="L250">			return;</span>
+<span class="nc" id="L251">		m_connection = conn;</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">		if (log.isLoggable(Level.FINEST)) log.finest(&quot;Connection=&quot; + conn);</span>
+		try
+		{
+<span class="nc" id="L255">			m_connection.setAutoCommit(false);</span>
+<span class="nc" id="L256">		}</span>
+<span class="nc" id="L257">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L259">			log.log(Level.SEVERE, &quot;connection&quot;, e);</span>
+		}
+<span class="nc" id="L261">		trace = new Exception();</span>
+<span class="nc" id="L262">	}	//	setConnection</span>
+
+	/**
+	 * 	Set Trx Name
+	 *	@param trxName transaction name
+	 */
+	private void setTrxName (String trxName)
+	{
+<span class="nc bnc" id="L270" title="All 4 branches missed.">		if (trxName == null || trxName.length() == 0)</span>
+<span class="nc" id="L271">			throw new IllegalArgumentException (&quot;No Transaction Name&quot;);</span>
+<span class="nc" id="L272">		m_trxName = trxName;</span>
+<span class="nc" id="L273">	}	//	setName</span>
+
+	/**
+	 * 	Get Transaction Name
+	 *	@return transaction name
+	 */
+	public String getTrxName()
+	{
+<span class="nc" id="L281">		return m_trxName;</span>
+	}	//	getName
+
+	/**
+	 * 	Start Trx
+	 *	@return true if trx started
+	 */
+	public boolean start()
+	{
+<span class="nc bnc" id="L290" title="All 2 branches missed.">		if (m_active)</span>
+		{
+<span class="nc" id="L292">			log.warning(&quot;Trx in progress &quot; + m_trxName);</span>
+<span class="nc" id="L293">			return false;</span>
+		}
+<span class="nc" id="L295">		m_active = true;</span>
+<span class="nc" id="L296">		m_startTime = System.currentTimeMillis();</span>
+<span class="nc" id="L297">		m_changesMadeByEventListener = false;</span>
+<span class="nc" id="L298">		return true;</span>
+	}	//	startTrx
+
+	/**
+	 * @return The start time of this transaction
+	 */
+	public Date getStartTime()
+	{
+<span class="nc" id="L306">		return new Date(m_startTime);</span>
+	}
+	
+	/**
+	 * 	Is Transaction Active
+	 *	@return true if transaction is active  
+	 */
+	public boolean isActive()
+	{
+<span class="nc" id="L315">		return m_active;</span>
+	}	//	isActive
+
+	/**
+	 * 	Rollback transaction
+	 *  @param throwException if true, re-throws exception
+	 *	@return true if success, false if failed or transaction already rollback
+	 */
+	public synchronized boolean rollback(boolean throwException) throws SQLException
+	{
+		//local
+		try
+		{
+<span class="nc bnc" id="L328" title="All 2 branches missed.">			if (m_connection != null)</span>
+			{
+<span class="nc" id="L330">				m_connection.rollback();</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">				Level logLevel = isLocalTrx(m_trxName) ? Level.FINE : Level.INFO; </span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">				if (log.isLoggable(logLevel)) log.log(logLevel, &quot;**** &quot; + m_trxName);</span>
+<span class="nc" id="L333">				m_active = false;</span>
+<span class="nc" id="L334">				fireAfterRollbackEvent(true);</span>
+<span class="nc" id="L335">				return true;</span>
+			}
+		}
+<span class="nc" id="L338">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L340">			log.log(Level.SEVERE, m_trxName, e);</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">			if (throwException)</span>
+			{
+<span class="nc" id="L343">				m_active = false;</span>
+<span class="nc" id="L344">				fireAfterRollbackEvent(false);</span>
+<span class="nc" id="L345">				throw e;</span>
+			}
+		}		
+<span class="nc" id="L348">		m_active = false;</span>
+<span class="nc" id="L349">		fireAfterRollbackEvent(false);</span>
+<span class="nc" id="L350">		return false;</span>
+	}	//	rollback
+	
+	/**
+	 * Fire after rollback event
+	 * @param success
+	 */
+	private void fireAfterRollbackEvent(boolean success) {
+<span class="nc bnc" id="L358" title="All 2 branches missed.">		for(TrxEventListener l : listeners) {</span>
+<span class="nc" id="L359">			l.afterRollback(this, success);</span>
+		}
+<span class="nc" id="L361">	}</span>
+	
+	/**
+	 * Rollback transaction
+	 * @return true if success, false if failed or transaction already rollback
+	 */
+	public boolean rollback()
+	{
+		try {
+<span class="nc" id="L370">			return rollback(false);</span>
+<span class="nc" id="L371">		} catch (SQLException e) {</span>
+<span class="nc" id="L372">			return false;</span>
+		}
+	}
+
+	/**
+	 * 	Rollback to save point
+	 *  @param savepoint
+	 *	@return true if success, false if failed or transaction already rollback
+	 *  @throws SQLException
+	 */
+	public boolean rollback(Savepoint savepoint) throws SQLException
+	{
+		//local
+		try
+		{
+<span class="nc bnc" id="L387" title="All 2 branches missed.">			if (m_connection != null)</span>
+			{
+<span class="nc" id="L389">				m_connection.rollback(savepoint);</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info (&quot;**** &quot; + m_trxName);</span>
+<span class="nc" id="L391">				m_changesMadeByEventListener = false;</span>
+<span class="nc" id="L392">				return true;</span>
+			}
+		}
+<span class="nc" id="L395">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L397">			log.log(Level.SEVERE, m_trxName, e);</span>
+<span class="nc" id="L398">			throw e;</span>
+		}		
+<span class="nc" id="L400">		return false;</span>
+	}	//	rollback
+	
+	/**
+	 * Commit transaction
+	 * @param throwException if true, re-throws exception
+	 * @return true if success
+	 **/
+	public synchronized boolean commit(boolean throwException) throws SQLException
+	{
+		//local
+		try
+		{
+<span class="nc bnc" id="L413" title="All 2 branches missed.">			if (m_connection != null)</span>
+			{
+<span class="nc" id="L415">				m_connection.commit();</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info (&quot;**** &quot; + m_trxName);</span>
+<span class="nc" id="L417">				m_active = false;</span>
+<span class="nc" id="L418">				fireAfterCommitEvent(true);</span>
+<span class="nc" id="L419">				return true;</span>
+			}
+		}
+<span class="nc" id="L422">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L424">			log.log(Level.SEVERE, m_trxName, e);</span>
+<span class="nc" id="L425">			String msg = DBException.getDefaultDBExceptionMessage(e);</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">			if (throwException) </span>
+			{
+<span class="nc" id="L428">				m_active = false;</span>
+<span class="nc" id="L429">				fireAfterCommitEvent(false);</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">				if (msg != null)</span>
+<span class="nc" id="L431">					msg = Msg.getMsg(Env.getCtx(), msg);</span>
+				else
+<span class="nc" id="L433">					msg = e.getLocalizedMessage();</span>
+<span class="nc" id="L434">				throw new AdempiereException(msg, e);</span>
+			}
+			else
+			{
+<span class="nc bnc" id="L438" title="All 2 branches missed.">				log.saveError(msg != null ? msg : e.getLocalizedMessage(), e);</span>
+			}
+		}
+<span class="nc" id="L441">		m_active = false;</span>
+<span class="nc" id="L442">		fireAfterCommitEvent(false);</span>
+<span class="nc" id="L443">		return false;</span>
+	}	//	commit
+	
+	/**
+	 * Fire after commit event
+	 * @param success
+	 */
+	private void fireAfterCommitEvent(boolean success) {
+<span class="nc bnc" id="L451" title="All 2 branches missed.">		for(TrxEventListener l : listeners) {</span>
+<span class="nc" id="L452">			l.afterCommit(this, success);</span>
+		}
+<span class="nc" id="L454">	}</span>
+
+	/**
+	 * Commit transaction
+	 * @return true if success
+	 */
+	public boolean commit()
+	{
+		try 
+		{
+<span class="nc" id="L464">			return commit(false);</span>
+		} 
+<span class="nc" id="L466">		catch(SQLException e) </span>
+		{
+<span class="nc" id="L468">			return false;</span>
+		}
+	}
+	
+	/**
+	 * 	Rollback and close transaction.&lt;br/&gt;
+	 *  This is means to be called by the timeout monitor and developer usually shouldn't call this directly.
+	 *	@return true if success
+	 */
+	public boolean rollbackAndCloseOnTimeout() {
+<span class="nc" id="L478">		boolean success = false;</span>
+		try
+		{
+<span class="nc" id="L481">			rollback(true);</span>
+<span class="nc" id="L482">		}</span>
+<span class="nc" id="L483">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L485">			log.log(Level.SEVERE, m_trxName, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L489">			success = close();</span>
+		}
+<span class="nc" id="L491">		return success;</span>
+	}
+
+	/**
+	 * 	End Transaction and Close Connection
+	 *	@return true if success
+	 */
+	public synchronized boolean close()
+	{
+<span class="nc" id="L500">		s_cache.remove(getTrxName());</span>
+		
+		//local
+<span class="nc bnc" id="L503" title="All 2 branches missed.">		if (m_connection == null)</span>
+<span class="nc" id="L504">			return true;</span>
+		
+		try {
+<span class="nc bnc" id="L507" title="All 4 branches missed.">			if (isActive() &amp;&amp; !m_connection.isReadOnly())</span>
+<span class="nc" id="L508">				commit();</span>
+<span class="nc" id="L509">		} catch (SQLException e) {			</span>
+		}
+			
+		//	Close Connection
+		try
+		{
+<span class="nc" id="L515">			m_connection.setAutoCommit(true);</span>
+<span class="nc" id="L516">		}</span>
+<span class="nc" id="L517">		catch (SQLException e)</span>
+		{
+		}
+		finally
+		{
+			//ensure connection return to pool with readonly=false
+			try 
+			{
+<span class="nc bnc" id="L525" title="All 2 branches missed.">				if (m_connection.isReadOnly())</span>
+				{
+<span class="nc" id="L527">					m_connection.setReadOnly(false);</span>
+				}
+<span class="nc" id="L529">			}</span>
+<span class="nc" id="L530">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L532">				log.log(Level.SEVERE, m_trxName, e);</span>
+			}	
+			try
+			{
+<span class="nc" id="L536">				m_connection.close();</span>
+<span class="nc" id="L537">			}</span>
+<span class="nc" id="L538">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L540">				log.log(Level.SEVERE, m_trxName, e);</span>
+			}
+		}
+<span class="nc" id="L543">		m_connection = null;</span>
+<span class="nc" id="L544">		trace = null;</span>
+<span class="nc" id="L545">		m_active = false;</span>
+<span class="nc" id="L546">		fireAfterCloseEvent();</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(m_trxName);</span>
+<span class="nc" id="L548">		return true;</span>
+	}	//	close
+	
+	/**
+	 * Fire after close event
+	 */
+	private void fireAfterCloseEvent() {
+<span class="nc bnc" id="L555" title="All 2 branches missed.">		for(TrxEventListener l : listeners) {</span>
+<span class="nc" id="L556">			l.afterClose(this);</span>
+		}
+<span class="nc" id="L558">	}</span>
+	
+	/**
+	 * Set transaction save point
+	 * @param name optional savepoint name
+	 * @return Savepoint
+	 * @throws SQLException
+	 */
+	public synchronized Savepoint setSavepoint(String name) throws SQLException {
+<span class="nc bnc" id="L567" title="All 2 branches missed.">		if (m_connection == null) </span>
+<span class="nc" id="L568">			getConnection();</span>
+		
+<span class="nc bnc" id="L570" title="All 2 branches missed.">		if(m_connection != null) {</span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">			if (name != null)</span>
+<span class="nc" id="L572">				return m_connection.setSavepoint(name);</span>
+			else
+<span class="nc" id="L574">				return m_connection.setSavepoint();</span>
+		} else {
+<span class="nc" id="L576">			return null;</span>
+		}
+	}
+
+<span class="nc" id="L580">	private Savepoint m_lastWFSavepoint = null; </span>
+
+	/**
+	 * Set last workflow save point.&lt;br/&gt;
+	 * For workflow engine use, developer usually shouldn't call this method directly.
+	 * @param savepoint
+	 */
+	public synchronized void setLastWFSavepoint(Savepoint savepoint) {
+<span class="nc" id="L588">		m_lastWFSavepoint = savepoint;</span>
+<span class="nc" id="L589">	}</span>
+
+	/**
+	 * Get last set workflow save point.&lt;br/&gt;
+	 * For workflow engine use, developer usually shouldn't call this method directly.
+	 * @return last set workflow save point or null
+	 */
+	public synchronized Savepoint getLastWFSavepoint() {
+<span class="nc" id="L597">		return m_lastWFSavepoint;</span>
+	}
+
+	/**
+	 * Release Transaction Savepoint
+	 * @param savepoint
+	 * @throws SQLException
+	 * @see {@link Connection#releaseSavepoint(Savepoint)}
+	 */
+	public synchronized void releaseSavepoint(Savepoint savepoint) throws SQLException
+	{
+<span class="nc bnc" id="L608" title="All 2 branches missed.">		if (DB.isOracle())</span>
+		{
+			// Note: As of Oracle Database 10g, releaseSavepoint and
+			// oracleReleaseSavepoint are not supported. If you call either
+			// of the methods, then SQLException is thrown with the message
+			// &quot;Unsupported feature&quot;.
+			// -- 4-4 Oracle Database JDBC Developer's Guide and Reference
+<span class="nc" id="L615">			return;</span>
+		}
+<span class="nc bnc" id="L617" title="All 2 branches missed.">		if (m_connection == null) </span>
+		{
+<span class="nc" id="L619">			getConnection();</span>
+		}
+<span class="nc bnc" id="L621" title="All 2 branches missed.">		if(m_connection != null)</span>
+		{
+<span class="nc" id="L623">			m_connection.releaseSavepoint(savepoint);</span>
+		}
+		
+<span class="nc" id="L626">	}</span>
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L635">		StringBuilder sb = new StringBuilder(&quot;Trx[&quot;);</span>
+<span class="nc" id="L636">		sb.append(getDisplayName())</span>
+<span class="nc" id="L637">			.append(&quot;,Active=&quot;).append(isActive())</span>
+<span class="nc" id="L638">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L639">		return sb.toString();</span>
+	}	//	toString
+
+	/**
+	 * Get register transactions
+	 * @return array of register transactions
+	 */
+	public static Trx[] getOpenTransactions()
+	{
+<span class="nc" id="L648">		Collection&lt;Trx&gt; collections = s_cache.values();</span>
+<span class="nc" id="L649">		Trx[] trxs = new Trx[collections.size()];</span>
+<span class="nc" id="L650">		collections.toArray(trxs);</span>
+		
+<span class="nc" id="L652">		return trxs;</span>
+	}
+
+	/**
+	 * @return Trx[]
+	 * @deprecated - wrong method name fixed with IDEMPIERE-5355 - please use getOpenTransactions
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static Trx[] getActiveTransactions()
+	{
+<span class="nc" id="L662">		return getOpenTransactions();</span>
+	}
+
+	/**
+	 * @see #run(String, TrxRunnable)
+	 */
+	public static void run(TrxRunnable r)
+	{
+<span class="nc" id="L670">		run(null, r);</span>
+<span class="nc" id="L671">	}</span>
+	
+	/**
+	 * Execute runnable object using provided transaction.&lt;br/&gt;
+	 * If execution fails, database operations will be rolled back.
+	 * &lt;p&gt;
+	 * Example: &lt;pre&gt;
+	 * Trx.run(null, new {@link TrxRunnable}() {
+	 *     public void run(String trxName) {
+	 *         // do something using trxName
+	 *     }
+	 * )};
+	 * &lt;/pre&gt;
+	 * 
+	 * @param trxName transaction name (if null, a new transaction will be created)
+	 * @param r runnable object
+	 * @throws RuntimeException or {@link AdempiereException}
+	 */
+	public static void run(String trxName, TrxRunnable r)
+	{
+<span class="nc" id="L691">		boolean localTrx = false;</span>
+<span class="nc bnc" id="L692" title="All 2 branches missed.">		if (trxName == null) {</span>
+<span class="nc" id="L693">			trxName = Trx.createTrxName(&quot;TrxRun&quot;);</span>
+<span class="nc" id="L694">			localTrx = true;</span>
+		}
+<span class="nc" id="L696">		Trx trx = Trx.get(trxName, true);</span>
+<span class="nc" id="L697">		Savepoint savepoint = null;</span>
+		try
+		{
+<span class="nc bnc" id="L700" title="All 2 branches missed.">			if (!localTrx)</span>
+<span class="nc" id="L701">				savepoint = trx.setSavepoint(null);</span>
+				
+<span class="nc" id="L703">			r.run(trxName);</span>
+			
+<span class="nc bnc" id="L705" title="All 2 branches missed.">			if (localTrx)</span>
+<span class="nc" id="L706">				trx.commit(true);</span>
+<span class="nc" id="L707">		}</span>
+<span class="nc" id="L708">		catch (Throwable e)</span>
+		{
+			// Rollback transaction
+<span class="nc bnc" id="L711" title="All 2 branches missed.">			if (localTrx)</span>
+			{
+<span class="nc" id="L713">				trx.rollback();</span>
+<span class="nc" id="L714">			}</span>
+<span class="nc bnc" id="L715" title="All 2 branches missed.">			else if (savepoint != null)</span>
+			{
+				try {
+<span class="nc" id="L718">					trx.rollback(savepoint);</span>
+<span class="nc" id="L719">				}</span>
+<span class="nc" id="L720">				catch (SQLException e2) {;}</span>
+			}
+			// Throw exception
+<span class="nc bnc" id="L723" title="All 2 branches missed.">			if (e instanceof RuntimeException)</span>
+			{
+<span class="nc" id="L725">				throw (RuntimeException)e;</span>
+			}
+			else
+			{
+<span class="nc" id="L729">				throw new AdempiereException(e);</span>
+			}
+		}
+		finally {
+<span class="nc bnc" id="L733" title="All 4 branches missed.">			if (localTrx &amp;&amp; trx != null)</span>
+			{
+<span class="nc" id="L735">				trx.close();</span>
+<span class="nc" id="L736">				trx = null;</span>
+			}
+		}
+<span class="nc" id="L739">	}</span>
+	
+	/**
+	 * Get transaction time out value
+	 * @return transaction time out value in second
+	 */
+	public int getTimeout() {
+<span class="nc" id="L746">		return m_timeout;</span>
+	}
+
+	/**
+	 * set transaction timeout value ( in seconds )
+	 * @param timeout
+	 */
+	public void setTimeout(int timeout) {
+<span class="nc" id="L754">		m_timeout = timeout;</span>
+<span class="nc" id="L755">	}</span>
+
+	/**
+	 * Add transaction event listener
+	 * @param listener
+	 */
+	public void addTrxEventListener(TrxEventListener listener) {
+<span class="nc" id="L762">		listeners.add(listener);</span>
+<span class="nc" id="L763">	}</span>
+	
+	/**
+	 * Remove transaction event listener
+	 * @param listener
+	 * @return true if listener is found and remove
+	 */
+	public boolean removeTrxEventListener(TrxEventListener listener) {
+<span class="nc" id="L771">		return listeners.remove(listener);</span>
+	}
+	
+	/**
+	 * Get stack trace save
+	 * @return stack trace save or empty string
+	 */
+	public String getStrackTrace()
+	{
+<span class="nc bnc" id="L780" title="All 2 branches missed.">		if (trace != null)</span>
+		{
+<span class="nc" id="L782">			StringWriter stringWriter = new StringWriter();</span>
+<span class="nc" id="L783">			PrintWriter printWriter = new PrintWriter(stringWriter);</span>
+<span class="nc" id="L784">			trace.printStackTrace(printWriter);</span>
+<span class="nc" id="L785">			return stringWriter.getBuffer().toString();</span>
+		}
+		else
+		{
+<span class="nc" id="L789">			return &quot;&quot;;</span>
+		}
+	}
+	
+	/**
+	 * Get transaction display name. Fall back to transaction name if display name is not set.
+	 * @return display name or name
+	 */
+	public String getDisplayName()
+	{
+<span class="nc bnc" id="L799" title="All 2 branches missed.">		return m_displayName != null ? m_displayName : m_trxName;</span>
+	}
+	
+	/**
+	 * Set transaction display name
+	 * @param displayName
+	 */
+	public void setDisplayName(String displayName)
+	{
+<span class="nc" id="L808">		m_displayName = displayName;</span>
+<span class="nc" id="L809">	}</span>
+	
+	/**
+	 * Indicate additional DB changes have been made by a transaction event listener
+	 * @param changesMade
+	 */
+	public void setChangesMadeByEventListener(boolean changesMade)
+	{
+<span class="nc" id="L817">		m_changesMadeByEventListener = changesMade;</span>
+<span class="nc" id="L818">	}</span>
+	
+	/**
+	 * Is there additional changes make by transaction event listener 
+	 * @return true if event listener(s) has flag that additional DB changes have been made 
+	 */
+	public boolean hasChangesMadeByEventListener()
+	{
+<span class="nc" id="L826">		return m_changesMadeByEventListener;</span>
+	}
+	
+	/** Transaction timeout monitor class */
+<span class="nc" id="L830">	public static class TrxMonitor implements Runnable</span>
+	{
+		@Override
+		public void run()
+		{
+<span class="nc bnc" id="L835" title="All 2 branches missed.">			if (!Trx.s_cache.isEmpty())</span>
+			{
+<span class="nc" id="L837">				Trx[] trxs = Trx.s_cache.values().toArray(new Trx[0]);</span>
+<span class="nc bnc" id="L838" title="All 2 branches missed.">				for(int i = 0; i &lt; trxs.length; i++)</span>
+				{
+<span class="nc bnc" id="L840" title="All 2 branches missed.">					if (trxs[i].m_startTime &lt;= 0)</span>
+<span class="nc" id="L841">						continue;</span>
+
+<span class="nc" id="L843">					long since = System.currentTimeMillis() - trxs[i].m_startTime;</span>
+<span class="nc bnc" id="L844" title="All 2 branches missed.">					if (since &gt; trxs[i].getTimeout() * 1000)</span>
+					{
+<span class="nc" id="L846">						trxs[i].log.log(Level.WARNING, &quot;Transaction timeout. Name=&quot;+trxs[i].getTrxName() + &quot;, timeout(sec)=&quot;+(since / 1000));</span>
+<span class="nc bnc" id="L847" title="All 2 branches missed.">						if (trxs[i].trace != null)</span>
+						{
+<span class="nc" id="L849">							trxs[i].log.log(Level.WARNING, &quot;Transaction timeout. Trace:\n&quot; + trxs[i].getStrackTrace());</span>
+						}
+<span class="nc" id="L851">						trxs[i].rollbackAndCloseOnTimeout();</span>
+					}
+				}
+			}
+<span class="nc" id="L855">		}</span>
+	}
+
+	/**
+	 * Is trxName a PO local transaction ?
+	 * @param trxName
+	 * @return true if trxName is a PO local transaction
+	 */
+	private boolean isLocalTrx(String trxName)
+	{
+<span class="nc bnc" id="L865" title="All 2 branches missed.">		return trxName == null</span>
+<span class="nc bnc" id="L866" title="All 2 branches missed.">			|| trxName.startsWith(PO.LOCAL_TRX_PREFIX);</span>
+	}
+
+	@Override
+	protected void finalize() throws Throwable {
+<span class="nc bnc" id="L871" title="All 4 branches missed.">		if (m_connection != null &amp;&amp; trace != null) {</span>
+<span class="nc" id="L872">			final Trx me = this;</span>
+<span class="nc" id="L873">			Adempiere.getThreadPoolExecutor().schedule(new Runnable() {					</span>
+				@Override
+				public void run() {
+<span class="nc bnc" id="L876" title="All 4 branches missed.">					if (me.m_connection != null &amp;&amp; me.trace != null) {</span>
+<span class="nc" id="L877">						log.log(Level.WARNING, &quot;Trx Not Close: &quot; + me.getStrackTrace());</span>
+<span class="nc" id="L878">						me.trace = null;</span>
+<span class="nc" id="L879">						me.close();</span>
+					}
+<span class="nc" id="L881">				}</span>
+<span class="nc" id="L882">			}, 2, TimeUnit.SECONDS);</span>
+		}
+<span class="nc" id="L884">	}</span>
+
+	/**
+	 * Register a null trx
+	 * @return
+	 */
+	public static String registerNullTrx() {
+<span class="nc" id="L891">		String nullTrxName = &quot;NullTrx_&quot; + Util.generateUUIDv7().toString();</span>
+<span class="nc" id="L892">		Trx nullTrx = new Trx(nullTrxName);</span>
+<span class="nc" id="L893">		nullTrx.trace = new Exception();</span>
+<span class="nc" id="L894">		nullTrx.m_startTime = System.currentTimeMillis();</span>
+<span class="nc" id="L895">		String displayName = null;</span>
+<span class="nc" id="L896">		StackWalker walker = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);</span>
+<span class="nc" id="L897">		Optional&lt;String&gt; stackName = walker.walk(frames -&gt; frames.map(</span>
+<span class="nc" id="L898">				stackFrame -&gt; stackFrame.getClassName() + &quot;.&quot; +</span>
+<span class="nc" id="L899">						stackFrame.getMethodName() + &quot;:&quot; +</span>
+<span class="nc" id="L900">						stackFrame.getLineNumber())</span>
+<span class="nc bnc" id="L901" title="All 8 branches missed.">				.filter(f -&gt; ! (f.startsWith(Trx.class.getName() + &quot;.&quot;) || f.startsWith(StatementProxy.class.getName() + &quot;.&quot;) || f.startsWith(&quot;jdk.proxy&quot;) || f.startsWith(&quot;org.compiere.util.DB.&quot;)))</span>
+<span class="nc" id="L902">				.findFirst());</span>
+<span class="nc" id="L903">		displayName = (stackName.orElse(null));</span>
+<span class="nc bnc" id="L904" title="All 2 branches missed.">		if (displayName != null)</span>
+<span class="nc" id="L905">			nullTrx.setDisplayName(displayName);</span>
+<span class="nc" id="L906">		s_cache.put(nullTrxName, nullTrx);</span>
+<span class="nc" id="L907">		return nullTrxName;</span>
+	}
+
+	/**
+	 * Unregister a null trx
+	 * @param nullTrxName
+	 */
+	public static void unregisterNullTrx(String nullTrxName) {
+<span class="nc" id="L915">		Trx nullTrx = s_cache.get(nullTrxName);</span>
+<span class="nc" id="L916">		nullTrx.setDisplayName(null);</span>
+<span class="nc" id="L917">		nullTrx.trace = null;</span>
+<span class="nc" id="L918">		s_cache.remove(nullTrxName);</span>
+<span class="nc" id="L919">	}</span>
+
+}	//	Trx
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

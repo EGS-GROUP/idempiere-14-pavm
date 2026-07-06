@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ProxyServlet.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.eclipse.equinox.http.servlet</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.eclipse.equinox.http.servlet</a> &gt; <span class="el_source">ProxyServlet.java</span></div><h1>ProxyServlet.java</h1><pre class="source lang-java linenums">/*******************************************************************************
+ * Copyright (c) 2005, 2007 Cognos Incorporated, IBM Corporation and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ *
+ * Contributors:
+ *     Cognos Incorporated - initial API and implementation
+ *     IBM Corporation - bug fixes and enhancements
+ *     Angelo Zerr &lt;angelo.zerr@gmail.com&gt; - give the capability to use resources (JSP, HTML, Servlet...)
+ *     from the Bridge webapp with HTTP Filter.
+ *******************************************************************************/
+package org.adempiere.eclipse.equinox.http.servlet;
+
+import java.io.IOException;
+import java.util.*;
+import javax.servlet.*;
+import javax.servlet.http.*;
+import org.osgi.service.http.HttpContext;
+import org.osgi.service.http.NamespaceException;
+
+/**
+ * The ProxyServlet is the private side of a Servlet that when registered (and init() called) in a servlet container
+ * will in-turn register and provide an OSGi Http Service implementation.
+ * This class is not meant for extending or even using directly and is purely meant for registering
+ * in a servlet container.
+ */
+<span class="nc" id="L29">public class ProxyServlet extends HttpServlet implements Filter {</span>
+
+	private static final long serialVersionUID = 4117456123807468871L;
+<span class="nc" id="L32">	private Map&lt;String, ServletRegistration&gt; servletRegistrations = new HashMap&lt;String, ServletRegistration&gt;(); //alias --&gt; servlet registration</span>
+<span class="nc" id="L33">	private Set&lt;Servlet&gt; registeredServlets = new HashSet&lt;Servlet&gt;(); //All the servlets objects that have been registered</span>
+
+<span class="nc" id="L35">	private Map&lt;Filter, FilterRegistration&gt; filterRegistrations = new HashMap&lt;Filter, FilterRegistration&gt;(); //filter --&gt; filter registration;</span>
+	private ProxyContext proxyContext;
+	private String httpContext;
+
+	public void init(ServletConfig config) throws ServletException {
+<span class="nc" id="L40">		super.init(config);</span>
+<span class="nc" id="L41">		proxyContext = new ProxyContext(config.getServletContext());</span>
+<span class="nc" id="L42">		httpContext = config.getInitParameter(&quot;HttpContext.ClassName&quot;);</span>
+<span class="nc bnc" id="L43" title="All 2 branches missed.">		if (httpContext == null)</span>
+<span class="nc" id="L44">			httpContext = DefaultHttpContext.class.getName();</span>
+<span class="nc" id="L45">		Activator.addProxyServlet(this);</span>
+<span class="nc" id="L46">	}</span>
+
+	public synchronized void destroy() {
+<span class="nc" id="L49">		Activator.removeProxyServlet(this);</span>
+<span class="nc" id="L50">		proxyContext.destroy();</span>
+<span class="nc" id="L51">		proxyContext = null;</span>
+<span class="nc" id="L52">		super.destroy();</span>
+<span class="nc" id="L53">	}</span>
+
+	/**
+	 * @see HttpServlet#service(ServletRequest, ServletResponse)
+	 */
+	protected void service(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+<span class="nc" id="L59">		process(req, resp, null);</span>
+<span class="nc" id="L60">	}</span>
+
+	protected synchronized void process(HttpServletRequest req, HttpServletResponse resp, FilterChain filterChain) throws ServletException, IOException {
+<span class="nc" id="L63">		proxyContext.initializeServletPath(req, filterChain);</span>
+<span class="nc" id="L64">		String alias = HttpServletRequestAdaptor.getDispatchPathInfo(req, filterChain);</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">		if (alias == null)</span>
+<span class="nc" id="L66">			alias = &quot;/&quot;; //$NON-NLS-1$</span>
+
+		// perfect match
+<span class="nc bnc" id="L69" title="All 2 branches missed.">		if (processAlias(req, resp, alias, null, filterChain))</span>
+<span class="nc" id="L70">			return;</span>
+
+<span class="nc" id="L72">		String extensionAlias = findExtensionAlias(alias);</span>
+<span class="nc" id="L73">		alias = alias.substring(0, alias.lastIndexOf('/'));</span>
+
+		// longest path match
+<span class="nc bnc" id="L76" title="All 2 branches missed.">		while (alias.length() != 0) {</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">			if (processAlias(req, resp, alias, extensionAlias, filterChain))</span>
+<span class="nc" id="L78">				return;</span>
+<span class="nc" id="L79">			alias = alias.substring(0, alias.lastIndexOf('/'));</span>
+		}
+
+		// default handler match
+<span class="nc bnc" id="L83" title="All 2 branches missed.">		if (extensionAlias != null)</span>
+<span class="nc" id="L84">			extensionAlias = extensionAlias.substring(1); // remove the leading '/'</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">		if (processAlias(req, resp, &quot;/&quot;, extensionAlias, filterChain)) //Handle '/' aliases //$NON-NLS-1$</span>
+<span class="nc" id="L86">			return;</span>
+
+		// Cannot find the Servlet or Filter from the OSGi registry services :
+<span class="nc bnc" id="L89" title="All 2 branches missed.">		if (filterChain != null) {</span>
+			// Delegate the HTTP request to the Web server container.
+<span class="nc" id="L91">			filterChain.doFilter(req, resp);</span>
+
+<span class="nc" id="L93">		} else {</span>
+			// Send HTTP 4040 Error.
+<span class="nc" id="L95">			resp.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;ProxyServlet: &quot; + req.getRequestURI()); //$NON-NLS-1$</span>
+		}
+<span class="nc" id="L97">	}</span>
+
+	private String findExtensionAlias(String alias) {
+<span class="nc" id="L100">		String lastSegment = alias.substring(alias.lastIndexOf('/') + 1);</span>
+<span class="nc" id="L101">		int dot = lastSegment.lastIndexOf('.');</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">		if (dot == -1)</span>
+<span class="nc" id="L103">			return null;</span>
+<span class="nc" id="L104">		String extension = lastSegment.substring(dot + 1);</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">		if (extension.length() == 0)</span>
+<span class="nc" id="L106">			return null;</span>
+<span class="nc" id="L107">		return &quot;/*.&quot; + extension; //$NON-NLS-1$</span>
+	}
+
+	private boolean processAlias(HttpServletRequest req, HttpServletResponse resp, String alias, String extensionAlias, FilterChain filterChain) throws ServletException, IOException {
+<span class="nc" id="L111">		ServletRegistration registration = null;</span>
+<span class="nc" id="L112">		List&lt;FilterRegistration&gt; matchingFilterRegistrations = Collections.emptyList();</span>
+<span class="nc" id="L113">		String dispatchPathInfo = HttpServletRequestAdaptor.getDispatchPathInfo(req, filterChain);</span>
+<span class="nc" id="L114">		synchronized (this) {</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			if (extensionAlias == null)</span>
+<span class="nc" id="L116">				registration = (ServletRegistration) servletRegistrations.get(alias);</span>
+			else {
+<span class="nc" id="L118">				registration = (ServletRegistration) servletRegistrations.get(alias + extensionAlias);</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">				if (registration != null) {</span>
+					// for regular ServletRegistrations extensions should be handled on the full alias
+<span class="nc bnc" id="L121" title="All 2 branches missed.">					if (!(registration.getServlet() instanceof ResourceServlet))</span>
+<span class="nc" id="L122">						alias = HttpServletRequestAdaptor.getDispatchPathInfo(req, filterChain);</span>
+<span class="nc" id="L123">				} else</span>
+<span class="nc" id="L124">					registration = (ServletRegistration) servletRegistrations.get(alias);</span>
+			}
+<span class="nc bnc" id="L126" title="All 2 branches missed.">			if (registration != null) {</span>
+<span class="nc" id="L127">				registration.addReference();</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">				if (!filterRegistrations.isEmpty()) {</span>
+<span class="nc" id="L129">					matchingFilterRegistrations = new ArrayList&lt;FilterRegistration&gt;();</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">					for (Iterator&lt;FilterRegistration&gt; it = filterRegistrations.values().iterator(); it.hasNext();) {</span>
+<span class="nc" id="L131">						FilterRegistration filterRegistration = it.next();</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">						if (filterRegistration.matches(dispatchPathInfo)) {</span>
+<span class="nc" id="L133">							matchingFilterRegistrations.add(filterRegistration);</span>
+<span class="nc" id="L134">							filterRegistration.addReference();</span>
+						}
+					}
+				}
+			}
+		}
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (registration != null) {</span>
+			try {
+<span class="nc" id="L142">				HttpServletRequest wrappedRequest = new HttpServletRequestAdaptor(req, alias, registration.getServlet(), filterChain);</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">				if (matchingFilterRegistrations.isEmpty()) {</span>
+<span class="nc" id="L144">					registration.service(wrappedRequest, resp);</span>
+<span class="nc" id="L145">				} else {</span>
+<span class="nc" id="L146">					Collections.sort(matchingFilterRegistrations);</span>
+<span class="nc" id="L147">					FilterChain chain = new FilterChainImpl(matchingFilterRegistrations, registration);</span>
+<span class="nc" id="L148">					chain.doFilter(wrappedRequest, resp);</span>
+				}
+<span class="nc" id="L150">			} finally {</span>
+<span class="nc" id="L151">				registration.removeReference();</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">				for (Iterator&lt;FilterRegistration&gt; it = matchingFilterRegistrations.iterator(); it.hasNext();) {</span>
+<span class="nc" id="L153">					FilterRegistration filterRegistration = (FilterRegistration) it.next();</span>
+<span class="nc" id="L154">					filterRegistration.removeReference();</span>
+				}
+			}
+<span class="nc" id="L157">			return true;</span>
+		}
+<span class="nc" id="L159">		return false;</span>
+	}
+
+	//Effective unregistration of servlet and resources as defined in HttpService#unregister()
+	synchronized void unregister(String alias, boolean destroy) {
+<span class="nc" id="L164">		ServletRegistration removedRegistration = (ServletRegistration) servletRegistrations.remove(alias);</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">		if (removedRegistration != null) {</span>
+<span class="nc" id="L166">			registeredServlets.remove(removedRegistration.getServlet());</span>
+			try {
+<span class="nc bnc" id="L168" title="All 2 branches missed.">				if (destroy)</span>
+<span class="nc" id="L169">					removedRegistration.destroy();</span>
+<span class="nc" id="L170">			} finally {</span>
+<span class="nc" id="L171">				proxyContext.destroyContextAttributes(removedRegistration.getHttpContext());</span>
+			}
+		}
+<span class="nc" id="L174">	}</span>
+
+	//Effective registration of the servlet as defined HttpService#registerServlet()
+	synchronized void registerServlet(String alias, Servlet servlet, Dictionary&lt;String, String&gt; initparams, HttpContext httpContext) throws ServletException, NamespaceException {
+<span class="nc" id="L178">		checkAlias(alias);</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">		if (servletRegistrations.containsKey(alias))</span>
+<span class="nc" id="L180">			throw new NamespaceException(&quot;The alias '&quot; + alias + &quot;' is already in use.&quot;); //$NON-NLS-1$//$NON-NLS-2$</span>
+
+<span class="nc bnc" id="L182" title="All 2 branches missed.">		if (servlet == null)</span>
+<span class="nc" id="L183">			throw new IllegalArgumentException(&quot;Servlet cannot be null&quot;); //$NON-NLS-1$</span>
+
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		if (registeredServlets.contains(servlet))</span>
+<span class="nc" id="L186">			throw new ServletException(&quot;This servlet has already been registered.&quot;); //$NON-NLS-1$</span>
+
+<span class="nc" id="L188">		ServletRegistration registration = new ServletRegistration(servlet, httpContext);</span>
+<span class="nc" id="L189">		ServletContext wrappedServletContext = new ServletContextAdaptor(proxyContext, getServletContext(), httpContext);</span>
+<span class="nc" id="L190">		ServletConfig servletConfig = new ServletConfigImpl(servlet, initparams, wrappedServletContext);</span>
+
+<span class="nc" id="L192">		boolean initialized = false;</span>
+<span class="nc" id="L193">		proxyContext.createContextAttributes(httpContext);</span>
+		try {
+<span class="nc" id="L195">			registration.init(servletConfig);</span>
+<span class="nc" id="L196">			initialized = true;</span>
+<span class="nc" id="L197">		} finally {</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">			if (!initialized)</span>
+<span class="nc" id="L199">				proxyContext.destroyContextAttributes(httpContext);</span>
+		}
+<span class="nc" id="L201">		registeredServlets.add(servlet);</span>
+<span class="nc" id="L202">		servletRegistrations.put(alias, registration);</span>
+<span class="nc" id="L203">	}</span>
+
+	//Effective registration of the resources as defined HttpService#registerResources()
+	synchronized void registerResources(String alias, String name, HttpContext httpContext) throws NamespaceException {
+<span class="nc" id="L207">		checkName(name);</span>
+<span class="nc" id="L208">		Servlet resourceServlet = new ResourceServlet(name, httpContext);</span>
+		try {
+<span class="nc" id="L210">			registerServlet(alias, resourceServlet, null, httpContext);</span>
+<span class="nc" id="L211">		} catch (ServletException e) {</span>
+<span class="nc" id="L212">			throw new IllegalStateException(&quot;Unexpected ServletException throw when registering resources at alias &quot; + alias + &quot;.&quot;); //$NON-NLS-1$//$NON-NLS-2$</span>
+		}
+<span class="nc" id="L214">	}</span>
+
+	private void checkName(String name) {
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		if (name == null)</span>
+<span class="nc" id="L218">			throw new IllegalArgumentException(&quot;Name cannot be null&quot;); //$NON-NLS-1$</span>
+
+<span class="nc bnc" id="L220" title="All 4 branches missed.">		if (name.endsWith(&quot;/&quot;) &amp;&amp; !name.equals(&quot;/&quot;)) //$NON-NLS-1$ //$NON-NLS-2$</span>
+<span class="nc" id="L221">			throw new IllegalArgumentException(&quot;Invalid Name '&quot; + name + &quot;'&quot;); //$NON-NLS-1$//$NON-NLS-2$</span>
+<span class="nc" id="L222">	}</span>
+
+	private void checkAlias(String alias) {
+<span class="nc bnc" id="L225" title="All 2 branches missed.">		if (alias == null)</span>
+<span class="nc" id="L226">			throw new IllegalArgumentException(&quot;Alias cannot be null&quot;); //$NON-NLS-1$</span>
+
+<span class="nc bnc" id="L228" title="All 6 branches missed.">		if (!alias.startsWith(&quot;/&quot;) || (alias.endsWith(&quot;/&quot;) &amp;&amp; !alias.equals(&quot;/&quot;))) //$NON-NLS-1$ //$NON-NLS-2$//$NON-NLS-3$</span>
+<span class="nc" id="L229">			throw new IllegalArgumentException(&quot;Invalid alias '&quot; + alias + &quot;'&quot;); //$NON-NLS-1$//$NON-NLS-2$</span>
+<span class="nc" id="L230">	}</span>
+
+	public synchronized void unregisterFilter(Filter filter, boolean destroy) {
+<span class="nc" id="L233">		FilterRegistration removedRegistration = (FilterRegistration) filterRegistrations.remove(filter);</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">		if (removedRegistration != null) {</span>
+			try {
+<span class="nc bnc" id="L236" title="All 2 branches missed.">				if (destroy)</span>
+<span class="nc" id="L237">					removedRegistration.destroy();</span>
+<span class="nc" id="L238">			} finally {</span>
+<span class="nc" id="L239">				proxyContext.destroyContextAttributes(removedRegistration.getHttpContext());</span>
+			}
+		}
+<span class="nc" id="L242">	}</span>
+
+	public synchronized void registerFilter(String alias, Filter filter, Dictionary&lt;String, String&gt; initparams, HttpContext httpContext) throws ServletException {
+<span class="nc" id="L245">		checkAlias(alias);</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">		if (filter == null)</span>
+<span class="nc" id="L247">			throw new IllegalArgumentException(&quot;Filter cannot be null&quot;); //$NON-NLS-1$</span>
+
+<span class="nc bnc" id="L249" title="All 2 branches missed.">		if (filterRegistrations.containsKey(filter))</span>
+<span class="nc" id="L250">			throw new ServletException(&quot;This filter has already been registered.&quot;); //$NON-NLS-1$</span>
+
+<span class="nc" id="L252">		int filterPriority = findFilterPriority(initparams);</span>
+<span class="nc" id="L253">		FilterRegistration registration = new FilterRegistration(filter, httpContext, alias, filterPriority);</span>
+<span class="nc" id="L254">		ServletContext wrappedServletContext = new ServletContextAdaptor(proxyContext, getServletContext(), httpContext);</span>
+<span class="nc" id="L255">		FilterConfig filterConfig = new FilterConfigImpl(filter, initparams, wrappedServletContext);</span>
+
+<span class="nc" id="L257">		boolean initialized = false;</span>
+<span class="nc" id="L258">		proxyContext.createContextAttributes(httpContext);</span>
+		try {
+<span class="nc" id="L260">			registration.init(filterConfig);</span>
+<span class="nc" id="L261">			initialized = true;</span>
+<span class="nc" id="L262">		} finally {</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">			if (!initialized)</span>
+<span class="nc" id="L264">				proxyContext.destroyContextAttributes(httpContext);</span>
+		}
+<span class="nc" id="L266">		filterRegistrations.put(filter, registration);</span>
+<span class="nc" id="L267">	}</span>
+
+	private int findFilterPriority(Dictionary&lt;String, String&gt; initparams) {
+<span class="nc bnc" id="L270" title="All 2 branches missed.">		if (initparams == null)</span>
+<span class="nc" id="L271">			return 0;</span>
+<span class="nc" id="L272">		String filterPriority = (String) initparams.get(&quot;filter-priority&quot;); //$NON-NLS-1$</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">		if (filterPriority == null)</span>
+<span class="nc" id="L274">			return 0;</span>
+
+		try {
+<span class="nc" id="L277">			int result = Integer.parseInt(filterPriority);</span>
+<span class="nc bnc" id="L278" title="All 4 branches missed.">			if (result &gt;= -1000 &amp;&amp; result &lt;= 1000)</span>
+<span class="nc" id="L279">				return result;</span>
+<span class="nc" id="L280">		} catch (NumberFormatException e) {</span>
+			// fall through
+		}
+<span class="nc" id="L283">		throw new IllegalArgumentException(&quot;filter-priority must be an integer between -1000 and 1000 but was: &quot; + filterPriority); //$NON-NLS-1$</span>
+	}
+
+	public void init(FilterConfig filterConfig) throws ServletException {
+<span class="nc" id="L287">		ServletConfig servletConfig = new ServletConfigAdaptor(filterConfig);</span>
+<span class="nc" id="L288">		this.init(servletConfig);</span>
+<span class="nc" id="L289">	}</span>
+
+	public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+<span class="nc" id="L292">		HttpServletRequest req = (HttpServletRequest) request;</span>
+<span class="nc" id="L293">		HttpServletResponse resp = (HttpServletResponse) response;</span>
+<span class="nc" id="L294">		process(req, resp, chain);</span>
+<span class="nc" id="L295">	}</span>
+
+	private static class ServletConfigAdaptor implements ServletConfig {
+
+		private FilterConfig filterConfig;
+
+<span class="nc" id="L301">		public ServletConfigAdaptor(FilterConfig filterConfig) {</span>
+<span class="nc" id="L302">			this.filterConfig = filterConfig;</span>
+<span class="nc" id="L303">		}</span>
+
+		public String getInitParameter(String arg0) {
+<span class="nc" id="L306">			return filterConfig.getInitParameter(arg0);</span>
+		}
+
+		public Enumeration&lt;String&gt; getInitParameterNames() {
+<span class="nc" id="L310">			return filterConfig.getInitParameterNames();</span>
+		}
+
+		public ServletContext getServletContext() {
+<span class="nc" id="L314">			return filterConfig.getServletContext();</span>
+		}
+
+		public String getServletName() {
+<span class="nc" id="L318">			return filterConfig.getFilterName();</span>
+		}
+
+	}
+
+	public String getHttpContext() {
+<span class="nc" id="L324">		return httpContext;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

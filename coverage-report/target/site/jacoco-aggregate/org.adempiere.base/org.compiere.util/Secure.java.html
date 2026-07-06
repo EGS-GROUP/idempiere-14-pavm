@@ -1,0 +1,504 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Secure.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">Secure.java</span></div><h1>Secure.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.io.UnsupportedEncodingException;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.AlgorithmParameters;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.KeySpec;
+import java.sql.Timestamp;
+import java.util.HexFormat;
+import java.util.logging.Level;
+
+import javax.crypto.Cipher;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.IKeyStore;
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator;
+import org.bouncycastle.crypto.params.Argon2Parameters;
+
+/**
+ * Default implementation of {@link SecureInterface} for encryption and decryption.
+ * &lt;p&gt;
+ * Change log:
+ * &lt;ul&gt;
+ * &lt;li&gt;2007-01-27 - teo_sarca - [ 1598095 ] class Secure is not working with UTF8
+ * &lt;/ul&gt;
+ *  
+ *  @author     Jorg Janke
+ *  @version    $Id: Secure.java,v 1.2 2006/07/30 00:52:23 jjanke Exp $
+ */
+public class Secure implements SecureInterface
+{
+	private static final String ARGON2 = &quot;Argon2&quot;;
+
+	private static final String PASSWORD_BASED_KEY_DERIVATION_FUNCTION_2 = &quot;PBKDF2&quot;;
+
+	public static final String LEGACY_PASSWORD_HASH_ALGORITHM = &quot;SHA-512&quot;;
+
+	/**
+	 *	Hash checksum number
+	 *  @param key key
+	 *  @return checksum number
+	 */
+	public static int hash (String key)
+	{
+<span class="nc" id="L68">		long tableSize = 2147483647;	// one less than max int</span>
+<span class="nc" id="L69">		long hashValue = 0;</span>
+
+<span class="nc bnc" id="L71" title="All 2 branches missed.">		for (int i = 0; i &lt; key.length(); i++)</span>
+<span class="nc" id="L72">			hashValue = (37 * hashValue) + (key.charAt(i) -31);</span>
+
+<span class="nc" id="L74">		hashValue %= tableSize;</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">		if (hashValue &lt; 0)</span>
+<span class="nc" id="L76">			hashValue += tableSize;</span>
+
+<span class="nc" id="L78">		int retValue = (int)hashValue;</span>
+<span class="nc" id="L79">		return retValue;</span>
+	}	//	hash
+
+	/**
+	 *  Convert Byte Array to Hex String
+	 *  @param bytes bytes
+	 *  @return HexString
+	 */
+	public static String convertToHexString (byte[] bytes)
+	{
+<span class="nc" id="L89">		return HexFormat.of().formatHex(bytes);</span>
+	}   //  convertToHexString
+
+	/**
+	 *  Convert Hex String to Byte Array
+	 *  @param hexString hex string
+	 *  @return byte array
+	 */
+	public static byte[] convertHexString (String hexString)
+	{
+<span class="nc bnc" id="L99" title="All 4 branches missed.">		if (hexString == null || hexString.length() == 0)</span>
+<span class="nc" id="L100">			return null;</span>
+		try
+		{
+<span class="nc" id="L103">			return HexFormat.of().parseHex(hexString);</span>
+		}
+<span class="nc" id="L105">		catch (Exception e)</span>
+		{
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			if (log.isLoggable(Level.FINEST)) log.finest(hexString + &quot; - &quot; + e.getLocalizedMessage());</span>
+		}
+<span class="nc" id="L109">		return null;</span>
+	}   //  convertToHexString
+
+	/**
+	 * 	iDempiere Security
+	 */
+<span class="nc" id="L115">	public Secure()</span>
+	{
+<span class="nc" id="L117">		createKeyStore();</span>
+<span class="nc" id="L118">	}	//	Secure</span>
+	
+	/** Message Digest				*/
+<span class="nc" id="L121">	private MessageDigest	m_md = null;</span>
+	
+<span class="nc" id="L123">	private MessageDigest	m_sha256 = null;</span>
+
+<span class="nc" id="L125">	private IKeyStore m_keyStore = null;</span>
+	/**	Logger						*/
+<span class="nc" id="L127">	private static CLogger	log	= CLogger.getCLogger (Secure.class.getName());</span>
+
+	/**
+	 * 	Create Key Store if not yet done
+	 */
+	private synchronized void createKeyStore()
+	{
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		if(m_keyStore==null){</span>
+<span class="nc" id="L135">			m_keyStore = getKeyStore();</span>
+		}
+		
+<span class="nc" id="L138">	}	//	initCipher</span>
+
+	/**
+	 *	Encryption.
+	 *  @param value clear value
+	 *  @param AD_Client_ID
+	 *  @return encrypted String
+	 */
+	public String encrypt (String value,int AD_Client_ID)
+	{
+<span class="nc" id="L148">		String clearText = value;</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (clearText == null)</span>
+<span class="nc" id="L150">			clearText = &quot;&quot;;</span>
+		// Init
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		if (m_keyStore == null)</span>
+<span class="nc" id="L153">			createKeyStore();</span>
+
+		// Encrypt
+		try {
+<span class="nc" id="L157">			Cipher cipher = getCipherInstance();</span>
+
+<span class="nc" id="L159">			cipher.init(Cipher.ENCRYPT_MODE, m_keyStore.getKey(AD_Client_ID));</span>
+<span class="nc" id="L160">			byte[] encBytes = cipher.doFinal(clearText.getBytes(&quot;UTF8&quot;));</span>
+
+<span class="nc" id="L162">			String encString = convertToHexString(encBytes);</span>
+			// globalqss - [ 1577737 ] Security Breach - show database password
+			// log.log (Level.ALL, value + &quot; =&gt; &quot; + encString);
+<span class="nc" id="L165">			return encString;</span>
+<span class="nc" id="L166">		} catch (Exception ex) {</span>
+<span class="nc" id="L167">			log.log(Level.SEVERE, &quot;Problem encrypting string&quot;, ex);</span>
+		}
+
+		// Fallback
+<span class="nc" id="L171">		return CLEARVALUE_START + value + CLEARVALUE_END;</span>
+	}	//	encrypt
+
+	/**
+	 * Get Cipher Instance
+	 * @return cipher
+	 * @throws NoSuchAlgorithmException
+	 * @throws NoSuchPaddingException
+	 * @throws NoSuchProviderException
+	 */
+	protected Cipher getCipherInstance() throws NoSuchAlgorithmException, NoSuchPaddingException, NoSuchProviderException {
+<span class="nc" id="L182">		String provider = getCipherProvider();</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">		Cipher cipher = Util.isEmpty(provider, true) </span>
+<span class="nc" id="L184">							? Cipher.getInstance(m_keyStore.getAlgorithm())</span>
+<span class="nc" id="L185">							: Cipher.getInstance(m_keyStore.getAlgorithm(), provider);</span>
+<span class="nc" id="L186">		return cipher;</span>
+	}
+
+	/**
+	 * Get Cipher Provider 
+	 * @return cipher provider or null if default provider should be used
+	 */
+	protected String getCipherProvider() {
+<span class="nc" id="L194">		return m_keyStore.getProvider();</span>
+	}
+	
+	/**
+	 *	Decryption.
+	 * 	The methods must recognize clear text values
+	 *  @param value encrypted value
+	 *  @param AD_Client_ID
+	 *  @return decrypted String
+	 */
+	public String decrypt (String value,int AD_Client_ID)
+	{
+<span class="nc bnc" id="L206" title="All 4 branches missed.">		if (value == null || value.length() == 0)</span>
+<span class="nc" id="L207">			return value;</span>
+<span class="nc bnc" id="L208" title="All 4 branches missed.">		boolean isEncrypted = value.startsWith(ENCRYPTEDVALUE_START) &amp;&amp; value.endsWith(ENCRYPTEDVALUE_END);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">		if (isEncrypted)</span>
+<span class="nc" id="L210">			value = value.substring(ENCRYPTEDVALUE_START.length(), value.length()-ENCRYPTEDVALUE_END.length());</span>
+		//	Needs to be hex String	
+<span class="nc" id="L212">		byte[] data = convertHexString(value);</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">		if (data == null)	//	cannot decrypt</span>
+		{
+<span class="nc bnc" id="L215" title="All 2 branches missed.">			if (isEncrypted)</span>
+			{
+				// log.info(&quot;Failed: &quot; + value);
+<span class="nc" id="L218">				log.info(&quot;Failed&quot;);</span>
+<span class="nc" id="L219">				return null;</span>
+			}
+			//	assume not encrypted
+<span class="nc" id="L222">			return value;</span>
+		}
+		//	Init
+<span class="nc bnc" id="L225" title="All 2 branches missed.">		if (m_keyStore == null)</span>
+<span class="nc" id="L226">			createKeyStore();</span>
+
+		//	Encrypt
+<span class="nc bnc" id="L229" title="All 4 branches missed.">		if (value != null &amp;&amp; value.length() &gt; 0)</span>
+		{
+			try
+			{
+<span class="nc" id="L233">				Cipher cipher = getCipherInstance();</span>
+<span class="nc" id="L234">				AlgorithmParameters ap = cipher.getParameters();</span>
+<span class="nc" id="L235">				cipher.init(Cipher.DECRYPT_MODE, m_keyStore.getKey(AD_Client_ID), ap);</span>
+<span class="nc" id="L236">				byte[] out = cipher.doFinal(data);</span>
+<span class="nc" id="L237">				String retValue = new String(out, &quot;UTF8&quot;);</span>
+				// globalqss - [ 1577737 ] Security Breach - show database password
+				// log.log (Level.ALL, value + &quot; =&gt; &quot; + retValue);
+<span class="nc" id="L240">				return retValue;</span>
+			}
+<span class="nc" id="L242">			catch (Exception ex)</span>
+			{
+<span class="nc" id="L244">				log.log(Level.SEVERE, &quot;Failed decrypting&quot;, ex);</span>
+			}
+		}
+<span class="nc" id="L247">		return null;</span>
+	}	//	decrypt
+
+	/**
+	 *	Not implemented, just return value as it is
+	 *  @param value clear value
+	 *  @param ad_client_id
+	 *  @return integer value
+	 */
+	public Integer encrypt (Integer value,int ad_client_id)
+	{
+<span class="nc" id="L258">		return value;</span>
+	}	//	encrypt
+
+	/**
+	 *	Not implemented, just return value as it is
+	 *  @param value encrypted value
+	 *  @return integer value
+	 */
+	public Integer decrypt (Integer value,int ad_client_id)
+	{
+<span class="nc" id="L268">		return value;</span>
+	}	//	decrypt
+	
+	/**
+	 *	Not implemented, just return value as it is
+	 *  @param value clear value
+	 *  @param ad_client_id
+	 *  @return BigDecimal value
+	 */
+	public BigDecimal encrypt (BigDecimal value,int ad_client_id)
+	{
+<span class="nc" id="L279">		return value;</span>
+	}	//	encrypt
+
+	/**
+	 *	Not implemented, just return value as it is
+	 *  @param value encrypted value
+	 *  @return Big decimal value
+	 */
+	public BigDecimal decrypt (BigDecimal value,int ad_client_id)
+	{
+<span class="nc" id="L289">		return value;</span>
+	}	//	decrypt
+
+	/**
+	 *	Not implemented, just return value as it is
+	 *  @param value clear value
+	 *  @param ad_client_id
+	 *  @return Timestamp value
+	 */
+	public Timestamp encrypt (Timestamp value,int ad_client_id)
+	{
+<span class="nc" id="L300">		return value;</span>
+	}	//	encrypt
+
+	/**
+	 *	Not implemented, just return value as it is 	
+	 *  @param value encrypted value
+	 *  @return Timestamp value
+	 */
+	public Timestamp decrypt (Timestamp value,int ad_client_id)
+	{
+<span class="nc" id="L310">		return value;</span>
+	}	//	decrypt
+		
+	/**
+	 *  Perform MD5 Digest of value
+	 *  JavaScript version see - http://pajhome.org.uk/crypt/md5/index.html
+	 *
+	 *  @param value text to digest
+	 *  @return HexString of digested message (length = 32 characters)
+	 */
+	public String getDigest (String value)
+	{
+<span class="nc bnc" id="L322" title="All 2 branches missed.">		if (m_md == null)</span>
+		{
+			try
+			{
+<span class="nc" id="L326">				m_md = MessageDigest.getInstance(&quot;MD5&quot;);</span>
+<span class="nc" id="L327">			}</span>
+<span class="nc" id="L328">			catch (NoSuchAlgorithmException nsae)</span>
+			{
+<span class="nc" id="L330">				nsae.printStackTrace();</span>
+			}
+		}
+        //	Convert String to array of bytes
+<span class="nc" id="L334">		byte[] input = value.getBytes();</span>
+<span class="nc" id="L335">		byte[] output = null;</span>
+		//	Reset MessageDigest object
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		if (m_md != null) {</span>
+<span class="nc" id="L338">			m_md.reset();		</span>
+			//	feed this array of bytes to the MessageDigest object
+<span class="nc" id="L340">			m_md.update(input);</span>
+			//	 Get the resulting bytes after the encryption process
+<span class="nc" id="L342">			output = m_md.digest();</span>
+<span class="nc" id="L343">			m_md.reset();</span>
+			//
+		}
+<span class="nc" id="L346">		return convertToHexString(output);</span>
+	}	//	getDigest
+
+	/**
+	 * 	Checks, if value is a valid digest
+	 *  @param value digest string
+	 *  @return true if valid digest
+	 */
+	public boolean isDigest (String value)
+	{
+<span class="nc bnc" id="L356" title="All 4 branches missed.">		if (value == null || value.length() != 32)</span>
+<span class="nc" id="L357">			return false;</span>
+		//	needs to be a hex string, so try to convert it
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		return (convertHexString(value) != null);</span>
+	}	//	isDigest
+
+	
+	@Override
+	public String getSHA256Digest(String value) {
+<span class="nc bnc" id="L365" title="All 2 branches missed.">		if (m_sha256 == null)</span>
+		{
+			try
+			{
+<span class="nc" id="L369">				m_sha256 = MessageDigest.getInstance(&quot;SHA-256&quot;);</span>
+<span class="nc" id="L370">			}</span>
+<span class="nc" id="L371">			catch (NoSuchAlgorithmException nsae)</span>
+			{
+<span class="nc" id="L373">				nsae.printStackTrace();</span>
+			}
+		}
+        //	Convert String to array of bytes
+<span class="nc" id="L377">		byte[] input = value.getBytes(StandardCharsets.UTF_8);</span>
+<span class="nc" id="L378">		byte[] output = null;</span>
+		//	Reset MessageDigest object
+<span class="nc bnc" id="L380" title="All 2 branches missed.">		if (m_sha256 != null) {</span>
+<span class="nc" id="L381">			m_sha256.reset();		</span>
+			//	feed this array of bytes to the MessageDigest object
+<span class="nc" id="L383">			m_sha256.update(input);</span>
+			//	 Get the resulting bytes after the encryption process
+<span class="nc" id="L385">			output = m_sha256.digest();</span>
+<span class="nc" id="L386">			m_sha256.reset();</span>
+			//
+		}
+<span class="nc" id="L389">		return convertToHexString(output);</span>
+	}
+
+	@Override
+	public boolean isSHA256Digest(String value) {
+<span class="nc bnc" id="L394" title="All 4 branches missed.">		if (value == null || value.length() != 64)</span>
+<span class="nc" id="L395">			return false;</span>
+		//	needs to be a hex string, so try to convert it
+<span class="nc bnc" id="L397" title="All 2 branches missed.">		return (convertHexString(value) != null);</span>
+	}
+
+	/**
+	 *  Convert String and salt to SHA-512 hash with iterations
+	 *  https://www.owasp.org/index.php/Hashing_Java
+	 *
+	 *  @param value message
+	 *  @return HexString of message (length = 128 characters)
+	 *  @throws NoSuchAlgorithmException 
+	 *  @throws UnsupportedEncodingException 
+	 */
+	public String getSHA512Hash (int iterations, String value, byte[] salt) throws NoSuchAlgorithmException, UnsupportedEncodingException
+	{
+<span class="nc" id="L411">		MessageDigest digest = MessageDigest.getInstance(LEGACY_PASSWORD_HASH_ALGORITHM);</span>
+<span class="nc" id="L412">		digest.reset();</span>
+<span class="nc" id="L413">		digest.update(salt);</span>
+<span class="nc" id="L414">		byte[] input = digest.digest(value.getBytes(&quot;UTF-8&quot;));</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">		for (int i = 0; i &lt; iterations; i++) {</span>
+<span class="nc" id="L416">			digest.reset();</span>
+<span class="nc" id="L417">			input = digest.digest(input);</span>
+		}
+<span class="nc" id="L419">		digest.reset();</span>
+		//
+<span class="nc" id="L421">		return convertToHexString(input);</span>
+	}	//	getSHA512Hash
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L431">		StringBuilder sb = new StringBuilder (&quot;Secure[&quot;);</span>
+<span class="nc" id="L432">		sb.append(m_keyStore.getAlgorithm())</span>
+<span class="nc" id="L433">			.append (&quot;]&quot;);</span>
+<span class="nc" id="L434">		return sb.toString ();</span>
+	}	//	toString
+	
+	/**
+	 * @return keystore
+	 */
+	public IKeyStore getKeyStore(){
+<span class="nc" id="L441">		IKeyStore keyStore = Core.getKeyStore();</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		if(keyStore==null)</span>
+<span class="nc" id="L443">			keyStore = new DefaultKeyStore();</span>
+		
+<span class="nc" id="L445">		return keyStore;</span>
+	}
+
+	
+	@Override
+	public boolean isSupportedPaswordHashAlgorithm(String algorithm) {
+<span class="nc bnc" id="L451" title="All 2 branches missed.">		return LEGACY_PASSWORD_HASH_ALGORITHM.equalsIgnoreCase(algorithm)</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">				|| PASSWORD_BASED_KEY_DERIVATION_FUNCTION_2.equalsIgnoreCase(algorithm)</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">				|| ARGON2.equalsIgnoreCase(algorithm);</span>
+	}
+
+	@Override
+	public String getPasswordHash(String password, byte[] salt, String algorithm)
+			throws NoSuchAlgorithmException, UnsupportedEncodingException, NoSuchProviderException, InvalidKeySpecException {
+<span class="nc bnc" id="L459" title="All 2 branches missed.">		if (algorithm == null)</span>
+		{
+			// SHA-512 hash with salt * 1000 iterations - backward compatibility, legacy default
+<span class="nc" id="L462">			return getSHA512Hash(1000, password, salt);</span>
+		}
+<span class="nc bnc" id="L464" title="All 2 branches missed.">		else if (LEGACY_PASSWORD_HASH_ALGORITHM.equalsIgnoreCase(algorithm))</span>
+		{
+			//SHA-512 hash with salt * 310000 iterations https://web.archive.org/web/20120507203007/https://www.owasp.org/index.php/Hashing_Java
+<span class="nc" id="L467">			return getSHA512Hash(310000, password, salt);</span>
+		}
+<span class="nc bnc" id="L469" title="All 2 branches missed.">		else if (PASSWORD_BASED_KEY_DERIVATION_FUNCTION_2.equalsIgnoreCase(algorithm))</span>
+		{
+<span class="nc" id="L471">			KeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 600000, 128);</span>
+<span class="nc" id="L472">			SecretKeyFactory factory = SecretKeyFactory.getInstance(&quot;PBKDF2WithHmacSHA256&quot;);</span>
+<span class="nc" id="L473">			byte[] hash = factory.generateSecret(spec).getEncoded();</span>
+<span class="nc" id="L474">			return convertToHexString(hash);</span>
+		}
+<span class="nc bnc" id="L476" title="All 2 branches missed.">		else if (ARGON2.equalsIgnoreCase(algorithm))</span>
+		{
+<span class="nc" id="L478">			int iterations = 2;</span>
+<span class="nc" id="L479">		    int memLimit = 66536;</span>
+<span class="nc" id="L480">		    int hashLength = 32;</span>
+<span class="nc" id="L481">		    int parallelism = 1;</span>
+		        
+<span class="nc" id="L483">		    Argon2Parameters.Builder builder = new Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)</span>
+<span class="nc" id="L484">		      .withVersion(Argon2Parameters.ARGON2_VERSION_13)</span>
+<span class="nc" id="L485">		      .withIterations(iterations)</span>
+<span class="nc" id="L486">		      .withMemoryAsKB(memLimit)</span>
+<span class="nc" id="L487">		      .withParallelism(parallelism)</span>
+<span class="nc" id="L488">		      .withSalt(salt);</span>
+		        
+<span class="nc" id="L490">		    Argon2BytesGenerator generate = new Argon2BytesGenerator();</span>
+<span class="nc" id="L491">		    generate.init(builder.build());</span>
+<span class="nc" id="L492">		    byte[] hash = new byte[hashLength];</span>
+<span class="nc" id="L493">		    generate.generateBytes(password.getBytes(StandardCharsets.UTF_8), hash, 0, hash.length);</span>
+<span class="nc" id="L494">		    return convertToHexString(hash);		    		        </span>
+		}
+		else
+		{
+<span class="nc" id="L498">			throw new NoSuchAlgorithmException(&quot;Hash algorithm not supported: &quot; + algorithm);</span>
+		}
+	}
+
+	
+}   //  Secure
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

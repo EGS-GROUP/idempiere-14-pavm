@@ -1,0 +1,760 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MMeasure.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MMeasure.java</span></div><h1>MMeasure.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Properties;
+import java.util.StringTokenizer;
+import java.util.logging.Level;
+
+import javax.script.Bindings;
+import javax.script.CompiledScript;
+import javax.script.ScriptEngine;
+
+import org.adempiere.apps.graph.GraphColumn;
+import org.adempiere.base.Core;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.util.MeasureInterface;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+import org.idempiere.cache.ImmutableIntPOCache;
+import org.idempiere.cache.ImmutablePOSupport;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ * 	Performance Measure
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: MMeasure.java,v 1.2 2006/07/30 00:51:05 jjanke Exp $
+ * 
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;BF [ 1887674 ] Deadlock when try to modify PA Goal's Measure Target
+ * @author victor.perez@e-evolution.com, www.e-evolution.com
+ * 			&lt;li&gt;FR [ 2905227 ] Calculate Measure based on the script to PA
+ * 			&lt;li&gt;https://sourceforge.net/p/adempiere/feature-requests/888/
+ */
+public class MMeasure extends X_PA_Measure implements ImmutablePOSupport
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -3584012092877837973L;
+
+	/**
+	 * 	Get MMeasure from Cache (immutable)
+	 *	@param PA_Measure_ID id
+	 *	@return MMeasure
+	 */
+	public static MMeasure get (int PA_Measure_ID)
+	{
+<span class="nc" id="L71">		return get(Env.getCtx(), PA_Measure_ID);</span>
+	}
+	
+	/**
+	 * 	Get MMeasure from Cache (immutable)
+	 *  @param ctx context
+	 *	@param PA_Measure_ID id
+	 *	@return MMeasure
+	 */
+	public static MMeasure get (Properties ctx, int PA_Measure_ID)
+	{
+<span class="nc" id="L82">		Integer key = Integer.valueOf(PA_Measure_ID);</span>
+<span class="nc" id="L83">		MMeasure retValue = s_cache.get (ctx, key, e -&gt; new MMeasure(ctx, e));</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">		if (retValue != null)</span>
+<span class="nc" id="L85">			return retValue;</span>
+<span class="nc" id="L86">		retValue = new MMeasure (ctx, PA_Measure_ID, (String)null);</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">		if (retValue.get_ID() == PA_Measure_ID)</span>
+		{
+<span class="nc" id="L89">			s_cache.put (key, retValue, e -&gt; new MMeasure(Env.getCtx(), e));</span>
+<span class="nc" id="L90">			return retValue;</span>
+		}
+<span class="nc" id="L92">		return null;</span>
+	} //	get
+
+	/**	Cache						*/
+<span class="nc" id="L96">	private static ImmutableIntPOCache&lt;Integer, MMeasure&gt; s_cache </span>
+<span class="nc" id="L97">		= new ImmutableIntPOCache&lt;Integer, MMeasure&gt; (Table_Name, 10);</span>
+	
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param PA_Measure_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MMeasure(Properties ctx, String PA_Measure_UU, String trxName) {
+<span class="nc" id="L106">        super(ctx, PA_Measure_UU, trxName);</span>
+<span class="nc" id="L107">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param PA_Measure_ID id
+	 *	@param trxName trx
+	 */
+	public MMeasure (Properties ctx, int PA_Measure_ID, String trxName)
+	{
+<span class="nc" id="L117">		super (ctx, PA_Measure_ID, trxName);</span>
+<span class="nc" id="L118">	}	//	MMeasure</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName trx
+	 */
+	public MMeasure (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L128">		super (ctx, rs, trxName);</span>
+<span class="nc" id="L129">	}	//	MMeasure</span>
+
+	/**
+	 * Copy constructor
+	 * @param copy
+	 */
+	public MMeasure(MMeasure copy) 
+	{
+<span class="nc" id="L137">		this(Env.getCtx(), copy);</span>
+<span class="nc" id="L138">	}</span>
+
+	/**
+	 * Copy constructor
+	 * @param ctx
+	 * @param copy
+	 */
+	public MMeasure(Properties ctx, MMeasure copy) 
+	{
+<span class="nc" id="L147">		this(ctx, copy, (String) null);</span>
+<span class="nc" id="L148">	}</span>
+
+	/**
+	 * Copy constructor
+	 * @param ctx
+	 * @param copy
+	 * @param trxName
+	 */
+	public MMeasure(Properties ctx, MMeasure copy, String trxName) 
+	{
+<span class="nc" id="L158">		this(ctx, 0, trxName);</span>
+<span class="nc" id="L159">		copyPO(copy);</span>
+<span class="nc" id="L160">	}</span>
+	
+	/**
+	 * Get chart columns
+	 * @param goal
+	 * @return list of GraphColumn
+	 */
+	public ArrayList&lt;GraphColumn&gt; getGraphColumnList(MGoal goal)
+	{
+<span class="nc" id="L169">		ArrayList&lt;GraphColumn&gt; list = new ArrayList&lt;GraphColumn&gt;();</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">		if (MMeasure.MEASURETYPE_Calculated.equals(getMeasureType()))</span>
+		{
+<span class="nc" id="L172">			MMeasureCalc mc = MMeasureCalc.get(getPA_MeasureCalc_ID());</span>
+<span class="nc" id="L173">			SQLFragment sql = mc.getSqlBarChartFragment(goal.getRestrictions(false),</span>
+<span class="nc" id="L174">					goal.getMeasureDisplay(), goal.getDateFrom(),</span>
+<span class="nc" id="L175">					MRole.getDefault()); // logged in role</span>
+<span class="nc" id="L176">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L177">			ResultSet rs = null;</span>
+			try 
+			{
+<span class="nc" id="L180">				pstmt = DB.prepareStatement(sql.sqlClause(), null);</span>
+<span class="nc bnc" id="L181" title="All 4 branches missed.">				if (sql.parameters() != null &amp;&amp; sql.parameters().size() &gt; 0)</span>
+<span class="nc" id="L182">					DB.setParameters(pstmt, sql.parameters());</span>
+<span class="nc" id="L183">				rs = pstmt.executeQuery();</span>
+<span class="nc" id="L184">				ArrayList&lt;Timestamp&gt; dataList = new ArrayList&lt;Timestamp&gt;();</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">				while (rs.next ())</span>
+				{
+<span class="nc" id="L187">					BigDecimal data = rs.getBigDecimal(1);</span>
+<span class="nc" id="L188">					Timestamp date = rs.getTimestamp(2);</span>
+<span class="nc" id="L189">					GraphColumn bgc = new GraphColumn(mc, data);</span>
+<span class="nc" id="L190">					bgc.setLabel(date, goal.getMeasureDisplay()); //TODO copy order-loop to other measures</span>
+<span class="nc" id="L191">					int pos=0;</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">					for (int i = 0; i &lt;  dataList.size(); i++)</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">						if (dataList.get(i).before(date)) pos++;</span>
+<span class="nc" id="L194">					dataList.add(date); // list of dates</span>
+<span class="nc" id="L195">					list.add(pos, bgc);</span>
+				}
+<span class="nc" id="L197">			}</span>
+<span class="nc" id="L198">			catch (Exception e)</span>
+			{
+<span class="nc" id="L200">				log.log (Level.SEVERE, sql.sqlClause(), e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L204">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L205">				rs = null; pstmt = null;</span>
+			}
+		}
+<span class="nc bnc" id="L208" title="All 2 branches missed.">		else if (MMeasure.MEASURETYPE_Achievements.equals(getMeasureType()))</span>
+		{
+<span class="nc bnc" id="L210" title="All 2 branches missed.">			if (MMeasure.MEASUREDATATYPE_StatusQtyAmount.equals(getMeasureDataType()))</span>
+			{
+<span class="nc" id="L212">				MAchievement[] achievements = MAchievement.get(this);</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">				for (int i = 0; i &lt; achievements.length; i++)</span>
+				{
+<span class="nc" id="L215">					MAchievement achievement = achievements[i];</span>
+<span class="nc" id="L216">					GraphColumn bgc = new GraphColumn(achievement);</span>
+<span class="nc" id="L217">					list.add(bgc);</span>
+				}
+<span class="nc" id="L219">			}</span>
+			else	//	MMeasure.MEASUREDATATYPE_QtyAmountInTime
+			{
+<span class="nc" id="L222">				String MeasureDisplay = goal.getMeasureDisplay();</span>
+<span class="nc" id="L223">				String trunc = &quot;D&quot;;</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">				if (MGoal.MEASUREDISPLAY_Year.equals(MeasureDisplay))</span>
+<span class="nc" id="L225">					trunc = &quot;Y&quot;;</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">				else if (MGoal.MEASUREDISPLAY_Quarter.equals(MeasureDisplay))</span>
+<span class="nc" id="L227">					trunc = &quot;Q&quot;;</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">				else if (MGoal.MEASUREDISPLAY_Month.equals(MeasureDisplay))</span>
+<span class="nc" id="L229">					trunc = &quot;MM&quot;;</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">				else if (MGoal.MEASUREDISPLAY_Week.equals(MeasureDisplay))</span>
+<span class="nc" id="L231">					trunc = &quot;W&quot;;</span>
+				//		trunc = &quot;D&quot;;
+<span class="nc" id="L233">				trunc = &quot;TRUNC(DateDoc,'&quot; + trunc + &quot;')&quot;;</span>
+<span class="nc" id="L234">				StringBuilder sql = new StringBuilder (&quot;SELECT SUM(ManualActual), &quot;)</span>
+<span class="nc" id="L235">				.append(trunc).append(&quot; FROM PA_Achievement WHERE PA_Measure_ID=? AND IsAchieved='Y' &quot;)</span>
+<span class="nc" id="L236">				.append(&quot;GROUP BY &quot;).append(trunc)</span>
+<span class="nc" id="L237">				.append(&quot; ORDER BY &quot;).append(trunc);</span>
+<span class="nc" id="L238">				PreparedStatement pstmt = null;</span>
+<span class="nc" id="L239">				ResultSet rs = null;</span>
+				try
+				{
+<span class="nc" id="L242">					pstmt = DB.prepareStatement (sql.toString(), null);</span>
+<span class="nc" id="L243">					pstmt.setInt(1, getPA_Measure_ID());</span>
+<span class="nc" id="L244">					rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">					while (rs.next ())</span>
+					{
+<span class="nc" id="L247">						BigDecimal data = rs.getBigDecimal(1);</span>
+<span class="nc" id="L248">						Timestamp date = rs.getTimestamp(2);</span>
+<span class="nc" id="L249">						GraphColumn bgc = new GraphColumn(goal, data);</span>
+<span class="nc" id="L250">						bgc.setLabel(date, goal.getMeasureDisplay());</span>
+<span class="nc" id="L251">						list.add(bgc);</span>
+					}
+<span class="nc" id="L253">				}</span>
+<span class="nc" id="L254">				catch (Exception e)</span>
+				{
+<span class="nc" id="L256">					log.log (Level.SEVERE, sql.toString(), e);</span>
+				}
+				finally
+				{
+<span class="nc" id="L260">					DB.close(rs, pstmt);</span>
+<span class="nc" id="L261">					rs = null; pstmt = null;</span>
+				}
+			}	//	Achievement in time
+		}	//	Achievement
+
+		//	Request
+<span class="nc bnc" id="L267" title="All 2 branches missed.">		else if (MMeasure.MEASURETYPE_Request.equals(getMeasureType()))</span>
+		{
+<span class="nc" id="L269">			MRequestType rt = MRequestType.get(Env.getCtx(), getR_RequestType_ID());</span>
+<span class="nc" id="L270">			String sql = rt.getSqlBarChart(goal.getRestrictions(false),</span>
+<span class="nc" id="L271">					goal.getMeasureDisplay(), getMeasureDataType(),</span>
+<span class="nc" id="L272">					goal.getDateFrom(), MRole.getDefault());	//	logged in role</span>
+<span class="nc" id="L273">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L274">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L277">				pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L278">				rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">				while (rs.next ())</span>
+				{
+<span class="nc" id="L281">					BigDecimal data = rs.getBigDecimal(1);</span>
+<span class="nc" id="L282">					int R_Status_ID = rs.getInt(3);</span>
+<span class="nc" id="L283">					GraphColumn bgc = new GraphColumn(rt, data, R_Status_ID);</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">					if (R_Status_ID == 0)</span>
+					{
+<span class="nc" id="L286">						Timestamp date = rs.getTimestamp(2);</span>
+<span class="nc" id="L287">						bgc.setLabel(date, goal.getMeasureDisplay());</span>
+<span class="nc" id="L288">					}</span>
+					else
+					{
+<span class="nc" id="L291">						MStatus status = MStatus.get(Env.getCtx(), R_Status_ID);</span>
+<span class="nc" id="L292">						bgc.setLabel(status.getName());</span>
+					}
+<span class="nc" id="L294">					list.add(bgc);</span>
+				}
+<span class="nc" id="L296">			}</span>
+<span class="nc" id="L297">			catch (Exception e)</span>
+			{
+<span class="nc" id="L299">				log.log (Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L303">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L304">				rs = null; pstmt = null;</span>
+			}
+		}	//	Request
+
+		//	Project
+<span class="nc bnc" id="L309" title="All 2 branches missed.">		else if (MMeasure.MEASURETYPE_Project.equals(getMeasureType()))</span>
+		{
+<span class="nc" id="L311">			MProjectType pt = MProjectType.get(Env.getCtx(), getC_ProjectType_ID());</span>
+<span class="nc" id="L312">			String sql = pt.getSqlBarChart(goal.getRestrictions(false),</span>
+<span class="nc" id="L313">					goal.getMeasureDisplay(), getMeasureDataType(),</span>
+<span class="nc" id="L314">					goal.getDateFrom(), MRole.getDefault());	//	logged in role</span>
+<span class="nc" id="L315">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L316">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L319">				pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L320">				rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">				while (rs.next ())</span>
+				{
+<span class="nc" id="L323">					BigDecimal data = rs.getBigDecimal(1);</span>
+<span class="nc" id="L324">					Timestamp date = rs.getTimestamp(2);</span>
+<span class="nc" id="L325">					int id = rs.getInt(3);</span>
+<span class="nc" id="L326">					GraphColumn bgc = new GraphColumn(pt, data, id);</span>
+<span class="nc" id="L327">					bgc.setLabel(date, goal.getMeasureDisplay());</span>
+<span class="nc" id="L328">					list.add(bgc);</span>
+				}
+<span class="nc" id="L330">			}</span>
+<span class="nc" id="L331">			catch (Exception e)</span>
+			{
+<span class="nc" id="L333">				log.log (Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L337">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L338">				rs = null; pstmt = null;</span>
+			}
+		}	//	Project
+
+<span class="nc" id="L342">		return list;</span>
+	}
+
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L352">		StringBuilder sb = new StringBuilder (&quot;MMeasure[&quot;);</span>
+<span class="nc" id="L353">		sb.append (get_ID()).append (&quot;-&quot;).append (getName()).append (&quot;]&quot;);</span>
+<span class="nc" id="L354">		return sb.toString ();</span>
+	}	//	toString
+	
+	@Override
+	protected boolean beforeSave (boolean newRecord)
+	{
+		// Mandatory field validation by measure type.
+<span class="nc bnc" id="L361" title="All 2 branches missed.">		if (MEASURETYPE_Calculated.equals(getMeasureType())</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">			&amp;&amp; getPA_MeasureCalc_ID() == 0)</span>
+		{
+<span class="nc" id="L364">			log.saveError(&quot;FillMandatory&quot;, Msg.getElement(getCtx(), &quot;PA_MeasureCalc_ID&quot;));</span>
+<span class="nc" id="L365">			return false;</span>
+		}
+<span class="nc bnc" id="L367" title="All 2 branches missed.">		else if (MEASURETYPE_Ratio.equals(getMeasureType())</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">			&amp;&amp; getPA_Ratio_ID() == 0)</span>
+		{
+<span class="nc" id="L370">			log.saveError(&quot;FillMandatory&quot;, Msg.getElement(getCtx(), &quot;PA_Ratio_ID&quot;));</span>
+<span class="nc" id="L371">			return false;</span>
+		}
+<span class="nc bnc" id="L373" title="All 2 branches missed.">		else if (MEASURETYPE_UserDefined.equals(getMeasureType())</span>
+<span class="nc bnc" id="L374" title="All 4 branches missed.">			&amp;&amp; (getCalculationClass() == null || getCalculationClass().length()==0))</span>
+		{
+<span class="nc" id="L376">			log.saveError(&quot;FillMandatory&quot;, Msg.getElement(getCtx(), &quot;CalculationClass&quot;));</span>
+<span class="nc" id="L377">			return false;</span>
+		}
+<span class="nc bnc" id="L379" title="All 2 branches missed.">		else if (MEASURETYPE_Request.equals(getMeasureType())</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">			&amp;&amp; getR_RequestType_ID() == 0)</span>
+		{
+<span class="nc" id="L382">			log.saveError(&quot;FillMandatory&quot;, Msg.getElement(getCtx(), &quot;R_RequestType_ID&quot;));</span>
+<span class="nc" id="L383">			return false;</span>
+		}
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		else if (MEASURETYPE_Project.equals(getMeasureType())</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">			&amp;&amp; getC_ProjectType_ID() == 0)</span>
+		{
+<span class="nc" id="L388">			log.saveError(&quot;FillMandatory&quot;, Msg.getElement(getCtx(), &quot;C_ProjectType_ID&quot;));</span>
+<span class="nc" id="L389">			return false;</span>
+		}
+<span class="nc" id="L391">		return true;</span>
+	}	//	beforeSave
+	
+	@Override
+	protected boolean afterSave (boolean newRecord, boolean success)
+	{
+		//	Update Goals with Manual Measure
+<span class="nc bnc" id="L398" title="All 4 branches missed.">		if (success &amp;&amp; MEASURETYPE_Manual.equals(getMeasureType()))</span>
+<span class="nc" id="L399">			updateManualGoals();</span>
+		
+<span class="nc" id="L401">		return success;</span>
+	}	//	afterSave
+	
+	/**
+	 * 	Update Goals
+	 * 	@return true if updated
+	 */
+	public boolean updateGoals()
+	{
+<span class="nc" id="L410">		String mt = getMeasureType();</span>
+		try
+		{
+<span class="nc bnc" id="L413" title="All 2 branches missed.">			if (MEASURETYPE_Manual.equals(mt))</span>
+<span class="nc" id="L414">				return updateManualGoals();</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">			else if (MEASURETYPE_Achievements.equals(mt))</span>
+<span class="nc" id="L416">				return updateAchievementGoals();</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">			else if (MEASURETYPE_Calculated.equals(mt))</span>
+<span class="nc" id="L418">				return updateCalculatedGoals();</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">			else if (MEASURETYPE_Ratio.equals(mt))</span>
+<span class="nc" id="L420">				return updateRatios();</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">			else if (MEASURETYPE_Request.equals(mt))</span>
+<span class="nc" id="L422">				return updateRequests();</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">			else if (MEASURETYPE_Project.equals(mt))</span>
+<span class="nc" id="L424">				return updateProjects();</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">			else if(MEASURETYPE_UserDefined.equals(mt))</span>
+<span class="nc" id="L426">				return updateUserDefined();</span>
+			//	Projects
+		}
+<span class="nc" id="L429">		catch (Exception e)</span>
+		{
+<span class="nc" id="L431">			log.log(Level.SEVERE, &quot;MeasureType=&quot; + mt, e);</span>
+		}
+<span class="nc" id="L433">		return false;</span>
+	}	//	updateGoals
+
+	/**
+	 * 	Update/save Manual Goals
+	 * 	@return true if updated
+	 */
+	private boolean updateManualGoals()
+	{
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		if (!MEASURETYPE_Manual.equals(getMeasureType()))</span>
+<span class="nc" id="L443">			return false;</span>
+<span class="nc" id="L444">		MGoal[] goals = MGoal.getMeasureGoals (getCtx(), getPA_Measure_ID());</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">		for (int i = 0; i &lt; goals.length; i++)</span>
+		{
+<span class="nc" id="L447">			MGoal goal = goals[i];</span>
+<span class="nc" id="L448">			goal.setMeasureActual(getManualActual());</span>
+<span class="nc" id="L449">			goal.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L451">		return true;</span>
+	}	//	updateManualGoals
+	
+	/**
+	 * 	Update/save Goals with Achievement
+	 * 	@return true if updated
+	 */
+	private boolean updateAchievementGoals()
+	{
+<span class="nc bnc" id="L460" title="All 2 branches missed.">		if (!MEASURETYPE_Achievements.equals(getMeasureType()))</span>
+<span class="nc" id="L461">			return false;</span>
+<span class="nc" id="L462">		Timestamp today = new Timestamp(System.currentTimeMillis());</span>
+<span class="nc" id="L463">		MGoal[] goals = MGoal.getMeasureGoals (getCtx(), getPA_Measure_ID());</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">		for (int i = 0; i &lt; goals.length; i++)</span>
+		{
+<span class="nc" id="L466">			MGoal goal = goals[i];</span>
+<span class="nc" id="L467">			String MeasureScope = goal.getMeasureScope();</span>
+<span class="nc" id="L468">			String trunc = TimeUtil.TRUNC_DAY;</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">			if (MGoal.MEASUREDISPLAY_Year.equals(MeasureScope))</span>
+<span class="nc" id="L470">				trunc = TimeUtil.TRUNC_YEAR;</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">			else if (MGoal.MEASUREDISPLAY_Quarter.equals(MeasureScope))</span>
+<span class="nc" id="L472">				trunc = TimeUtil.TRUNC_QUARTER;</span>
+<span class="nc bnc" id="L473" title="All 2 branches missed.">			else if (MGoal.MEASUREDISPLAY_Month.equals(MeasureScope))</span>
+<span class="nc" id="L474">				trunc = TimeUtil.TRUNC_MONTH;</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">			else if (MGoal.MEASUREDISPLAY_Week.equals(MeasureScope))</span>
+<span class="nc" id="L476">				trunc = TimeUtil.TRUNC_WEEK;</span>
+<span class="nc" id="L477">			Timestamp compare = TimeUtil.trunc(today, trunc); </span>
+			//
+<span class="nc" id="L479">			MAchievement[] achievements = MAchievement.getOfMeasure(getCtx(), getPA_Measure_ID());</span>
+<span class="nc" id="L480">			BigDecimal ManualActual = Env.ZERO;</span>
+<span class="nc bnc" id="L481" title="All 2 branches missed.">			for (int j = 0; j &lt; achievements.length; j++)</span>
+			{
+<span class="nc" id="L483">				MAchievement achievement = achievements[j];</span>
+<span class="nc bnc" id="L484" title="All 4 branches missed.">				if (achievement.isAchieved() &amp;&amp; achievement.getDateDoc() != null)</span>
+				{
+<span class="nc" id="L486">					Timestamp ach = TimeUtil.trunc(achievement.getDateDoc(), trunc);</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">					if (compare.equals(ach))</span>
+<span class="nc" id="L488">						ManualActual = ManualActual.add(achievement.getManualActual());</span>
+				}
+			}
+<span class="nc" id="L491">			goal.setMeasureActual(ManualActual);</span>
+<span class="nc" id="L492">			goal.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L494">		return true;</span>
+	}	//	updateAchievementGoals
+
+	/**
+	 * 	Update Goals with Calculation measure type (MEASURETYPE_Calculated)
+	 * 	@return true if updated
+	 */
+	private boolean updateCalculatedGoals()
+	{
+<span class="nc bnc" id="L503" title="All 2 branches missed.">		if (!MEASURETYPE_Calculated.equals(getMeasureType()))</span>
+<span class="nc" id="L504">			return false;</span>
+<span class="nc" id="L505">		MGoal[] goals = MGoal.getMeasureGoals (getCtx(), getPA_Measure_ID());</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">		for (int i = 0; i &lt; goals.length; i++)</span>
+		{
+<span class="nc" id="L508">			MGoal goal = goals[i];</span>
+			//	Find Role
+<span class="nc" id="L510">			MRole role = null;</span>
+<span class="nc bnc" id="L511" title="All 2 branches missed.">			if (goal.getAD_Role_ID() != 0)</span>
+<span class="nc" id="L512">				role = MRole.get(getCtx(), goal.getAD_Role_ID());</span>
+<span class="nc bnc" id="L513" title="All 2 branches missed.">			else if (goal.getAD_User_ID() != 0)</span>
+			{
+<span class="nc" id="L515">				MUser user = MUser.get(getCtx(), goal.getAD_User_ID());</span>
+<span class="nc" id="L516">				MRole[] roles = user.getRoles(goal.getAD_Org_ID());</span>
+<span class="nc bnc" id="L517" title="All 2 branches missed.">				if (roles.length &gt; 0)</span>
+<span class="nc" id="L518">					role = roles[0];</span>
+			}
+<span class="nc bnc" id="L520" title="All 2 branches missed.">			if (role == null)</span>
+<span class="nc" id="L521">				role = MRole.getDefault(getCtx(), false);	//	could result in wrong data</span>
+			//
+<span class="nc" id="L523">			MMeasureCalc mc = MMeasureCalc.get(getPA_MeasureCalc_ID());</span>
+<span class="nc bnc" id="L524" title="All 6 branches missed.">			if (mc == null || mc.get_ID() == 0 || mc.get_ID() != getPA_MeasureCalc_ID())</span>
+			{
+<span class="nc" id="L526">				log.log(Level.SEVERE, &quot;Not found PA_MeasureCalc_ID=&quot; + getPA_MeasureCalc_ID());</span>
+<span class="nc" id="L527">				return false;</span>
+			}
+<span class="nc" id="L529">			SQLFragment sql = mc.getSqlPIFragment(goal.getRestrictions(false),</span>
+<span class="nc" id="L530">					goal.getMeasureScope(), getMeasureDataType(), null, role);</span>
+<span class="nc" id="L531">			BigDecimal ManualActual = DB.getSQLValueBD(null, sql.sqlClause(), sql.parameters().toArray());</span>
+			// SQL may return no rows or null
+<span class="nc bnc" id="L533" title="All 2 branches missed.">			if (ManualActual == null) </span>
+			{
+<span class="nc" id="L535">				ManualActual = Env.ZERO;</span>
+<span class="nc bnc" id="L536" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L537">					log.fine(&quot;No Value = &quot; + sql);</span>
+			}
+<span class="nc" id="L539">			goal.setMeasureActual(ManualActual);</span>
+<span class="nc" id="L540">			goal.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L542">		return true;</span>
+	}	//	updateCalculatedGoals
+	
+	/**
+	 * 	Update Goals with Ratios measure type (MEASURETYPE_Ratio)
+	 * 	@return true if updated
+	 */
+	private boolean updateRatios()
+	{
+<span class="nc bnc" id="L551" title="All 2 branches missed.">		if (!MEASURETYPE_Ratio.equals(getMeasureType()))</span>
+<span class="nc" id="L552">			return false;</span>
+<span class="nc" id="L553">		return false;</span>
+	}		//	updateRatios
+	
+	/**
+	 * 	Update Goals with Requests measure type (MEASURETYPE_Request)
+	 * 	@return true if updated
+	 */
+	private boolean updateRequests()
+	{
+<span class="nc bnc" id="L562" title="All 2 branches missed.">		if (!MEASURETYPE_Request.equals(getMeasureType())</span>
+<span class="nc bnc" id="L563" title="All 2 branches missed.">			|| getR_RequestType_ID() == 0)</span>
+<span class="nc" id="L564">			return false;</span>
+<span class="nc" id="L565">		MGoal[] goals = MGoal.getMeasureGoals (getCtx(), getPA_Measure_ID());</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">		for (int i = 0; i &lt; goals.length; i++)</span>
+		{
+<span class="nc" id="L568">			MGoal goal = goals[i];</span>
+			//	Find Role
+<span class="nc" id="L570">			MRole role = null;</span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">			if (goal.getAD_Role_ID() != 0)</span>
+<span class="nc" id="L572">				role = MRole.get(getCtx(), goal.getAD_Role_ID());</span>
+<span class="nc bnc" id="L573" title="All 2 branches missed.">			else if (goal.getAD_User_ID() != 0)</span>
+			{
+<span class="nc" id="L575">				MUser user = MUser.get(getCtx(), goal.getAD_User_ID());</span>
+<span class="nc" id="L576">				MRole[] roles = user.getRoles(goal.getAD_Org_ID());</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">				if (roles.length &gt; 0)</span>
+<span class="nc" id="L578">					role = roles[0];</span>
+			}
+<span class="nc bnc" id="L580" title="All 2 branches missed.">			if (role == null)</span>
+<span class="nc" id="L581">				role = MRole.getDefault(getCtx(), false);	//	could result in wrong data</span>
+			//
+<span class="nc" id="L583">			MRequestType rt = MRequestType.get(getCtx(), getR_RequestType_ID());</span>
+<span class="nc" id="L584">			String sql = rt.getSqlPI(goal.getRestrictions(false), </span>
+<span class="nc" id="L585">				goal.getMeasureScope(), getMeasureDataType(), null, role);</span>
+<span class="nc" id="L586">			BigDecimal ManualActual = DB.getSQLValueBD(null, sql, new Object[]{});</span>
+			//	SQL may return no rows or null
+<span class="nc bnc" id="L588" title="All 2 branches missed.">			if (ManualActual == null)</span>
+			{
+<span class="nc" id="L590">				ManualActual = Env.ZERO;</span>
+<span class="nc bnc" id="L591" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;No Value = &quot; + sql);</span>
+			}
+<span class="nc" id="L593">			goal.setMeasureActual(ManualActual);</span>
+<span class="nc" id="L594">			goal.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L596">		return true;</span>
+	}		//	updateRequests
+
+	/**
+	 * 	Update Goals with Projects measure type (MEASURETYPE_Project)
+	 * 	@return true if updated
+	 */
+	private boolean updateProjects()
+	{
+<span class="nc bnc" id="L605" title="All 2 branches missed.">		if (!MEASURETYPE_Project.equals(getMeasureType())</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">			|| getC_ProjectType_ID() == 0)</span>
+<span class="nc" id="L607">			return false;</span>
+<span class="nc" id="L608">		MGoal[] goals = MGoal.getMeasureGoals (getCtx(), getPA_Measure_ID());</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">		for (int i = 0; i &lt; goals.length; i++)</span>
+		{
+<span class="nc" id="L611">			MGoal goal = goals[i];</span>
+			//	Find Role
+<span class="nc" id="L613">			MRole role = null;</span>
+<span class="nc bnc" id="L614" title="All 2 branches missed.">			if (goal.getAD_Role_ID() != 0)</span>
+<span class="nc" id="L615">				role = MRole.get(getCtx(), goal.getAD_Role_ID());</span>
+<span class="nc bnc" id="L616" title="All 2 branches missed.">			else if (goal.getAD_User_ID() != 0)</span>
+			{
+<span class="nc" id="L618">				MUser user = MUser.get(getCtx(), goal.getAD_User_ID());</span>
+<span class="nc" id="L619">				MRole[] roles = user.getRoles(goal.getAD_Org_ID());</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">				if (roles.length &gt; 0)</span>
+<span class="nc" id="L621">					role = roles[0];</span>
+			}
+<span class="nc bnc" id="L623" title="All 2 branches missed.">			if (role == null)</span>
+<span class="nc" id="L624">				role = MRole.getDefault(getCtx(), false);	//	could result in wrong data</span>
+			//
+<span class="nc" id="L626">			MProjectType pt = MProjectType.get(getCtx(), getC_ProjectType_ID());</span>
+<span class="nc" id="L627">			String sql = pt.getSqlPI(goal.getRestrictions(false), </span>
+<span class="nc" id="L628">				goal.getMeasureScope(), getMeasureDataType(), null, role);		</span>
+<span class="nc" id="L629">			BigDecimal ManualActual = DB.getSQLValueBD(null, sql, new Object[]{});</span>
+			//	SQL may return no rows or null
+<span class="nc bnc" id="L631" title="All 2 branches missed.">			if (ManualActual == null)</span>
+			{
+<span class="nc" id="L633">				ManualActual = Env.ZERO;</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;No Value = &quot; + sql);</span>
+			}
+<span class="nc" id="L636">			goal.setMeasureActual(ManualActual);</span>
+<span class="nc" id="L637">			goal.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L639">		return true;</span>
+	}	//	updateProjects
+	/**
+	 * 	Update goals with User Defined measure type
+	 * 	@return true if updated
+	 */
+	private boolean updateUserDefined()
+	{
+<span class="nc" id="L647">		MGoal[] goals = MGoal.getMeasureGoals (getCtx(), getPA_Measure_ID());</span>
+<span class="nc bnc" id="L648" title="All 2 branches missed.">		for (MGoal goal:goals)</span>
+		{
+<span class="nc" id="L650">			BigDecimal amt = Env.ZERO;</span>
+<span class="nc" id="L651">			PO po = new MTable(getCtx(),get_Table_ID(),get_TrxName()).getPO(get_ID(), get_TrxName());</span>
+<span class="nc" id="L652">			StringTokenizer st = new StringTokenizer(getCalculationClass(), &quot;;,&quot;, false);</span>
+<span class="nc bnc" id="L653" title="All 2 branches missed.">			while (st.hasMoreTokens())      //  for each class</span>
+			{
+<span class="nc" id="L655">				String cmd = st.nextToken().trim();	</span>
+<span class="nc" id="L656">				StringBuilder retValue = new StringBuilder();</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">				if (cmd.toLowerCase().startsWith(MRule.SCRIPT_PREFIX)) {</span>
+					
+<span class="nc" id="L659">					MRule rule = MRule.get(getCtx(), cmd.substring(MRule.SCRIPT_PREFIX.length()));</span>
+<span class="nc bnc" id="L660" title="All 2 branches missed.">					if (rule == null) {</span>
+<span class="nc" id="L661">						retValue = new StringBuilder(&quot;Script &quot;).append(cmd).append(&quot; not found&quot;); </span>
+<span class="nc" id="L662">						log.log(Level.SEVERE, retValue.toString());</span>
+<span class="nc" id="L663">						break;</span>
+					}
+<span class="nc bnc" id="L665" title="All 2 branches missed.">					if ( !  (rule.getEventType().equals(MRule.EVENTTYPE_MeasureForPerformanceAnalysis) </span>
+<span class="nc bnc" id="L666" title="All 2 branches missed.">						  &amp;&amp; rule.getRuleType().equals(MRule.RULETYPE_JSR223ScriptingAPIs))) {</span>
+<span class="nc" id="L667">						retValue = new StringBuilder(&quot;Script &quot;).append(cmd)</span>
+<span class="nc" id="L668">							.append(&quot; must be of type JSR 223 and event measure&quot;); </span>
+<span class="nc" id="L669">						log.log(Level.SEVERE, retValue.toString());</span>
+<span class="nc" id="L670">						break;</span>
+					}
+
+					// Try to use cached compiled script for better performance
+<span class="nc" id="L674">					CompiledScript compiled = Core.getCompiledScript(rule);</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">					if (compiled != null) {</span>
+<span class="nc" id="L676">						Bindings bindings = compiled.getEngine().createBindings();</span>
+<span class="nc" id="L677">						MRule.setContext(bindings, po.getCtx(), 0);</span>
+<span class="nc" id="L678">						bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, po.getCtx());</span>
+<span class="nc" id="L679">						bindings.put(MRule.ARGUMENTS_PREFIX + &quot;PO&quot;, po);</span>
+						try
+						{
+<span class="nc" id="L682">							Object value =  compiled.eval(bindings);</span>
+<span class="nc" id="L683">							amt = (BigDecimal)value;</span>
+<span class="nc" id="L684">						}</span>
+<span class="nc" id="L685">						catch (Exception e)</span>
+						{
+<span class="nc" id="L687">							log.log(Level.SEVERE, &quot;&quot;, e);</span>
+<span class="nc" id="L688">							retValue = 	new StringBuilder(&quot;Script Invalid: &quot;).append(e.getLocalizedMessage());</span>
+<span class="nc" id="L689">							return false;</span>
+						}
+					} else {
+<span class="nc" id="L692">						ScriptEngine engine = rule.getScriptEngine();</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">						if (engine == null) {</span>
+<span class="nc" id="L694">							throw new AdempiereException(&quot;Engine not found: &quot; + rule.getEngineName());</span>
+						}
+<span class="nc" id="L696">						MRule.setContext(engine, po.getCtx(), 0);</span>
+<span class="nc" id="L697">						engine.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, po.getCtx());</span>
+<span class="nc" id="L698">						engine.put(MRule.ARGUMENTS_PREFIX + &quot;PO&quot;, po);</span>
+						try
+						{
+<span class="nc" id="L701">							Object value =  engine.eval(rule.getScript());</span>
+<span class="nc" id="L702">							amt = (BigDecimal)value;</span>
+<span class="nc" id="L703">						}</span>
+<span class="nc" id="L704">						catch (Exception e)</span>
+						{
+<span class="nc" id="L706">							log.log(Level.SEVERE, &quot;&quot;, e);</span>
+<span class="nc" id="L707">							retValue = 	new StringBuilder(&quot;Script Invalid: &quot;).append(e.getLocalizedMessage());</span>
+<span class="nc" id="L708">							return false;</span>
+						}
+					}
+				}
+				else 
+				{
+<span class="nc" id="L714">					MeasureInterface custom = null;</span>
+					try
+					{
+<span class="nc" id="L717">						Class&lt;?&gt; clazz = Class.forName(cmd);</span>
+<span class="nc" id="L718">						custom = (MeasureInterface)clazz.getDeclaredConstructor().newInstance();</span>
+<span class="nc" id="L719">					}</span>
+<span class="nc" id="L720">					catch (Exception e)</span>
+					{
+<span class="nc" id="L722">						log.log(Level.SEVERE, &quot;No custom measure class &quot;</span>
+<span class="nc" id="L723">								+ cmd + &quot; - &quot; + e.toString(), e);</span>
+<span class="nc" id="L724">						return false;</span>
+					}
+					
+					try
+					{
+<span class="nc" id="L729">						amt = custom.getValue();</span>
+<span class="nc" id="L730">					}</span>
+<span class="nc" id="L731">					catch (Exception e)</span>
+					{
+<span class="nc" id="L733">						log.log(Level.SEVERE, custom.toString(), e);</span>
+<span class="nc" id="L734">						return false;</span>
+					}					
+				}			
+				
+<span class="nc bnc" id="L738" title="All 2 branches missed.">				if (!Util.isEmpty(retValue.toString()))		//	interrupt on first error</span>
+				{
+<span class="nc" id="L740">					log.severe (retValue.toString());</span>
+<span class="nc" id="L741">					return false;</span>
+				}
+			}			
+<span class="nc" id="L744">			goal.setMeasureActual(amt);</span>
+<span class="nc" id="L745">			goal.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L747">		return true;</span>
+	}	//	updateUserDefinedGoals
+	
+	@Override
+	public MMeasure markImmutable() {
+<span class="nc bnc" id="L752" title="All 2 branches missed.">		if (is_Immutable())</span>
+<span class="nc" id="L753">			return this;</span>
+
+<span class="nc" id="L755">		makeImmutable();</span>
+<span class="nc" id="L756">		return this;</span>
+	}
+
+}	//	MMeasure
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

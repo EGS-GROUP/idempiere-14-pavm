@@ -1,0 +1,458 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ValidateMFAPanel.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.panel</a> &gt; <span class="el_source">ValidateMFAPanel.java</span></div><h1>ValidateMFAPanel.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz (sponsored by FH)                                     *
+ **********************************************************************/
+
+package org.adempiere.webui.panel;
+
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.logging.Level;
+
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.adempiere.util.LogAuthFailure;
+import org.adempiere.webui.AdempiereIdGenerator;
+import org.adempiere.webui.ClientInfo;
+import org.adempiere.webui.LayoutUtils;
+import org.adempiere.webui.component.ComboItem;
+import org.adempiere.webui.component.Combobox;
+import org.adempiere.webui.component.ConfirmPanel;
+import org.adempiere.webui.component.Label;
+import org.adempiere.webui.component.Textbox;
+import org.adempiere.webui.component.Window;
+import org.adempiere.webui.session.SessionManager;
+import org.adempiere.webui.theme.ITheme;
+import org.adempiere.webui.theme.ThemeManager;
+import org.adempiere.webui.util.ZKUpdateUtil;
+import org.adempiere.webui.window.LoginWindow;
+import org.compiere.model.MMFAMethod;
+import org.compiere.model.MMFARegisteredDevice;
+import org.compiere.model.MMFARegistration;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MUser;
+import org.compiere.model.SystemProperties;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Login;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.zkoss.zhtml.Div;
+import org.zkoss.zhtml.Table;
+import org.zkoss.zhtml.Td;
+import org.zkoss.zhtml.Tr;
+import org.zkoss.zk.au.out.AuFocus;
+import org.zkoss.zk.ui.Executions;
+import org.zkoss.zk.ui.WrongValueException;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.util.Clients;
+import org.zkoss.zul.Checkbox;
+import org.zkoss.zul.Image;
+
+/**
+ * Multi factor authentication panel
+ */
+public class ValidateMFAPanel extends Window implements EventListener&lt;Event&gt; {
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = 4777197666886479162L;
+
+<span class="nc" id="L87">	private static final CLogger logger = CLogger.getCLogger(ValidateMFAPanel.class);</span>
+
+	protected LoginWindow wndLogin;
+	protected Login login;
+
+	/** Context */
+	protected Properties m_ctx;
+
+	protected Label lblMFAMechanism;
+	protected Combobox lstMFAMechanism;
+	protected Label lblMFAMsg;
+	protected Label lblValidationCode;
+	protected Textbox txtValidationCode;
+	protected Checkbox chkSetPreferred;
+<span class="nc" id="L101">	protected Checkbox chkRegisterDevice = null;</span>
+
+	private KeyNamePair m_orgKNPair;
+	private KeyNamePair[] m_clientsKNPairs;
+
+	private boolean m_isClientDefined;
+	private String m_userName;
+<span class="nc" id="L108">	private boolean m_showRolePanel = true;</span>
+<span class="nc" id="L109">	private boolean m_showMFAPanel = false;</span>
+
+	/* Push the first OK automatically - when the first record is TOTP */
+<span class="nc" id="L112">	private boolean m_autoCall = false;</span>
+
+<span class="nc" id="L114">	private static LogAuthFailure logAuthFailure = new LogAuthFailure();</span>
+
+	/* Number of failures to calculate an incremental delay on every trial */
+<span class="nc" id="L117">	private int failures = 0;</span>
+
+	/**
+	 * @param ctx
+	 * @param loginWindow
+	 * @param orgKNPair
+	 * @param isClientDefined
+	 * @param userName
+	 * @param showRolePanel
+	 * @param clientsKNPairs
+	 */
+<span class="nc" id="L128">	public ValidateMFAPanel(Properties ctx, LoginWindow loginWindow, KeyNamePair orgKNPair, boolean isClientDefined, String userName, boolean showRolePanel, KeyNamePair[] clientsKNPairs) {</span>
+<span class="nc" id="L129">		this.wndLogin = loginWindow;</span>
+<span class="nc" id="L130">		m_ctx = ctx;</span>
+<span class="nc" id="L131">		this.m_orgKNPair = orgKNPair;</span>
+<span class="nc" id="L132">    	m_isClientDefined = isClientDefined;</span>
+<span class="nc" id="L133">    	m_userName = userName;</span>
+<span class="nc" id="L134">    	m_showRolePanel = showRolePanel;</span>
+<span class="nc" id="L135">    	m_clientsKNPairs = clientsKNPairs;</span>
+
+<span class="nc" id="L137">		String registerCookie = getCookie(getCookieName());</span>
+<span class="nc" id="L138">		login = new Login(ctx);</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">		if (login.isMFARequired(registerCookie)) {</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">			initComponents(registerCookie != null);</span>
+<span class="nc" id="L141">			init();</span>
+<span class="nc" id="L142">			this.setId(&quot;validateMFAPanel&quot;);</span>
+<span class="nc" id="L143">			this.setSclass(&quot;login-box&quot;);</span>
+
+<span class="nc" id="L145">			AuFocus auf = new AuFocus(lstMFAMechanism);</span>
+<span class="nc" id="L146">			Clients.response(auf);</span>
+
+<span class="nc bnc" id="L148" title="All 2 branches missed.">			if (m_autoCall) {</span>
+<span class="nc" id="L149">				validateMFAComplete(true);</span>
+<span class="nc" id="L150">			} else {</span>
+<span class="nc" id="L151">				m_showMFAPanel = true;</span>
+			}
+
+<span class="nc" id="L154">		} else {</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">			if (logger.isLoggable(Level.INFO)) logger.info(&quot;MFA not required&quot;);</span>
+<span class="nc" id="L156">			validateMFAComplete(false);</span>
+		}
+
+<span class="nc" id="L159">	}</span>
+
+	/**
+	 * Layout panel
+	 */
+	private void init() {
+<span class="nc" id="L165">		Div div = new Div();</span>
+<span class="nc" id="L166">		div.setSclass(ITheme.LOGIN_BOX_HEADER_CLASS);</span>
+<span class="nc" id="L167">		Label label = new Label(Msg.getMsg(m_ctx, &quot;MFALoginValidationHeader&quot;));</span>
+<span class="nc" id="L168">		label.setSclass(ITheme.LOGIN_BOX_HEADER_TXT_CLASS);</span>
+<span class="nc" id="L169">		div.appendChild(label);</span>
+<span class="nc" id="L170">		this.appendChild(div);</span>
+
+<span class="nc" id="L172">		Table table = new Table();</span>
+<span class="nc" id="L173">		table.setId(&quot;grdMFAValidate&quot;);</span>
+<span class="nc" id="L174">		table.setDynamicProperty(&quot;cellpadding&quot;, &quot;0&quot;);</span>
+<span class="nc" id="L175">		table.setDynamicProperty(&quot;cellspacing&quot;, &quot;5&quot;);</span>
+<span class="nc" id="L176">		table.setSclass(ITheme.LOGIN_BOX_BODY_CLASS);</span>
+
+<span class="nc" id="L178">		this.appendChild(table);</span>
+
+<span class="nc" id="L180">		Tr tr = new Tr();</span>
+<span class="nc" id="L181">		table.appendChild(tr);</span>
+<span class="nc" id="L182">		Td td = new Td();</span>
+<span class="nc" id="L183">		td.setSclass(ITheme.LOGIN_BOX_HEADER_LOGO_CLASS);</span>
+<span class="nc" id="L184">		tr.appendChild(td);</span>
+<span class="nc" id="L185">		td.setDynamicProperty(&quot;colspan&quot;, &quot;2&quot;);</span>
+<span class="nc" id="L186">		Image image = new Image();</span>
+<span class="nc" id="L187">		image.setSrc(ThemeManager.getLargeLogo());</span>
+<span class="nc" id="L188">		td.appendChild(image);</span>
+
+<span class="nc" id="L190">		tr = new Tr();</span>
+<span class="nc" id="L191">		tr.setId(&quot;rowMFAMechanism&quot;);</span>
+<span class="nc" id="L192">		table.appendChild(tr);</span>
+<span class="nc" id="L193">		td = new Td();</span>
+<span class="nc" id="L194">		tr.appendChild(td);</span>
+<span class="nc" id="L195">		td.setSclass(ITheme.LOGIN_LABEL_CLASS);</span>
+<span class="nc" id="L196">		td.appendChild(lblMFAMechanism);</span>
+<span class="nc" id="L197">		td = new Td();</span>
+<span class="nc" id="L198">		td.setSclass(ITheme.LOGIN_FIELD_CLASS);</span>
+<span class="nc" id="L199">		tr.appendChild(td);</span>
+<span class="nc" id="L200">		td.appendChild(lstMFAMechanism);</span>
+
+<span class="nc" id="L202">		tr = new Tr();</span>
+<span class="nc" id="L203">		tr.setId(&quot;rowMFAMsg&quot;);</span>
+<span class="nc" id="L204">		table.appendChild(tr);</span>
+<span class="nc" id="L205">		td = new Td();</span>
+<span class="nc" id="L206">		tr.appendChild(td);</span>
+<span class="nc" id="L207">		td.setSclass(ITheme.LOGIN_LABEL_CLASS);</span>
+<span class="nc" id="L208">		td.appendChild(new Label(&quot;&quot;));</span>
+<span class="nc" id="L209">		td = new Td();</span>
+<span class="nc" id="L210">		tr.appendChild(td);</span>
+<span class="nc" id="L211">		td.setSclass(ITheme.LOGIN_FIELD_CLASS);</span>
+<span class="nc" id="L212">		td.appendChild(lblMFAMsg);</span>
+
+<span class="nc" id="L214">		tr = new Tr();</span>
+<span class="nc" id="L215">		tr.setId(&quot;rowValidationCode&quot;);</span>
+<span class="nc" id="L216">		table.appendChild(tr);</span>
+<span class="nc" id="L217">		td = new Td();</span>
+<span class="nc" id="L218">		tr.appendChild(td);</span>
+<span class="nc" id="L219">		td.setSclass(ITheme.LOGIN_LABEL_CLASS);</span>
+<span class="nc" id="L220">		td.appendChild(lblValidationCode);</span>
+<span class="nc" id="L221">		td = new Td();</span>
+<span class="nc" id="L222">		td.setSclass(ITheme.LOGIN_FIELD_CLASS);</span>
+<span class="nc" id="L223">		tr.appendChild(td);</span>
+<span class="nc" id="L224">		td.appendChild(txtValidationCode);</span>
+
+<span class="nc" id="L226">		tr = new Tr();</span>
+<span class="nc" id="L227">		tr.setId(&quot;rowSetPreferred&quot;);</span>
+<span class="nc" id="L228">		table.appendChild(tr);</span>
+<span class="nc" id="L229">		td = new Td();</span>
+<span class="nc" id="L230">		tr.appendChild(td);</span>
+<span class="nc" id="L231">		td.setSclass(ITheme.LOGIN_LABEL_CLASS);</span>
+<span class="nc" id="L232">		td.appendChild(new Label(&quot;&quot;));</span>
+<span class="nc" id="L233">		td = new Td();</span>
+<span class="nc" id="L234">		td.setSclass(ITheme.LOGIN_FIELD_CLASS);</span>
+<span class="nc" id="L235">		tr.appendChild(td);</span>
+<span class="nc" id="L236">		td.appendChild(chkSetPreferred);</span>
+
+<span class="nc" id="L238">		tr = new Tr();</span>
+<span class="nc" id="L239">		tr.setId(&quot;rowRegisterDevice&quot;);</span>
+<span class="nc" id="L240">		table.appendChild(tr);</span>
+<span class="nc" id="L241">		td = new Td();</span>
+<span class="nc" id="L242">		tr.appendChild(td);</span>
+<span class="nc" id="L243">		td.setSclass(ITheme.LOGIN_LABEL_CLASS);</span>
+<span class="nc" id="L244">		td.appendChild(new Label(&quot;&quot;));</span>
+<span class="nc" id="L245">		td = new Td();</span>
+<span class="nc" id="L246">		td.setSclass(ITheme.LOGIN_FIELD_CLASS);</span>
+<span class="nc" id="L247">		tr.appendChild(td);</span>
+<span class="nc" id="L248">		td.appendChild(chkRegisterDevice);</span>
+
+<span class="nc" id="L250">		div = new Div();</span>
+<span class="nc" id="L251">		div.setSclass(ITheme.LOGIN_BOX_FOOTER_CLASS);</span>
+<span class="nc" id="L252">		ConfirmPanel pnlButtons = new ConfirmPanel(true);</span>
+<span class="nc" id="L253">		pnlButtons.addActionListener(this);</span>
+<span class="nc" id="L254">		LayoutUtils.addSclass(ITheme.LOGIN_BOX_FOOTER_PANEL_CLASS, pnlButtons);</span>
+<span class="nc" id="L255">		ZKUpdateUtil.setWidth(pnlButtons, null);</span>
+<span class="nc" id="L256">		pnlButtons.getButton(ConfirmPanel.A_OK).setSclass(ITheme.LOGIN_BUTTON_CLASS);</span>
+<span class="nc" id="L257">		pnlButtons.getButton(ConfirmPanel.A_CANCEL).setSclass(ITheme.LOGIN_BUTTON_CLASS);</span>
+<span class="nc" id="L258">		div.appendChild(pnlButtons);</span>
+<span class="nc" id="L259">		this.appendChild(div);</span>
+<span class="nc" id="L260">	}</span>
+
+	/**
+	 * Create components
+	 * @param hasCookie
+	 */
+	private void initComponents(boolean hasCookie) {
+<span class="nc" id="L267">		lblMFAMechanism = new Label();</span>
+<span class="nc" id="L268">		lblMFAMechanism.setId(&quot;lblMFAMechanism&quot;);</span>
+<span class="nc" id="L269">		lblMFAMechanism.setValue(Msg.getMsg(m_ctx, &quot;MFALoginMechanism&quot;));</span>
+
+<span class="nc" id="L271">		lblValidationCode = new Label();</span>
+<span class="nc" id="L272">		lblValidationCode.setId(&quot;lblValidationCode&quot;);</span>
+<span class="nc" id="L273">		lblValidationCode.setValue(Msg.getMsg(m_ctx, &quot;MFALoginValidationCode&quot;));</span>
+
+<span class="nc" id="L275">		lblMFAMsg = new Label();</span>
+<span class="nc" id="L276">		lblMFAMsg.setId(&quot;lblMFAMsg&quot;);</span>
+<span class="nc" id="L277">		lblMFAMsg.setValue(Msg.getMsg(m_ctx, &quot;MFALoginMessage&quot;));</span>
+
+<span class="nc" id="L279">		lstMFAMechanism = new Combobox();</span>
+<span class="nc" id="L280">		lstMFAMechanism.setAutocomplete(true);</span>
+<span class="nc" id="L281">		lstMFAMechanism.setAutodrop(true);</span>
+<span class="nc" id="L282">		lstMFAMechanism.setId(&quot;lstMFAMechanism&quot;);</span>
+<span class="nc" id="L283">		List&lt;MMFARegistration&gt; regs = MMFARegistration.getValidRegistrationsFromUser();</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">		for (MMFARegistration reg : regs) {</span>
+<span class="nc" id="L285">			MMFAMethod method = new MMFAMethod(m_ctx, reg.getMFA_Method_ID(), reg.get_TrxName());</span>
+<span class="nc bnc" id="L286" title="All 4 branches missed.">			if (regs.size() == 1 &amp;&amp; MMFAMethod.METHOD_Time_BasedOne_TimePassword.equals(method.getMethod())) {</span>
+<span class="nc" id="L287">				m_autoCall = true;</span>
+			}
+<span class="nc" id="L289">			ComboItem ci = new ComboItem(reg.getName() + &quot; - &quot; + method.getMethod(), reg.getMFA_Registration_ID());</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">    		if (SystemProperties.isZkUnitTest()) {</span>
+<span class="nc" id="L291">    			String id = AdempiereIdGenerator.escapeId(ci.getLabel());</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">    			if (lstMFAMechanism.getFellowIfAny(id) == null)</span>
+<span class="nc" id="L293">    				ci.setId(id);</span>
+    		}
+<span class="nc" id="L295">			lstMFAMechanism.appendChild(ci);</span>
+		}
+<span class="nc" id="L297">		lstMFAMechanism.setSelectedIndex(0);</span>
+<span class="nc" id="L298">		ZKUpdateUtil.setWidth(lstMFAMechanism, &quot;220px&quot;);</span>
+
+<span class="nc" id="L300">		chkSetPreferred = new Checkbox(Msg.getMsg(m_ctx, &quot;MFALoginSetPreferred&quot;));</span>
+<span class="nc" id="L301">		chkSetPreferred.setId(&quot;chkSetPreferred&quot;);</span>
+<span class="nc bnc" id="L302" title="All 4 branches missed.">		boolean enablePreferred = (lstMFAMechanism.getChildren().size() &gt; 1 &amp;&amp; lstMFAMechanism.getSelectedIndex() &gt; 0);</span>
+<span class="nc" id="L303">		chkSetPreferred.setVisible(enablePreferred);</span>
+<span class="nc" id="L304">		chkSetPreferred.setChecked(false);</span>
+
+<span class="nc" id="L306">		int daysExpire = MSysConfig.getIntValue(MSysConfig.MFA_REGISTERED_DEVICE_EXPIRATION_DAYS, 30, Env.getAD_Client_ID(m_ctx));</span>
+<span class="nc" id="L307">		chkRegisterDevice = new Checkbox(Msg.getMsg(m_ctx, &quot;MFALoginRegisterDevice&quot;, new Object[] {daysExpire}));</span>
+<span class="nc" id="L308">		chkRegisterDevice.setId(&quot;chkRegisterDevice&quot;);</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">		boolean enableRegisterDevice = (daysExpire &gt; 0);</span>
+<span class="nc" id="L310">		chkRegisterDevice.setVisible(enableRegisterDevice);</span>
+<span class="nc" id="L311">		chkRegisterDevice.setChecked(hasCookie);</span>
+
+<span class="nc" id="L313">		txtValidationCode = new Textbox();</span>
+<span class="nc" id="L314">		txtValidationCode.setId(&quot;txtValidationCode&quot;);</span>
+<span class="nc" id="L315">		txtValidationCode.setCols(25);</span>
+<span class="nc" id="L316">		ZKUpdateUtil.setWidth(txtValidationCode, &quot;220px&quot;);</span>
+<span class="nc" id="L317">		txtValidationCode.setDisabled(true);</span>
+<span class="nc" id="L318">	}</span>
+
+	@Override
+	public void onEvent(Event event) {
+<span class="nc bnc" id="L322" title="All 2 branches missed.">		if (event.getTarget().getId().equals(ConfirmPanel.A_OK)) {</span>
+<span class="nc" id="L323">			validateMFAComplete(true);</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">		} else if (event.getTarget().getId().equals(ConfirmPanel.A_CANCEL)) {</span>
+<span class="nc" id="L325">			SessionManager.logoutSession();</span>
+		}
+<span class="nc" id="L327">	}</span>
+
+	/**
+	 * Validate completion of multi factor authentication
+	 * @param required
+	 */
+	public void validateMFAComplete(boolean required) {
+<span class="nc" id="L334">		Clients.clearBusy();</span>
+
+<span class="nc" id="L336">		int registrationId = 0;</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		if (required) {</span>
+<span class="nc" id="L338">			registrationId = lstMFAMechanism.getSelectedItem().getValue();</span>
+<span class="nc bnc" id="L339" title="All 4 branches missed.">			boolean enablePreferred = (lstMFAMechanism.getChildren().size() &gt; 1 &amp;&amp; lstMFAMechanism.getSelectedIndex() &gt; 0);</span>
+<span class="nc" id="L340">			chkSetPreferred.setVisible(enablePreferred);</span>
+<span class="nc" id="L341">			MMFARegistration reg = new MMFARegistration(Env.getCtx(), registrationId, null);</span>
+<span class="nc" id="L342">			m_showMFAPanel = true;</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">			if (txtValidationCode.isDisabled()) {</span>
+<span class="nc" id="L344">				String msg = reg.generateValidationCode(reg);</span>
+<span class="nc" id="L345">				lblMFAMsg.setValue(msg);</span>
+<span class="nc" id="L346">				txtValidationCode.setDisabled(false);</span>
+<span class="nc" id="L347">				lstMFAMechanism.setDisabled(true);</span>
+<span class="nc" id="L348">				AuFocus auf = new AuFocus(txtValidationCode);</span>
+<span class="nc" id="L349">				Clients.response(auf);</span>
+<span class="nc" id="L350">				return;</span>
+			} else {
+<span class="nc bnc" id="L352" title="All 4 branches missed.">				if (Util.isEmpty(txtValidationCode.getText()) &amp;&amp; lstMFAMechanism.getItemCount() &gt; 1) {</span>
+<span class="nc" id="L353">					lblMFAMsg.setValue(Msg.getMsg(m_ctx, &quot;MFALoginMessage&quot;));</span>
+<span class="nc" id="L354">					txtValidationCode.setDisabled(true);</span>
+<span class="nc" id="L355">					lstMFAMechanism.setDisabled(false);</span>
+<span class="nc" id="L356">					AuFocus auf = new AuFocus(lstMFAMechanism);</span>
+<span class="nc" id="L357">					Clients.response(auf);</span>
+<span class="nc" id="L358">					return;</span>
+				} else {
+<span class="nc" id="L360">					String msg = reg.validateCode(reg, txtValidationCode.getText(), chkSetPreferred.isChecked());</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">					if (msg != null) {</span>
+
+<span class="nc" id="L363">						String x_Forward_IP = Executions.getCurrent().getHeader(&quot;X-Forwarded-For&quot;);</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">						if (x_Forward_IP == null)</span>
+<span class="nc" id="L365">							x_Forward_IP = Executions.getCurrent().getRemoteAddr();</span>
+<span class="nc" id="L366">						MUser user = MUser.get(m_ctx);</span>
+<span class="nc" id="L367">						boolean email_login = MSysConfig.getBooleanValue(MSysConfig.USE_EMAIL_FOR_LOGIN, false);</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">						logAuthFailure.log(x_Forward_IP, &quot;/webui&quot;, email_login ? user.getEMail() : user.getName(), msg);</span>
+
+						// Incremental delay to avoid brute-force attack on testing codes
+						try {
+<span class="nc" id="L372">							Thread.sleep(failures * 2000);</span>
+<span class="nc" id="L373">						} catch (InterruptedException e) {}</span>
+<span class="nc" id="L374">						failures++;</span>
+<span class="nc" id="L375">						AuFocus auf = new AuFocus(txtValidationCode);</span>
+<span class="nc" id="L376">						Clients.response(auf);</span>
+<span class="nc" id="L377">						throw new WrongValueException(txtValidationCode, msg);</span>
+					}
+				}
+			}
+		}
+
+<span class="nc bnc" id="L383" title="All 4 branches missed.">		if (chkRegisterDevice != null &amp;&amp; chkRegisterDevice.isChecked()) {</span>
+<span class="nc" id="L384">			String cookieValue = UUID.randomUUID().toString();</span>
+<span class="nc" id="L385">			int daysExpire = MSysConfig.getIntValue(MSysConfig.MFA_REGISTERED_DEVICE_EXPIRATION_DAYS, 30, Env.getAD_Client_ID(m_ctx));</span>
+<span class="nc" id="L386">			setCookie(getCookieName(), cookieValue, daysExpire * 86400); // 86400 = seconds per day</span>
+<span class="nc" id="L387">			MUser user = MUser.get(Env.getCtx());</span>
+<span class="nc" id="L388">			MMFARegisteredDevice rd = new MMFARegisteredDevice(m_ctx, 0, null);</span>
+<span class="nc" id="L389">			rd.set_ValueOfColumn(MMFARegistration.COLUMNNAME_AD_Client_ID, user.getAD_Client_ID());</span>
+<span class="nc" id="L390">			rd.setAD_Org_ID(0);</span>
+<span class="nc" id="L391">			rd.setAD_User_ID(user.getAD_User_ID());</span>
+<span class="nc" id="L392">			rd.setMFADeviceIdentifier(cookieValue);</span>
+<span class="nc" id="L393">			rd.setExpiration(new Timestamp(System.currentTimeMillis() + (daysExpire * 86400000L)));</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.ZK_SESSION_SAVE_USER_AGENT, false))</span>
+<span class="nc" id="L395">				rd.setHelp(ClientInfo.get().userAgent);</span>
+<span class="nc" id="L396">			rd.saveCrossTenantSafeEx();</span>
+		}
+<span class="nc" id="L398">		Env.setContext(m_ctx, Env.MFA_Registration_ID, registrationId);</span>
+
+<span class="nc bnc" id="L400" title="All 2 branches missed.">		if (m_isClientDefined) {</span>
+<span class="nc" id="L401">			wndLogin.showRolePanel(m_userName, m_showRolePanel, m_clientsKNPairs, m_isClientDefined, true);</span>
+<span class="nc" id="L402">		} else {</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">			if (m_orgKNPair == null)</span>
+<span class="nc" id="L404">				wndLogin.showRolePanel(m_userName, m_showRolePanel, m_clientsKNPairs, m_isClientDefined, true);</span>
+			else
+<span class="nc" id="L406">				wndLogin.loginCompleted(login, m_orgKNPair, this);</span>
+		}
+<span class="nc" id="L408">	}</span>
+
+	/**
+	 * The cookie name for the MFA registered device
+	 * @return
+	 */
+	private String getCookieName() {
+<span class="nc" id="L415">		StringBuilder sb = new StringBuilder(&quot;UD_&quot;) // User Device</span>
+<span class="nc" id="L416">				.append(Env.getAD_User_ID(m_ctx));</span>
+<span class="nc" id="L417">		return sb.toString();</span>
+	}
+
+	/**
+	 * Set a cookie
+	 * @param name
+	 * @param value
+	 */
+	public static void setCookie(String name, String value, int expiry) {
+<span class="nc" id="L426">		Cookie cookie = new Cookie(name, value);</span>
+<span class="nc" id="L427">		cookie.setSecure(true);</span>
+<span class="nc" id="L428">		cookie.setHttpOnly(true);</span>
+<span class="nc" id="L429">		cookie.setMaxAge(expiry);</span>
+<span class="nc" id="L430">		((HttpServletResponse) Executions.getCurrent().getNativeResponse()).addCookie(cookie);</span>
+<span class="nc" id="L431">	}</span>
+
+	/**
+	 * Get a cookie by name
+	 * @param name
+	 * @return
+	 */
+	public static String getCookie(String name) {
+<span class="nc" id="L439">		Cookie[] cookies = ((HttpServletRequest) Executions.getCurrent().getNativeRequest()).getCookies();</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">		if (cookies != null) {</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">			for (Cookie cookie : cookies) {</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">				if (cookie.getName().equals(name)) {</span>
+<span class="nc" id="L443">					return cookie.getValue();</span>
+				}
+			}
+		}
+<span class="nc" id="L447">		return null;</span>
+	}
+
+	/**
+	 * @return true if panel is shown to user
+	 */
+	public boolean show() {
+<span class="nc" id="L454">		return m_showMFAPanel;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

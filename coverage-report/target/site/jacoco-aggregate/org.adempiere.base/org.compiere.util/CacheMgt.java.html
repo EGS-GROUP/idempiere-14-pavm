@@ -1,0 +1,615 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CacheMgt.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">CacheMgt.java</span></div><h1>CacheMgt.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.compiere.Adempiere;
+import org.compiere.model.SystemProperties;
+import org.idempiere.distributed.ICacheService;
+import org.idempiere.distributed.IClusterMember;
+import org.idempiere.distributed.IClusterService;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Scheduler;
+
+/**
+ *  iDempiere global Cache Manager
+ *
+ *  @author Jorg Janke
+ *  @version $Id: CacheMgt.java,v 1.2 2006/07/30 00:54:35 jjanke Exp $
+ */
+public class CacheMgt
+{
+	/**
+	 * 	Get global Cache Manager
+	 * 	@return Cache Manager
+	 */
+	public static synchronized CacheMgt get()
+	{
+<span class="nc bnc" id="L55" title="All 2 branches missed.">		if (s_cache == null)</span>
+		{
+<span class="nc" id="L57">			s_cache = new CacheMgt();</span>
+		}
+<span class="nc" id="L59">		return s_cache;</span>
+	}	//	get
+
+	/**	Singleton					*/
+<span class="nc" id="L63">	private static CacheMgt		s_cache = null;</span>
+
+	/**
+	 *	Private Constructor
+	 */
+<span class="nc" id="L68">	private CacheMgt()</span>
+	{
+<span class="nc" id="L70">	}	//	CacheMgt</span>
+
+	/**	List of Instances				*/
+<span class="nc" id="L73">	private ArrayList&lt;CacheInterface&gt;	m_instances = new ArrayList&lt;CacheInterface&gt;();</span>
+	/** List of Table Names				*/
+<span class="nc" id="L75">	private ArrayList&lt;String&gt;	m_tableNames = new ArrayList&lt;String&gt;();</span>
+	/** Logger							*/
+<span class="nc" id="L77">	private static CLogger		log = CLogger.getCLogger(CacheMgt.class);</span>
+	/** Cache change listeners **/
+<span class="nc" id="L79">	private List&lt;CacheChangeListener&gt; m_listeners = new ArrayList&lt;CacheChangeListener&gt;();</span>
+	/** Default maximum cache size **/
+<span class="nc" id="L81">	public static int MAX_SIZE = 1000;</span>
+	static 
+	{
+		try 
+		{
+<span class="nc" id="L86">			String maxSize = SystemProperties.getCacheMaxSize();</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">			if (maxSize != null &amp;&amp; maxSize.trim().length() &gt; 0)</span>
+			{
+<span class="nc" id="L89">				int max = 0;</span>
+				try
+				{
+<span class="nc" id="L92">					max = Integer.parseInt(maxSize.trim());</span>
+<span class="nc" id="L93">				} catch (Throwable t) {}</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">				if (max &gt; 0)</span>
+<span class="nc" id="L95">					MAX_SIZE = max;</span>
+			}
+<span class="nc" id="L97">		} catch (Throwable t) {}</span>
+	}
+	
+	/** List of tables that have been temporary suspended for cache reset operations, usually for batch update/insert/delete */
+<span class="nc" id="L101">	private final static Set&lt;String&gt; suspendedResetCacheTables = ConcurrentHashMap.newKeySet();</span>
+	
+	/**
+	 * 	Register new CCache Instance.&lt;br/&gt;
+	 *  This is use by {@link CCache} and developer usually shouldn't call this directly.
+	 *	@param instance Cache
+	 *  @param distributed
+	 *	@return map for CCache
+	 */
+	public synchronized &lt;K,V&gt;Map&lt;K, V&gt; register (CCache&lt;K, V&gt; instance, boolean distributed)
+	{
+<span class="nc bnc" id="L112" title="All 2 branches missed.">		if (instance == null)</span>
+<span class="nc" id="L113">			return null;</span>
+		
+<span class="nc" id="L115">		String name = instance.getName();</span>
+<span class="nc" id="L116">		String tableName = instance.getTableName();</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">		if (tableName != null)</span>
+<span class="nc" id="L118">			m_tableNames.add(tableName);</span>
+		
+<span class="nc" id="L120">		m_instances.add (instance);</span>
+		
+<span class="nc bnc" id="L122" title="All 4 branches missed.">		if (tableName == null &amp;&amp; instance instanceof CacheChangeListener)</span>
+		{
+<span class="nc" id="L124">			m_listeners.add((CacheChangeListener) instance);</span>
+		}
+		
+<span class="nc" id="L127">		Map&lt;K, V&gt; map = null;</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">		if (distributed) </span>
+		{
+<span class="nc" id="L130">			ICacheService provider = Core.getCacheService();</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			if (provider != null)</span>
+			{
+				// for better performance, do not use distributed cache if this is a stand alone instance
+<span class="nc" id="L134">				IClusterService clusterService = Core.getClusterService();</span>
+<span class="nc bnc" id="L135" title="All 4 branches missed.">				if (clusterService != null &amp;&amp; !clusterService.isStandAlone())</span>
+<span class="nc" id="L136">					map = provider.getMap(name);</span>
+			}
+		}
+		
+		// not distributed cache or distributed cache service is not available
+<span class="nc bnc" id="L141" title="All 2 branches missed.">		if (map == null)</span>
+		{
+<span class="nc" id="L143">			int maxSize = instance.getMaxSize();</span>
+<span class="nc bnc" id="L144" title="All 4 branches missed.">			if (maxSize &gt; 0 || instance.getExpireMinutes() &gt; 0)</span>
+			{
+				// cache with max size and/or expire minutes
+<span class="nc" id="L147">				Caffeine&lt;Object, Object&gt; builder = Caffeine.newBuilder();</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">				if (maxSize &gt; 0)</span>
+<span class="nc" id="L149">					builder.maximumSize(maxSize);</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">				if (instance.getExpireMinutes() &gt; 0)					</span>
+<span class="nc" id="L151">					builder.scheduler(Scheduler.systemScheduler())</span>
+<span class="nc" id="L152">					 	   .expireAfterAccess(instance.getExpireMinutes(), TimeUnit.MINUTES);</span>
+<span class="nc" id="L153">				Cache&lt;K, V&gt; cache = builder.build();</span>
+<span class="nc" id="L154">				map = cache.asMap();</span>
+<span class="nc" id="L155">			}</span>
+			else
+			{
+				// no max size, no expire minutes, use simple concurrent hash map for best performance
+<span class="nc" id="L159">				map = new ConcurrentHashMap&lt;K, V&gt;();</span>
+			}
+		}		
+<span class="nc" id="L162">		return map;</span>
+	}	//	register
+
+	/**
+	 * 	Un-Register Cache Instance
+	 *	@param instance Cache
+	 *	@return true if removed
+	 */
+	public synchronized boolean unregister (CacheInterface instance)
+	{
+<span class="nc bnc" id="L172" title="All 2 branches missed.">		if (instance == null)</span>
+<span class="nc" id="L173">			return false;</span>
+<span class="nc" id="L174">		boolean found = false;</span>
+		//	Could be included multiple times
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		for (int i = m_instances.size()-1; i &gt;= 0; i--)</span>
+		{
+<span class="nc" id="L178">			CacheInterface stored = (CacheInterface)m_instances.get(i);</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">			if (instance.equals(stored))</span>
+			{
+<span class="nc" id="L181">				m_instances.remove(i);</span>
+<span class="nc" id="L182">				found = true;</span>
+			}
+		}
+<span class="nc" id="L185">		return found;</span>
+	}	//	unregister
+
+	/**
+	 * Do a cluster wide cache reset 
+	 * @return number of deleted cache entries
+	 */
+	private int  clusterReset() {
+<span class="nc" id="L193">		return clusterReset(null, -1);</span>
+	}
+	
+	/**
+	 * Do a cluster wide cache reset for tableName with recordId key
+	 * @param tableName name of cache
+	 * @param recordId cache key. -1 to reset all cache entries for this table
+	 * @return number of deleted cache entries
+	 */
+	private int clusterReset(String tableName, int recordId) {
+<span class="nc" id="L203">		return clusterResetInternal(tableName, recordId);</span>
+	}
+	
+	/**
+	 * Do a cluster wide cache reset for tableName with string key
+	 * @param tableName name of cache
+	 * @param key cache key
+	 * @return number of deleted cache entries
+	 */
+	private int clusterReset(String tableName, String key) {
+<span class="nc" id="L213">		return clusterResetInternal(tableName, key);</span>
+	}
+	
+	/**
+	 * Do a cluster wide cache reset for tableName with key
+	 * @param tableName name of cache
+	 * @param key integer or string cache key   
+	 * @return number of deleted cache entries
+	 */
+	private &lt;K&gt; int clusterResetInternal(String tableName, K key) {
+<span class="nc" id="L223">		IClusterService service = Core.getClusterService();</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">		if (service != null) {			</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">			ResetCacheCallable callable = key instanceof Integer id</span>
+<span class="nc" id="L226">					? new ResetCacheCallable(tableName, id)</span>
+<span class="nc" id="L227">					: new ResetCacheCallable(tableName, key.toString());</span>
+<span class="nc" id="L228">			Map&lt;IClusterMember, Future&lt;Integer&gt;&gt; futureMap = service.execute(callable, service.getMembers());</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">			if (futureMap != null) {</span>
+<span class="nc" id="L230">				int total = 0;</span>
+				try {
+<span class="nc" id="L232">					Collection&lt;Future&lt;Integer&gt;&gt; results = futureMap.values();</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">					for(Future&lt;Integer&gt; i : results) </span>
+					{
+<span class="nc" id="L235">						total += i.get();</span>
+					}
+<span class="nc" id="L237">				} catch (InterruptedException e) {</span>
+<span class="nc" id="L238">					throw new RuntimeException(e);</span>
+<span class="nc" id="L239">				} catch (ExecutionException e) {</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">					if (e.getCause() != null)</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">						if (e.getCause() instanceof RuntimeException)</span>
+<span class="nc" id="L242">							throw (RuntimeException)e.getCause();</span>
+						else
+<span class="nc" id="L244">							throw new RuntimeException(e.getCause());</span>
+					else
+<span class="nc" id="L246">						throw new RuntimeException(e);</span>
+				}
+<span class="nc" id="L248">				return total;</span>
+			} else {
+<span class="nc bnc" id="L250" title="All 2 branches missed.">				return key instanceof Integer id</span>
+<span class="nc" id="L251">					? resetLocalCache(tableName, id)</span>
+<span class="nc" id="L252">					: resetLocalCache(tableName, key.toString());</span>
+			}
+		} else {
+<span class="nc bnc" id="L255" title="All 2 branches missed.">			return key instanceof Integer id</span>
+<span class="nc" id="L256">					? resetLocalCache(tableName, id)</span>
+<span class="nc" id="L257">					: resetLocalCache(tableName, key.toString());</span>
+		}
+	}
+	
+	/**
+	 * Do a cluster wide cache reset for tableName with recordId key
+	 * @param tableName
+	 * @param recordId record id for the cache entries to delete. pass -1 if you don't want to delete 
+	 * cache entries by record id   
+	 * @return number of deleted cache entries
+	 */
+	private void clusterNewRecord(String tableName, int recordId) {
+<span class="nc" id="L269">		IClusterService service = Core.getClusterService();</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">		if (service != null) {			</span>
+<span class="nc" id="L271">			CacheNewRecordCallable callable = new CacheNewRecordCallable(tableName, recordId);</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">			if (service.execute(callable, service.getMembers()) == null) {</span>
+<span class="nc" id="L273">				localNewRecord(tableName, recordId);</span>
+			}
+<span class="nc" id="L275">		} else {</span>
+<span class="nc" id="L276">			localNewRecord(tableName, recordId);</span>
+		}
+<span class="nc" id="L278">	}</span>
+	
+	/**
+	 * Do a cluster wide cache reset 
+	 * @return number of deleted cache entries
+	 */
+	public int reset() 
+	{
+<span class="nc" id="L286">		return clusterReset();</span>
+	}
+	
+	/**
+	 * 	Do a cluster wide cache reset for tableName
+	 * 	@param tableName table name
+	 * 	@return number of deleted cache entries
+	 */
+	public int reset (String tableName)
+	{
+<span class="nc" id="L296">		return reset(tableName, -1);</span>
+	}
+	
+	/**
+	 * Do a cluster wide cache reset for tableName with recordId key
+	 * @param tableName
+	 * @param Record_ID record id for the cache entries to delete. pass -1 if you don't want to delete 
+	 * cache entries by record id
+	 * @return number of deleted cache entries
+	 */
+	public int reset (String tableName, int Record_ID)
+	{
+<span class="nc bnc" id="L308" title="All 2 branches missed.">		if (suspendedResetCacheTables.contains(tableName))</span>
+<span class="nc" id="L309">			return 0;</span>
+		
+<span class="nc" id="L311">		return clusterReset(tableName, Record_ID);</span>
+	}
+	
+	/**
+	 * Do a cluster wide cache reset for tableName with key
+	 * @param tableName cache name
+	 * @param key cache key
+	 * @return number of deleted cache entries
+	 */
+	public int reset(String tableName, String key) 
+	{
+<span class="nc bnc" id="L322" title="All 2 branches missed.">		if (suspendedResetCacheTables.contains(tableName))</span>
+<span class="nc" id="L323">			return 0;</span>
+		
+<span class="nc" id="L325">		return clusterReset(tableName, key);</span>
+	}
+	
+	/**
+	 * 	Reset local Cache
+	 * 	@return number of deleted cache entries
+	 */
+	public int resetLocalCache()
+	{
+<span class="nc" id="L334">		int counter = 0;</span>
+<span class="nc" id="L335">		int total = 0;</span>
+<span class="nc" id="L336">		CacheInterface[] instances = getInstancesAsArray();</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		for (CacheInterface stored : instances)</span>
+		{
+<span class="nc bnc" id="L339" title="All 4 branches missed.">			if (stored != null &amp;&amp; stored.size() &gt; 0)</span>
+			{
+<span class="nc bnc" id="L341" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(stored.toString());</span>
+<span class="nc" id="L342">				total += stored.reset();</span>
+<span class="nc" id="L343">				counter++;</span>
+			}
+		}
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + counter + &quot; (&quot; + total + &quot;)&quot;);</span>
+<span class="nc" id="L347">		return total;</span>
+	}
+
+	/**
+	 * Get cache instances
+	 * @return cache instances
+	 */
+	public synchronized CacheInterface[] getInstancesAsArray() {
+<span class="nc" id="L355">		return m_instances.toArray(new CacheInterface[0]);</span>
+	}
+	
+	/**
+	 * Reset local Cache
+	 * @param tableName cache name
+	 * @param recordId cache key
+	 * @return number of deleted cache entries
+	 */
+	protected int resetLocalCache (String tableName, Integer recordId)
+	{
+<span class="nc" id="L366">		return resetLocalCacheInternal(tableName, recordId);</span>
+	}
+	
+	/**
+	 * Reset local Cache
+	 * @param tableName cache name
+	 * @param key cache key
+	 * @return number of deleted cache entries
+	 */
+	protected int resetLocalCache (String tableName, String key)
+	{
+<span class="nc" id="L377">		return resetLocalCacheInternal(tableName, key);</span>
+	}
+	
+	/**
+	 * 	Reset local Cache
+	 * 	@param tableName table name
+	 * 	@param key integer or string cache key
+	 * 	@return number of deleted cache entries
+	 */
+	private &lt;K&gt; int resetLocalCacheInternal (String tableName, K key)
+	{
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		if (tableName == null)</span>
+<span class="nc" id="L389">			return resetLocalCache();</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">		if (!m_tableNames.contains(tableName))</span>
+<span class="nc" id="L391">			return 0;</span>
+		//
+<span class="nc" id="L393">		int counter = 0;</span>
+<span class="nc" id="L394">		int total = 0;</span>
+<span class="nc" id="L395">		CacheInterface[] instances = getInstancesAsArray();</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">		for (CacheInterface stored : instances)</span>
+		{
+<span class="nc bnc" id="L398" title="All 6 branches missed.">			if (stored != null &amp;&amp; stored instanceof CCache &amp;&amp; stored.size() &gt; 0)</span>
+			{
+<span class="nc" id="L400">				CCache&lt;?, ?&gt; cc = (CCache&lt;?, ?&gt;)stored;</span>
+<span class="nc bnc" id="L401" title="All 4 branches missed.">				if (cc.getTableName() != null &amp;&amp; cc.getTableName().equalsIgnoreCase(tableName))</span>
+				{
+<span class="nc bnc" id="L403" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;(all) - &quot; + stored);</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">					total += key instanceof Integer id ? stored.reset(id) : stored.resetByStringKey(key.toString());</span>
+<span class="nc" id="L405">					counter++;</span>
+				}
+			}
+		}
+<span class="nc bnc" id="L409" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(tableName + &quot;: #&quot; + counter + &quot; (&quot; + total + &quot;)&quot;);</span>
+
+<span class="nc" id="L411">		CacheChangeListener[] listeners = m_listeners.toArray(new CacheChangeListener[0]);</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">		for(CacheChangeListener listener : listeners)</span>
+		{
+<span class="nc bnc" id="L414" title="All 6 branches missed.">			if ((key instanceof Integer id &amp;&amp; id == -1) || (key.toString().length() == 0))</span>
+<span class="nc" id="L415">				listener.reset(tableName);</span>
+			else
+<span class="nc" id="L417">				listener.reset(tableName, key.toString());</span>
+		}
+		
+<span class="nc" id="L420">		return total;</span>
+	}
+	
+	/**
+	 * 	New record notification for local cache instances
+	 * 	@param tableName table name
+	 * 	@param Record_ID record if applicable or 0 for all
+	 */
+	protected void localNewRecord (String tableName, int Record_ID)
+	{
+<span class="nc bnc" id="L430" title="All 2 branches missed.">		if (tableName == null)</span>
+<span class="nc" id="L431">			return;</span>
+		
+<span class="nc bnc" id="L433" title="All 2 branches missed.">		if (!m_tableNames.contains(tableName))</span>
+<span class="nc" id="L434">			return;</span>
+		//
+<span class="nc" id="L436">		CacheInterface[] instances = getInstancesAsArray();</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">		for (CacheInterface stored : instances)</span>
+		{
+<span class="nc bnc" id="L439" title="All 4 branches missed.">			if (stored != null &amp;&amp; stored instanceof CCache)</span>
+			{
+<span class="nc" id="L441">				CCache&lt;?, ?&gt; cc = (CCache&lt;?, ?&gt;)stored;</span>
+<span class="nc bnc" id="L442" title="All 4 branches missed.">				if (cc.getTableName() != null &amp;&amp; cc.getTableName().equalsIgnoreCase(tableName))</span>
+				{
+<span class="nc" id="L444">					stored.newRecord(Record_ID);</span>
+				}
+			}
+		}		
+<span class="nc" id="L448">	}</span>
+	
+	/**
+	 * 	Get Total Cached Elements
+	 *	@return total cache element count
+	 */
+	public int getElementCount()
+	{		
+<span class="nc" id="L456">		int total = 0;</span>
+<span class="nc" id="L457">		CacheInterface[] instances = getInstancesAsArray();</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">		for (CacheInterface stored : instances)</span>
+		{
+<span class="nc bnc" id="L460" title="All 4 branches missed.">			if (stored != null &amp;&amp; stored.size() &gt; 0)</span>
+			{
+<span class="nc bnc" id="L462" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(stored.toString());</span>
+<span class="nc bnc" id="L463" title="All 2 branches missed.">				if (stored instanceof CCache)</span>
+<span class="nc" id="L464">					total += ((CCache&lt;?, ?&gt;)stored).sizeNoExpire();</span>
+				else
+<span class="nc" id="L466">					total += stored.size();</span>
+			}
+		}
+<span class="nc" id="L469">		return total;</span>
+	}	//	getElementCount
+	
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L480">		StringBuilder sb = new StringBuilder (&quot;CacheMgt[&quot;);</span>
+<span class="nc" id="L481">		sb.append(&quot;Instances=&quot;)</span>
+<span class="nc" id="L482">			.append(m_instances.size())</span>
+<span class="nc" id="L483">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L484">		return sb.toString ();</span>
+	}	//	toString
+	
+	/**
+	 * 	Extended String Representation
+	 *	@return info
+	 */
+	public String toStringX ()
+	{
+<span class="nc" id="L493">		StringBuilder sb = new StringBuilder (&quot;CacheMgt[&quot;);</span>
+<span class="nc" id="L494">		sb.append(&quot;Instances=&quot;)</span>
+<span class="nc" id="L495">			.append(m_instances.size())</span>
+<span class="nc" id="L496">			.append(&quot;, Elements=&quot;)</span>
+<span class="nc" id="L497">			.append(getElementCount())</span>
+<span class="nc" id="L498">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L499">		return sb.toString ();</span>
+	}	//	toString	
+
+	/**
+	 * New record notification
+	 * @param tableName
+	 * @param recordId
+	 */
+	public void newRecord(String tableName, int recordId) {
+<span class="nc bnc" id="L508" title="All 2 branches missed.">		if (suspendedResetCacheTables.contains(tableName))</span>
+<span class="nc" id="L509">			return;</span>
+		
+<span class="nc" id="L511">		clusterNewRecord(tableName, recordId);</span>
+<span class="nc" id="L512">	}</span>
+	
+	/**
+	 * Get info for cache instances
+	 * @return info for cache instances
+	 */
+	public List&lt;CacheInfo&gt; getCacheInfos() {
+<span class="nc" id="L519">		List&lt;CacheInfo&gt; infos = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L520">		CacheInterface[] instances = getInstancesAsArray();</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">		for(CacheInterface ci : instances) {</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">			if (ci instanceof CCache&lt;?, ?&gt;) {</span>
+<span class="nc" id="L523">				infos.add(new CacheInfo((CCache&lt;?, ?&gt;) ci));</span>
+			}
+		}
+<span class="nc" id="L526">		return infos;</span>
+	}
+	
+	/**
+	 * Is there a cache instance for this table name?
+	 * @param tableName
+	 * @return boolean
+	 */
+	public boolean hasCache(String tableName) {
+<span class="nc" id="L535">		return m_tableNames.contains(tableName);</span>
+	}
+
+	/**
+	 * Suspend cache reset operations for tableName (usually to improve performance for batch operations).&lt;br/&gt;
+	 * Caller must call {@link #resumeTableCacheReset(String)} later to clear the suspend cache reset flag.
+	 * @param tableName
+	 */
+	public void suspendTableCacheReset(String tableName) {
+<span class="nc" id="L544">		suspendedResetCacheTables.add(tableName);</span>
+<span class="nc" id="L545">	}</span>
+	
+	/**
+	 * Clear suspend cache reset flag for tableName
+	 * @param tableName
+	 */
+	public void resumeTableCacheReset(String tableName) {
+<span class="nc" id="L552">		suspendedResetCacheTables.remove(tableName);</span>
+<span class="nc" id="L553">	}</span>
+
+	/**
+	 * Schedule cache reset after transaction commit. If trxName is null or transaction cannot be found, the cache reset will be scheduled immediately
+	 *   exceptions are logged and ignored
+	 * @param cacheName
+	 * @param key - can be an Integer ID or String key, if key is -1, the whole cache will be reset
+	 * @param newRecord
+	 * @param trxName
+	 */
+	public static void scheduleCacheReset(String cacheName, Object key, boolean newRecord, String trxName) {
+<span class="nc bnc" id="L564" title="All 2 branches missed.">		if (!CacheMgt.get().hasCache(cacheName))</span>
+<span class="nc" id="L565">			return;</span>
+<span class="nc bnc" id="L566" title="All 4 branches missed.">		if (key instanceof Integer &amp;&amp; (Integer)key == 0)</span>
+<span class="nc" id="L567">			return;</span>
+		try {
+<span class="nc" id="L569">			boolean cacheResetScheduled = false;</span>
+<span class="nc bnc" id="L570" title="All 2 branches missed.">			if (trxName != null) {</span>
+<span class="nc" id="L571">				Trx trx = Trx.get(trxName, false);</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">				if (trx != null) {</span>
+<span class="nc" id="L573">					trx.addTrxEventListener(new TrxEventListener() {</span>
+						@Override
+						public void afterRollback(Trx trx, boolean success) {
+<span class="nc" id="L576">							trx.removeTrxEventListener(this);</span>
+<span class="nc" id="L577">						}</span>
+						@Override
+						public void afterCommit(Trx sav, boolean success) {
+<span class="nc bnc" id="L580" title="All 2 branches missed.">							if (success) {</span>
+<span class="nc bnc" id="L581" title="All 2 branches missed.">								if (!newRecord) {</span>
+<span class="nc bnc" id="L582" title="All 2 branches missed.">									if (key instanceof Integer)</span>
+<span class="nc" id="L583">										Adempiere.getThreadPoolExecutor().submit(() -&gt; CacheMgt.get().reset(cacheName, (Integer) key));</span>
+									else
+<span class="nc" id="L585">										Adempiere.getThreadPoolExecutor().submit(() -&gt; CacheMgt.get().reset(cacheName, String.valueOf(key)));</span>
+<span class="nc bnc" id="L586" title="All 4 branches missed.">								} else if (key instanceof Integer &amp;&amp; (Integer)key &gt; 0) {</span>
+<span class="nc" id="L587">									Adempiere.getThreadPoolExecutor().submit(() -&gt; CacheMgt.get().newRecord(cacheName, (Integer) key));</span>
+								}
+							}
+<span class="nc" id="L590">							trx.removeTrxEventListener(this);</span>
+<span class="nc" id="L591">						}</span>
+						@Override
+						public void afterClose(Trx trx) {
+<span class="nc" id="L594">						}</span>
+					});
+<span class="nc" id="L596">					cacheResetScheduled = true;</span>
+				}
+			}
+<span class="nc bnc" id="L599" title="All 2 branches missed.">			if (!cacheResetScheduled) {</span>
+<span class="nc bnc" id="L600" title="All 2 branches missed.">				if (!newRecord) {</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">					if (key instanceof Integer)</span>
+<span class="nc" id="L602">						Adempiere.getThreadPoolExecutor().submit(() -&gt; CacheMgt.get().reset(cacheName, (Integer) key));</span>
+					else
+<span class="nc" id="L604">						Adempiere.getThreadPoolExecutor().submit(() -&gt; CacheMgt.get().reset(cacheName, String.valueOf(key)));</span>
+<span class="nc bnc" id="L605" title="All 4 branches missed.">				} else if (key instanceof Integer &amp;&amp; (Integer)key &gt; 0) {</span>
+<span class="nc" id="L606">					Adempiere.getThreadPoolExecutor().submit(() -&gt; CacheMgt.get().newRecord(cacheName, (Integer) key));</span>
+				}
+			}
+<span class="nc" id="L609">		} catch (RuntimeException ex) {</span>
+<span class="nc" id="L610">			log.log(Level.WARNING, &quot;Failed to enqueue cache reset for &quot; + cacheName + &quot;, key=&quot; + String.valueOf(key) + &quot;, newRecord=&quot; + newRecord + &quot;, trxName=&quot; + trxName, ex);</span>
+		}
+<span class="nc" id="L612">	}</span>
+
+}	//	CacheMgt
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

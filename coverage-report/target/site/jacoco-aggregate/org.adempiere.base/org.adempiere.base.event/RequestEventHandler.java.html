@@ -1,0 +1,446 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>RequestEventHandler.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.base.event</a> &gt; <span class="el_source">RequestEventHandler.java</span></div><h1>RequestEventHandler.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2013 Nur Yasmin                                              *
+ * Copyright (C) 2013 Trek Global
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.base.event;
+
+import static org.compiere.model.SystemIDs.MESSAGE_REQUESTUPDATE;
+
+import java.io.File;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Dictionary;
+import java.util.StringTokenizer;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.DBException;
+import org.compiere.model.I_R_Request;
+import org.compiere.model.MClient;
+import org.compiere.model.MNote;
+import org.compiere.model.MRequest;
+import org.compiere.model.MRequestAction;
+import org.compiere.model.MRequestType;
+import org.compiere.model.MRequestUpdate;
+import org.compiere.model.MUser;
+import org.compiere.model.PO;
+import org.compiere.model.X_AD_User;
+import org.compiere.model.X_R_Request;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.osgi.service.cm.ConfigurationException;
+import org.osgi.service.cm.ManagedService;
+import org.osgi.service.event.Event;
+
+/**
+ * Event handler for R_Request table and REQUEST_SEND_EMAIL event topic.
+ * @author Nur Yasmin
+ *
+ */
+<span class="nc" id="L53">public class RequestEventHandler extends AbstractEventHandler implements ManagedService</span>
+{
+<span class="nc" id="L55">	private static final CLogger s_log = CLogger.getCLogger (RequestEventHandler.class);</span>
+	
+	@Override
+	protected void doHandleEvent(Event event) 
+	{
+<span class="nc" id="L60">		String topic = event.getTopic();</span>
+<span class="nc bnc" id="L61" title="All 2 branches missed.">		if (topic.equals(IEventTopics.REQUEST_SEND_EMAIL)) </span>
+		{
+<span class="nc" id="L63">			RequestSendEMailEventData eventData = (RequestSendEMailEventData) event.getProperty(EventManager.EVENT_DATA);</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">			if (!eventData.getClient().sendEMail(eventData.getFrom(), eventData.getTo(), eventData.getSubject(), eventData.getMessage(), eventData.getAttachment()))</span>
+			{
+<span class="nc" id="L66">				int AD_Message_ID = MESSAGE_REQUESTUPDATE;</span>
+<span class="nc" id="L67">				MNote note = new MNote(Env.getCtx(), AD_Message_ID, eventData.getTo().getAD_User_ID(),</span>
+<span class="nc" id="L68">						X_R_Request.Table_ID, eventData.getRequestID(), </span>
+<span class="nc" id="L69">						eventData.getSubject(), eventData.getMessage(), null);</span>
+<span class="nc" id="L70">				note.saveEx();</span>
+			}
+<span class="nc" id="L72">		}</span>
+<span class="nc bnc" id="L73" title="All 4 branches missed.">		else if (topic.equals(IEventTopics.PO_BEFORE_NEW) || topic.equals(IEventTopics.PO_BEFORE_CHANGE)</span>
+<span class="nc bnc" id="L74" title="All 4 branches missed.">				|| topic.equals(IEventTopics.PO_AFTER_NEW) || topic.equals(IEventTopics.PO_AFTER_CHANGE)) </span>
+		{
+<span class="nc" id="L76">			PO po = getPO(event);</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">			if (po.get_TableName().equals(I_R_Request.Table_Name))</span>
+			{
+<span class="nc" id="L79">				MRequest r = (MRequest) po;</span>
+				
+<span class="nc" id="L81">				MRequestType rt = r.getRequestType();</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">				if (ignoreRequestTypes.contains(rt.getName()))</span>
+<span class="nc" id="L83">					return;</span>
+				
+<span class="nc bnc" id="L85" title="All 4 branches missed.">				if (topic.equals(IEventTopics.PO_BEFORE_NEW) || topic.equals(IEventTopics.PO_BEFORE_CHANGE))</span>
+<span class="nc" id="L86">					beforeSaveRequest(r, topic.equals(IEventTopics.PO_BEFORE_NEW));</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">				else if (topic.equals(IEventTopics.PO_AFTER_NEW) || topic.equals(IEventTopics.PO_AFTER_CHANGE))</span>
+<span class="nc" id="L88">					afterSaveRequest(r, topic.equals(IEventTopics.PO_AFTER_NEW));</span>
+			}
+		}
+<span class="nc" id="L91">	}</span>
+
+	@Override
+	protected void initialize() 
+	{
+<span class="nc" id="L96">		registerEvent(IEventTopics.REQUEST_SEND_EMAIL);</span>
+<span class="nc" id="L97">		registerTableEvent(IEventTopics.PO_BEFORE_NEW, I_R_Request.Table_Name);</span>
+<span class="nc" id="L98">		registerTableEvent(IEventTopics.PO_BEFORE_CHANGE, I_R_Request.Table_Name);</span>
+<span class="nc" id="L99">		registerTableEvent(IEventTopics.PO_AFTER_NEW, I_R_Request.Table_Name);</span>
+<span class="nc" id="L100">		registerTableEvent(IEventTopics.PO_AFTER_CHANGE, I_R_Request.Table_Name);</span>
+<span class="nc" id="L101">	}</span>
+	
+	/**
+	 * Handle before update of R_Request record
+	 * @param r
+	 * @param newRecord
+	 * @return error message or null
+	 */
+	private String beforeSaveRequest(MRequest r, boolean newRecord)
+	{
+		//	New
+<span class="nc bnc" id="L112" title="All 2 branches missed.">		if (newRecord)</span>
+<span class="nc" id="L113">			return null;</span>
+		
+		//	Change Log
+<span class="nc" id="L116">		r.setIsChanged(false);</span>
+<span class="nc" id="L117">		ArrayList&lt;String&gt; sendInfo = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L118">		MRequestAction ra = new MRequestAction(r, false);</span>
+		//
+<span class="nc bnc" id="L120" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;R_RequestType_ID&quot;))</span>
+<span class="nc" id="L121">			sendInfo.add(&quot;R_RequestType_ID&quot;);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;R_Group_ID&quot;))</span>
+<span class="nc" id="L123">			sendInfo.add(&quot;R_Group_ID&quot;);</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;R_Category_ID&quot;))</span>
+<span class="nc" id="L125">			sendInfo.add(&quot;R_Category_ID&quot;);</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;R_Status_ID&quot;))</span>
+<span class="nc" id="L127">			sendInfo.add(&quot;R_Status_ID&quot;);</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;R_Resolution_ID&quot;))</span>
+<span class="nc" id="L129">			sendInfo.add(&quot;R_Resolution_ID&quot;);</span>
+		//
+<span class="nc bnc" id="L131" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;SalesRep_ID&quot;))</span>
+		{
+			//	Sender
+<span class="nc" id="L134">			int AD_User_ID = Env.getContextAsInt(r.getCtx(), Env.AD_USER_ID);</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">			if (AD_User_ID == 0)</span>
+<span class="nc" id="L136">				AD_User_ID = r.getUpdatedBy();</span>
+			//	Old
+<span class="nc" id="L138">			Object oo = r.get_ValueOld(&quot;SalesRep_ID&quot;);</span>
+<span class="nc" id="L139">			int oldSalesRep_ID = 0;</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">			if (oo instanceof Integer)</span>
+<span class="nc" id="L141">				oldSalesRep_ID = ((Integer)oo).intValue();</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">			if (oldSalesRep_ID != 0)</span>
+			{
+				//  RequestActionTransfer - Request {0} was transferred by {1} from {2} to {3}
+<span class="nc" id="L145">				Object[] args = new Object[] {r.getDocumentNo(), </span>
+<span class="nc" id="L146">					MUser.getNameOfUser(AD_User_ID), </span>
+<span class="nc" id="L147">					MUser.getNameOfUser(oldSalesRep_ID),</span>
+<span class="nc" id="L148">					MUser.getNameOfUser(r.getSalesRep_ID())</span>
+					};
+<span class="nc" id="L150">				String msg = Msg.getMsg(r.getCtx(), &quot;RequestActionTransfer&quot;, args);</span>
+<span class="nc" id="L151">				r.addToResult(msg);</span>
+<span class="nc" id="L152">				sendInfo.add(&quot;SalesRep_ID&quot;);</span>
+			}
+		}
+<span class="nc" id="L155">		checkChange(r, ra, &quot;AD_Role_ID&quot;);</span>
+		//
+<span class="nc" id="L157">		checkChange(r, ra, &quot;Priority&quot;);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;PriorityUser&quot;))</span>
+<span class="nc" id="L159">			sendInfo.add(&quot;PriorityUser&quot;);</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		if (checkChange(r, ra, &quot;IsEscalated&quot;))</span>
+<span class="nc" id="L161">			sendInfo.add(&quot;IsEscalated&quot;);</span>
+		//
+<span class="nc" id="L163">		checkChange(r, ra, &quot;ConfidentialType&quot;);</span>
+<span class="nc" id="L164">		checkChange(r, ra, &quot;Summary&quot;);</span>
+<span class="nc" id="L165">		checkChange(r, ra, &quot;IsSelfService&quot;);</span>
+<span class="nc" id="L166">		checkChange(r, ra, &quot;C_BPartner_ID&quot;);</span>
+<span class="nc" id="L167">		checkChange(r, ra, &quot;AD_User_ID&quot;);</span>
+<span class="nc" id="L168">		checkChange(r, ra, &quot;C_Project_ID&quot;);</span>
+<span class="nc" id="L169">		checkChange(r, ra, &quot;A_Asset_ID&quot;);</span>
+<span class="nc" id="L170">		checkChange(r, ra, &quot;C_Order_ID&quot;);</span>
+<span class="nc" id="L171">		checkChange(r, ra, &quot;C_Invoice_ID&quot;);</span>
+<span class="nc" id="L172">		checkChange(r, ra, &quot;M_Product_ID&quot;);</span>
+<span class="nc" id="L173">		checkChange(r, ra, &quot;C_Payment_ID&quot;);</span>
+<span class="nc" id="L174">		checkChange(r, ra, &quot;M_InOut_ID&quot;);</span>
+<span class="nc" id="L175">		checkChange(r, ra, &quot;M_RMA_ID&quot;);</span>
+<span class="nc" id="L176">		checkChange(r, ra, &quot;IsInvoiced&quot;);</span>
+<span class="nc" id="L177">		checkChange(r, ra, &quot;C_Activity_ID&quot;);</span>
+<span class="nc" id="L178">		checkChange(r, ra, &quot;DateNextAction&quot;);</span>
+<span class="nc" id="L179">		checkChange(r, ra, &quot;M_ProductSpent_ID&quot;);</span>
+<span class="nc" id="L180">		checkChange(r, ra, &quot;QtySpent&quot;);</span>
+<span class="nc" id="L181">		checkChange(r, ra, &quot;QtyInvoiced&quot;);</span>
+<span class="nc" id="L182">		checkChange(r, ra, &quot;StartDate&quot;);</span>
+<span class="nc" id="L183">		checkChange(r, ra, &quot;CloseDate&quot;);</span>
+<span class="nc" id="L184">		checkChange(r, ra, &quot;TaskStatus&quot;);</span>
+<span class="nc" id="L185">		checkChange(r, ra, &quot;DateStartPlan&quot;);</span>
+<span class="nc" id="L186">		checkChange(r, ra, &quot;DateCompletePlan&quot;);</span>
+		//
+<span class="nc bnc" id="L188" title="All 2 branches missed.">		if (r.is_Changed())</span>
+<span class="nc" id="L189">			ra.saveEx();</span>
+		
+		//	Current Info
+<span class="nc" id="L192">		MRequestUpdate update = new MRequestUpdate(r);</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">		if (update.isNewInfo())</span>
+<span class="nc" id="L194">			update.saveEx();</span>
+		else
+<span class="nc" id="L196">			update = null;</span>
+		//
+<span class="nc bnc" id="L198" title="All 4 branches missed.">		if (update != null || sendInfo.size() &gt; 0)</span>
+		{
+			// Note that calling the notifications from beforeSave is causing the
+			// new interested are not notified if the RV_RequestUpdates view changes
+			// this is, when changed the sales rep (solved in sendNotices)
+			// or when changed the request category or group or contact (unsolved - the old ones are notified)
+<span class="nc" id="L204">			sendNotices(r, sendInfo);</span>
+			
+			//	Update
+<span class="nc" id="L207">			r.setDateLastAction(r.getUpdated());</span>
+<span class="nc" id="L208">			r.setLastResult(r.getResult());</span>
+			//	Reset
+<span class="nc" id="L210">			r.setConfidentialTypeEntry (r.getConfidentialType());</span>
+
+<span class="nc" id="L212">			r.setEndTime(null);</span>
+<span class="nc" id="L213">			r.setR_StandardResponse_ID(0);</span>
+<span class="nc" id="L214">			r.setR_MailText_ID(0);</span>
+<span class="nc" id="L215">			r.setResult(null);</span>
+		}
+		
+<span class="nc" id="L218">		return null;</span>
+	}
+	
+	/**
+	 * Handle after save of R_Request record
+	 * @param r
+	 * @param newRecord
+	 * @return error message or null
+	 */
+	private String afterSaveRequest(MRequest r, boolean newRecord)
+	{
+		//	Initial Mail
+<span class="nc bnc" id="L230" title="All 2 branches missed.">		if (newRecord)</span>
+<span class="nc" id="L231">			sendNotices(r, new ArrayList&lt;String&gt;());</span>
+		
+<span class="nc" id="L233">		return null;</span>
+	}
+	
+	/**
+	 * 	Process changes
+	 *	@param ra request action
+	 *	@param columnName column
+	 *	@return true if columnName has changes
+	 */
+	public boolean checkChange (MRequest r, MRequestAction ra, String columnName)
+	{
+<span class="nc bnc" id="L244" title="All 2 branches missed.">		if (r.is_ValueChanged(columnName))</span>
+		{
+<span class="nc" id="L246">			Object value = r.get_ValueOld(columnName);</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">			if (value == null) {</span>
+<span class="nc" id="L248">				ra.addNullColumn(columnName);</span>
+<span class="nc" id="L249">			} else {</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">				if (value instanceof Boolean</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">					&amp;&amp; (   MRequestAction.COLUMNNAME_IsEscalated.equals(columnName)</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">					    || MRequestAction.COLUMNNAME_IsSelfService.equals(columnName))) {</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">					ra.set_ValueNoCheck(columnName, ((Boolean)value).booleanValue() ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc" id="L254">				} else {</span>
+<span class="nc" id="L255">					ra.set_ValueNoCheck(columnName, value);</span>
+				}
+			}
+<span class="nc" id="L258">			r.setIsChanged(true);</span>
+<span class="nc" id="L259">			return true;</span>
+		}
+<span class="nc" id="L261">		return false;</span>
+	}	//	checkChange
+	
+	/**
+	 * 	Send Update EMail/Notices
+	 * 	@param list list of changes
+	 */
+	private void sendNotices(MRequest r, ArrayList&lt;String&gt; list)
+	{
+		//	Subject
+<span class="nc" id="L271">		String subject = Msg.translate(r.getCtx(), &quot;R_Request_ID&quot;) </span>
+<span class="nc" id="L272">			+ &quot; &quot; + Msg.getMsg(r.getCtx(), &quot;Updated&quot;) + &quot;: &quot; + r.getDocumentNo();</span>
+		//	Message
+<span class="nc" id="L274">		StringBuilder message = new StringBuilder();</span>
+		//		UpdatedBy: Joe
+<span class="nc" id="L276">		int UpdatedBy = Env.getAD_User_ID(r.getCtx());</span>
+<span class="nc" id="L277">		MUser from = MUser.get(r.getCtx(), UpdatedBy);</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">		if (from != null)</span>
+<span class="nc" id="L279">			message.append(Msg.translate(r.getCtx(), &quot;UpdatedBy&quot;)).append(&quot;: &quot;)</span>
+<span class="nc" id="L280">				.append(from.getName());</span>
+		//		LastAction/Created: ...	
+<span class="nc bnc" id="L282" title="All 2 branches missed.">		if (r.getDateLastAction() != null)</span>
+<span class="nc" id="L283">			message.append(&quot;\n&quot;).append(Msg.translate(r.getCtx(), &quot;DateLastAction&quot;))</span>
+<span class="nc" id="L284">				.append(&quot;: &quot;).append(r.getDateLastAction());</span>
+		else
+<span class="nc" id="L286">			message.append(&quot;\n&quot;).append(Msg.translate(r.getCtx(), &quot;Created&quot;))</span>
+<span class="nc" id="L287">				.append(&quot;: &quot;).append(r.getCreated());</span>
+		//	Changes
+<span class="nc bnc" id="L289" title="All 2 branches missed.">		for (int i = 0; i &lt; list.size(); i++)</span>
+		{
+<span class="nc" id="L291">			String columnName = (String)list.get(i);</span>
+<span class="nc" id="L292">			message.append(&quot;\n&quot;).append(Msg.getElement(r.getCtx(), columnName))</span>
+<span class="nc" id="L293">				.append(&quot;: &quot;).append(r.get_DisplayValue(columnName, false))</span>
+<span class="nc" id="L294">				.append(&quot; -&gt; &quot;).append(r.get_DisplayValue(columnName, true));</span>
+		}
+		//	NextAction
+<span class="nc bnc" id="L297" title="All 2 branches missed.">		if (r.getDateNextAction() != null)</span>
+<span class="nc" id="L298">			message.append(&quot;\n&quot;).append(Msg.translate(r.getCtx(), &quot;DateNextAction&quot;))</span>
+<span class="nc" id="L299">				.append(&quot;: &quot;).append(r.getDateNextAction());</span>
+<span class="nc" id="L300">		message.append(MRequest.SEPARATOR)</span>
+<span class="nc" id="L301">			.append(r.getSummary());</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">		if (r.getResult() != null)</span>
+<span class="nc" id="L303">			message.append(&quot;\n----------\n&quot;).append(r.getResult());</span>
+<span class="nc" id="L304">		message.append(getMailTrailer(r, null));</span>
+<span class="nc" id="L305">		File pdf = r.createPDF();</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (s_log.isLoggable(Level.FINER)) s_log.finer(message.toString());</span>
+		
+		//	Prepare sending Notice/Mail
+<span class="nc" id="L309">		MClient client = MClient.get(r.getCtx());</span>
+		//	Reset from if external
+<span class="nc bnc" id="L311" title="All 4 branches missed.">		if (from.getEMailUser() == null || from.getEMailUserPW() == null)</span>
+<span class="nc" id="L312">			from = null;</span>
+		//
+<span class="nc" id="L314">		ArrayList&lt;Integer&gt; userList = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc" id="L315">		final String sql = &quot;SELECT u.AD_User_ID, u.NotificationType, u.EMail, u.Name, MAX(r.AD_Role_ID) &quot;</span>
+			+ &quot;FROM RV_RequestUpdates_Only ru&quot;
+			+ &quot; INNER JOIN AD_User u ON (ru.AD_User_ID=u.AD_User_ID OR u.AD_User_ID=?)&quot;
+			+ &quot; LEFT OUTER JOIN AD_User_Roles r ON (u.AD_User_ID=r.AD_User_ID) &quot;
+			+ &quot;WHERE ru.R_Request_ID=? &quot;
+			+ &quot;GROUP BY u.AD_User_ID, u.NotificationType, u.EMail, u.Name&quot;;
+<span class="nc" id="L321">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L322">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L325">			pstmt = DB.prepareStatement (sql, r.get_TrxName());</span>
+<span class="nc" id="L326">			pstmt.setInt (1, r.getSalesRep_ID());</span>
+<span class="nc" id="L327">			pstmt.setInt (2, r.getR_Request_ID());</span>
+<span class="nc" id="L328">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L331">				int AD_User_ID = rs.getInt(1);</span>
+<span class="nc" id="L332">				String NotificationType = rs.getString(2);</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">				if (NotificationType == null)</span>
+<span class="nc" id="L334">					NotificationType = X_AD_User.NOTIFICATIONTYPE_EMail;</span>
+<span class="nc" id="L335">				String email = rs.getString(3);</span>
+<span class="nc" id="L336">				String Name = rs.getString(4);</span>
+				//	Role
+<span class="nc" id="L338">				int AD_Role_ID = rs.getInt(5);</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">				if (rs.wasNull())</span>
+<span class="nc" id="L340">					AD_Role_ID = -1;</span>
+				
+				//	No confidential to externals
+<span class="nc bnc" id="L343" title="All 2 branches missed.">				if (AD_Role_ID == -1 </span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">					&amp;&amp; (r.getConfidentialTypeEntry().equals(MRequest.CONFIDENTIALTYPE_Internal)</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">						|| r.getConfidentialTypeEntry().equals(MRequest.CONFIDENTIALTYPE_PrivateInformation)))</span>
+<span class="nc" id="L346">					continue;</span>
+				
+<span class="nc bnc" id="L348" title="All 2 branches missed.">				if (X_AD_User.NOTIFICATIONTYPE_None.equals(NotificationType))</span>
+				{
+<span class="nc bnc" id="L350" title="All 2 branches missed.">					if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;Opt out: &quot; + Name);</span>
+<span class="nc" id="L351">					continue;</span>
+				}
+<span class="nc bnc" id="L353" title="All 2 branches missed.">				if ((X_AD_User.NOTIFICATIONTYPE_EMail.equals(NotificationType)</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">					|| X_AD_User.NOTIFICATIONTYPE_EMailPlusNotice.equals(NotificationType))</span>
+<span class="nc bnc" id="L355" title="All 4 branches missed.">					&amp;&amp; (email == null || email.length() == 0))</span>
+				{
+<span class="nc bnc" id="L357" title="All 2 branches missed.">					if (AD_Role_ID &gt;= 0)</span>
+<span class="nc" id="L358">						NotificationType = X_AD_User.NOTIFICATIONTYPE_Notice;</span>
+					else
+					{
+<span class="nc bnc" id="L361" title="All 2 branches missed.">						if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;No EMail: &quot; + Name);</span>
+<span class="nc" id="L362">						continue;</span>
+					}
+				}
+<span class="nc bnc" id="L365" title="All 2 branches missed.">				if (X_AD_User.NOTIFICATIONTYPE_Notice.equals(NotificationType)</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">					&amp;&amp; AD_Role_ID &lt; 0)</span>
+				{
+<span class="nc bnc" id="L368" title="All 2 branches missed.">					if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;No internal User: &quot; + Name);</span>
+<span class="nc" id="L369">					continue;</span>
+				}
+
+				//	Check duplicate receivers
+<span class="nc" id="L373">				Integer ii = Integer.valueOf(AD_User_ID);</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">				if (userList.contains(ii))</span>
+<span class="nc" id="L375">					continue;</span>
+<span class="nc" id="L376">				userList.add(ii);</span>
+				//
+<span class="nc" id="L378">				MUser to = MUser.get (r.getCtx(), AD_User_ID);</span>
+				//	Send Mail
+<span class="nc bnc" id="L380" title="All 2 branches missed.">				if (X_AD_User.NOTIFICATIONTYPE_EMail.equals(NotificationType)</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">					|| X_AD_User.NOTIFICATIONTYPE_EMailPlusNotice.equals(NotificationType))</span>
+				{
+<span class="nc" id="L383">					RequestSendEMailEventData eventData = new RequestSendEMailEventData(client, from, to, subject, message.toString(), pdf, r.getR_Request_ID());</span>
+<span class="nc" id="L384">					Event event = EventManager.newEvent(IEventTopics.REQUEST_SEND_EMAIL, eventData, true);</span>
+<span class="nc" id="L385">					EventManager.getInstance().postEvent(event);</span>
+				}
+				//	Send Note
+<span class="nc bnc" id="L388" title="All 2 branches missed.">				if (X_AD_User.NOTIFICATIONTYPE_Notice.equals(NotificationType)</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">					|| X_AD_User.NOTIFICATIONTYPE_EMailPlusNotice.equals(NotificationType))</span>
+				{
+<span class="nc" id="L391">					int AD_Message_ID = MESSAGE_REQUESTUPDATE;</span>
+<span class="nc" id="L392">					MNote note = new MNote(r.getCtx(), AD_Message_ID, AD_User_ID,</span>
+<span class="nc" id="L393">						X_R_Request.Table_ID, r.getR_Request_ID(), </span>
+<span class="nc" id="L394">						subject, message.toString(), r.get_TrxName());</span>
+<span class="nc" id="L395">					note.saveEx();</span>
+				}
+			}
+<span class="nc" id="L398">		}</span>
+<span class="nc" id="L399">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L401">			throw new DBException(e, sql);</span>
+		}
+		finally
+		{
+<span class="nc" id="L405">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L406">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L408">	}	//	sendNotice</span>
+	
+	/**
+	 * 	Get mail trailer text
+	 * 	@param serverAddress server address
+	 *	@return Mail trailer text
+	 */
+	private String getMailTrailer(MRequest r, String serverAddress)
+	{
+<span class="nc" id="L417">		StringBuilder sb = new StringBuilder(&quot;\n&quot;).append(MRequest.SEPARATOR)</span>
+<span class="nc" id="L418">			.append(Msg.translate(r.getCtx(), &quot;R_Request_ID&quot;))</span>
+<span class="nc" id="L419">			.append(&quot;: &quot;).append(r.getDocumentNo())</span>
+<span class="nc" id="L420">			.append(&quot;  &quot;).append(r.getMailTag())</span>
+<span class="nc" id="L421">			.append(&quot;\n&quot;)</span>
+<span class="nc" id="L422">			.append(Msg.getMsg(r.getCtx(), &quot;RequestSentBy&quot;));</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (serverAddress != null)</span>
+<span class="nc" id="L424">			sb.append(&quot; from &quot;).append(serverAddress);</span>
+<span class="nc" id="L425">		return sb.toString();</span>
+	}	//	getMailTrailer
+
+	public static final String IGNORE_REQUEST_TYPES = &quot;ignoreRequestTypes&quot;;
+<span class="nc" id="L429">	private static ArrayList&lt;String&gt; ignoreRequestTypes = new ArrayList&lt;String&gt;();</span>
+	
+	@SuppressWarnings(&quot;rawtypes&quot;)
+	@Override
+	public void updated(Dictionary properties) throws ConfigurationException {
+<span class="nc bnc" id="L434" title="All 2 branches missed.">		if (properties != null) {</span>
+<span class="nc" id="L435">			String p = (String) properties.get(IGNORE_REQUEST_TYPES);</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">			if (!Util.isEmpty(p)) {</span>
+<span class="nc" id="L437">				ignoreRequestTypes.clear();</span>
+				
+<span class="nc" id="L439">				StringTokenizer st = new StringTokenizer(p, &quot;;&quot;);</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">				while (st.hasMoreTokens())</span>
+<span class="nc" id="L441">					ignoreRequestTypes.add(st.nextToken().trim());</span>
+			}
+		}
+<span class="nc" id="L444">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,314 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>BatchUpdate.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">BatchUpdate.java</span></div><h1>BatchUpdate.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ **********************************************************************/
+package org.compiere.model;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Savepoint;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.ValueNamePair;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ * Batch Update PO.&lt;br/&gt;
+ * Difference from individual PO update - no auto reload of PO after successful save.
+ * @param &lt;T&gt; PO type
+ * @author iDempiere
+ */
+public class BatchUpdate&lt;T extends PO&gt; implements IBatchOperation&lt;T&gt; {
+<span class="nc" id="L52">	private static final CLogger s_log = CLogger.getCLogger(BatchUpdate.class);</span>
+<span class="nc" id="L53">	private List&lt;T&gt; m_list = new ArrayList&lt;&gt;();</span>
+	private Class&lt;T&gt; type;
+
+<span class="nc" id="L56">	private record BatchElement&lt;T extends PO&gt;(T po, List&lt;Object&gt; parameters) {}</span>
+
+<span class="nc" id="L58">	public BatchUpdate(Class&lt;T&gt; type) {</span>
+<span class="nc" id="L59">		this.type = type;</span>
+<span class="nc" id="L60">	}</span>
+	
+	@Override
+	public void add(T po) {
+<span class="nc bnc" id="L64" title="All 4 branches missed.">		if (po != null &amp;&amp; type.isInstance(po)) {</span>
+<span class="nc" id="L65">			m_list.add(po);</span>
+		}
+<span class="nc" id="L67">	}</span>
+
+	@Override
+	public void executeBatch(String trxName) {
+<span class="nc bnc" id="L71" title="All 2 branches missed.">		if (m_list.isEmpty()) {</span>
+<span class="nc" id="L72">			return;</span>
+		}
+
+<span class="nc" id="L75">		Trx trx = null;</span>
+<span class="nc" id="L76">		boolean internalTrx = false;</span>
+<span class="nc" id="L77">		String localTrxName = trxName;</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">		if (localTrxName != null) {</span>
+<span class="nc" id="L79">			trx = Trx.get(localTrxName, false);</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">			if (trx == null)</span>
+			{
+				// Using a trx that was previously closed or never opened
+				// Creating and starting the transaction right here, but please note
+				// that this is not a good practice
+<span class="nc" id="L85">				trx = Trx.get(localTrxName, true);</span>
+<span class="nc" id="L86">				s_log.severe(&quot;Transaction closed or never opened (&quot;+localTrxName+&quot;) =&gt; starting now --&gt; &quot; + toString());</span>
+			}
+<span class="nc" id="L88">		} else {</span>
+<span class="nc" id="L89">			localTrxName = Trx.createTrxName(&quot;BatchUpdate&quot;);</span>
+<span class="nc" id="L90">			trx = Trx.get(localTrxName, true);</span>
+<span class="nc" id="L91">			internalTrx = true;</span>
+		}
+
+<span class="nc" id="L94">		Map&lt;String, List&lt;BatchElement&lt;T&gt;&gt;&gt; sqlMap = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L95">		BatchInsert&lt;MChangeLog&gt; changeLogBatch = new BatchInsert&lt;&gt;(MChangeLog.class);</span>
+
+<span class="nc" id="L97">		Savepoint savepoint = null;</span>
+<span class="nc" id="L98">		boolean allSuccess = true;</span>
+<span class="nc" id="L99">		Connection conn = null;</span>
+
+		try {
+<span class="nc" id="L102">			conn = trx.getConnection(true);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">			if (!internalTrx) {</span>
+<span class="nc" id="L104">				savepoint = trx.setSavepoint(null);</span>
+			}
+
+<span class="nc" id="L107">			String sql = null;</span>
+
+<span class="nc bnc" id="L109" title="All 2 branches missed.">			for (T po : m_list) {</span>
+<span class="nc" id="L110">				po.set_TrxName(localTrxName);</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">				if (!po.doVerificationForSave()) {</span>
+<span class="nc" id="L112">					allSuccess = false;</span>
+<span class="nc" id="L113">					break;</span>
+				}
+<span class="nc bnc" id="L115" title="All 2 branches missed.">				if (!po.is_Changed()) {</span>
+<span class="nc" id="L116">					continue;</span>
+				}
+<span class="nc bnc" id="L118" title="All 2 branches missed.">				if (!po.beforeSave(false)) {</span>
+<span class="nc" id="L119">					s_log.warning(&quot;beforeSave failed - &quot; + po.toString());</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">					if (CLogger.peekError() == null)</span>
+<span class="nc" id="L121">						s_log.saveError(&quot;Error&quot;,&quot;beforeSave failed - &quot; + po.toString());</span>
+<span class="nc" id="L122">					allSuccess = false;</span>
+<span class="nc" id="L123">					break;</span>
+				}
+
+<span class="nc" id="L126">				String errorMsg = ModelValidationEngine.get().fireModelChange(po, ModelValidator.TYPE_CHANGE);</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">				if (errorMsg != null) {</span>
+<span class="nc" id="L128">					s_log.warning(&quot;Validation failed - &quot; + errorMsg);</span>
+<span class="nc" id="L129">					s_log.saveError(errorMsg, &quot;&quot;);</span>
+<span class="nc" id="L130">					allSuccess = false;</span>
+<span class="nc" id="L131">					break;</span>
+				}
+
+<span class="nc bnc" id="L134" title="All 2 branches missed.">				if (!po.doOrganizationCheckForSave()) {</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">					if (CLogger.peekError() == null)</span>
+<span class="nc" id="L136">						s_log.saveError(&quot;Error&quot;, &quot;Organization check failed - &quot; + po.toString());</span>
+<span class="nc" id="L137">					allSuccess = false;</span>
+<span class="nc" id="L138">					break;</span>
+				}
+
+				// build update sql
+<span class="nc" id="L142">				SQLFragment sqlFragment = po.buildUpdateSQL(po.isLogSQLScript(), null, changeLogBatch);</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">				if (sqlFragment == null) {</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">					if (CLogger.peekError() == null)</span>
+<span class="nc" id="L145">						s_log.saveError(&quot;Error&quot;, &quot;Failed to build update SQL - &quot; + po.toString());</span>
+<span class="nc" id="L146">					allSuccess = false;</span>
+<span class="nc" id="L147">					break;</span>
+				}
+<span class="nc bnc" id="L149" title="All 4 branches missed.">				if (sqlFragment.sqlClause() == null || sqlFragment.sqlClause().length() == 0) {</span>
+					// no changes, pretend success
+<span class="nc" id="L151">					po.m_idOld = po.get_ID();</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">					if (po.afterSave(false, true)) {</span>
+<span class="nc" id="L153">						errorMsg = ModelValidationEngine.get().fireModelChange(po, ModelValidator.TYPE_AFTER_CHANGE);</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">						if (errorMsg != null) {</span>
+<span class="nc" id="L155">							s_log.warning(&quot;Validation failed - &quot; + errorMsg);</span>
+<span class="nc" id="L156">							s_log.saveError(errorMsg, &quot;&quot;);</span>
+<span class="nc" id="L157">							allSuccess = false;</span>
+						}
+<span class="nc" id="L159">					} else {</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">						if (CLogger.peekError() == null)</span>
+<span class="nc" id="L161">							s_log.saveError(&quot;Error&quot;, &quot;afterSave failed - &quot; + po.toString());</span>
+<span class="nc" id="L162">						allSuccess = false;</span>
+					}
+<span class="nc" id="L164">					continue;</span>
+				}
+
+<span class="nc" id="L167">				sql = sqlFragment.sqlClause();</span>
+<span class="nc" id="L168">				sql = DB.getDatabase().convertStatement(sql);</span>
+<span class="nc" id="L169">				sqlMap.computeIfAbsent(sql, k -&gt; new ArrayList&lt;&gt;()).add(new BatchElement&lt;&gt;(po, sqlFragment.parameters()));</span>
+			}
+
+			// insert change logs
+<span class="nc bnc" id="L173" title="All 4 branches missed.">			if (allSuccess &amp;&amp; !changeLogBatch.isEmpty()) {				</span>
+<span class="nc" id="L174">				changeLogBatch.executeBatch(localTrxName);</span>
+			}
+
+<span class="nc" id="L177">			List &lt;T&gt; allProcessed = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">			if (allSuccess) {</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">				for (Map.Entry&lt;String, List&lt;BatchElement&lt;T&gt;&gt;&gt; entry : sqlMap.entrySet()) {</span>
+<span class="nc" id="L180">					sql = entry.getKey();</span>
+<span class="nc" id="L181">					try (PreparedStatement pstmt = conn.prepareStatement(sql)) {</span>
+<span class="nc" id="L182">						List&lt;T&gt; processed = new ArrayList&lt;&gt;();			</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">						for (BatchElement&lt;T&gt; element : entry.getValue()) {</span>
+<span class="nc" id="L184">							T po = element.po();</span>
+<span class="nc" id="L185">							List&lt;Object&gt; params = element.parameters();</span>
+<span class="nc bnc" id="L186" title="All 4 branches missed.">							if (params != null &amp;&amp; !params.isEmpty()) {</span>
+<span class="nc" id="L187">								DB.setParameters(pstmt, params);</span>
+							}
+<span class="nc" id="L189">							pstmt.addBatch();</span>
+<span class="nc" id="L190">							pstmt.clearParameters();</span>
+<span class="nc" id="L191">							processed.add(po);</span>
+						}
+<span class="nc" id="L193">						int[] results = pstmt.executeBatch();</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">						for (int i = 0; i &lt; results.length; i++) {</span>
+<span class="nc" id="L195">							T po = processed.get(i);</span>
+<span class="nc bnc" id="L196" title="All 4 branches missed.">							if (results[i] != 1 &amp;&amp; results[i] != Statement.SUCCESS_NO_INFO) {</span>
+<span class="nc" id="L197">								s_log.warning(&quot;Batch execution failed for &quot; + po.toString());</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">								if (CLogger.peekError() == null)</span>
+<span class="nc" id="L199">									s_log.saveError(&quot;Error&quot;, &quot;Batch execution failed - &quot; + po.toString());</span>
+<span class="nc" id="L200">								allSuccess = false;</span>
+<span class="nc" id="L201">								break;</span>
+							} else {
+<span class="nc" id="L203">								allSuccess = po.lobSave();</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">								if (!allSuccess)</span>
+<span class="nc" id="L205">									break;</span>
+							}
+						}
+<span class="nc bnc" id="L208" title="All 2 branches missed.">						if (!allSuccess) {</span>
+							break;
+						}
+<span class="nc" id="L211">						allProcessed.addAll(processed);</span>
+					}
+				}
+			}
+			
+<span class="nc bnc" id="L216" title="All 2 branches missed.">			if (allSuccess) {</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">				for(T po : allProcessed) {</span>
+<span class="nc" id="L218">					allSuccess = po.saveFinish(false, allSuccess);</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">					if (!allSuccess)</span>
+<span class="nc" id="L220">						break;</span>
+				}
+			}
+
+<span class="nc bnc" id="L224" title="All 2 branches missed.">			if (allSuccess) {</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">				if (internalTrx) {</span>
+<span class="nc" id="L226">					trx.commit(true);</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">				} else if (savepoint != null) {</span>
+<span class="nc" id="L228">					trx.releaseSavepoint(savepoint);</span>
+<span class="nc" id="L229">					savepoint = null;</span>
+				}
+<span class="nc" id="L231">			} else {</span>
+<span class="nc" id="L232">				rollback(trx, internalTrx, savepoint);</span>
+<span class="nc" id="L233">				throwSaveError();</span>
+			}
+<span class="nc" id="L235">		} catch (Exception e) {</span>
+<span class="nc" id="L236">			s_log.log(Level.SEVERE, &quot;executeBatch&quot;, e);</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">			if (e instanceof BatchUpdateException batchUpdateException)</span>
+<span class="nc" id="L238">				throw batchUpdateException;</span>
+
+<span class="nc" id="L240">			rollback(trx, internalTrx, savepoint);</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">			if (e instanceof RuntimeException runtimeException)</span>
+<span class="nc" id="L242">				throw runtimeException;</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">			else if (e instanceof SQLException sqlException)</span>
+<span class="nc" id="L244">				throw new DBException(sqlException);</span>
+			else
+<span class="nc" id="L246">				throw new AdempiereException(e);</span>
+		} finally {
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if (internalTrx) {</span>
+<span class="nc" id="L249">				trx.close();</span>
+			}
+		}
+<span class="nc" id="L252">	}</span>
+
+	@Override
+	public boolean isEmpty() {
+<span class="nc" id="L256">		return m_list.isEmpty();</span>
+	}
+
+	@Override
+	public int getCount() {
+<span class="nc" id="L261">		return m_list.size();</span>
+	}
+
+	/**
+	 * Throw BatchUpdateException based on CLogger error
+	 * @throws BatchUpdateException
+	 */
+	private void throwSaveError() {
+<span class="nc" id="L269">		StringBuilder msg = new StringBuilder();</span>
+<span class="nc" id="L270">		ValueNamePair err = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">		String val = err != null ? Msg.translate(Env.getCtx(), err.getValue()) : &quot;&quot;;</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">		if (err != null) {</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">			if (val != null) {</span>
+<span class="nc" id="L274">				msg.append(val);</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">				if (val.endsWith(&quot;:&quot;))</span>
+<span class="nc" id="L276">					msg.append(&quot; &quot;);</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">				else if (! val.endsWith(&quot;: &quot;))</span>
+<span class="nc" id="L278">					msg.append(&quot;: &quot;);</span>
+			}
+<span class="nc" id="L280">			msg.append(err.getName());</span>
+		}
+<span class="nc bnc" id="L282" title="All 2 branches missed.">		if (msg.length() == 0)</span>
+<span class="nc" id="L283">			msg.append(&quot;SaveError&quot;);</span>
+<span class="nc" id="L284">		Exception ex = CLogger.retrieveException();</span>
+<span class="nc" id="L285">		throw new BatchUpdateException(msg.toString(), ex);</span>
+	}
+
+	/**
+	 * Batch Update Exception
+	 */
+	private static class BatchUpdateException extends AdempiereException {
+		/**
+		 * 
+		 */
+		private static final long serialVersionUID = -2458156172535084920L;
+
+		public BatchUpdateException(String message, Throwable cause) {
+<span class="nc" id="L298">			super(message, cause);</span>
+<span class="nc" id="L299">		}</span>
+	}
+
+	private void rollback(Trx trx, boolean internalTrx, Savepoint savepoint) {
+<span class="nc bnc" id="L303" title="All 2 branches missed.">		if (internalTrx) {</span>
+<span class="nc" id="L304">			trx.rollback();</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">		} else if (savepoint != null) {</span>
+			try {
+<span class="nc" id="L307">				trx.rollback(savepoint);</span>
+<span class="nc" id="L308">			} catch (SQLException e) {</span>
+<span class="nc" id="L309">				s_log.log(Level.FINE, &quot;Rollback to savepoint failed&quot;, e);</span>
+			}
+		}
+<span class="nc" id="L312">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

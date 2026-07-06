@@ -1,0 +1,445 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PayPrint.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.apps.form</a> &gt; <span class="el_source">PayPrint.java</span></div><h1>PayPrint.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2009 Low Heng Sin                                            *
+ * Copyright (C) 2009 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *                                                                            *
+ *  Contributors:                                                             *
+ *    Carlos Ruiz - GlobalQSS:                                                *
+ *      FR 3132033 - Make payment export class configurable per bank
+ *    Markus Bozem:  IDEMPIERE-1546 / IDEMPIERE-3286        				  *
+ *****************************************************************************/
+package org.compiere.apps.form;
+
+import static org.compiere.model.SystemIDs.REFERENCE_PAYMENTRULE;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.compiere.model.MLookupFactory;
+import org.compiere.model.MLookupInfo;
+import org.compiere.model.MPaySelectionCheck;
+import org.compiere.model.MPaymentBatch;
+import org.compiere.print.MPrintFormat;
+import org.compiere.print.ReportEngine;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.ServerProcessCtl;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Language;
+import org.compiere.util.Msg;
+import org.compiere.util.PaymentExport;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+
+import com.lowagie.text.pdf.PdfReader;
+
+/**
+ * Form to Print and Export payment.
+ */
+<span class="nc" id="L56">public class PayPrint {</span>
+
+	/**	Window No			*/
+<span class="nc" id="L59">	protected int         	m_WindowNo = 0;</span>
+	/**	Used Bank Account	*/
+<span class="nc" id="L61">	protected int				m_C_BankAccount_ID = -1;</span>
+	/**	Export Class for Bank Account	*/
+<span class="nc" id="L63">	protected String			m_PaymentExportClass = null;</span>
+	/**	Payment Selection	*/
+<span class="nc" id="L65">	protected int         		m_C_PaySelection_ID = 0;</span>
+
+	/** Payment Information */
+<span class="nc" id="L68">	protected MPaySelectionCheck[]     m_checks = null;</span>
+	/** Payment Batch		*/
+<span class="nc" id="L70">	protected MPaymentBatch	m_batch = null; </span>
+	/**	Logger			*/
+<span class="nc" id="L72">	protected static final CLogger log = CLogger.getCLogger(PayPrint.class);</span>
+	
+	protected String bank;
+	protected String currency;
+	protected BigDecimal balance;
+	protected PaymentExport m_PaymentExport;
+	
+	/**
+	 *  Load pay selection (C_PaySelection) details (bank info, balance and payment export class)
+	 *  @param C_PaySelection_ID
+	 */
+	public void loadPaySelectInfo(int C_PaySelection_ID)
+	{
+		//  load Banks from PaySelectLine
+<span class="nc" id="L86">		m_C_BankAccount_ID = -1;</span>
+<span class="nc" id="L87">		String sql = &quot;SELECT ps.C_BankAccount_ID, b.Name || ' ' || ba.AccountNo,&quot;	//	1..2</span>
+			+ &quot; c.ISO_Code, CurrentBalance, ba.PaymentExportClass &quot;					//	3..5
+			+ &quot;FROM C_PaySelection ps&quot;
+			+ &quot; INNER JOIN C_BankAccount ba ON (ps.C_BankAccount_ID=ba.C_BankAccount_ID)&quot;
+			+ &quot; INNER JOIN C_Bank b ON (ba.C_Bank_ID=b.C_Bank_ID)&quot;
+			+ &quot; INNER JOIN C_Currency c ON (ba.C_Currency_ID=c.C_Currency_ID) &quot;
+			+ &quot;WHERE ps.C_PaySelection_ID=? AND ps.Processed='Y' AND ba.IsActive='Y'&quot;;
+<span class="nc" id="L94">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L95">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L98">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L99">			pstmt.setInt(1, C_PaySelection_ID);</span>
+<span class="nc" id="L100">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L103">				m_C_BankAccount_ID = rs.getInt(1);</span>
+<span class="nc" id="L104">				bank = rs.getString(2);</span>
+<span class="nc" id="L105">				currency = rs.getString(3);</span>
+<span class="nc" id="L106">				balance = rs.getBigDecimal(4);</span>
+<span class="nc" id="L107">				m_PaymentExportClass = rs.getString(5);</span>
+<span class="nc" id="L108">			}</span>
+			else
+			{
+<span class="nc" id="L111">				m_C_BankAccount_ID = -1;</span>
+<span class="nc" id="L112">				bank = &quot;&quot;;</span>
+<span class="nc" id="L113">				currency = &quot;&quot;;</span>
+<span class="nc" id="L114">				balance = Env.ZERO;</span>
+<span class="nc" id="L115">				m_PaymentExportClass = null;</span>
+<span class="nc" id="L116">				log.log(Level.SEVERE, &quot;No active BankAccount for C_PaySelection_ID=&quot; + C_PaySelection_ID);</span>
+			}
+<span class="nc" id="L118">		}</span>
+<span class="nc" id="L119">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L121">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L125">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L126">			rs = null;</span>
+<span class="nc" id="L127">			pstmt = null;</span>
+		}
+<span class="nc" id="L129">	}   //  loadPaySelectInfo</span>
+
+	/**
+	 *  Get payment rules that's applicable to a pay selection record
+	 *  @param C_PaySelection_ID
+	 *  @return list of applicable payment rules
+	 */
+	public ArrayList&lt;ValueNamePair&gt; loadPaymentRule(int C_PaySelection_ID)
+	{
+<span class="nc" id="L138">		ArrayList&lt;ValueNamePair&gt; data = new ArrayList&lt;ValueNamePair&gt;();</span>
+
+		// load PaymentRule for Bank
+<span class="nc" id="L141">		int AD_Reference_ID = REFERENCE_PAYMENTRULE;  //  MLookupInfo.getAD_Reference_ID(&quot;All_Payment Rule&quot;);</span>
+<span class="nc" id="L142">		Language language = Language.getLanguage(Env.getAD_Language(Env.getCtx()));</span>
+<span class="nc" id="L143">		MLookupInfo info = MLookupFactory.getLookup_List(language, AD_Reference_ID);</span>
+<span class="nc" id="L144">		String sql = info.Query.substring(0, info.Query.indexOf(&quot; ORDER BY&quot;))</span>
+<span class="nc" id="L145">			+ &quot; AND &quot; + info.KeyColumn</span>
+			+ &quot; IN (SELECT PaymentRule FROM C_PaySelectionCheck WHERE C_PaySelection_ID=?) &quot;
+<span class="nc" id="L147">			+ info.Query.substring(info.Query.indexOf(&quot; ORDER BY&quot;));</span>
+<span class="nc" id="L148">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L149">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L152">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L153">			pstmt.setInt(1, C_PaySelection_ID);</span>
+<span class="nc" id="L154">			rs = pstmt.executeQuery();</span>
+			//
+<span class="nc bnc" id="L156" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L158">				ValueNamePair pp = new ValueNamePair(rs.getString(2), rs.getString(3));</span>
+<span class="nc" id="L159">				data.add(pp);</span>
+			}
+<span class="nc" id="L161">		}</span>
+<span class="nc" id="L162">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L164">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L168">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L169">			rs = null;</span>
+<span class="nc" id="L170">			pstmt = null;</span>
+		}
+		
+<span class="nc bnc" id="L173" title="All 2 branches missed.">		if (data.size() == 0)</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">			if (log.isLoggable(Level.CONFIG)) log.config(&quot;PaySel=&quot; + C_PaySelection_ID + &quot;, BAcct=&quot; + m_C_BankAccount_ID + &quot; - &quot; + sql);</span>
+		
+<span class="nc" id="L176">		return data;</span>
+	}   //  loadPaymentRule
+	
+	protected String noPayments;
+	protected Integer documentNo;
+	protected Double sumPayments;
+	protected Integer printFormatId;
+
+	/**
+	 *  PaymentRule changed - get next DocumentNo, No of Payments and total pay amount
+	 *  @param C_PaySelection_ID
+	 *  @param PaymentRule
+	 *  @return error message (if any)
+	 */
+	public String loadPaymentRuleInfo(int C_PaySelection_ID, String PaymentRule)
+	{
+<span class="nc" id="L192">		String msg = null;</span>
+		
+		// get number of payments and total payamt
+<span class="nc" id="L195">		String sql = &quot;SELECT COUNT(*),SUM(payamt) &quot;</span>
+			+ &quot;FROM C_PaySelectionCheck &quot;
+			+ &quot;WHERE C_PaySelection_ID=? AND PaymentRule=?&quot;;
+<span class="nc" id="L198">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L199">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L202">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L203">			pstmt.setInt(1, C_PaySelection_ID);</span>
+<span class="nc" id="L204">			pstmt.setString(2, PaymentRule);</span>
+<span class="nc" id="L205">			rs = pstmt.executeQuery();</span>
+			//
+<span class="nc bnc" id="L207" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L209">				noPayments = String.valueOf(rs.getInt(1));</span>
+<span class="nc" id="L210">				sumPayments = rs.getDouble(2);</span>
+			}   
+<span class="nc" id="L212">		}</span>
+<span class="nc" id="L213">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L215">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L219">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L220">			rs = null;</span>
+<span class="nc" id="L221">			pstmt = null;</span>
+		}
+
+<span class="nc" id="L224">		printFormatId = null;</span>
+<span class="nc" id="L225">		documentNo = null;</span>
+		
+		// Next DocumentNo
+<span class="nc" id="L228">		sql = &quot;SELECT CurrentNext, Check_PrintFormat_ID &quot;</span>
+			+ &quot;FROM C_BankAccountDoc &quot;
+			+ &quot;WHERE C_BankAccount_ID=? AND PaymentRule=? AND IsActive='Y'&quot;;
+		try
+		{
+<span class="nc" id="L233">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L234">			pstmt.setInt(1, m_C_BankAccount_ID);</span>
+<span class="nc" id="L235">			pstmt.setString(2, PaymentRule);</span>
+<span class="nc" id="L236">			rs = pstmt.executeQuery();</span>
+			//
+<span class="nc bnc" id="L238" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L240">				documentNo = Integer.valueOf(rs.getInt(1));</span>
+<span class="nc" id="L241">				printFormatId = Integer.valueOf(rs.getInt(2));</span>
+<span class="nc" id="L242">			}</span>
+			else
+			{
+<span class="nc" id="L245">				log.log(Level.SEVERE, &quot;VPayPrint.loadPaymentRuleInfo - No active BankAccountDoc for C_BankAccount_ID=&quot;</span>
+<span class="nc" id="L246">					+ m_C_BankAccount_ID + &quot; AND PaymentRule=&quot; + PaymentRule);</span>
+<span class="nc" id="L247">				msg = &quot;VPayPrintNoDoc&quot;;</span>
+			}
+<span class="nc" id="L249">		}</span>
+<span class="nc" id="L250">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L252">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L256">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L257">			rs = null;</span>
+<span class="nc" id="L258">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L261">		return msg;</span>
+	}   //  loadPaymentRuleInfo
+	
+	/**
+	 * Instantiate payment export service
+	 * @param err error message buffer
+	 * @return 0 if loaded fine, -1 if failed to load 
+	 */
+	protected int loadPaymentExportClass (StringBuffer err)
+	{
+<span class="nc" id="L271">		m_PaymentExport = null ;</span>
+		
+<span class="nc bnc" id="L273" title="All 4 branches missed.">		if (m_PaymentExportClass == null || m_PaymentExportClass.trim().length() == 0) {</span>
+<span class="nc" id="L274">			m_PaymentExportClass = &quot;org.compiere.util.GenericPaymentExport&quot;;</span>
+		}
+		try
+		{
+<span class="nc" id="L278">			m_PaymentExport = Core.getPaymentExporter(m_PaymentExportClass);			</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">			if (m_PaymentExport == null)</span>
+			{
+<span class="nc" id="L281">				Class&lt;?&gt; clazz = Class.forName (m_PaymentExportClass);</span>
+<span class="nc" id="L282">				m_PaymentExport = (PaymentExport)clazz.getDeclaredConstructor().newInstance();</span>
+			}
+			
+<span class="nc" id="L285">		}</span>
+<span class="nc" id="L286">		catch (ClassNotFoundException e)</span>
+		{
+<span class="nc bnc" id="L288" title="All 2 branches missed.">			if (err!=null)</span>
+			{
+<span class="nc" id="L290">				err.append(&quot;No custom PaymentExport class &quot; + m_PaymentExportClass + &quot; - &quot; + e.toString());</span>
+<span class="nc" id="L291">				log.log(Level.SEVERE, err.toString(), e);</span>
+			}
+<span class="nc" id="L293">			return -1;</span>
+		}
+<span class="nc" id="L295">		catch (Exception e)</span>
+		{
+<span class="nc bnc" id="L297" title="All 2 branches missed.">			if (err!=null)</span>
+			{
+<span class="nc" id="L299">				err.append(&quot;Error in &quot; + m_PaymentExportClass + &quot; check log, &quot; + e.toString());</span>
+<span class="nc" id="L300">				log.log(Level.SEVERE, err.toString(), e);</span>
+			}
+<span class="nc" id="L302">			return -1;</span>
+		}
+<span class="nc" id="L304">		return 0 ;</span>
+	} // loadPaymentExportClass
+	
+	/**
+	 * Create PDF documents (usually check) from pay selection check records
+	 * @param startDocumentNo
+	 * @param paymentRule
+	 * @return list of PDF documents
+	 * @throws Exception
+	 */
+	protected List&lt;File&gt; createCheckDocuments(int startDocumentNo, String paymentRule) throws Exception 
+	{
+		//	for all checks
+<span class="nc" id="L317">		List&lt;File&gt; pdfList = new ArrayList&lt;File&gt;();</span>
+<span class="nc" id="L318">		int lastDocumentNo = startDocumentNo;</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">		for (int i = 0; i &lt; m_checks.length; i++)</span>
+		{
+<span class="nc" id="L321">			MPaySelectionCheck check = m_checks[i];</span>
+			
+			//	Set new Check Document No
+<span class="nc" id="L324">			check.setDocumentNo(String.valueOf(lastDocumentNo));</span>
+<span class="nc" id="L325">			check.saveEx(); </span>
+			
+			//	Update BankAccountDoc
+<span class="nc" id="L328">			MPaySelectionCheck.confirmPrint(m_checks[i], m_batch);</span>
+
+			//	ReportCtrl will check BankAccountDoc for PrintFormat
+<span class="nc" id="L331">			ReportEngine re = ReportEngine.get(Env.getCtx(), ReportEngine.CHECK, check.get_ID(), m_WindowNo);</span>
+<span class="nc" id="L332">			MPrintFormat format = re.getPrintFormat();</span>
+<span class="nc" id="L333">			File pdfFile = null;</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">			if (format.getJasperProcess_ID() &gt; 0)	</span>
+			{
+<span class="nc" id="L336">				ProcessInfo pi = new ProcessInfo(&quot;&quot;, format.getJasperProcess_ID());</span>
+<span class="nc" id="L337">				pi.setRecord_ID(check.get_ID());</span>
+<span class="nc" id="L338">				pi.setIsBatch(true);</span>
+<span class="nc" id="L339">				pi.setTransientObject(format);</span>
+									
+<span class="nc" id="L341">				ServerProcessCtl.process(pi, null);</span>
+<span class="nc" id="L342">				pdfFile = pi.getPDFReport();</span>
+<span class="nc" id="L343">			}</span>
+			else
+			{
+<span class="nc" id="L346">				pdfFile = File.createTempFile(&quot;WPayPrint&quot;, null);</span>
+<span class="nc" id="L347">				re.getPDF(pdfFile);</span>
+			}
+			
+<span class="nc bnc" id="L350" title="All 2 branches missed.">			if (pdfFile != null)</span>
+			{
+				// increase the check document no by the number of pages of the generated pdf file
+<span class="nc" id="L353">				try (PdfReader document = new PdfReader(pdfFile.getAbsolutePath())) {</span>
+<span class="nc" id="L354">					lastDocumentNo += document.getNumberOfPages();</span>
+				}
+<span class="nc" id="L356">				pdfList.add(pdfFile);</span>
+			}
+		}
+
+		//	Update Check Next Document No		
+<span class="nc bnc" id="L361" title="All 2 branches missed.">		if (startDocumentNo != lastDocumentNo)</span>
+		{
+<span class="nc" id="L363">			StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L364">			sb.append(&quot;UPDATE C_BankAccountDoc SET CurrentNext=&quot;).append(lastDocumentNo)</span>
+<span class="nc" id="L365">				.append(&quot; WHERE C_BankAccount_ID=&quot;).append(m_C_BankAccount_ID)</span>
+<span class="nc" id="L366">				.append(&quot; AND PaymentRule='&quot;).append(paymentRule).append(&quot;'&quot;);</span>
+<span class="nc" id="L367">			DB.executeUpdate(sb.toString(), null);</span>
+		}
+		
+<span class="nc" id="L370">		return pdfList;</span>
+	}
+	
+	/**
+	 * Create Remittance Documents (PDF) from pay selection check records
+	 * @return list of Remittance documents
+	 */
+	protected List&lt;File&gt; createRemittanceDocuments()
+	{		
+<span class="nc" id="L379">		List&lt;File&gt; pdfList = new ArrayList&lt;File&gt;();</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">		for (int i = 0; i &lt; m_checks.length; i++)</span>
+		{
+<span class="nc" id="L382">			MPaySelectionCheck check = m_checks[i];</span>
+<span class="nc" id="L383">			ReportEngine re = ReportEngine.get(Env.getCtx(), ReportEngine.REMITTANCE, check.get_ID(), m_WindowNo);</span>
+			try
+			{
+<span class="nc" id="L386">				MPrintFormat format = re.getPrintFormat();</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">				if (format.getJasperProcess_ID() &gt; 0)	</span>
+				{
+<span class="nc" id="L389">					ProcessInfo pi = new ProcessInfo(&quot;&quot;, format.getJasperProcess_ID());</span>
+<span class="nc" id="L390">					pi.setRecord_ID(check.get_ID());</span>
+<span class="nc" id="L391">					pi.setIsBatch(true);</span>
+<span class="nc" id="L392">					pi.setTransientObject(format);</span>
+					
+<span class="nc" id="L394">					ServerProcessCtl.process(pi, null);</span>
+<span class="nc" id="L395">					pdfList.add(pi.getPDFReport());</span>
+<span class="nc" id="L396">				}</span>
+				else
+				{
+<span class="nc" id="L399">					File file = File.createTempFile(&quot;WPayPrint&quot;, null);</span>
+<span class="nc" id="L400">					re.getPDF(file);</span>
+<span class="nc" id="L401">					pdfList.add(file);</span>
+				}
+<span class="nc" id="L403">			}</span>
+<span class="nc" id="L404">			catch (Exception e)</span>
+			{
+<span class="nc" id="L406">				log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+			}
+		}
+<span class="nc" id="L409">		return pdfList;</span>
+	}
+	
+	/**
+	 *  Get Checks
+	 *  @param PaymentRule Payment Rule
+	 *  @param startDocumentNo
+	 *  @param error
+	 *  @param trxName
+	 *  @return true if payments were created
+	 */
+	protected boolean getChecks(String PaymentRule, BigDecimal startDocumentNo, AtomicReference&lt;ValueNamePair&gt; error, String trxName)
+	{
+		//  do we have values
+<span class="nc bnc" id="L423" title="All 4 branches missed.">		if (m_C_PaySelection_ID &lt;= 0 || m_C_BankAccount_ID == -1</span>
+<span class="nc bnc" id="L424" title="All 4 branches missed.">			|| Util.isEmpty(PaymentRule, true) || startDocumentNo == null)</span>
+		{
+<span class="nc" id="L426">			error.set(new ValueNamePair(&quot;VPayPrintNoRecords&quot;, &quot;(&quot; + Msg.translate(Env.getCtx(), &quot;C_PaySelectionLine_ID&quot;) + &quot; #0&quot;));</span>
+<span class="nc" id="L427">			return false;</span>
+		}
+
+<span class="nc bnc" id="L430" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;C_PaySelection_ID=&quot; + m_C_PaySelection_ID + &quot;, PaymentRule=&quot; +  PaymentRule);</span>
+		
+		//	get payment selection checks without check no assignment
+<span class="nc" id="L433">		m_checks = MPaySelectionCheck.get(m_C_PaySelection_ID, PaymentRule, trxName);</span>
+
+		//
+<span class="nc bnc" id="L436" title="All 4 branches missed.">		if (m_checks == null || m_checks.length == 0)</span>
+		{
+<span class="nc" id="L438">			error.set(new ValueNamePair(&quot;VPayPrintNoRecords&quot;, &quot;(&quot; + Msg.translate(Env.getCtx(), &quot;C_PaySelectionLine_ID&quot;) + &quot; #0&quot;));</span>
+<span class="nc" id="L439">			return false;</span>
+		}
+<span class="nc" id="L441">		m_batch = MPaymentBatch.getForPaySelection (Env.getCtx(), m_C_PaySelection_ID, null);</span>
+<span class="nc" id="L442">		return true;</span>
+	}   //  getChecks
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

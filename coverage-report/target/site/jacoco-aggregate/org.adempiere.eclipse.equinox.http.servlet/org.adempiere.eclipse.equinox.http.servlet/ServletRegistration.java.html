@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ServletRegistration.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.eclipse.equinox.http.servlet</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.eclipse.equinox.http.servlet</a> &gt; <span class="el_source">ServletRegistration.java</span></div><h1>ServletRegistration.java</h1><pre class="source lang-java linenums">/*******************************************************************************
+ * Copyright (c) 2005-2007 Cognos Incorporated, IBM Corporation and others
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ * 
+ * Contributors:
+ *     Cognos Incorporated - initial API and implementation
+ *     IBM Corporation - bug fixes and enhancements
+ *******************************************************************************/
+package org.adempiere.eclipse.equinox.http.servlet;
+
+import java.io.IOException;
+import java.util.logging.Level;
+
+import javax.servlet.Servlet;
+import javax.servlet.ServletConfig;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.adempiere.base.sso.ISSOPrincipalService;
+import org.adempiere.base.sso.SSOUtils;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MUser;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.osgi.service.http.HttpContext;
+
+//This class wraps the servlet object registered in the HttpService.registerServlet call, to manage the context classloader when handleRequests are being asked.
+public class ServletRegistration extends Registration {
+
+	/** Logger */
+<span class="nc" id="L35">	protected static CLogger	log	= CLogger.getCLogger(ServletRegistration.class);</span>
+	private Servlet servlet; //The actual servlet object registered against the http service. All requests will eventually be delegated to it.
+	private HttpContext httpContext; //The context used during the registration of the servlet
+	private ClassLoader registeredContextClassLoader;
+
+<span class="nc" id="L40">	public ServletRegistration(Servlet servlet, HttpContext context) {</span>
+<span class="nc" id="L41">		this.servlet = servlet;</span>
+<span class="nc" id="L42">		this.httpContext = context;</span>
+<span class="nc" id="L43">		registeredContextClassLoader = Thread.currentThread().getContextClassLoader();</span>
+<span class="nc" id="L44">	}</span>
+
+	public void destroy() {
+<span class="nc" id="L47">		ClassLoader original = Thread.currentThread().getContextClassLoader();</span>
+		try {
+<span class="nc" id="L49">			Thread.currentThread().setContextClassLoader(registeredContextClassLoader);</span>
+<span class="nc" id="L50">			super.destroy();</span>
+<span class="nc" id="L51">			servlet.destroy();</span>
+<span class="nc" id="L52">		} finally {</span>
+<span class="nc" id="L53">			Thread.currentThread().setContextClassLoader(original);</span>
+		}
+<span class="nc" id="L55">	}</span>
+
+	//Delegate the init call to the actual servlet
+	public void init(ServletConfig servletConfig) throws ServletException {
+<span class="nc" id="L59">		ClassLoader original = Thread.currentThread().getContextClassLoader();</span>
+		try {
+<span class="nc" id="L61">			Thread.currentThread().setContextClassLoader(registeredContextClassLoader);</span>
+<span class="nc" id="L62">			servlet.init(servletConfig);</span>
+<span class="nc" id="L63">		} finally {</span>
+<span class="nc" id="L64">			Thread.currentThread().setContextClassLoader(original);</span>
+		}
+<span class="nc" id="L66">	}</span>
+
+	//Delegate the handling of the request to the actual servlet
+	/**
+	 * @param req
+	 * @param resp
+	 * @throws IOException
+	 * @throws ServletException
+	 */
+	public void service(HttpServletRequest req, HttpServletResponse resp) throws IOException, ServletException {
+<span class="nc" id="L76">		ClassLoader original = Thread.currentThread().getContextClassLoader();</span>
+		try {
+<span class="nc" id="L78">			Thread.currentThread().setContextClassLoader(registeredContextClassLoader);</span>
+<span class="nc" id="L79">			boolean isSSOEnable  = MSysConfig.getBooleanValue(MSysConfig.ENABLE_SSO_OSGI_CONSOLE, false);</span>
+<span class="nc bnc" id="L80" title="All 4 branches missed.">			if (isSSOEnable &amp;&amp; SSOUtils.getSSOPrincipalService() != null)</span>
+			{
+<span class="nc" id="L82">				Object token = req.getSession().getAttribute(ISSOPrincipalService.SSO_PRINCIPAL_SESSION_TOKEN);</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">				if (checkSSOAuthorization(token))</span>
+				{
+<span class="nc" id="L85">					servlet.service(req, resp);</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">					if (req.getPathInfo().endsWith(&quot;logout&quot;))</span>
+					{
+<span class="nc" id="L88">						req.getSession().removeAttribute(ISSOPrincipalService.SSO_PRINCIPAL_SESSION_TOKEN);</span>
+<span class="nc" id="L89">						resp.sendRedirect(&quot;osgi/system/console/bundles&quot;);</span>
+					}
+<span class="nc" id="L91">				}</span>
+				else
+				{
+<span class="nc" id="L94">					req.getSession().removeAttribute(ISSOPrincipalService.SSO_PRINCIPAL_SESSION_TOKEN);</span>
+				}
+<span class="nc" id="L96">			}</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">			else if (httpContext.handleSecurity(req, resp))</span>
+			{
+<span class="nc" id="L99">				servlet.service(req, resp);</span>
+			}
+<span class="nc" id="L101">		} finally {</span>
+<span class="nc" id="L102">			Thread.currentThread().setContextClassLoader(original);</span>
+		}
+<span class="nc" id="L104">	}</span>
+
+	public Servlet getServlet() {
+<span class="nc" id="L107">		return servlet;</span>
+	}
+
+	public HttpContext getHttpContext() {
+<span class="nc" id="L111">		return httpContext;</span>
+	}
+	
+	private boolean checkSSOAuthorization(Object token)
+	{
+<span class="nc bnc" id="L116" title="All 2 branches missed.">		if (token == null)</span>
+<span class="nc" id="L117">			return false;</span>
+		try
+		{
+<span class="nc" id="L120">			String username = SSOUtils.getSSOPrincipalService().getUserName(token);</span>
+<span class="nc" id="L121">			return validateUser(username, null, true);</span>
+		}
+<span class="nc" id="L123">		catch (Exception e)</span>
+		{
+<span class="nc" id="L125">			log.log(Level.SEVERE, &quot;SSOAuthorizationChekError&quot;, e);</span>
+		}
+<span class="nc" id="L127">		return false;</span>
+	}
+	
+	private boolean validateUser(String name, String password, boolean isSSO)
+	{
+<span class="nc" id="L132">		MUser user = MUser.get(Env.getCtx(), name, password, isSSO);</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">		if (user == null)</span>
+		{
+<span class="nc" id="L135">			log.warning (&quot;User not found: '&quot; + name);</span>
+<span class="nc" id="L136">			return false;</span>
+		}
+<span class="nc bnc" id="L138" title="All 4 branches missed.">		if (!user.isAdministrator() &amp;&amp; !user.hasURLFormAccess(&quot;/osgi/system/console&quot;))</span>
+		{
+<span class="nc" id="L140">			log.warning (&quot;User doesn't have access to /osgi/system/console = &quot; + name);</span>
+<span class="nc" id="L141">			return false;</span>
+		}
+<span class="nc bnc" id="L143" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;Name=&quot; + name);</span>
+<span class="nc" id="L144">		return Boolean.TRUE;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

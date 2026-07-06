@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CalloutPaymentAllocate.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.callout</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">CalloutPaymentAllocate.java</span></div><h1>CalloutPaymentAllocate.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+
+/**
+ * 	Callout for Allocate Payments
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: CalloutPaymentAllocate.java,v 1.3 2006/07/30 00:51:03 jjanke Exp $
+ */
+<span class="nc" id="L37">public class CalloutPaymentAllocate extends CalloutEngine</span>
+{
+	/**
+	 *  Payment_Invoice.
+	 *  when Invoice selected
+	 *  - set InvoiceAmt = invoiceOpen
+	 *  	- DiscountAmt = C_Invoice_Discount (ID, DateTrx)
+	 *   	- Amount = invoiceOpen (ID) - Discount
+	 * 		- WriteOffAmt,OverUnderAmt = 0
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @return null or error message
+	 */
+	public String invoice (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L55">		Integer C_Invoice_ID = (Integer)value;</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">		if (isCalloutActive()		//	assuming it is resetting value</span>
+<span class="nc bnc" id="L57" title="All 4 branches missed.">			|| C_Invoice_ID == null || C_Invoice_ID.intValue() == 0)</span>
+<span class="nc" id="L58">			return &quot;&quot;;</span>
+
+		//	Check Payment
+<span class="nc" id="L61">		int C_Payment_ID = Env.getContextAsInt(ctx, WindowNo, &quot;C_Payment_ID&quot;);</span>
+<span class="nc" id="L62">		MPayment payment = new MPayment (ctx, C_Payment_ID, null);</span>
+<span class="nc bnc" id="L63" title="All 4 branches missed.">		if (payment.getC_Charge_ID() != 0 || payment.getC_Invoice_ID() != 0 </span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">			|| payment.getC_Order_ID() != 0)</span>
+<span class="nc" id="L65">			return Msg.getMsg(ctx, &quot;PaymentIsAllocated&quot;);</span>
+		
+		//
+<span class="nc" id="L68">		mTab.setValue(&quot;DiscountAmt&quot;, Env.ZERO);</span>
+<span class="nc" id="L69">		mTab.setValue(&quot;WriteOffAmt&quot;, Env.ZERO);</span>
+<span class="nc" id="L70">		mTab.setValue(&quot;OverUnderAmt&quot;, Env.ZERO);</span>
+
+<span class="nc" id="L72">		int C_InvoicePaySchedule_ID = 0;</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">		if (Env.getContextAsInt(ctx, WindowNo, Env.TAB_INFO, &quot;C_Invoice_ID&quot;) == C_Invoice_ID.intValue()</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">			&amp;&amp; Env.getContextAsInt(ctx, WindowNo, Env.TAB_INFO, &quot;C_InvoicePaySchedule_ID&quot;) != 0)</span>
+		{
+<span class="nc" id="L76">			C_InvoicePaySchedule_ID = Env.getContextAsInt(ctx, WindowNo, Env.TAB_INFO, &quot;C_InvoicePaySchedule_ID&quot;);</span>
+		}
+
+		//  Payment Date
+<span class="nc" id="L80">		Timestamp ts = Env.getContextAsDate(ctx, WindowNo, &quot;DateTrx&quot;);</span>
+		//
+<span class="nc" id="L82">		String sql = &quot;SELECT C_BPartner_ID,C_Currency_ID,&quot;		//	1..2</span>
+			+ &quot; invoiceOpen(C_Invoice_ID, ?),&quot;					//	3		#1
+			+ &quot; invoiceDiscount(C_Invoice_ID,?,?), IsSOTrx &quot;	//	4..5	#2/3
+			+ &quot;FROM C_Invoice WHERE C_Invoice_ID=?&quot;;			//			#4
+<span class="nc" id="L86">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L87">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L90">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L91">			pstmt.setInt(1, C_InvoicePaySchedule_ID);</span>
+<span class="nc" id="L92">			pstmt.setTimestamp(2, ts);</span>
+<span class="nc" id="L93">			pstmt.setInt(3, C_InvoicePaySchedule_ID);</span>
+<span class="nc" id="L94">			pstmt.setInt(4, C_Invoice_ID.intValue());</span>
+<span class="nc" id="L95">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+				//
+<span class="nc" id="L99">				BigDecimal InvoiceOpen = rs.getBigDecimal(3);		//	Set Invoice OPen Amount</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">				if (InvoiceOpen == null)</span>
+<span class="nc" id="L101">					InvoiceOpen = Env.ZERO;</span>
+<span class="nc" id="L102">				BigDecimal DiscountAmt = rs.getBigDecimal(4);		//	Set Discount Amt</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">				if (DiscountAmt == null)</span>
+<span class="nc" id="L104">					DiscountAmt = Env.ZERO;</span>
+<span class="nc" id="L105">				mTab.setValue(&quot;InvoiceAmt&quot;, InvoiceOpen);</span>
+<span class="nc" id="L106">				mTab.setValue(&quot;Amount&quot;, InvoiceOpen.subtract(DiscountAmt));</span>
+<span class="nc" id="L107">				mTab.setValue(&quot;DiscountAmt&quot;, DiscountAmt);</span>
+				//  reset as dependent fields get reset
+<span class="nc" id="L109">				Env.setContext(ctx, WindowNo, mTab.getTabNo(), &quot;C_Invoice_ID&quot;, C_Invoice_ID.toString());</span>
+<span class="nc" id="L110">				mTab.setValue(&quot;C_Invoice_ID&quot;, C_Invoice_ID);</span>
+			}
+<span class="nc" id="L112">		}</span>
+<span class="nc" id="L113">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L115">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L116">			return e.getLocalizedMessage();</span>
+		}
+		finally
+		{
+<span class="nc" id="L120">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L121">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L123">		return &quot;&quot;;</span>
+	}	//	invoice
+
+	/**
+	 *  Payment_Amounts.
+	 *	Change of:
+	 *		- IsOverUnderPayment -&amp;gt; set OverUnderAmt to 0
+	 *		- C_Currency_ID, C_ConvesionRate_ID -&amp;gt; convert all
+	 *		- PayAmt, DiscountAmt, WriteOffAmt, OverUnderAmt -&amp;gt; PayAmt
+	 *			make sure that add up to InvoiceOpenAmt
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @param oldValue Old Value
+	 *  @return null or error message
+	 */
+	public String amounts (Properties ctx, int WindowNo, GridTab mTab, GridField mField, 
+		Object value, Object oldValue)
+	{
+<span class="nc bnc" id="L144" title="All 2 branches missed.">		if (isCalloutActive())		//	assuming it is resetting value</span>
+<span class="nc" id="L145">			return &quot;&quot;;</span>
+		//	No Invoice		
+<span class="nc" id="L147">		int C_Invoice_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;C_Invoice_ID&quot;);</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		if (C_Invoice_ID == 0)</span>
+<span class="nc" id="L149">			return &quot;&quot;;</span>
+		//	Get Info from Tab
+<span class="nc" id="L151">		BigDecimal Amount = (BigDecimal)mTab.getValue (&quot;Amount&quot;);</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		if (Amount == null)</span>
+<span class="nc" id="L153">			Amount = Env.ZERO;</span>
+<span class="nc" id="L154">		BigDecimal DiscountAmt = (BigDecimal)mTab.getValue (&quot;DiscountAmt&quot;);</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">		if (DiscountAmt == null)</span>
+<span class="nc" id="L156">			DiscountAmt = Env.ZERO;</span>
+<span class="nc" id="L157">		BigDecimal WriteOffAmt = (BigDecimal)mTab.getValue (&quot;WriteOffAmt&quot;);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		if (WriteOffAmt == null)</span>
+<span class="nc" id="L159">			WriteOffAmt = Env.ZERO;</span>
+<span class="nc" id="L160">		BigDecimal OverUnderAmt = (BigDecimal)mTab.getValue (&quot;OverUnderAmt&quot;);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">		if (OverUnderAmt == null)</span>
+<span class="nc" id="L162">			OverUnderAmt = Env.ZERO;</span>
+<span class="nc" id="L163">		BigDecimal InvoiceAmt = (BigDecimal)mTab.getValue(&quot;InvoiceAmt&quot;);</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Amt=&quot; + Amount + &quot;, Discount=&quot; + DiscountAmt</span>
+<span class="nc" id="L165">			+ &quot;, WriteOff=&quot; + WriteOffAmt + &quot;, OverUnder=&quot; + OverUnderAmt</span>
+<span class="nc" id="L166">			+ &quot;, Invoice=&quot; + InvoiceAmt);</span>
+
+		//	Changed Column
+<span class="nc" id="L169">		String colName = mField.getColumnName();</span>
+		//  PayAmt - calculate write off
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if (colName.equals(&quot;Amount&quot;))</span>
+		{
+<span class="nc" id="L173">			OverUnderAmt = InvoiceAmt.subtract(Amount).subtract(DiscountAmt).subtract(WriteOffAmt);</span>
+<span class="nc" id="L174">			mTab.setValue(&quot;OverUnderAmt&quot;, OverUnderAmt);</span>
+<span class="nc" id="L175">		}</span>
+		else    //  calculate Amount
+		{
+<span class="nc" id="L178">			Amount = InvoiceAmt.subtract(DiscountAmt).subtract(WriteOffAmt).subtract(OverUnderAmt);</span>
+<span class="nc" id="L179">			mTab.setValue(&quot;Amount&quot;, Amount);</span>
+		}
+
+<span class="nc" id="L182">		return &quot;&quot;;</span>
+	}	//	amounts
+
+	
+}	//	CalloutPaymentAllocate
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

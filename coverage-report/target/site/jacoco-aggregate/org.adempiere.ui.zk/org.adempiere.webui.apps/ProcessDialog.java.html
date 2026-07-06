@@ -1,0 +1,808 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ProcessDialog.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.apps</a> &gt; <span class="el_source">ProcessDialog.java</span></div><h1>ProcessDialog.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2007 Low Heng Sin											  *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.webui.apps;
+
+import static org.compiere.model.SystemIDs.PROCESS_C_INVOICE_GENERATE;
+import static org.compiere.model.SystemIDs.PROCESS_M_INOUT_GENERATE;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.util.Callback;
+import org.adempiere.webui.LayoutUtils;
+import org.adempiere.webui.component.ConfirmPanel;
+import org.adempiere.webui.component.DocumentLink;
+import org.adempiere.webui.component.Mask;
+import org.adempiere.webui.component.Tabpanel;
+import org.adempiere.webui.component.Window;
+import org.adempiere.webui.desktop.IDesktop;
+import org.adempiere.webui.panel.IHelpContext;
+import org.adempiere.webui.panel.ITabOnCloseHandler;
+import org.adempiere.webui.part.WindowContainer;
+import org.adempiere.webui.process.WProcessInfo;
+import org.adempiere.webui.session.SessionManager;
+import org.adempiere.webui.theme.ThemeManager;
+import org.adempiere.webui.util.Icon;
+import org.adempiere.webui.util.ZKUpdateUtil;
+import org.adempiere.webui.window.Dialog;
+import org.adempiere.webui.window.SimplePDFViewer;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MProcess;
+import org.compiere.model.MRole;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.X_AD_CtxHelp;
+import org.compiere.print.ReportEngine;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.ProcessInfoLog;
+import org.compiere.process.ProcessInfoUtil;
+import org.compiere.util.CLogger;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.zkoss.zhtml.Table;
+import org.zkoss.zhtml.Td;
+import org.zkoss.zhtml.Text;
+import org.zkoss.zhtml.Tr;
+import org.zkoss.zk.au.out.AuEcho;
+import org.zkoss.zk.au.out.AuScript;
+import org.zkoss.zk.ui.Component;
+import org.zkoss.zk.ui.HtmlBasedComponent;
+import org.zkoss.zk.ui.Page;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.event.Events;
+import org.zkoss.zk.ui.event.KeyEvent;
+import org.zkoss.zk.ui.util.Clients;
+import org.zkoss.zul.A;
+import org.zkoss.zul.Div;
+import org.zkoss.zul.Html;
+import org.zkoss.zul.Label;
+import org.zkoss.zul.Tab;
+import org.zkoss.zul.Vlayout;
+
+import com.lowagie.text.Document;
+import com.lowagie.text.pdf.PdfContentByte;
+import com.lowagie.text.pdf.PdfImportedPage;
+import com.lowagie.text.pdf.PdfReader;
+import com.lowagie.text.pdf.PdfWriter;
+
+/**
+ *  Embedded window to start process or report.&lt;br/&gt;
+ *  &lt;pre&gt;
+ *  Displays information about the process
+ *     and lets the user decide to start it
+ *     and displays results (optionally print them)  
+ *  Calls ProcessCtl to execute.
+ *  &lt;/pre&gt;
+ *  @author 	Low Heng Sin
+ *  @author     arboleda - globalqss
+ *  - Implement ShowHelp option on processes and reports
+ */
+public class ProcessDialog extends AbstractProcessDialog implements EventListener&lt;Event&gt;, IHelpContext, ITabOnCloseHandler
+{
+	public static final String SAVED_PREDEFINED_CONTEXT_VARIABLES = &quot;__PredefinedContextVariables__&quot;;
+
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -6728929130788829223L;
+
+	public static final String ON_INITIAL_FOCUS_EVENT = &quot;onInitialFocus&quot;;
+	
+	/** 
+	 * Event echo form {@link #onOk()} to defer execution of {@link #onOk()}.
+	 * Execution is defer to happens after the dismiss of modal dialog (usually info window) blocking parameter panel. 
+	 */
+	private static final String ON_OK_ECHO_EVENT = &quot;onOkEcho&quot;;
+	
+	/**	Logger			*/
+<span class="nc" id="L118">	private static final CLogger log = CLogger.getCLogger(ProcessDialog.class);</span>
+	//
+	/** message from {@link ProcessInfoLog} **/
+	private Table logMessageTable;
+	/** record ids from {@link ProcessInfo} **/
+<span class="nc" id="L123">	private int[] m_ids = null;	</span>
+	/** true if dialog is showing process parameters **/
+<span class="nc" id="L125">	private boolean isParameterPage = true;	</span>
+	private Mask mask;
+	/** layout for process execution result **/
+	private HtmlBasedComponent resultPanelLayout;
+	/** process message content of {@link #resultPanelLayout} **/
+	private HtmlBasedComponent messageResultContent;
+	/** process log content of {@link #resultPanelLayout}, host {@link #logMessageTable} **/
+	private HtmlBasedComponent infoResultContent;
+
+	/**
+	 * SysConfig USE_ESC_FOR_TAB_CLOSING
+	 */
+<span class="nc" id="L137">	private boolean isUseEscForTabClosing = MSysConfig.getBooleanValue(MSysConfig.USE_ESC_FOR_TAB_CLOSING, false, Env.getAD_Client_ID(Env.getCtx()));</span>
+
+	/**
+	 * Dialog to start a process/report
+	 * @param AD_Process_ID
+	 * @param isSOTrx
+	 */
+	public ProcessDialog (int AD_Process_ID, boolean isSOTrx)
+	{
+<span class="nc" id="L146">		this(AD_Process_ID, isSOTrx, null);</span>
+<span class="nc" id="L147">	}</span>
+	
+	/**
+	 * Dialog to start a process/report
+	 * @param AD_Process_ID
+	 * @param isSOTrx
+	 * @param predefinedContextVariables
+	 */
+<span class="nc" id="L155">	public ProcessDialog (int AD_Process_ID, boolean isSOTrx, String predefinedContextVariables)</span>
+	{
+<span class="nc bnc" id="L157" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Process=&quot; + AD_Process_ID );</span>
+<span class="nc" id="L158">		m_WindowNo = SessionManager.getAppDesktop().registerWindow(this);</span>
+<span class="nc" id="L159">		this.setAttribute(IDesktop.WINDOWNO_ATTRIBUTE, m_WindowNo);</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		Env.setContext(Env.getCtx(), m_WindowNo, &quot;IsSOTrx&quot;, isSOTrx ? &quot;Y&quot; : &quot;N&quot;);</span>
+		//save for rerun of report
+<span class="nc bnc" id="L162" title="All 4 branches missed.">		if (predefinedContextVariables != null &amp;&amp; MProcess.get(AD_Process_ID).isReport())</span>
+		{
+<span class="nc" id="L164">			Env.setContext(Env.getCtx(), m_WindowNo, SAVED_PREDEFINED_CONTEXT_VARIABLES, predefinedContextVariables);</span>
+		}
+<span class="nc" id="L166">		Env.setPredefinedVariables(Env.getCtx(), m_WindowNo, predefinedContextVariables);</span>
+		try
+		{
+<span class="nc" id="L169">			init(Env.getCtx(), m_WindowNo, AD_Process_ID, null, false, false);</span>
+<span class="nc" id="L170">			querySaved();</span>
+<span class="nc" id="L171">			addEventListener(WindowContainer.ON_WINDOW_CONTAINER_SELECTION_CHANGED_EVENT, this);</span>
+<span class="nc" id="L172">			addEventListener(ON_INITIAL_FOCUS_EVENT, this);</span>
+<span class="nc" id="L173">			addEventListener(ON_OK_ECHO_EVENT, this);</span>
+<span class="nc" id="L174">		}</span>
+<span class="nc" id="L175">		catch(Exception ex)</span>
+		{
+<span class="nc" id="L177">			log.log(Level.SEVERE, &quot;&quot;, ex);</span>
+		}
+<span class="nc" id="L179">	}	//	ProcessDialog</span>
+	
+	@Override
+	public void onPageAttached(Page newpage, Page oldpage) {
+<span class="nc" id="L183">		super.onPageAttached(newpage, oldpage);</span>
+		try {
+<span class="nc" id="L185">			SessionManager.getSessionApplication().getKeylistener().addEventListener(Events.ON_CTRL_KEY, this);</span>
+<span class="nc" id="L186">			addEventListener(IDesktop.ON_CLOSE_WINDOW_SHORTCUT_EVENT, this);</span>
+			
+<span class="nc" id="L188">			Component parentTab = this.getParent();</span>
+<span class="nc bnc" id="L189" title="All 4 branches missed.">			if (parentTab != null &amp;&amp; parentTab instanceof Tabpanel) {</span>
+<span class="nc" id="L190">				((Tabpanel)parentTab).setOnCloseHandler(this);</span>
+			}
+<span class="nc" id="L192">		} catch (Exception e) {}</span>
+<span class="nc" id="L193">	}</span>
+
+	@Override
+	public void onPageDetached(Page page) {
+<span class="nc" id="L197">		super.onPageDetached(page);</span>
+		try {
+<span class="nc" id="L199">			SessionManager.getSessionApplication().getKeylistener().removeEventListener(Events.ON_CTRL_KEY, this);</span>
+<span class="nc" id="L200">			removeEventListener(IDesktop.ON_CLOSE_WINDOW_SHORTCUT_EVENT, this);</span>
+<span class="nc" id="L201">			SessionManager.getAppDesktop().unregisterWindow(m_WindowNo);</span>
+<span class="nc" id="L202">		} catch (Exception e) {}</span>
+<span class="nc" id="L203">	}</span>
+
+	@Override
+	public boolean setVisible (boolean visible)
+	{
+<span class="nc" id="L208">		return super.setVisible(visible);</span>
+	}	//	setVisible
+
+	@Override
+	public void dispose()
+	{
+<span class="nc" id="L214">		super.dispose();</span>
+<span class="nc" id="L215">		SessionManager.getAppDesktop().closeWindow(getWindowNo());</span>
+<span class="nc" id="L216">	}//	dispose</span>
+
+	@Override
+	public void onEvent(Event event) {
+<span class="nc" id="L220">		Component component = event.getTarget(); </span>
+		
+<span class="nc bnc" id="L222" title="All 4 branches missed.">		if(component instanceof A &amp;&amp; event.getName().equals((Events.ON_CLICK))){</span>
+<span class="nc" id="L223">			doOnClick((A)component);</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">		} else if (bOK.equals(component)) {</span>
+<span class="nc" id="L225">			super.onEvent(event);</span>
+			
+<span class="nc" id="L227">			onOk();</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">		} else if (event.getName().equals(ON_OK_ECHO_EVENT)) {</span>
+<span class="nc" id="L229">			onOk();</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">		}else if (bCancel.equals(component)){</span>
+<span class="nc" id="L231">			super.onEvent(event);</span>
+<span class="nc" id="L232">			cancelProcess();</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">		} else if (event.getName().equals(WindowContainer.ON_WINDOW_CONTAINER_SELECTION_CHANGED_EVENT)) {</span>
+<span class="nc" id="L234">    		SessionManager.getAppDesktop().updateHelpContext(X_AD_CtxHelp.CTXTYPE_Process, getAD_Process_ID());</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		} else if (event.getName().equals(ON_INITIAL_FOCUS_EVENT)) {</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">			if (!isUILocked())</span>
+			{
+<span class="nc bnc" id="L238" title="All 2 branches missed.">				if (!getParameterPanel().focusToFirstEditor()) </span>
+				{
+<span class="nc" id="L240">					bOK.focus();</span>
+				}
+			}
+<span class="nc bnc" id="L243" title="All 2 branches missed.">        } else if (event.getName().equals(Events.ON_CTRL_KEY)) {</span>
+<span class="nc" id="L244">        	KeyEvent keyEvent = (KeyEvent) event;</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        	if (LayoutUtils.isReallyVisible(this))</span>
+<span class="nc" id="L246">	        	this.onCtrlKeyEvent(keyEvent);</span>
+<span class="nc" id="L247">		} </span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">        else if(IDesktop.ON_CLOSE_WINDOW_SHORTCUT_EVENT.equals(event.getName())) {</span>
+<span class="nc" id="L249">        	IDesktop desktop = SessionManager.getAppDesktop();</span>
+<span class="nc bnc" id="L250" title="All 4 branches missed.">        	if (m_WindowNo &gt; 0 &amp;&amp; desktop.isCloseTabWithShortcut())</span>
+<span class="nc" id="L251">        		desktop.closeWindow(m_WindowNo);</span>
+        	else
+<span class="nc" id="L253">        		desktop.setCloseTabWithShortcut(true);</span>
+<span class="nc" id="L254">        }</span>
+        else {
+<span class="nc" id="L256">			super.onEvent(event);</span>
+		}
+<span class="nc" id="L258">	}</span>
+
+	/**
+	 * Handle ON_Click event from {@link #bOK}
+	 */
+	private void onOk() {
+<span class="nc bnc" id="L264" title="All 2 branches missed.">		if (isParameterPage)</span>
+		{
+<span class="nc bnc" id="L266" title="All 2 branches missed.">			if (getParameterPanel().isWaitingForDialog())</span>
+			{
+<span class="nc" id="L268">				Events.echoEvent(ON_OK_ECHO_EVENT, this, null);</span>
+<span class="nc" id="L269">				return;</span>
+			}
+<span class="nc" id="L271">			startProcess();</span>
+<span class="nc" id="L272">		}</span>
+		else
+<span class="nc" id="L274">			restart();</span>
+<span class="nc" id="L275">	}</span>
+	
+	/**
+	 * Handle shortcut key event
+	 * @param keyEvent
+	 */
+	private void onCtrlKeyEvent(KeyEvent keyEvent) {
+<span class="nc bnc" id="L282" title="All 4 branches missed.">		if ((keyEvent.isAltKey() &amp;&amp; keyEvent.getKeyCode() == 0x58)	// Alt-X</span>
+<span class="nc bnc" id="L283" title="All 4 branches missed.">				|| (keyEvent.getKeyCode() == 0x1B &amp;&amp; isUseEscForTabClosing)) {	// ESC</span>
+<span class="nc" id="L284">			keyEvent.stopPropagation();</span>
+<span class="nc" id="L285">			Events.echoEvent(new Event(IDesktop.ON_CLOSE_WINDOW_SHORTCUT_EVENT, this));</span>
+		}
+<span class="nc" id="L287">	}</span>
+
+	/**
+	 * Handle on click event for record link.
+	 * @param btn
+	 */
+	private void doOnClick(A btn) {
+<span class="nc" id="L294">		int Record_ID = 0;</span>
+<span class="nc" id="L295">		int AD_Table_ID =0;</span>
+		try
+		{
+<span class="nc" id="L298">			Record_ID = Integer.valueOf((String)btn.getAttribute(&quot;Record_ID&quot;));            		</span>
+<span class="nc" id="L299">			AD_Table_ID= Integer.valueOf((String)btn.getAttribute(&quot;AD_Table_ID&quot;));            		</span>
+<span class="nc" id="L300">		}</span>
+<span class="nc" id="L301">		catch (Exception e) {</span>
+		}
+
+<span class="nc bnc" id="L304" title="All 4 branches missed.">		if (Record_ID &gt; 0 &amp;&amp; AD_Table_ID &gt; 0) {			</span>
+<span class="nc" id="L305">			AEnv.zoom(AD_Table_ID, Record_ID);</span>
+		}		
+<span class="nc" id="L307">	}</span>
+
+	@Override
+	public void showBusyDialog() {		
+<span class="nc" id="L311">		BusyDialog progressWindow = createBusyDialog();</span>
+<span class="nc" id="L312">		progressWindow.setStyle(&quot;position: absolute;&quot;);</span>
+<span class="nc" id="L313">		showBusyMask(progressWindow);</span>
+<span class="nc" id="L314">		LayoutUtils.openOverlappedWindow(this, progressWindow, &quot;middle_center&quot;);</span>
+<span class="nc" id="L315">	}</span>
+
+	/**
+	 * Get in progress mask
+	 * @return in progress mask
+	 */
+	private Div getMask() {
+<span class="nc bnc" id="L322" title="All 2 branches missed.">		if (mask == null) {</span>
+<span class="nc" id="L323">			mask = new Mask();</span>
+		}
+<span class="nc" id="L325">		return mask;</span>
+	}
+	
+	/**
+	 * Show in progress mask
+	 * @param window
+	 */
+	private void showBusyMask(Window window) {
+<span class="nc bnc" id="L333" title="All 2 branches missed.">	  if (getParent() != null) {</span>
+<span class="nc" id="L334">		getParent().appendChild(getMask());</span>
+		//to prevent focus to components beneath the in progress mask (see canActivate in web/js/org/idempiere/commons/window.js)
+<span class="nc" id="L336">		StringBuilder script = new StringBuilder(&quot;(function(){let w=zk.Widget.$('#&quot;);</span>
+<span class="nc" id="L337">		script.append(getParent().getUuid()).append(&quot;');&quot;);</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		if (window != null) {</span>
+<span class="nc" id="L339">			script.append(&quot;let d=zk.Widget.$('#&quot;).append(window.getUuid()).append(&quot;');w.busy=d;&quot;);</span>
+<span class="nc" id="L340">		} else {</span>
+<span class="nc" id="L341">			script.append(&quot;w.busy=true;&quot;);</span>
+		}
+<span class="nc" id="L343">		script.append(&quot;})()&quot;);</span>
+<span class="nc" id="L344">		Clients.response(new AuScript(script.toString()));</span>
+	  }
+<span class="nc" id="L346">	}</span>
+		
+	/**
+	 * Close in progress mask
+	 */
+	private void hideBusyMask() 
+	{
+<span class="nc bnc" id="L353" title="All 4 branches missed.">		if (mask != null &amp;&amp; mask.getParent() != null) {</span>
+<span class="nc" id="L354">			mask.detach();</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">			if(getParent() != null) {</span>
+<span class="nc" id="L356">				StringBuilder script = new StringBuilder(&quot;(function(){let w=zk.Widget.$('#&quot;);</span>
+<span class="nc" id="L357">				script.append(getParent().getUuid()).append(&quot;');w.busy=false;&quot;);</span>
+<span class="nc" id="L358">				script.append(&quot;})()&quot;);</span>
+<span class="nc" id="L359">				Clients.response(new AuScript(script.toString()));</span>
+			}
+		}
+<span class="nc" id="L362">	}</span>
+	
+	@Override
+	public void hideBusyDialog() 
+	{		
+<span class="nc" id="L367">		hideBusyMask();</span>
+<span class="nc" id="L368">		closeBusyDialog();</span>
+<span class="nc" id="L369">	}</span>
+
+	@Override
+	public void updateUI() {
+<span class="nc" id="L373">		swithToFinishScreen();</span>
+<span class="nc" id="L374">	}</span>
+	
+	/**
+	 * Switch to process execution result panel.
+	 */
+	protected void swithToFinishScreen() {
+<span class="nc" id="L380">		ProcessInfo pi = getProcessInfo();</span>
+<span class="nc" id="L381">		ProcessInfoUtil.setLogFromDB(pi);</span>
+		
+<span class="nc" id="L383">		layoutResultPanel (topParameterLayout);</span>
+		
+<span class="nc" id="L385">		StringBuilder buildMsg = new StringBuilder(getInitialMessage());</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">		buildMsg.append(&quot;&lt;hr&gt;&lt;p&gt;&lt;font color=\&quot;&quot;).append(pi.isError() ? &quot;#FF0000&quot; : &quot;#0000FF&quot;).append(&quot;\&quot;&gt;** &quot;)</span>
+<span class="nc" id="L387">		.append(pi.getSummary())</span>
+<span class="nc" id="L388">		.append(&quot;&lt;/font&gt;&lt;/p&gt;&quot;);</span>
+	
+<span class="nc" id="L390">		((Html)messageResultContent).setContent (buildMsg.toString());</span>
+		
+		// Add Log info with zoom on record id
+<span class="nc" id="L393">		infoResultContent.getChildren().removeAll(infoResultContent.getChildren());</span>
+<span class="nc" id="L394">		appendRecordLogInfo(pi.getLogs(), infoResultContent);</span>
+		
+<span class="nc" id="L396">		bOK.setLabel(Msg.getMsg(Env.getCtx(), &quot;Parameter&quot;));</span>
+<span class="nc" id="L397">		bOK.setDisabled(false);</span>
+
+<span class="nc" id="L399">		bCancel.setLabel(Msg.getMsg(Env.getCtx(), &quot;Close&quot;));</span>
+<span class="nc" id="L400">		bCancel.setDisabled(false);</span>
+
+<span class="nc bnc" id="L402" title="All 2 branches missed.">    	if (ThemeManager.isUseFontIconForImage()) {</span>
+<span class="nc" id="L403">    		String iconSclass = Icon.getIconSclass(Icon.RESET);</span>
+<span class="nc" id="L404">    		bOK.setIconSclass(iconSclass);</span>
+<span class="nc" id="L405">    		LayoutUtils.addSclass(&quot;font-icon-toolbar-button&quot;, bOK);</span>
+<span class="nc" id="L406">    	} else {</span>
+<span class="nc" id="L407">			bOK.setImage(ThemeManager.getThemeResource(&quot;images/Reset16.png&quot;));</span>
+<span class="nc" id="L408">			bCancel.setImage(ThemeManager.getThemeResource(&quot;images/Cancel16.png&quot;));</span>
+		}
+
+<span class="nc" id="L411">		isParameterPage = false;</span>
+
+<span class="nc" id="L413">		m_ids = pi.getIDs();</span>
+		
+		//move message div to center to give more space to display potentially very long log info
+<span class="nc" id="L416">		replaceComponent (resultPanelLayout, topParameterLayout);</span>
+<span class="nc" id="L417">		invalidate();</span>
+<span class="nc" id="L418">		Clients.response(new AuEcho(this, &quot;onAfterProcess&quot;, null));</span>
+<span class="nc" id="L419">	}</span>
+	
+	/**
+	 * Layout process execution result panel
+	 * @param topParameterLayout
+	 */
+	private void layoutResultPanel (HtmlBasedComponent topParameterLayout){
+<span class="nc bnc" id="L426" title="All 2 branches missed.">		if (resultPanelLayout == null){</span>
+<span class="nc" id="L427">			resultPanelLayout = new Vlayout();</span>
+<span class="nc" id="L428">			resultPanelLayout.setSclass(&quot;result-parameter-layout&quot;);</span>
+<span class="nc" id="L429">			ZKUpdateUtil.setVflex(resultPanelLayout, &quot;true&quot;);</span>
+			// reference for update late
+<span class="nc" id="L431">			messageResultContent = setHeadMessage(resultPanelLayout, null);</span>
+			
+<span class="nc" id="L433">			infoResultContent = new Div();</span>
+<span class="nc" id="L434">			resultPanelLayout.appendChild(infoResultContent);</span>
+		}
+<span class="nc" id="L436">	}</span>
+	
+	/**
+	 * Replace oldComponent with newComponent
+	 * @param newComponent
+	 * @param oldComponent
+	 */
+	protected void replaceComponent(HtmlBasedComponent newComponent, HtmlBasedComponent oldComponent) {
+<span class="nc" id="L444">		oldComponent.getParent().insertBefore(newComponent, oldComponent);</span>
+<span class="nc" id="L445">		oldComponent.detach();</span>
+<span class="nc" id="L446">	}	</span>
+	
+	/**
+	 * Append m_logs content to {@link #logMessageTable}
+	 * @param m_logs
+	 * @param infoResultContent
+	 */
+	private void appendRecordLogInfo(ProcessInfoLog[] m_logs, HtmlBasedComponent infoResultContent) {
+<span class="nc bnc" id="L454" title="All 2 branches missed.">		if (m_logs == null)</span>
+<span class="nc" id="L455">			return;</span>
+
+<span class="nc" id="L457">		SimpleDateFormat dateFormat = DisplayType</span>
+<span class="nc" id="L458">				.getDateFormat(DisplayType.Date);</span>
+
+<span class="nc" id="L460">		logMessageTable = new Table();</span>
+<span class="nc" id="L461">		logMessageTable.setId(&quot;logrecords&quot;);</span>
+<span class="nc" id="L462">		logMessageTable.setDynamicProperty(&quot;border&quot;, &quot;1&quot;);</span>
+<span class="nc" id="L463">		logMessageTable.setDynamicProperty(&quot;cellpadding&quot;, &quot;0&quot;);</span>
+<span class="nc" id="L464">		logMessageTable.setDynamicProperty(&quot;cellspacing&quot;, &quot;0&quot;);</span>
+<span class="nc" id="L465">		logMessageTable.setDynamicProperty(&quot;width&quot;, &quot;100%&quot;);</span>
+
+<span class="nc" id="L467">		infoResultContent.appendChild(logMessageTable);</span>
+
+<span class="nc" id="L469">		boolean datePresents = false;</span>
+<span class="nc" id="L470">		boolean numberPresents = false;</span>
+<span class="nc" id="L471">		boolean msgPresents = false;</span>
+
+<span class="nc bnc" id="L473" title="All 2 branches missed.">		for (ProcessInfoLog log : m_logs) {</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">			if (log.getP_Date() != null)</span>
+<span class="nc" id="L475">				datePresents = true;</span>
+<span class="nc bnc" id="L476" title="All 2 branches missed.">			if (log.getP_Number() != null)</span>
+<span class="nc" id="L477">				numberPresents = true;</span>
+<span class="nc bnc" id="L478" title="All 2 branches missed.">			if (log.getP_Msg() != null)</span>
+<span class="nc" id="L479">				msgPresents = true;</span>
+		}
+
+<span class="nc bnc" id="L482" title="All 2 branches missed.">		for (int i = 0; i &lt; m_logs.length; i++) {</span>
+
+<span class="nc" id="L484">			Tr tr = new Tr();</span>
+<span class="nc" id="L485">			logMessageTable.appendChild(tr);</span>
+
+<span class="nc" id="L487">			ProcessInfoLog log = m_logs[i];</span>
+
+<span class="nc bnc" id="L489" title="All 2 branches missed.">			if (datePresents) {</span>
+<span class="nc" id="L490">				Td td = new Td();</span>
+<span class="nc bnc" id="L491" title="All 2 branches missed.">				if (log.getP_Date() != null) {</span>
+<span class="nc" id="L492">					Label label = new Label(dateFormat.format(log.getP_Date()));</span>
+<span class="nc" id="L493">					td.appendChild(label);</span>
+					// label.setStyle(&quot;padding-right:100px&quot;);
+				}
+<span class="nc" id="L496">				tr.appendChild(td);</span>
+
+			}
+
+<span class="nc bnc" id="L500" title="All 2 branches missed.">			if (numberPresents) {</span>
+
+<span class="nc" id="L502">				Td td = new Td();</span>
+<span class="nc bnc" id="L503" title="All 2 branches missed.">				if (log.getP_Number() != null) {</span>
+<span class="nc" id="L504">					Label labelPno = new Label(&quot;&quot; + log.getP_Number());</span>
+<span class="nc" id="L505">					td.appendChild(labelPno);</span>
+				}
+<span class="nc" id="L507">				tr.appendChild(td);</span>
+			}
+
+<span class="nc bnc" id="L510" title="All 2 branches missed.">			if (msgPresents) {</span>
+<span class="nc" id="L511">				Td td = new Td();</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">				if (log.getP_Msg() != null) {</span>
+<span class="nc bnc" id="L513" title="All 4 branches missed.">					if (log.getAD_Table_ID() &gt; 0 &amp;&amp; log.getRecord_ID() &gt; 0) {</span>
+<span class="nc" id="L514">						DocumentLink recordLink = new DocumentLink(log.getP_Msg(), log.getAD_Table_ID(), log.getRecord_ID());																								</span>
+<span class="nc" id="L515">						td.appendChild(recordLink);</span>
+<span class="nc" id="L516">					} else {</span>
+<span class="nc" id="L517">						Text t = new Text();</span>
+<span class="nc" id="L518">						t.setEncode(false);</span>
+<span class="nc" id="L519">						t.setValue(log.getP_Msg());</span>
+<span class="nc" id="L520">						td.appendChild(t);</span>
+					}
+				}
+<span class="nc" id="L523">				tr.appendChild(td);</span>
+			}
+		}
+<span class="nc" id="L526">	}</span>
+
+	/**
+	 * Move back from process execution result panel to process parameter panel
+	 */
+	private void restart() {
+<span class="nc" id="L532">		replaceComponent (topParameterLayout, resultPanelLayout);</span>
+		
+<span class="nc" id="L534">		isParameterPage = true;</span>
+
+<span class="nc" id="L536">		bOK.setLabel(Msg.getMsg(Env.getCtx(), &quot;Start&quot;));</span>
+		
+<span class="nc" id="L538">		bCancel.setLabel(Util.cleanAmp(Msg.translate(Env.getCtx(), ConfirmPanel.A_CANCEL)));</span>
+
+<span class="nc bnc" id="L540" title="All 2 branches missed.">    	if (ThemeManager.isUseFontIconForImage()) {</span>
+<span class="nc" id="L541">    		bOK.setIconSclass(Icon.getIconSclass(Icon.OK));</span>
+<span class="nc" id="L542">    		LayoutUtils.addSclass(&quot;font-icon-toolbar-button&quot;, bOK);</span>
+<span class="nc" id="L543">    	} else {</span>
+<span class="nc" id="L544">			bOK.setImage(ThemeManager.getThemeResource(&quot;images/Ok16.png&quot;));</span>
+<span class="nc" id="L545">			bCancel.setImage(ThemeManager.getThemeResource(&quot;images/Cancel16.png&quot;));</span>
+		}
+
+		//recreate process info
+<span class="nc" id="L549">		ProcessInfo m_pi = new WProcessInfo(getName(), getAD_Process_ID());</span>
+<span class="nc" id="L550">		m_pi.setAD_User_ID (Env.getAD_User_ID(Env.getCtx()));</span>
+<span class="nc" id="L551">		m_pi.setAD_Client_ID(Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc" id="L552">		setProcessInfo(m_pi);</span>
+<span class="nc" id="L553">		getParameterPanel().setProcessInfo(m_pi);</span>
+
+<span class="nc" id="L555">		m_ids = null;</span>
+<span class="nc bnc" id="L556" title="All 2 branches missed.">		if (fSavedName != null)</span>
+<span class="nc" id="L557">			querySaved();</span>
+<span class="nc" id="L558">		invalidate();</span>
+<span class="nc" id="L559">	}</span>
+
+	/**
+	 * Handle onAfterProcess event echo from {@link #swithToFinishScreen()}
+	 */
+	public void onAfterProcess() 
+	{
+		//
+<span class="nc bnc" id="L567" title="All 2 branches missed.">		if (!afterProcessTask()) {</span>
+			// If the process is a silent one and no errors occurred, close the dialog
+<span class="nc bnc" id="L569" title="All 4 branches missed.">			if(getShowHelp() != null &amp;&amp; MProcess.SHOWHELP_RunSilently_TakeDefaults.equals(getShowHelp()))</span>
+<span class="nc" id="L570">				this.dispose();	</span>
+		}
+<span class="nc" id="L572">	}</span>
+	
+	/**
+	 * Optional after/post process execution task
+	 */
+	private boolean afterProcessTask()
+	{
+		//  something to do?
+<span class="nc bnc" id="L580" title="All 4 branches missed.">		if (m_ids != null &amp;&amp; m_ids.length &gt; 0)</span>
+		{
+<span class="nc bnc" id="L582" title="All 2 branches missed.">			if (log.isLoggable(Level.CONFIG)) log.config(&quot;&quot;);</span>
+			//	Print invoices
+<span class="nc bnc" id="L584" title="All 4 branches missed.">			if (getAD_Process_ID() == PROCESS_C_INVOICE_GENERATE &amp;&amp; MRole.getDefault().isCanReport(MInvoice.Table_ID))</span>
+			{
+<span class="nc" id="L586">				printInvoices();</span>
+<span class="nc" id="L587">				return true;</span>
+			}
+<span class="nc bnc" id="L589" title="All 4 branches missed.">			else if (getAD_Process_ID() == PROCESS_M_INOUT_GENERATE &amp;&amp; MRole.getDefault().isCanReport(MInOut.Table_ID))</span>
+			{
+<span class="nc" id="L591">				printShipments();</span>
+<span class="nc" id="L592">				return true;</span>
+			}
+			else
+			{
+<span class="nc" id="L596">				return false;</span>
+			}
+		}
+<span class="nc" id="L599">		return false;</span>
+	}	//	afterProcessTask
+	
+	/**
+	 * Print Shipments
+	 */
+	private void printShipments()
+	{		
+<span class="nc bnc" id="L607" title="All 2 branches missed.">		if (m_ids == null)</span>
+<span class="nc" id="L608">			return;</span>
+<span class="nc" id="L609">		Dialog.ask(getWindowNo(), &quot;PrintShipments&quot;, new Callback&lt;Boolean&gt;() {</span>
+			@Override
+			public void onCallback(Boolean result) {
+<span class="nc bnc" id="L612" title="All 2 branches missed.">				if (result) {</span>
+<span class="nc" id="L613">					StringBuilder buildMsg = new StringBuilder(((Html)messageResultContent).getContent());</span>
+<span class="nc" id="L614">					buildMsg.append(&quot;&lt;p&gt;&quot;).append(Msg.getMsg(Env.getCtx(), &quot;PrintShipments&quot;)).append(&quot;&lt;/p&gt;&quot;);</span>
+<span class="nc" id="L615">					((Html)messageResultContent).setContent(buildMsg.toString());</span>
+<span class="nc" id="L616">					showBusyDialog();</span>
+<span class="nc" id="L617">					Clients.response(new AuEcho(ProcessDialog.this, &quot;onPrintShipments&quot;, null));</span>
+				}
+<span class="nc" id="L619">			}</span>
+		});						
+<span class="nc" id="L621">	}</span>
+	
+	/**
+	 * Handle onPrintShipments event echo by {@link #printShipments()}
+	 */
+	public void onPrintShipments() 
+	{		
+		//	Loop through all items
+<span class="nc" id="L629">		List&lt;File&gt; pdfList = new ArrayList&lt;File&gt;();</span>
+<span class="nc bnc" id="L630" title="All 2 branches missed.">		for (int i = 0; i &lt; m_ids.length; i++)</span>
+		{
+<span class="nc" id="L632">			int M_InOut_ID = m_ids[i];</span>
+<span class="nc" id="L633">			ReportEngine re = ReportEngine.get (Env.getCtx(), ReportEngine.SHIPMENT, M_InOut_ID, getWindowNo());</span>
+<span class="nc" id="L634">			pdfList.add(re.getPDF());				</span>
+		}
+		
+<span class="nc bnc" id="L637" title="All 2 branches missed.">		if (pdfList.size() &gt; 1) {</span>
+<span class="nc" id="L638">			List&lt;PdfReader&gt; pdfReaders = new ArrayList&lt;PdfReader&gt;();</span>
+			try {
+<span class="nc" id="L640">				File outFile = File.createTempFile(&quot;PrintShipments&quot;, &quot;.pdf&quot;);					</span>
+<span class="nc" id="L641">				Document document = null;</span>
+<span class="nc" id="L642">				PdfWriter copy = null;					</span>
+<span class="nc bnc" id="L643" title="All 2 branches missed.">				for (File f : pdfList) </span>
+				{
+<span class="nc" id="L645">					String fileName = f.getAbsolutePath();</span>
+<span class="nc" id="L646">					PdfReader reader = new PdfReader(fileName);</span>
+<span class="nc" id="L647">					pdfReaders.add(reader);</span>
+<span class="nc" id="L648">					reader.consolidateNamedDestinations();</span>
+<span class="nc bnc" id="L649" title="All 2 branches missed.">					if (document == null)</span>
+					{
+<span class="nc" id="L651">						document = new Document(reader.getPageSizeWithRotation(1));</span>
+<span class="nc" id="L652">						copy = PdfWriter.getInstance(document, new FileOutputStream(outFile));</span>
+<span class="nc" id="L653">						document.open();</span>
+					}
+<span class="nc" id="L655">					int pages = reader.getNumberOfPages();</span>
+<span class="nc" id="L656">					PdfContentByte cb = copy.getDirectContent();</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">					for (int i = 1; i &lt;= pages; i++) {</span>
+<span class="nc" id="L658">						document.newPage();</span>
+<span class="nc" id="L659">						PdfImportedPage page = copy.getImportedPage(reader, i);</span>
+<span class="nc" id="L660">						cb.addTemplate(page, 0, 0);</span>
+					}
+				}
+<span class="nc" id="L663">				document.close();</span>
+
+<span class="nc" id="L665">				hideBusyDialog();</span>
+<span class="nc" id="L666">				Window win = new SimplePDFViewer(getProcessInfo().getTitle(), new FileInputStream(outFile));</span>
+<span class="nc" id="L667">				SessionManager.getAppDesktop().showWindow(win, &quot;center&quot;);</span>
+<span class="nc" id="L668">			} catch (Exception e) {</span>
+<span class="nc" id="L669">				log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+			} finally {
+<span class="nc bnc" id="L671" title="All 2 branches missed.">				for (PdfReader reader : pdfReaders)</span>
+				{
+<span class="nc bnc" id="L673" title="All 2 branches missed.">					if (reader != null)</span>
+<span class="nc" id="L674">						reader.close();</span>
+				}
+				//do no harm calling this twice
+<span class="nc" id="L677">				hideBusyDialog();</span>
+			}
+<span class="nc bnc" id="L679" title="All 2 branches missed.">		} else if (pdfList.size() &gt; 0) {</span>
+<span class="nc" id="L680">			hideBusyDialog();</span>
+			try {
+<span class="nc" id="L682">				Window win = new SimplePDFViewer(getProcessInfo().getTitle(), new FileInputStream(pdfList.get(0)));</span>
+<span class="nc" id="L683">				SessionManager.getAppDesktop().showWindow(win, &quot;center&quot;);</span>
+<span class="nc" id="L684">			} catch (Exception e)</span>
+			{
+<span class="nc" id="L686">				log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+			}
+		}
+		
+		// If the process is a silent one and no errors occurred, close the dialog
+<span class="nc bnc" id="L691" title="All 4 branches missed.">		if(getShowHelp() != null &amp;&amp; MProcess.SHOWHELP_RunSilently_TakeDefaults.equals(getShowHelp()))</span>
+<span class="nc" id="L692">			this.dispose();	</span>
+<span class="nc" id="L693">	}</span>
+
+	/**
+	 * Print Invoices
+	 */
+	private void printInvoices()
+	{
+<span class="nc bnc" id="L700" title="All 2 branches missed.">		if (m_ids == null)</span>
+<span class="nc" id="L701">			return;</span>
+<span class="nc" id="L702">		Dialog.ask(getWindowNo(), &quot;PrintInvoices&quot;, new Callback&lt;Boolean&gt;() {</span>
+			@Override
+			public void onCallback(Boolean result) 
+			{
+<span class="nc bnc" id="L706" title="All 2 branches missed.">				if (result)</span>
+				{
+<span class="nc" id="L708">					StringBuilder buildMsg = new StringBuilder(((Html)messageResultContent).getContent());</span>
+<span class="nc" id="L709">					buildMsg.append(&quot;&lt;p&gt;&quot;).append(Msg.getMsg(Env.getCtx(), &quot;PrintInvoices&quot;)).append(&quot;&lt;/p&gt;&quot;);</span>
+<span class="nc" id="L710">					((Html)messageResultContent).setContent(buildMsg.toString());</span>
+<span class="nc" id="L711">					showBusyDialog();</span>
+<span class="nc" id="L712">					Clients.response(new AuEcho(ProcessDialog.this, &quot;onPrintInvoices&quot;, null));</span>
+				}
+<span class="nc" id="L714">			}</span>
+		});						
+<span class="nc" id="L716">	}</span>
+	
+	/**
+	 * Handle onPrintInvoices event echo by {@link #printInvoices()}
+	 */
+	public void onPrintInvoices()
+	{
+		//	Loop through all items
+<span class="nc" id="L724">		List&lt;File&gt; pdfList = new ArrayList&lt;File&gt;();</span>
+<span class="nc bnc" id="L725" title="All 2 branches missed.">		for (int i = 0; i &lt; m_ids.length; i++)</span>
+		{
+<span class="nc" id="L727">			int C_Invoice_ID = m_ids[i];</span>
+<span class="nc" id="L728">			ReportEngine re = ReportEngine.get (Env.getCtx(), ReportEngine.INVOICE, C_Invoice_ID, getWindowNo());</span>
+<span class="nc" id="L729">			pdfList.add(re.getPDF());				</span>
+		}
+		
+<span class="nc bnc" id="L732" title="All 2 branches missed.">		if (pdfList.size() &gt; 1) {</span>
+<span class="nc" id="L733">			List&lt;PdfReader&gt; pdfReaders = new ArrayList&lt;PdfReader&gt;();</span>
+			try {
+<span class="nc" id="L735">				File outFile = File.createTempFile(&quot;PrintInvoices&quot;, &quot;.pdf&quot;);					</span>
+<span class="nc" id="L736">				Document document = null;</span>
+<span class="nc" id="L737">				PdfWriter copy = null;					</span>
+<span class="nc bnc" id="L738" title="All 2 branches missed.">				for (File f : pdfList) </span>
+				{
+<span class="nc" id="L740">					PdfReader reader = new PdfReader(f.getAbsolutePath());</span>
+<span class="nc" id="L741">					pdfReaders.add(reader);</span>
+<span class="nc bnc" id="L742" title="All 2 branches missed.">					if (document == null)</span>
+					{
+<span class="nc" id="L744">						document = new Document(reader.getPageSizeWithRotation(1));</span>
+<span class="nc" id="L745">						copy = PdfWriter.getInstance(document, new FileOutputStream(outFile));</span>
+<span class="nc" id="L746">						document.open();						</span>
+					}
+<span class="nc" id="L748">					PdfContentByte cb = copy.getDirectContent(); // Holds the PDF</span>
+<span class="nc" id="L749">					int pages = reader.getNumberOfPages();</span>
+<span class="nc bnc" id="L750" title="All 2 branches missed.">					for (int i = 1; i &lt;= pages; i++) {</span>
+<span class="nc" id="L751">						document.newPage();</span>
+<span class="nc" id="L752">						PdfImportedPage page = copy.getImportedPage(reader, i);</span>
+<span class="nc" id="L753">						cb.addTemplate(page, 0, 0);</span>
+					}
+				}
+<span class="nc" id="L756">				document.close();</span>
+
+<span class="nc" id="L758">				hideBusyDialog();</span>
+<span class="nc" id="L759">				Window win = new SimplePDFViewer(getProcessInfo().getTitle(), new FileInputStream(outFile));</span>
+<span class="nc" id="L760">				SessionManager.getAppDesktop().showWindow(win, &quot;center&quot;);</span>
+<span class="nc" id="L761">			} catch (Exception e) {</span>
+<span class="nc" id="L762">				log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+			} finally {
+<span class="nc bnc" id="L764" title="All 2 branches missed.">				for (PdfReader reader : pdfReaders)</span>
+				{
+<span class="nc bnc" id="L766" title="All 2 branches missed.">					if (reader != null)</span>
+<span class="nc" id="L767">						reader.close();</span>
+				}
+				//do no harm calling this twice
+<span class="nc" id="L770">				hideBusyDialog();</span>
+			}
+<span class="nc bnc" id="L772" title="All 2 branches missed.">		} else if (pdfList.size() &gt; 0) {</span>
+<span class="nc" id="L773">			hideBusyDialog();</span>
+			try {
+<span class="nc" id="L775">				Window win = new SimplePDFViewer(getProcessInfo().getTitle(), new FileInputStream(pdfList.get(0)));</span>
+<span class="nc" id="L776">				SessionManager.getAppDesktop().showWindow(win, &quot;center&quot;);</span>
+<span class="nc" id="L777">			} catch (Exception e)</span>
+			{
+<span class="nc" id="L779">				log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+			}
+		}
+		
+		// If the process is a silent one and no errors occurred, close the dialog
+<span class="nc bnc" id="L784" title="All 4 branches missed.">		if(getShowHelp() != null &amp;&amp; MProcess.SHOWHELP_RunSilently_TakeDefaults.equals(getShowHelp()))</span>
+<span class="nc" id="L785">			this.dispose();	</span>
+<span class="nc" id="L786">	}</span>
+
+	@Override
+	public void onClose(Tabpanel tabPanel) {
+<span class="nc bnc" id="L790" title="All 2 branches missed.">		if(!isUILocked()) {</span>
+<span class="nc" id="L791">			Tab tab = tabPanel.getLinkedTab();</span>
+<span class="nc bnc" id="L792" title="All 2 branches missed.">			if (tab != null) {</span>
+<span class="nc" id="L793">				tab.close();</span>
+<span class="nc" id="L794">				cleanUp();</span>
+			}
+		}
+<span class="nc" id="L797">	}</span>
+
+	private void cleanUp() {
+<span class="nc bnc" id="L800" title="All 2 branches missed.">		if (m_WindowNo &gt;= 0)</span>
+		{
+<span class="nc" id="L802">			SessionManager.getAppDesktop().unregisterWindow(m_WindowNo);</span>
+<span class="nc" id="L803">			m_WindowNo = -1;</span>
+		}
+<span class="nc" id="L805">	}</span>
+	
+}	//	ProcessDialog
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

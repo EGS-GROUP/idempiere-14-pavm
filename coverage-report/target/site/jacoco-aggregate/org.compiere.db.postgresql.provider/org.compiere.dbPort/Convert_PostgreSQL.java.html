@@ -1,0 +1,1254 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Convert_PostgreSQL.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.compiere.db.postgresql.provider</a> &gt; <a href="index.source.html" class="el_package">org.compiere.dbPort</a> &gt; <span class="el_source">Convert_PostgreSQL.java</span></div><h1>Convert_PostgreSQL.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 Adempiere, Inc. All Rights Reserved.               *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.dbPort;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.StringTokenizer;
+import java.util.TreeMap;
+import java.util.Vector;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.compiere.db.DB_PostgreSQL;
+import org.compiere.model.SystemProperties;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+
+/**
+ * Convert Oracle SQL to PostgreSQL SQL
+ * 
+ * @author Victor Perez, Low Heng Sin, Carlos Ruiz
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;BF [ 1824256 ] Convert sql casts
+ */
+public class Convert_PostgreSQL extends Convert_SQL92 {
+	/**
+	 * Constructor
+	 */
+<span class="nc" id="L43">	public Convert_PostgreSQL() {</span>
+<span class="nc" id="L44">		m_map = ConvertMap_PostgreSQL.getConvertMap();</span>
+<span class="nc" id="L45">	} // Convert</span>
+
+	/** RegEx: insensitive and dot to include line end characters */
+	public static final int REGEX_FLAGS = Pattern.CASE_INSENSITIVE | Pattern.DOTALL;
+
+	private TreeMap&lt;String,String&gt; m_map;
+
+<span class="nc" id="L52">	private String sharedNonce = generateNonce();</span>
+
+	/** Logger */
+<span class="nc" id="L55">	private static final CLogger log = CLogger.getCLogger(Convert_PostgreSQL.class);</span>
+
+	
+<span class="nc" id="L58">	private final static Pattern likePattern = Pattern.compile(&quot;\\bLIKE\\b&quot;, REGEX_FLAGS);</span>
+	
+<span class="nc" id="L60">	private final static Pattern sysDatePattern = Pattern.compile(&quot;\\bSYSDATE\\b&quot;, REGEX_FLAGS);</span>
+	
+	/**
+	 * Is Oracle DB
+	 * 
+	 * @return true if connection is Oracle DB
+	 */
+	public boolean isOracle() {
+<span class="nc" id="L68">		return false;</span>
+	} // isOracle
+	
+	@Override
+	protected Map&lt;String,String&gt; getConvertMap() {
+<span class="nc" id="L73">		return m_map;</span>
+	}
+
+	/**
+	 * Convert single Statements. - remove comments - process
+	 * FUNCTION/TRIGGER/PROCEDURE - process Statement
+	 * 
+	 * @param sqlStatement
+	 * @return converted statement
+	 */
+	protected ArrayList&lt;String&gt; convertStatement(String sqlStatement) {
+<span class="nc" id="L84">		ArrayList&lt;String&gt; result = new ArrayList&lt;String&gt;();</span>
+		/** Vector to save previous values of quoted strings **/
+<span class="nc" id="L86">		Vector&lt;String&gt; retVars = new Vector&lt;String&gt;();</span>
+
+<span class="nc" id="L88">		String nonce = sharedNonce;</span>
+
+		// check for collision with nonce
+<span class="nc bnc" id="L91" title="All 2 branches missed.">		while ( sqlStatement.contains(nonce))</span>
+		{
+<span class="nc" id="L93">			nonce = generateNonce();</span>
+		}
+
+<span class="nc" id="L96">		String statement = replaceQuotedStrings(sqlStatement, retVars, nonce);</span>
+
+<span class="nc bnc" id="L98" title="All 2 branches missed.">		if (DB_PostgreSQL.isUseNativeDialect()) {</span>
+
+<span class="nc" id="L100">			statement = convertSysDate(statement);</span>
+<span class="nc" id="L101">			statement = convertSimilarTo(statement);</span>
+<span class="nc" id="L102">			statement = DB_PostgreSQL.removeNativeKeyworkMarker(statement);</span>
+
+<span class="nc" id="L104">		} else {</span>
+
+<span class="nc" id="L106">			statement = convertAddJson(statement);</span>
+<span class="nc" id="L107">			statement = convertWithConvertMap(statement);</span>
+<span class="nc" id="L108">			statement = convertSimilarTo(statement);</span>
+<span class="nc" id="L109">			statement = DB_PostgreSQL.removeNativeKeyworkMarker(statement);</span>
+
+<span class="nc" id="L111">			String cmpString = statement.toUpperCase();</span>
+<span class="nc" id="L112">			boolean isCreate = cmpString.startsWith(&quot;CREATE &quot;);</span>
+
+			// Process
+<span class="nc bnc" id="L115" title="All 4 branches missed.">			if (isCreate &amp;&amp; cmpString.indexOf(&quot; FUNCTION &quot;) != -1)</span>
+<span class="nc" id="L116">				;</span>
+<span class="nc bnc" id="L117" title="All 4 branches missed.">			else if (isCreate &amp;&amp; cmpString.indexOf(&quot; TRIGGER &quot;) != -1)</span>
+<span class="nc" id="L118">				;</span>
+<span class="nc bnc" id="L119" title="All 4 branches missed.">			else if (isCreate &amp;&amp; cmpString.indexOf(&quot; PROCEDURE &quot;) != -1)</span>
+<span class="nc" id="L120">				;</span>
+<span class="nc bnc" id="L121" title="All 4 branches missed.">			else if (isCreate &amp;&amp; cmpString.indexOf(&quot; VIEW &quot;) != -1)</span>
+<span class="nc" id="L122">				;</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">			else if (cmpString.indexOf(&quot;ALTER TABLE&quot;) != -1) {</span>
+				// See https://sourceforge.net/p/adempiere/bugs/655/
+<span class="nc" id="L125">				statement = recoverQuotedStrings(statement, retVars, nonce);</span>
+<span class="nc" id="L126">				retVars.clear();</span>
+<span class="nc" id="L127">				statement = convertDDL(convertComplexStatement(statement));</span>
+				/*
+		    } else if (cmpString.indexOf(&quot;ROWNUM&quot;) != -1) {
+			    result.add(convertRowNum(convertComplexStatement(convertAlias(statement))));*/
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			} else if (cmpString.indexOf(&quot;DELETE &quot;) != -1</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">					&amp;&amp; cmpString.indexOf(&quot;DELETE FROM&quot;) == -1) {</span>
+<span class="nc" id="L133">				statement = convertDelete(statement);</span>
+<span class="nc" id="L134">				statement = convertComplexStatement(convertAlias(statement));</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">			} else if (cmpString.indexOf(&quot;DELETE FROM&quot;) != -1) {</span>
+<span class="nc" id="L136">				statement = convertComplexStatement(convertAlias(statement));</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">			} else if (cmpString.indexOf(&quot;UPDATE &quot;) != -1) {</span>
+<span class="nc" id="L138">				statement = convertComplexStatement(convertUpdate(convertAlias(statement)));</span>
+<span class="nc" id="L139">			} else {</span>
+<span class="nc" id="L140">				statement = convertComplexStatement(convertAlias(statement));</span>
+			}
+		}
+<span class="nc bnc" id="L143" title="All 2 branches missed.">		if (retVars.size() &gt; 0)</span>
+<span class="nc" id="L144">			statement = recoverQuotedStrings(statement, retVars, nonce);</span>
+<span class="nc" id="L145">		result.add(statement);</span>
+
+<span class="nc bnc" id="L147" title="All 2 branches missed.">		if (SystemProperties.isDBDebug()) {</span>
+<span class="nc" id="L148">			String filterPgDebug = SystemProperties.getDBDebugFilter();</span>
+<span class="nc" id="L149">			boolean print = true;</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">			if (filterPgDebug != null)</span>
+<span class="nc" id="L151">				print = statement.matches(filterPgDebug);</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">			if (print) {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">				if (SystemProperties.isDBDebugConvert())</span>
+<span class="nc" id="L154">					log.warning(&quot;Oracle -&gt; &quot; + sqlStatement);</span>
+<span class="nc" id="L155">				log.warning(&quot;PgSQL  -&gt; &quot; + statement);</span>
+			}
+		}
+<span class="nc" id="L158">		return result;</span>
+	} // convertStatement
+
+	private String convertSysDate(String statement) {
+<span class="nc" id="L162">		String retValue = statement;</span>
+<span class="nc" id="L163">		String replacement = &quot;getDate()&quot;;</span>
+		try {
+<span class="nc" id="L165">			Matcher m = sysDatePattern.matcher(retValue);</span>
+<span class="nc" id="L166">			retValue = m.replaceAll(replacement);</span>
+<span class="nc" id="L167">		} catch (Exception e) {</span>
+<span class="nc" id="L168">			String error = &quot;Error expression: &quot; + sysDatePattern.pattern() + &quot; - &quot; + e;</span>
+<span class="nc" id="L169">			log.info(error);</span>
+<span class="nc" id="L170">			m_conversionError = error;</span>
+		}		
+<span class="nc" id="L172">		return retValue;</span>
+	}
+	
+	/**
+	 * Convert LIKE to SIMILAR TO depending on the user preference P|IsUseSimilarTo - applies just to SELECT queries
+	 * @param statement
+	 * @return
+	 */
+	private String convertSimilarTo(String statement) {
+<span class="nc" id="L181">		String retValue = statement;</span>
+<span class="nc" id="L182">		boolean useSimilarTo = isUseSimilarTo();</span>
+<span class="nc bnc" id="L183" title="All 4 branches missed.">		if (useSimilarTo &amp;&amp; statement.matches(&quot;(?i)^\\s*SELECT\\b.*&quot;)) {</span>
+<span class="nc" id="L184">			final String replacement = &quot;SIMILAR TO&quot;;</span>
+			try {
+<span class="nc" id="L186">				Matcher m = likePattern.matcher(retValue);</span>
+<span class="nc" id="L187">				retValue = m.replaceAll(replacement);</span>
+<span class="nc" id="L188">			} catch (Exception e) {</span>
+<span class="nc" id="L189">				String error = &quot;Error expression: &quot; + likePattern.pattern() + &quot; - &quot; + e;</span>
+<span class="nc" id="L190">				log.info(error);</span>
+<span class="nc" id="L191">				m_conversionError = error;</span>
+			}
+		}
+<span class="nc" id="L194">		return retValue;</span>
+	}
+
+	/**
+	 * True if the user preference IsUseSimilarTo is set to Y
+	 * @return
+	 */
+	private boolean isUseSimilarTo() {
+<span class="nc" id="L202">		return &quot;Y&quot;.equals(Env.getContext(Env.getCtx(), &quot;P|IsUseSimilarTo&quot;));</span>
+	}
+
+	/**
+	 * Generate fairly hard to guess numeric string
+	 */
+	private String generateNonce() {
+
+<span class="nc" id="L210">		String newNonce = Long.toString(ThreadLocalRandom.current()</span>
+<span class="nc" id="L211">				.nextLong(100000000000000000L,</span>
+<span class="nc" id="L212">						999999999999999999L)).intern();</span>
+
+<span class="nc" id="L214">		sharedNonce = newNonce;</span>
+
+<span class="nc" id="L216">		return newNonce;</span>
+	}
+
+	@Override
+	protected String escapeQuotedString(String in)
+	{
+<span class="nc" id="L222">		StringBuilder out = new StringBuilder();</span>
+<span class="nc" id="L223">		boolean escape = false;</span>
+<span class="nc" id="L224">		int size = in.length();</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">		for(int i = 0; i &lt; size; i++) {</span>
+<span class="nc" id="L226">			char c = in.charAt(i);</span>
+<span class="nc" id="L227">			out.append(c);</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">			if (c == '\\')</span>
+			{
+<span class="nc" id="L230">				escape  = true;</span>
+<span class="nc" id="L231">				out.append(c);</span>
+			}
+		}
+<span class="nc bnc" id="L234" title="All 2 branches missed.">		if (escape)</span>
+		{
+<span class="nc" id="L236">			return &quot;E&quot; + out.toString();</span>
+		}
+		else
+		{
+<span class="nc" id="L240">			return out.toString();</span>
+		}
+	}
+
+	/***************************************************************************
+	 * Converts Decode and Outer Join.
+	 * 
+	 * &lt;pre&gt;
+	 *        DECODE (a, 1, 'one', 2, 'two', 'none')
+	 *         =&amp;gt; CASE WHEN a = 1 THEN 'one' WHEN a = 2 THEN 'two' ELSE 'none' END
+	 *  
+	 * &lt;/pre&gt;
+	 * 
+	 * @param sqlStatement
+	 * @return converted statement
+	 */
+	protected String convertComplexStatement(String sqlStatement) {
+<span class="nc" id="L257">		String retValue = sqlStatement;</span>
+
+		// Convert all decode parts
+<span class="nc" id="L260">		int found = retValue.toUpperCase().indexOf(&quot;DECODE&quot;); </span>
+<span class="nc" id="L261">		int fromIndex = 0;</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		while ( found != -1) {</span>
+<span class="nc" id="L263">			retValue = convertDecode(retValue, fromIndex);</span>
+<span class="nc" id="L264">			fromIndex = found + 6;</span>
+<span class="nc" id="L265">			found = retValue.toUpperCase().indexOf(&quot;DECODE&quot;, fromIndex);</span>
+		}
+		
+		// Outer Join Handling -----------------------------------------------
+<span class="nc" id="L269">		int index = retValue.toUpperCase().indexOf(&quot;SELECT &quot;);</span>
+<span class="nc bnc" id="L270" title="All 4 branches missed.">		if (index != -1 &amp;&amp; retValue.indexOf(&quot;(+)&quot;, index) != -1)</span>
+<span class="nc" id="L271">			retValue = convertOuterJoin(retValue);</span>
+
+		// Convert datatypes from CAST(.. as datatypes):
+<span class="nc" id="L274">		retValue = convertCast(retValue);</span>
+		
+<span class="nc" id="L276">		return retValue;</span>
+	} // convertComplexStatement
+	
+	/**
+	 * Convert datatypes from CAST sentences
+	 * &lt;pre&gt;
+	 * 		cast(NULL as NVARCHAR2(255))
+	 * 		=&amp;gt;cast(NULL as VARCHAR)
+	 * &lt;/pre&gt;
+	 */
+	private String convertCast(String sqlStatement) {
+<span class="nc" id="L287">		final String PATTERN_String = &quot;\'([^']|(''))*\'&quot;;</span>
+<span class="nc" id="L288">		final String PATTERN_DataType = &quot;([\\w]+)(\\(\\d+\\))?&quot;;</span>
+<span class="nc" id="L289">		final String pattern =</span>
+<span class="nc" id="L290">							&quot;\\bCAST\\b[\\s]*\\([\\s]*&quot;					// CAST&lt;sp&gt;(&lt;sp&gt;		</span>
+							+&quot;((&quot;+PATTERN_String+&quot;)|([^\\s]+))&quot;		//	arg1				1(2,3)
+							+&quot;[\\s]*AS[\\s]*&quot;						//	&lt;sp&gt;AS&lt;sp&gt;
+							+&quot;(&quot;+PATTERN_DataType+&quot;)&quot;				//	arg2 (datatype)		4
+							+&quot;\\s*\\)&quot;								//	&lt;sp&gt;)
+		;
+<span class="nc" id="L296">		final int gidx_arg1 = 1;</span>
+<span class="nc" id="L297">		final int gidx_arg2 = 7;	// datatype w/o length</span>
+<span class="nc" id="L298">		final Pattern p = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE);</span>
+<span class="nc" id="L299">		Matcher m = p.matcher(sqlStatement);</span>
+		
+<span class="nc" id="L301">		TreeMap&lt;String, String&gt; convertMap = (TreeMap&lt;String, String&gt;)getConvertMap(); </span>
+<span class="nc" id="L302">		StringBuffer retValue = new StringBuffer(sqlStatement.length());</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">		while (m.find()) {</span>
+<span class="nc" id="L304">			String arg1 = m.group(gidx_arg1);</span>
+<span class="nc" id="L305">			String arg2 = m.group(gidx_arg2);</span>
+			//
+<span class="nc" id="L307">			String datatype = convertMap.get(&quot;\\b&quot;+arg2.toUpperCase()+&quot;\\b&quot;);</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			if (datatype == null)</span>
+<span class="nc" id="L309">				datatype = arg2;</span>
+<span class="nc" id="L310">			m.appendReplacement(retValue, &quot;cast(&quot;+arg1+&quot; as &quot;+datatype+&quot;)&quot;);</span>
+		}
+<span class="nc" id="L312">		m.appendTail(retValue);</span>
+<span class="nc" id="L313">		return retValue.toString();</span>
+	}
+
+	/**
+	 * Convert RowNum.
+	 * 
+	 * &lt;pre&gt;
+	 *        SELECT Col1 FROM tableA WHERE ROWNUM=1
+	 *        =&amp;gt; SELECT Col1 FROM tableA LIMIT 1
+	 *    Assumptions/Limitations:
+	 *    - RowNum not used in SELECT part
+	 * &lt;/pre&gt;
+	 * 
+	 * @param sqlStatement
+	 * @return converted statement
+	 */
+	/*
+	private String convertRowNum(String sqlStatement) {
+		// log.info(&quot;RowNum&lt;== &quot; + sqlStatement);
+
+        sqlStatement = Pattern.compile(&quot;rownum&quot;,REGEX_FLAGS).matcher(sqlStatement).replaceAll(&quot;ROWNUM&quot;); 
+                
+		String retValue = null;
+
+		// find into (select from where)
+
+		int s_end = 0;
+		int s_start = -1;
+		String select = sqlStatement;
+		String convert = &quot;&quot;;
+		while (true) {
+			s_end = 0;
+			s_start = select.indexOf(&quot;(SELECT&quot;);
+
+			if (s_start == -1)
+				break;
+
+			convert = convert + select.substring(0, s_start);
+			// System.out.println(&quot;convert:&quot; + convert);
+			int open = -1;
+			for (int i = s_start; i &lt; select.length(); i++) {
+				char c = select.charAt(i);
+				if (c == '(')
+					open++;
+
+				if (c == ')')
+					open--;
+
+				if (open == -1) {
+					s_end = i + 1;
+					break;
+				}
+			}
+
+			String subselect = select.substring(s_start, s_end);
+			// System.out.println(&quot;subselect:&quot; +subselect);
+			// System.out.println(&quot;select:&quot; +select);
+
+			if (subselect.indexOf(&quot;AND ROWNUM=1&quot;) &gt; 1) {
+				subselect = subselect.substring(0, subselect.length() - 1)
+						+ &quot; LIMIT 1 )&quot;;
+				// System.out.println(&quot;subselect:&quot; +subselect);
+				convert = convert + Util.replace(subselect, &quot;AND ROWNUM=1&quot;, &quot;&quot;);
+				// System.out.println(&quot;convert:&quot; + convert);
+			} else if (subselect.indexOf(&quot; WHERE ROWNUM=1 AND&quot;) &gt; 1) {
+				subselect = subselect.substring(0, subselect.length() - 1)
+						+ &quot; LIMIT 1 )&quot;;
+				// System.out.println(&quot;subselect:&quot; +subselect);
+				convert = convert
+						+ Util.replace(subselect, &quot; WHERE ROWNUM=1 AND&quot;,
+								&quot; WHERE &quot;);
+				// System.out.println(&quot;convert:&quot; + convert);
+			} else {
+				convert = convert + subselect;
+			}
+
+			select = select.substring(s_end);
+			retValue = select;
+
+		}
+		// System.out.println(&quot;convert:&quot; + convert);
+		// System.out.println(&quot;select:&quot; + select);
+		if (retValue == null)
+			retValue = sqlStatement;
+
+		if (retValue.indexOf(&quot;AND ROWNUM=1&quot;) &gt; 1) {
+			int rownum = retValue.indexOf(&quot;AND ROWNUM=1&quot;);
+			if (retValue.substring(0, rownum).contains(&quot;WHERE&quot;)) {
+				retValue = Util.replace(retValue, &quot;AND ROWNUM=1&quot;, &quot; LIMIT 1&quot;);
+				return convert + retValue;
+			} else {
+				retValue = Util.replace(retValue, &quot;AND ROWNUM=1&quot;, &quot;&quot;);
+				return convert + retValue + &quot; LIMIT 1&quot;;
+			}
+
+		} else if (retValue.indexOf(&quot;AND ROWNUM= 1&quot;) &gt; 1) {
+			int rownum = retValue.indexOf(&quot;AND ROWNUM= 1&quot;);
+			if (retValue.substring(0, rownum).contains(&quot;WHERE&quot;)) {
+
+				retValue = Util.replace(retValue, &quot;AND ROWNUM= 1&quot;, &quot; LIMIT 1&quot;);
+				return convert + retValue;
+			} else {
+				retValue = Util.replace(retValue, &quot;AND ROWNUM= 1&quot;, &quot;&quot;);
+				return convert + retValue + &quot; LIMIT 1&quot;;
+			}
+		} else if (retValue.indexOf(&quot;AND ROWNUM = 1&quot;) &gt; 1) {
+			int rownum = retValue.indexOf(&quot;AND ROWNUM = 1&quot;);
+			if (retValue.substring(0, rownum).contains(&quot;WHERE&quot;)) {
+
+				retValue = Util.replace(sqlStatement, &quot;AND ROWNUM = 1&quot;,
+						&quot; LIMIT 1&quot;);
+				return convert + retValue;
+			} else {
+				retValue = Util.replace(sqlStatement, &quot;AND ROWNUM = 1&quot;, &quot;&quot;);
+				return convert + retValue + &quot; LIMIT 1&quot;;
+			}
+		} else if (retValue.indexOf(&quot;AND ROWNUM =1&quot;) &gt; 1) {
+			int rownum = retValue.indexOf(&quot;AND ROWNUM =1&quot;);
+			if (retValue.substring(0, rownum).contains(&quot;WHERE&quot;)) {
+
+				retValue = Util.replace(retValue, &quot;AND ROWNUM =1&quot;, &quot; LIMIT 1&quot;);
+				return convert + retValue;
+			} else {
+				retValue = Util.replace(retValue, &quot;AND ROWNUM =1&quot;, &quot;&quot;);
+				return convert + retValue + &quot; LIMIT 1&quot;;
+			}
+		} else if (retValue.indexOf(&quot;ROWNUM=1&quot;) &gt; 1) {
+			int rownum = retValue.indexOf(&quot;ROWNUM=1&quot;);
+			//System.out.println(&quot;retValue&quot; + retValue);
+			if (retValue.substring(0, rownum).contains(&quot;WHERE&quot;)) {
+				retValue = Util.replace(retValue, &quot;ROWNUM=1 &quot;, &quot; LIMIT 1&quot;);
+				return convert + retValue;
+			} else {
+				retValue = Util.replace(retValue, &quot;ROWNUM=1&quot;, &quot;&quot;);
+				return convert + retValue + &quot; LIMIT 1&quot;;
+			}
+		}
+		// log.info(&quot;RowNum==&gt; &quot; + retValue);
+		return convert + retValue;
+
+		//
+		// log.info(&quot;RowNum==&gt; &quot; + retValue);
+		// return retValue;
+		// end e-evolution PostgreSQL
+	} // convertRowNum
+	*/
+
+	/***************************************************************************
+	 * Converts Update.
+	 * 
+	 * &lt;pre&gt;
+	 *        UPDATE C_Order i SET 
+	 *         =&amp;gt; UPDATE C_Order SET
+	 * &lt;/pre&gt;
+	 * 
+	 * @param sqlStatement
+	 * @return converted statement
+	 */
+
+	private String convertUpdate(String sqlStatement) {
+<span class="nc" id="L473">		String targetTable = null;</span>
+<span class="nc" id="L474">		String targetAlias = null;</span>
+		
+<span class="nc" id="L476">		String sqlUpper = sqlStatement.toUpperCase();</span>
+<span class="nc" id="L477">		StringBuilder token = new StringBuilder();</span>
+<span class="nc" id="L478">		String previousToken = null;</span>
+<span class="nc" id="L479">		int charIndex = 0;</span>
+<span class="nc" id="L480">		int sqlLength = sqlUpper.length();</span>
+<span class="nc" id="L481">		int cnt = 0;</span>
+<span class="nc" id="L482">		boolean isUpdate = false;</span>
+		
+		//get target table and alias
+<span class="nc bnc" id="L485" title="All 2 branches missed.">		while (charIndex &lt; sqlLength)</span>
+		{
+<span class="nc" id="L487">			char c = sqlStatement.charAt(charIndex);</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">			if (Character.isWhitespace(c))</span>
+			{
+<span class="nc bnc" id="L490" title="All 2 branches missed.">				if (token.length() &gt; 0) {</span>
+<span class="nc" id="L491">					cnt++;</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">					if ( cnt == 1)</span>
+<span class="nc" id="L493">						isUpdate = &quot;UPDATE&quot;.equalsIgnoreCase(token.toString()); </span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">					else if (cnt == 2)</span>
+<span class="nc" id="L495">						targetTable = token.toString();</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">					else if (cnt == 3)</span>
+					{
+<span class="nc" id="L498">						targetAlias = token.toString().trim();</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">						if (&quot;SET&quot;.equalsIgnoreCase(targetAlias)) //no alias</span>
+<span class="nc" id="L500">							targetAlias = targetTable;</span>
+					}
+<span class="nc" id="L502">					previousToken = token.toString();</span>
+<span class="nc" id="L503">					token = new StringBuilder();</span>
+				}
+<span class="nc" id="L505">			}</span>
+			else
+			{
+<span class="nc bnc" id="L508" title="All 2 branches missed.">				if (&quot;SET&quot;.equalsIgnoreCase(previousToken))</span>
+<span class="nc" id="L509">					break;</span>
+				else
+<span class="nc" id="L511">					token.append(c);</span>
+			}
+<span class="nc" id="L513">			charIndex++;</span>
+		}
+		
+<span class="nc bnc" id="L516" title="All 6 branches missed.">		if (isUpdate &amp;&amp; targetTable != null &amp;&amp; sqlUpper.charAt(charIndex) == '(') {</span>
+<span class="nc" id="L517">			int updateFieldsBegin = charIndex;</span>
+<span class="nc" id="L518">			String updateFields = null;</span>
+			
+<span class="nc" id="L520">			String select = &quot;&quot;;</span>
+
+			//get the sub query
+<span class="nc" id="L523">			String beforePreviousToken = null;</span>
+<span class="nc" id="L524">			previousToken = null;</span>
+<span class="nc" id="L525">			token = new StringBuilder();</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">			while (charIndex &lt; sqlLength)</span>
+			{
+<span class="nc" id="L528">				char c = sqlUpper.charAt(charIndex);</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">				if (Character.isWhitespace(c))</span>
+				{
+<span class="nc bnc" id="L531" title="All 2 branches missed.">					if (token.length() &gt; 0)</span>
+					{
+<span class="nc" id="L533">						String currentToken = token.toString();</span>
+<span class="nc bnc" id="L534" title="All 6 branches missed.">						if (&quot;(&quot;.equals(currentToken) || (currentToken != null &amp;&amp; currentToken.startsWith(&quot;(&quot;)))</span>
+						{
+<span class="nc bnc" id="L536" title="All 2 branches missed.">							if (( &quot;)&quot;.equals(beforePreviousToken) ||</span>
+<span class="nc bnc" id="L537" title="All 4 branches missed.">								(beforePreviousToken != null &amp;&amp; beforePreviousToken.endsWith(&quot;)&quot;)) ) &amp;&amp;</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">								&quot;=&quot;.equals(previousToken))</span>
+							{
+<span class="nc" id="L540">								select = sqlStatement.substring(charIndex - currentToken.length());</span>
+<span class="nc" id="L541">								updateFields = sqlStatement.substring(updateFieldsBegin, charIndex);</span>
+<span class="nc" id="L542">								updateFields = updateFields.substring(0, updateFields.lastIndexOf(')'));</span>
+<span class="nc" id="L543">								break;</span>
+							}
+<span class="nc bnc" id="L545" title="All 2 branches missed.">							else if (&quot;)=&quot;.equals(previousToken))</span>
+							{
+<span class="nc" id="L547">								select = sqlStatement.substring(charIndex - currentToken.length());</span>
+<span class="nc" id="L548">								updateFields = sqlStatement.substring(updateFieldsBegin, charIndex);</span>
+<span class="nc" id="L549">								updateFields = updateFields.substring(0, updateFields.lastIndexOf(')'));</span>
+<span class="nc" id="L550">								break;</span>
+							}
+<span class="nc bnc" id="L552" title="All 4 branches missed.">							else if (previousToken != null &amp;&amp; previousToken.endsWith(&quot;)=&quot;))</span>
+							{
+<span class="nc" id="L554">								select = sqlStatement.substring(charIndex - currentToken.length());</span>
+<span class="nc" id="L555">								updateFields = sqlStatement.substring(updateFieldsBegin, charIndex);</span>
+<span class="nc" id="L556">								updateFields = updateFields.substring(0, updateFields.lastIndexOf(')'));</span>
+<span class="nc" id="L557">								break;</span>
+							}
+							
+						}
+<span class="nc bnc" id="L561" title="All 2 branches missed.">						if (&quot;)=(&quot;.equals(currentToken))</span>
+						{
+<span class="nc" id="L563">							select = sqlStatement.substring(charIndex - 1);</span>
+<span class="nc" id="L564">							updateFields = sqlStatement.substring(updateFieldsBegin, charIndex);</span>
+<span class="nc" id="L565">							updateFields = updateFields.substring(0, updateFields.lastIndexOf(')'));</span>
+<span class="nc" id="L566">							break;</span>
+						}
+<span class="nc bnc" id="L568" title="All 2 branches missed.">						else if (currentToken.endsWith(&quot;)=(SELECT&quot;))</span>
+						{
+<span class="nc" id="L570">							select = sqlStatement.substring(charIndex - 7);</span>
+<span class="nc" id="L571">							updateFields = sqlStatement.substring(updateFieldsBegin, charIndex);</span>
+<span class="nc" id="L572">							updateFields = updateFields.substring(0, updateFields.lastIndexOf(')'));</span>
+<span class="nc" id="L573">							break;</span>
+						}
+<span class="nc bnc" id="L575" title="All 6 branches missed.">						else if (&quot;=(&quot;.equals(currentToken) || (currentToken != null &amp;&amp; currentToken.startsWith(&quot;=(&quot;)))</span>
+						{
+<span class="nc bnc" id="L577" title="All 6 branches missed.">							if (&quot;)&quot;.equals(previousToken) || (previousToken != null &amp;&amp; previousToken.endsWith(&quot;)&quot;)))</span>
+							{
+<span class="nc" id="L579">								select = sqlStatement.substring(charIndex - currentToken.length());</span>
+<span class="nc" id="L580">								updateFields = sqlStatement.substring(updateFieldsBegin, charIndex);</span>
+<span class="nc" id="L581">								updateFields = updateFields.substring(0, updateFields.lastIndexOf(')'));</span>
+<span class="nc" id="L582">								break;</span>
+							}
+						}
+<span class="nc" id="L585">						beforePreviousToken = previousToken;</span>
+<span class="nc" id="L586">						previousToken = token.toString();</span>
+<span class="nc" id="L587">						token = new StringBuilder();</span>
+					}
+<span class="nc" id="L589">				}</span>
+				else{
+<span class="nc" id="L591">					token.append(c);</span>
+				}
+<span class="nc" id="L593">				charIndex++;</span>
+			}
+<span class="nc bnc" id="L595" title="All 4 branches missed.">			if (updateFields != null &amp;&amp; updateFields.startsWith(&quot;(&quot;))</span>
+<span class="nc" id="L596">				updateFields = updateFields.substring(1);</span>
+
+<span class="nc" id="L598">			int subQueryEnd = 0;</span>
+<span class="nc" id="L599">			int subQueryStart = select.indexOf('(');</span>
+<span class="nc" id="L600">			String subWhere = null;</span>
+<span class="nc" id="L601">			int open = -1;</span>
+<span class="nc bnc" id="L602" title="All 2 branches missed.">			for (int i = subQueryStart; i &lt; select.length(); i++) {</span>
+<span class="nc" id="L603">				char c = select.charAt(i);</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">				if (c == '(')</span>
+<span class="nc" id="L605">					open++;</span>
+
+<span class="nc bnc" id="L607" title="All 2 branches missed.">				if (c == ')')</span>
+<span class="nc" id="L608">					open--;</span>
+
+<span class="nc bnc" id="L610" title="All 2 branches missed.">				if (open == -1) {</span>
+<span class="nc" id="L611">					subQueryEnd = i + 1;</span>
+<span class="nc" id="L612">					break;</span>
+				}
+			}
+
+<span class="nc" id="L616">			String mainWhere = &quot;&quot;;</span>
+<span class="nc" id="L617">			String otherUpdateFields = &quot;&quot;;</span>
+			//get update where clause
+<span class="nc" id="L619">			token = new StringBuilder();</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">			for(int i = subQueryEnd; i &lt; select.length(); i++)</span>
+			{
+<span class="nc" id="L622">				char c = select.charAt(i);</span>
+<span class="nc bnc" id="L623" title="All 2 branches missed.">				if (Character.isWhitespace(c))</span>
+				{
+<span class="nc bnc" id="L625" title="All 2 branches missed.">					if (token.length() &gt; 0)</span>
+					{
+<span class="nc bnc" id="L627" title="All 2 branches missed.">						if (&quot;WHERE&quot;.equalsIgnoreCase(token.toString()))</span>
+						{
+<span class="nc" id="L629">							otherUpdateFields = select.substring(subQueryEnd, i - 5).trim();</span>
+<span class="nc" id="L630">							mainWhere = select.substring(i + 1);</span>
+<span class="nc" id="L631">							break;</span>
+						}
+<span class="nc" id="L633">						token = new StringBuilder();</span>
+					}
+<span class="nc" id="L635">				}</span>
+				else
+				{
+<span class="nc" id="L638">					token.append(c);</span>
+				}
+			}
+
+<span class="nc" id="L642">			String subQuery = select.substring(subQueryStart, subQueryEnd);</span>
+
+			//get join table and alias
+<span class="nc" id="L645">			String joinTable = null;</span>
+<span class="nc" id="L646">			String joinAlias = null;</span>
+<span class="nc" id="L647">			token = new StringBuilder();</span>
+<span class="nc" id="L648">			previousToken = null;</span>
+<span class="nc" id="L649">			int joinFieldsBegin = 0;</span>
+<span class="nc" id="L650">			String joinFields = null;</span>
+<span class="nc" id="L651">			String joinFromClause = null;</span>
+<span class="nc" id="L652">			int joinFromClauseStart = 0;</span>
+<span class="nc" id="L653">			open = -1;</span>
+<span class="nc bnc" id="L654" title="All 2 branches missed.">			for (int i = 0; i &lt; subQuery.length(); i++)</span>
+			{
+<span class="nc" id="L656">				char c = subQuery.charAt(i);</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">				if (Character.isWhitespace(c))</span>
+				{
+<span class="nc bnc" id="L659" title="All 4 branches missed.">					if (token.length() &gt; 0 &amp;&amp; open &lt; 0)</span>
+					{
+<span class="nc bnc" id="L661" title="All 2 branches missed.">						if (&quot;FROM&quot;.equalsIgnoreCase(previousToken))</span>
+						{
+<span class="nc" id="L663">							joinTable = token.toString();</span>
+						}
+<span class="nc bnc" id="L665" title="All 2 branches missed.">						if (&quot;WHERE&quot;.equalsIgnoreCase(token.toString()))</span>
+						{
+<span class="nc" id="L667">							subWhere = subQuery.substring(i+1, subQuery.length() - 1);</span>
+<span class="nc" id="L668">							joinFromClause = subQuery.substring(joinFromClauseStart, i - 5).trim();</span>
+<span class="nc" id="L669">							break;</span>
+						}
+<span class="nc bnc" id="L671" title="All 2 branches missed.">						if (&quot;FROM&quot;.equalsIgnoreCase(token.toString()))</span>
+						{
+<span class="nc" id="L673">							joinFields = subQuery.substring(joinFieldsBegin, i - 4);</span>
+<span class="nc" id="L674">							joinFromClauseStart = i;</span>
+						}
+<span class="nc bnc" id="L676" title="All 4 branches missed.">						if (previousToken != null &amp;&amp; previousToken.equals(joinTable))</span>
+						{
+<span class="nc" id="L678">							joinAlias = token.toString();</span>
+						}
+<span class="nc" id="L680">						previousToken = token.toString();</span>
+<span class="nc" id="L681">						token = new StringBuilder();</span>
+					}
+<span class="nc" id="L683">				}</span>
+				else
+				{
+<span class="nc bnc" id="L686" title="All 2 branches missed.">					if (joinFieldsBegin == 0)</span>
+					{
+<span class="nc bnc" id="L688" title="All 2 branches missed.">						if (token.length() == 0 &amp;&amp; </span>
+<span class="nc bnc" id="L689" title="All 2 branches missed.">							( &quot;SELECT&quot;.equalsIgnoreCase(previousToken) || </span>
+<span class="nc bnc" id="L690" title="All 4 branches missed.">							  (previousToken != null &amp;&amp; previousToken.toUpperCase().endsWith(&quot;SELECT&quot;)))) </span>
+<span class="nc" id="L691">							joinFieldsBegin = i;</span>
+<span class="nc" id="L692">					}</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">					else if (c == '(')</span>
+<span class="nc" id="L694">						open++;</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">					else if (c == ')')</span>
+<span class="nc" id="L696">						open--;</span>
+<span class="nc" id="L697">					token.append(c);</span>
+				}
+			}
+<span class="nc bnc" id="L700" title="All 2 branches missed.">			if (joinFromClause == null) joinFromClause = subQuery.substring(joinFromClauseStart).trim();</span>
+<span class="nc bnc" id="L701" title="All 2 branches missed.">			if (joinAlias == null) joinAlias = joinTable;</span>
+			
+			//construct update clause
+<span class="nc" id="L704">			StringBuilder Update = new StringBuilder(&quot;UPDATE &quot;);</span>
+<span class="nc" id="L705">			Update.append(targetTable);</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">			if (!targetAlias.equals(targetTable))</span>
+<span class="nc" id="L707">				Update.append(&quot; &quot; + targetAlias);</span>
+			
+<span class="nc" id="L709">			Update.append(&quot; SET &quot;);</span>
+			
+<span class="nc bnc" id="L711" title="All 2 branches missed.">			int f = updateFields!=null ? updateFields.length() : 0;</span>
+<span class="nc" id="L712">			int fj = joinFields.length();</span>
+<span class="nc" id="L713">			String updateField = null;</span>
+<span class="nc" id="L714">			String joinField = null;</span>
+			
+<span class="nc" id="L716">			boolean useSubQuery = false;</span>
+<span class="nc bnc" id="L717" title="All 2 branches missed.">			if (useAggregateFunction(joinFields))</span>
+<span class="nc" id="L718">				useSubQuery = true;</span>
+
+<span class="nc bnc" id="L720" title="All 2 branches missed.">			while (f &gt; 0) {</span>
+<span class="nc" id="L721">				f = Util.findIndexOf(updateFields, ',');</span>
+<span class="nc bnc" id="L722" title="All 2 branches missed.">				if (f &lt; 0) {</span>
+<span class="nc" id="L723">					updateField = updateFields;</span>
+<span class="nc" id="L724">					joinField = joinFields.trim();</span>
+<span class="nc bnc" id="L725" title="All 4 branches missed.">					if (joinField.indexOf('.') &lt; 0 &amp;&amp; isIdentifier(joinField)) {</span>
+<span class="nc" id="L726">						joinField = joinAlias + &quot;.&quot; + joinField;</span>
+					}
+
+<span class="nc" id="L729">					Update.append(updateField.trim());</span>
+<span class="nc" id="L730">					Update.append(&quot;=&quot;);</span>
+<span class="nc bnc" id="L731" title="All 2 branches missed.">					if (useSubQuery)</span>
+					{
+<span class="nc" id="L733">						Update.append(&quot;( SELECT &quot;);</span>
+<span class="nc" id="L734">						Update.append(joinField);</span>
+<span class="nc" id="L735">						Update.append(&quot; FROM &quot;);</span>
+<span class="nc" id="L736">						Update.append(joinFromClause);</span>
+<span class="nc" id="L737">						Update.append(&quot; WHERE &quot;);</span>
+<span class="nc" id="L738">						Update.append(subWhere.trim());</span>
+<span class="nc" id="L739">						Update.append(&quot; ) &quot;);</span>
+<span class="nc" id="L740">						Update.append(otherUpdateFields);</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">						if (mainWhere != null)</span>
+						{
+<span class="nc" id="L743">							Update.append(&quot; WHERE &quot;);</span>
+<span class="nc" id="L744">							Update.append(mainWhere);</span>
+						}
+<span class="nc" id="L746">					}</span>
+					else
+					{
+<span class="nc" id="L749">						Update.append(joinField);</span>
+<span class="nc" id="L750">						Update.append(otherUpdateFields);</span>
+<span class="nc" id="L751">						Update.append(&quot; FROM &quot;);</span>
+<span class="nc" id="L752">						Update.append(joinFromClause);</span>
+<span class="nc" id="L753">						Update.append(&quot; WHERE &quot;);</span>
+<span class="nc" id="L754">						subWhere = addAliasToIdentifier(subWhere, joinAlias);</span>
+<span class="nc" id="L755">						Update.append(subWhere.trim());</span>
+						
+<span class="nc bnc" id="L757" title="All 2 branches missed.">						if (mainWhere != null)</span>
+<span class="nc" id="L758">							mainWhere = &quot; AND &quot; + mainWhere;</span>
+	
+						else
+<span class="nc" id="L761">							mainWhere = &quot;&quot;;</span>
+	
+<span class="nc" id="L763">						mainWhere = addAliasToIdentifier(mainWhere, targetAlias);</span>
+<span class="nc" id="L764">						Update.append(mainWhere);</span>
+					}
+<span class="nc" id="L766">				} else {</span>
+
+<span class="nc" id="L768">					updateField = updateFields.substring(0, f);</span>
+<span class="nc" id="L769">					fj = Util.findIndexOf(joinFields, ',');</span>
+					// fieldsjoin.indexOf(',');
+
+<span class="nc bnc" id="L772" title="All 2 branches missed.">					joinField = fj &gt; 0 ? joinFields.substring(0, fj).trim() : joinFields.trim();</span>
+<span class="nc bnc" id="L773" title="All 4 branches missed.">					if (joinField.indexOf('.') &lt; 0 &amp;&amp; isIdentifier(joinField)) {</span>
+<span class="nc" id="L774">						joinField = joinAlias + &quot;.&quot; + joinField;</span>
+					}
+<span class="nc" id="L776">					Update.append(updateField.trim());</span>
+<span class="nc" id="L777">					Update.append(&quot;=&quot;);</span>
+<span class="nc bnc" id="L778" title="All 2 branches missed.">					if (useSubQuery)</span>
+					{
+<span class="nc" id="L780">						Update.append(&quot;( SELECT &quot;);</span>
+<span class="nc" id="L781">						Update.append(joinField);</span>
+<span class="nc" id="L782">						Update.append(&quot; FROM &quot;);</span>
+<span class="nc" id="L783">						Update.append(joinFromClause);</span>
+<span class="nc" id="L784">						Update.append(&quot; WHERE &quot;);</span>
+<span class="nc" id="L785">						Update.append(subWhere.trim());</span>
+<span class="nc" id="L786">						Update.append(&quot; ) &quot;);</span>
+<span class="nc" id="L787">					}</span>
+					else
+					{
+<span class="nc" id="L790">						Update.append(joinField);</span>
+					}
+<span class="nc" id="L792">					Update.append(&quot;,&quot;);</span>
+<span class="nc" id="L793">					joinFields = joinFields.substring(fj + 1);</span>
+				}
+
+<span class="nc" id="L796">				updateFields = updateFields.substring(f + 1);</span>
+
+				// System.out.println(&quot;Update&quot; + Update);
+			}
+
+<span class="nc" id="L801">			return Update.toString();</span>
+
+		}
+		// System.out.println(&quot;Convert Update:&quot;+sqlUpdate);
+<span class="nc" id="L805">		return sqlStatement;</span>
+
+	} // convertDecode
+	
+	/**
+	 * Check if one of the field is using standard sql aggregate function
+	 * @param fields
+	 * @return boolean
+	 */
+	private boolean useAggregateFunction(String fields) 
+	{
+<span class="nc" id="L816">		String fieldsUpper = fields.toUpperCase();</span>
+<span class="nc" id="L817">		int size = fieldsUpper.length();</span>
+<span class="nc" id="L818">		StringBuilder buffer = new StringBuilder();</span>
+<span class="nc" id="L819">		String token = null;</span>
+<span class="nc bnc" id="L820" title="All 2 branches missed.">		for (int i = 0; i &lt; size; i++)</span>
+		{
+<span class="nc" id="L822">			char ch = fieldsUpper.charAt(i);</span>
+<span class="nc bnc" id="L823" title="All 2 branches missed.">			if (Character.isWhitespace(ch))</span>
+			{
+<span class="nc bnc" id="L825" title="All 2 branches missed.">				if (buffer.length() &gt; 0)</span>
+				{
+<span class="nc" id="L827">					token = buffer.toString();</span>
+<span class="nc" id="L828">					buffer = new StringBuilder();</span>
+				}
+<span class="nc" id="L830">			}</span>
+			else
+			{
+<span class="nc bnc" id="L833" title="All 2 branches missed.">				if (isOperator(ch)) </span>
+				{
+<span class="nc bnc" id="L835" title="All 2 branches missed.">					if (buffer.length() &gt; 0)</span>
+					{
+<span class="nc" id="L837">						token = buffer.toString();</span>
+<span class="nc" id="L838">						buffer = new StringBuilder();</span>
+<span class="nc" id="L839">					}</span>
+					else
+					{
+<span class="nc" id="L842">						token = null;</span>
+					}
+<span class="nc bnc" id="L844" title="All 4 branches missed.">					if (ch == '(' &amp;&amp; token != null)</span>
+					{
+<span class="nc bnc" id="L846" title="All 6 branches missed.">						if (token.equals(&quot;SUM&quot;) || token.equals(&quot;MAX&quot;) || token.equals(&quot;MIN&quot;)</span>
+<span class="nc bnc" id="L847" title="All 4 branches missed.">							|| token.equals(&quot;COUNT&quot;) || token.equals(&quot;AVG&quot;))</span>
+						{
+<span class="nc" id="L849">							return true;</span>
+						}
+					}					
+				}
+				else
+<span class="nc" id="L854">					buffer.append(ch);</span>
+			}
+		}
+		
+<span class="nc" id="L858">		return false;</span>
+	}
+
+	/**
+	 * Add table alias to identifier in where clause
+	 * @param where
+	 * @param alias
+	 * @return converted where clause
+	 */
+	private String addAliasToIdentifier(String where, String alias)
+	{
+<span class="nc" id="L869">		String sqlkey = &quot;AND,OR,FROM,WHERE,JOIN,BY,GROUP,IN,INTO,SELECT,NOT,SET,UPDATE,DELETE,HAVING,IS,NULL,EXISTS,BETWEEN,LIKE,INNER,OUTER,SIMILAR TO&quot;;</span>
+		
+<span class="nc" id="L871">		StringTokenizer st = new StringTokenizer(where);</span>
+<span class="nc" id="L872">		String result = &quot;&quot;;</span>
+<span class="nc" id="L873">		String token = &quot;&quot;;</span>
+<span class="nc" id="L874">		int o = -1;</span>
+		while (true) 
+		{
+<span class="nc" id="L877">			token = st.nextToken();</span>
+<span class="nc bnc" id="L878" title="All 2 branches missed.">			String test = token.startsWith(&quot;(&quot;) ? token.substring(1) : token;</span>
+<span class="nc bnc" id="L879" title="All 2 branches missed.">			if (sqlkey.indexOf(test) == -1) {</span>
+
+<span class="nc" id="L881">				token = token.trim();</span>
+				//skip subquery, non identifier and fully qualified identifier
+<span class="nc bnc" id="L883" title="All 2 branches missed.">				if (o != -1)</span>
+<span class="nc" id="L884">					result = result + &quot; &quot; + token;</span>
+				else 
+				{
+<span class="nc" id="L887">					result = result + &quot; &quot;;</span>
+<span class="nc" id="L888">					StringBuilder t = new StringBuilder();</span>
+<span class="nc bnc" id="L889" title="All 2 branches missed.">					for (int i = 0; i &lt; token.length(); i++) {</span>
+<span class="nc" id="L890">						char c = token.charAt(i);</span>
+<span class="nc bnc" id="L891" title="All 2 branches missed.">						if(isOperator(c))</span>
+						{
+<span class="nc bnc" id="L893" title="All 2 branches missed.">							if (t.length() &gt; 0)</span>
+							{
+<span class="nc bnc" id="L895" title="All 2 branches missed.">								if (c == '(')</span>
+<span class="nc" id="L896">									result = result + t.toString();</span>
+<span class="nc bnc" id="L897" title="All 2 branches missed.">								else if (isIdentifier(t.toString()) &amp;&amp;</span>
+<span class="nc bnc" id="L898" title="All 2 branches missed.">									t.toString().indexOf('.') == -1)</span>
+<span class="nc" id="L899">									result = result + alias + &quot;.&quot; + t.toString();</span>
+								else
+<span class="nc" id="L901">									result = result + t.toString();</span>
+<span class="nc" id="L902">								t = new StringBuilder();</span>
+							}
+<span class="nc" id="L904">							result = result + c;</span>
+<span class="nc" id="L905">						}</span>
+						else
+						{
+<span class="nc" id="L908">							t.append(c);</span>
+						}
+					}
+<span class="nc bnc" id="L911" title="All 2 branches missed.">					if (t.length() &gt; 0)</span>
+					{
+<span class="nc bnc" id="L913" title="All 2 branches missed.">						if (&quot;SELECT&quot;.equalsIgnoreCase(t.toString().toUpperCase())) </span>
+						{
+<span class="nc" id="L915">							o = 0;</span>
+<span class="nc" id="L916">							result = result + t.toString();</span>
+<span class="nc" id="L917">						}</span>
+<span class="nc bnc" id="L918" title="All 2 branches missed.">						else if (isIdentifier(t.toString()) &amp;&amp;</span>
+<span class="nc bnc" id="L919" title="All 2 branches missed.">							t.toString().indexOf('.') == -1 )</span>
+<span class="nc" id="L920">							result = result + alias + &quot;.&quot; + t.toString();</span>
+						else
+<span class="nc" id="L922">							result = result + t.toString();</span>
+					}
+				}
+				
+<span class="nc bnc" id="L926" title="All 2 branches missed.">				if (o != -1) {</span>
+<span class="nc bnc" id="L927" title="All 2 branches missed.">					for (int i = 0; i &lt; token.length(); i++) {</span>
+<span class="nc" id="L928">						char c = token.charAt(i);</span>
+<span class="nc bnc" id="L929" title="All 2 branches missed.">						if (c == '(')</span>
+<span class="nc" id="L930">							o++;</span>
+<span class="nc bnc" id="L931" title="All 2 branches missed.">						if (c == ')')</span>
+<span class="nc" id="L932">							o--;</span>
+					}
+				}
+
+<span class="nc" id="L936">			} else {</span>
+<span class="nc" id="L937">				result = result + &quot; &quot; + token;</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">				if (&quot;SELECT&quot;.equalsIgnoreCase(test)) {</span>
+<span class="nc" id="L939">					o = 0;</span>
+				}
+			}
+<span class="nc bnc" id="L942" title="All 2 branches missed.">			if (!st.hasMoreElements())</span>
+				break;
+		}
+<span class="nc" id="L945">		return result;</span>
+	}
+	
+	/**
+	 * Check if token is a valid sql identifier
+	 * @param token
+	 * @return True if token is a valid sql identifier, false otherwise
+	 */
+	private boolean isIdentifier(String token)
+	{
+<span class="nc" id="L955">		int size = token.length();</span>
+<span class="nc bnc" id="L956" title="All 2 branches missed.">		for (int i = 0; i &lt; size; i++)</span>
+		{
+<span class="nc" id="L958">			char c = token.charAt(i);</span>
+<span class="nc bnc" id="L959" title="All 2 branches missed.">			if (isOperator(c))</span>
+<span class="nc" id="L960">				return false;</span>
+		}
+<span class="nc bnc" id="L962" title="All 4 branches missed.">		if (token.startsWith(&quot;'&quot;) &amp;&amp; token.endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L963">			return false;</span>
+		// quoted string substitution marker
+<span class="nc bnc" id="L965" title="All 2 branches missed.">		else if ( token.matches(&quot;QS\\d+QS\\d{18}&quot;) )</span>
+<span class="nc" id="L966">			return false;</span>
+		else 
+		{
+			try {
+<span class="nc" id="L970">				new BigDecimal(token);</span>
+<span class="nc" id="L971">				return false;</span>
+<span class="nc" id="L972">			} catch (NumberFormatException e) {}</span>
+		}
+		
+<span class="nc bnc" id="L975" title="All 2 branches missed.">		if (isSQLFunctions(token))</span>
+<span class="nc" id="L976">			return false;</span>
+		
+<span class="nc" id="L978">		return true;</span>
+	}
+	
+	private boolean isSQLFunctions(String token)
+	{
+<span class="nc bnc" id="L983" title="All 2 branches missed.">		if (token.equalsIgnoreCase(&quot;current_timestamp&quot;))</span>
+<span class="nc" id="L984">			return true;</span>
+<span class="nc bnc" id="L985" title="All 2 branches missed.">		else if (token.equalsIgnoreCase(&quot;current_time&quot;))</span>
+<span class="nc" id="L986">			return true;</span>
+<span class="nc bnc" id="L987" title="All 2 branches missed.">		else if (token.equalsIgnoreCase(&quot;current_date&quot;))</span>
+<span class="nc" id="L988">			return true;</span>
+<span class="nc bnc" id="L989" title="All 2 branches missed.">		else if (token.equalsIgnoreCase(&quot;localtime&quot;))</span>
+<span class="nc" id="L990">			return true;</span>
+<span class="nc bnc" id="L991" title="All 2 branches missed.">		else if (token.equalsIgnoreCase(&quot;localtimestamp&quot;))</span>
+<span class="nc" id="L992">			return true;</span>
+<span class="nc" id="L993">		return false;</span>
+	}
+	
+	// begin vpj-cd e-evolution 08/02/2005
+	/***************************************************************************
+	 * convertAlias - for compatibility with 8.1
+	 * 
+	 * @param sqlStatement
+	 * @return converted statementf
+	 */
+	private String convertAlias(String sqlStatement) {     
+<span class="nc" id="L1004">		String[] tokens = sqlStatement.split(&quot;\\s&quot;);</span>
+<span class="nc" id="L1005">		String table = null;</span>
+<span class="nc" id="L1006">		String alias = null;</span>
+<span class="nc bnc" id="L1007" title="All 2 branches missed.">		if (&quot;UPDATE&quot;.equalsIgnoreCase(tokens[0])) {</span>
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">			if (&quot;SET&quot;.equalsIgnoreCase(tokens[2])) return sqlStatement;</span>
+<span class="nc" id="L1009">			table = tokens[1];</span>
+<span class="nc" id="L1010">			alias = tokens[2];</span>
+<span class="nc bnc" id="L1011" title="All 2 branches missed.">		} else if (&quot;INSERT&quot;.equalsIgnoreCase(tokens[0])) {</span>
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">			if (&quot;VALUES&quot;.equalsIgnoreCase(tokens[3]) || </span>
+<span class="nc bnc" id="L1013" title="All 2 branches missed.">				&quot;SELECT&quot;.equalsIgnoreCase(tokens[3])) </span>
+<span class="nc" id="L1014">				return sqlStatement;</span>
+<span class="nc bnc" id="L1015" title="All 2 branches missed.">			if (tokens[2].indexOf('(') &gt; 0) </span>
+<span class="nc" id="L1016">				return sqlStatement;</span>
+<span class="nc bnc" id="L1017" title="All 2 branches missed.">			else if ((tokens[3].indexOf('(') &lt; 0) ||</span>
+<span class="nc bnc" id="L1018" title="All 2 branches missed.">					tokens[3].indexOf('(') &gt; 0) {</span>
+<span class="nc" id="L1019">				table = tokens[2];</span>
+<span class="nc" id="L1020">				alias = tokens[3];</span>
+<span class="nc" id="L1021">			} else {</span>
+<span class="nc" id="L1022">				return sqlStatement;</span>
+			}
+<span class="nc bnc" id="L1024" title="All 2 branches missed.">		} else if (&quot;DELETE&quot;.equalsIgnoreCase(tokens[0])) {</span>
+<span class="nc bnc" id="L1025" title="All 2 branches missed.">			if (tokens.length &lt; 4) return sqlStatement;</span>
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">			if (&quot;WHERE&quot;.equalsIgnoreCase(tokens[3])) return sqlStatement;</span>
+<span class="nc" id="L1027">			table = tokens[2];</span>
+<span class="nc" id="L1028">			alias = tokens[3];</span>
+		} 
+<span class="nc bnc" id="L1030" title="All 4 branches missed.">		if (table != null &amp;&amp; alias != null ) {</span>
+<span class="nc bnc" id="L1031" title="All 2 branches missed.">			if (alias.indexOf('(') &gt; 0) alias = alias.substring(0, alias.indexOf('('));</span>
+<span class="nc" id="L1032">			String converted = sqlStatement.replaceFirst(&quot;\\s&quot;+alias+&quot;\\s&quot;, &quot; &quot;);</span>
+<span class="nc" id="L1033">			converted = converted.replaceAll(&quot;\\b&quot;+alias+&quot;\\.&quot;, table+&quot;.&quot;);</span>
+<span class="nc" id="L1034">			converted = converted.replaceAll(&quot;[+]&quot;+alias+&quot;\\.&quot;, &quot;+&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1035">			converted = converted.replaceAll(&quot;[-]&quot;+alias+&quot;\\.&quot;, &quot;-&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1036">			converted = converted.replaceAll(&quot;[*]&quot;+alias+&quot;\\.&quot;, &quot;*&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1037">			converted = converted.replaceAll(&quot;[/]&quot;+alias+&quot;\\.&quot;, &quot;/&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1038">			converted = converted.replaceAll(&quot;[%]&quot;+alias+&quot;\\.&quot;, &quot;%&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1039">			converted = converted.replaceAll(&quot;[&lt;]&quot;+alias+&quot;\\.&quot;, &quot;&lt;&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1040">			converted = converted.replaceAll(&quot;[&gt;]&quot;+alias+&quot;\\.&quot;, &quot;&gt;&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1041">			converted = converted.replaceAll(&quot;[=]&quot;+alias+&quot;\\.&quot;, &quot;=&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1042">			converted = converted.replaceAll(&quot;[|]&quot;+alias+&quot;\\.&quot;, &quot;|&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1043">			converted = converted.replaceAll(&quot;[(]&quot;+alias+&quot;\\.&quot;, &quot;(&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1044">			converted = converted.replaceAll(&quot;[)]&quot;+alias+&quot;\\.&quot;, &quot;)&quot;+table+&quot;.&quot;);</span>
+<span class="nc" id="L1045">			return converted;</span>
+		} else {
+<span class="nc" id="L1047">			return sqlStatement;</span>
+		}
+	} // 
+	// end vpj-cd e-evolution 02/24/2005 PostgreSQL
+
+	// begin vpj-cd 08/02/2005
+	// ALTER TABLE AD_FieldGroup MODIFY IsTab CHAR(1) DEFAULT N;
+	// ALTER TABLE AD_FieldGroup ALTER COLUMN IsTab TYPE CHAR(1); ALTER TABLE
+	// AD_FieldGroup ALTER COLUMN SET DEFAULT 'N';
+	private String convertDDL(String sqlStatement) {
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">		if (sqlStatement.toUpperCase().indexOf(&quot;ALTER TABLE &quot;) == 0) {</span>
+<span class="nc" id="L1058">			String action = null;</span>
+<span class="nc" id="L1059">			int begin_col = -1;</span>
+<span class="nc bnc" id="L1060" title="All 2 branches missed.">			if (sqlStatement.toUpperCase().indexOf(&quot; MODIFY &quot;) &gt; 0) {</span>
+<span class="nc" id="L1061">				action = &quot; MODIFY &quot;;</span>
+<span class="nc" id="L1062">				begin_col = sqlStatement.toUpperCase().indexOf(&quot; MODIFY &quot;)</span>
+<span class="nc" id="L1063">						+ action.length();</span>
+<span class="nc bnc" id="L1064" title="All 2 branches missed.">			} else if (sqlStatement.toUpperCase().indexOf(&quot; ADD &quot;) &gt; 0) {</span>
+<span class="nc bnc" id="L1065" title="All 2 branches missed.">				if (sqlStatement.toUpperCase().indexOf(&quot; ADD CONSTRAINT &quot;) &lt; 0 &amp;&amp;</span>
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">						sqlStatement.toUpperCase().indexOf(&quot; ADD FOREIGN KEY &quot; ) &lt; 0 )</span>
+				{
+<span class="nc" id="L1068">					action = &quot; ADD &quot;;</span>
+<span class="nc" id="L1069">					begin_col = sqlStatement.toUpperCase().indexOf(&quot; ADD &quot;)</span>
+<span class="nc" id="L1070">							+ action.length();</span>
+				}
+			}
+
+			// System.out.println( &quot;MODIFY :&quot; +
+			// sqlStatement.toUpperCase().indexOf(&quot; MODIFY &quot;));
+			// System.out.println( &quot;ADD :&quot; +
+			// sqlStatement.toUpperCase().indexOf(&quot; ADD &quot;));
+			// System.out.println( &quot;begincolumn:&quot; + sqlStatement +
+			// &quot;begincolumn:&quot; + begin_col );
+
+<span class="nc bnc" id="L1081" title="All 2 branches missed.">			if (begin_col &lt; 0)</span>
+<span class="nc" id="L1082">				return sqlStatement;</span>
+
+<span class="nc" id="L1084">			int end_col = 0;</span>
+<span class="nc" id="L1085">			int begin_default = -1;</span>
+
+<span class="nc" id="L1087">			String column = null;</span>
+<span class="nc" id="L1088">			String type = null;</span>
+<span class="nc" id="L1089">			String defaultvalue = null;</span>
+<span class="nc" id="L1090">			String nullclause = null;</span>
+<span class="nc" id="L1091">			String DDL = null;</span>
+
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">			if (begin_col != -1) {</span>
+<span class="nc" id="L1094">				column = sqlStatement.substring(begin_col);</span>
+<span class="nc" id="L1095">				end_col = begin_col + column.indexOf(' ');</span>
+<span class="nc" id="L1096">				column = sqlStatement.substring(begin_col, end_col);</span>
+				// System.out.println(&quot; column:&quot; + column + &quot; begincolumn:&quot; +
+				// begin_col + &quot;en column:&quot; + end_col );
+				// System.out.println(&quot; type &quot; + sqlStatement.substring(end_col
+				// + 1));
+<span class="nc" id="L1101">				String rest = sqlStatement.substring(end_col + 1); </span>
+				
+<span class="nc bnc" id="L1103" title="All 2 branches missed.">				if (action.equals(&quot; ADD &quot;)) {</span>
+<span class="nc bnc" id="L1104" title="All 2 branches missed.">					if (rest.toUpperCase().indexOf(&quot; DEFAULT &quot;) != -1) {</span>
+<span class="nc" id="L1105">						String beforeDefault = rest.substring(0, rest.toUpperCase().indexOf(&quot; DEFAULT &quot;));</span>
+<span class="nc" id="L1106">						begin_default = rest.toUpperCase().indexOf(</span>
+<span class="nc" id="L1107">								&quot; DEFAULT &quot;) + 9;</span>
+<span class="nc" id="L1108">						defaultvalue = rest.substring(begin_default);</span>
+<span class="nc" id="L1109">						String endDefaultChar = &quot; &quot;;</span>
+<span class="nc" id="L1110">						int shift = 0;</span>
+<span class="nc bnc" id="L1111" title="All 2 branches missed.">						if (defaultvalue.startsWith(&quot;'&quot;)) {</span>
+<span class="nc" id="L1112">							endDefaultChar = &quot;'&quot;;</span>
+<span class="nc" id="L1113">							shift = 1;</span>
+						}
+<span class="nc" id="L1115">						int endDefault = defaultvalue.substring(shift).indexOf(endDefaultChar) + shift;</span>
+<span class="nc bnc" id="L1116" title="All 2 branches missed.">						if (endDefault &gt; -1+shift) {</span>
+<span class="nc" id="L1117">						    rest = defaultvalue.substring(endDefault+shift);</span>
+<span class="nc" id="L1118">						    defaultvalue = defaultvalue.substring(0, endDefault+shift);</span>
+<span class="nc" id="L1119">						} else {</span>
+<span class="nc" id="L1120">							rest = &quot;&quot;;</span>
+						}
+<span class="nc bnc" id="L1122" title="All 4 branches missed.">						if (defaultvalue.equalsIgnoreCase(&quot;NULL&quot;) || defaultvalue.equalsIgnoreCase(&quot;statement_timestamp()&quot;)) {</span>
+<span class="nc" id="L1123">							DDL = sqlStatement.substring(0, begin_col</span>
+<span class="nc" id="L1124">									- action.length())</span>
+									+ &quot; ADD COLUMN &quot;
+<span class="nc" id="L1126">									+ column</span>
+<span class="nc" id="L1127">									+ &quot; &quot; + beforeDefault.trim()</span>
+									+ &quot; DEFAULT &quot;
+<span class="nc" id="L1129">									+ defaultvalue.trim() + &quot; &quot; + rest.trim();</span>
+<span class="nc" id="L1130">						} else {</span>
+							// Check if default value is already quoted, no need to double quote
+<span class="nc bnc" id="L1132" title="All 4 branches missed.">							if(defaultvalue.startsWith(&quot;'&quot;) &amp;&amp; defaultvalue.endsWith(&quot;'&quot;))</span>
+							{
+<span class="nc" id="L1134">								DDL = sqlStatement.substring(0, begin_col</span>
+<span class="nc" id="L1135">									- action.length())</span>
+									+ &quot; ADD COLUMN &quot;
+<span class="nc" id="L1137">									+ column</span>
+<span class="nc" id="L1138">									+ &quot; &quot; + beforeDefault.trim()</span>
+									+ &quot; DEFAULT &quot;
+<span class="nc" id="L1140">									+ defaultvalue.trim() + &quot; &quot; + rest.trim();</span>
+<span class="nc" id="L1141">							}</span>
+							else
+							{
+<span class="nc" id="L1144">								DDL = sqlStatement.substring(0, begin_col</span>
+<span class="nc" id="L1145">										- action.length())</span>
+									+ &quot; ADD COLUMN &quot;
+<span class="nc" id="L1147">									+ column</span>
+<span class="nc" id="L1148">									+ &quot; &quot; + beforeDefault.trim()</span>
+									+ &quot; DEFAULT '&quot;
+<span class="nc" id="L1150">									+ defaultvalue.trim() + &quot;' &quot; + rest.trim();</span>
+							}
+						}
+<span class="nc" id="L1153">					} else {</span>
+<span class="nc" id="L1154">						DDL = sqlStatement</span>
+<span class="nc" id="L1155">							.substring(0, begin_col - action.length())</span>
+<span class="nc" id="L1156">							+ action + &quot;COLUMN &quot; + column + &quot; &quot; + rest.trim();</span>
+					}
+<span class="nc bnc" id="L1158" title="All 2 branches missed.">				} else if (action.equals(&quot; MODIFY &quot;))</span>
+				{
+<span class="nc" id="L1160">					rest = rest.trim();</span>
+<span class="nc bnc" id="L1161" title="All 4 branches missed.">					if (rest.toUpperCase().startsWith(&quot;NOT &quot;) || rest.toUpperCase().startsWith(&quot;NULL &quot;) </span>
+<span class="nc bnc" id="L1162" title="All 4 branches missed.">							|| rest.toUpperCase().equals(&quot;NULL&quot;) || rest.toUpperCase().equals(&quot;NOT NULL&quot;))</span>
+					{
+<span class="nc" id="L1164">						type = null;</span>
+<span class="nc" id="L1165">					}</span>
+					else 
+					{
+<span class="nc" id="L1168">						int typeEnd = rest.indexOf(' ');</span>
+<span class="nc bnc" id="L1169" title="All 2 branches missed.">						type = typeEnd &gt; 0 ? rest.substring(0, typeEnd).trim() : rest;</span>
+<span class="nc bnc" id="L1170" title="All 2 branches missed.">						rest = typeEnd &gt; 0 ? rest.substring(typeEnd) : &quot;&quot;;</span>
+					}
+
+<span class="nc bnc" id="L1173" title="All 2 branches missed.">					if (rest.toUpperCase().indexOf(&quot; DEFAULT &quot;) != -1) {</span>
+<span class="nc" id="L1174">						begin_default = rest.toUpperCase().indexOf(</span>
+<span class="nc" id="L1175">								&quot; DEFAULT &quot;) + 9;</span>
+<span class="nc" id="L1176">						defaultvalue = rest.substring(begin_default);</span>
+<span class="nc" id="L1177">						String endDefaultChar = &quot; &quot;;</span>
+<span class="nc" id="L1178">						int shift = 0;</span>
+<span class="nc bnc" id="L1179" title="All 2 branches missed.">						if (defaultvalue.startsWith(&quot;'&quot;)) {</span>
+<span class="nc" id="L1180">							endDefaultChar = &quot;'&quot;;</span>
+<span class="nc" id="L1181">							shift = 1;</span>
+						}
+<span class="nc" id="L1183">						int endDefault = defaultvalue.substring(shift).indexOf(endDefaultChar) + shift;</span>
+<span class="nc bnc" id="L1184" title="All 2 branches missed.">						if (endDefault &gt; -1+shift) {</span>
+<span class="nc" id="L1185">						    rest = defaultvalue.substring(endDefault+shift);</span>
+<span class="nc" id="L1186">						    defaultvalue = defaultvalue.substring(0, endDefault+shift);</span>
+<span class="nc" id="L1187">						} else {</span>
+<span class="nc" id="L1188">							rest = &quot;&quot;;</span>
+						}
+						// Check if default value is already quoted
+<span class="nc" id="L1191">						defaultvalue = defaultvalue.trim();</span>
+<span class="nc bnc" id="L1192" title="All 4 branches missed.">						if(defaultvalue.startsWith(&quot;'&quot;) &amp;&amp; defaultvalue.endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1193">							defaultvalue = defaultvalue.substring(1, defaultvalue.length() - 1);</span>
+						
+<span class="nc bnc" id="L1195" title="All 4 branches missed.">						if (rest != null &amp;&amp; rest.toUpperCase().indexOf(&quot;NOT NULL&quot;) &gt;= 0)</span>
+<span class="nc" id="L1196">							nullclause = &quot;NOT NULL&quot;;</span>
+<span class="nc bnc" id="L1197" title="All 4 branches missed.">						else if (rest != null &amp;&amp; rest.toUpperCase().indexOf(&quot;NULL&quot;) &gt;= 0)</span>
+<span class="nc" id="L1198">							nullclause = &quot;NULL&quot;;</span>
+							
+						// return DDL;
+<span class="nc" id="L1201">					}</span>
+<span class="nc bnc" id="L1202" title="All 4 branches missed.">					else if ( rest != null &amp;&amp; rest.toUpperCase().indexOf(&quot;NOT NULL&quot;) &gt;= 0 ) {</span>
+<span class="nc" id="L1203">						nullclause = &quot;NOT NULL&quot;;</span>
+						
+<span class="nc" id="L1205">					}</span>
+<span class="nc bnc" id="L1206" title="All 4 branches missed.">					else if ( rest != null &amp;&amp; rest.toUpperCase().indexOf(&quot;NULL&quot;) &gt;= 0) {</span>
+<span class="nc" id="L1207">						nullclause = &quot;NULL&quot;;</span>
+						
+					}
+
+<span class="nc" id="L1211">					DDL = &quot;INSERT INTO t_alter_column values('&quot;;</span>
+<span class="nc" id="L1212">					String tableName = sqlStatement.substring(0, begin_col - action.length());</span>
+<span class="nc" id="L1213">					tableName = tableName.toUpperCase().replace(&quot;ALTER TABLE&quot;, &quot;&quot;);</span>
+<span class="nc" id="L1214">					tableName = tableName.trim().toLowerCase();</span>
+<span class="nc" id="L1215">					DDL = DDL + tableName + &quot;','&quot; + column + &quot;',&quot;;</span>
+<span class="nc bnc" id="L1216" title="All 2 branches missed.">					if (type != null)</span>
+<span class="nc" id="L1217">						DDL = DDL + &quot;'&quot; + type +&quot;',&quot;;</span>
+					else
+<span class="nc" id="L1219">						DDL = DDL + &quot;null,&quot;;</span>
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">					if (nullclause != null)</span>
+<span class="nc" id="L1221">						DDL = DDL + &quot;'&quot; + nullclause + &quot;',&quot;;</span>
+					else
+<span class="nc" id="L1223">						DDL = DDL + &quot;null,&quot;;</span>
+<span class="nc bnc" id="L1224" title="All 2 branches missed.">					if (defaultvalue != null)</span>
+<span class="nc" id="L1225">						DDL = DDL + &quot;'&quot; + defaultvalue + &quot;'&quot;;</span>
+					else
+<span class="nc" id="L1227">						DDL = DDL + &quot;null&quot;;</span>
+<span class="nc" id="L1228">					DDL = DDL + &quot;)&quot;;					</span>
+				}
+<span class="nc" id="L1230">				return DDL;</span>
+			}
+		}
+
+<span class="nc" id="L1234">		return sqlStatement;</span>
+	}
+
+	/**
+	 * For JSON columns Oracle uses CLOB ... CONSTRAINT ... CHECK IS JSON
+	 * while oracle uses JSONB, no constraint
+	 * @param statement
+	 * @return
+	 */
+	private String convertAddJson(String statement) {
+<span class="nc bnc" id="L1244" title="All 2 branches missed.">		if (statement.toUpperCase().matches(&quot;.*\\bCLOB\\b.*\\bCONSTRAINT\\b.*CHECK\\b.*\\bIS JSON\\).*&quot;)) {</span>
+			// remove the CONSTRAINT ... IS JSON part
+<span class="nc" id="L1246">			statement = statement.replaceAll(&quot;(?i)\\bCONSTRAINT\\b.*CHECK\\b.*\\(.*\\bIS JSON\\)&quot;, &quot;&quot;);</span>
+			// change type CLOB to JSONB
+<span class="nc" id="L1248">			statement = statement.replaceAll(&quot;(?i)\\bCLOB\\b&quot;, &quot;JSONB&quot;);</span>
+		}
+<span class="nc" id="L1250">		return statement;</span>
+	}
+
+} // Convert
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

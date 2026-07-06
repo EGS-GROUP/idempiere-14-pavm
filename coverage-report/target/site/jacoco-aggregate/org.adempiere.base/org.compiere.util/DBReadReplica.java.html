@@ -1,0 +1,370 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DBReadReplica.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">DBReadReplica.java</span></div><h1>DBReadReplica.java</h1><pre class="source lang-java linenums">/**********************************************************************
+* Copyright (C) Contributors                                          *
+*                                                                     *
+* This program is free software; you can redistribute it and/or       *
+* modify it under the terms of the GNU General Public License         *
+* as published by the Free Software Foundation; either version 2      *
+* of the License, or (at your option) any later version.              *
+*                                                                     *
+* This program is distributed in the hope that it will be useful,     *
+* but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+* GNU General Public License for more details.                        *
+*                                                                     *
+* You should have received a copy of the GNU General Public License   *
+* along with this program; if not, write to the Free Software         *
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+* MA 02110-1301, USA.                                                 *
+*                                                                     *
+* Contributors:                                                       *
+* - Trek Global                                                       *
+* - Carlos Ruiz - globalqss                                           *
+**********************************************************************/
+package org.compiere.util;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MSystem;
+
+/**
+ * Support class for read only replica DB
+ */
+<span class="nc" id="L44">public class DBReadReplica {</span>
+
+<span class="nc" id="L46">	private static String m_user = null;</span>
+<span class="nc" id="L47">	private static String m_pass = null;</span>
+	final private static String sqlValidateSync = &quot;SELECT lastupdate FROM dbreplicasyncverifier&quot;;
+	final private static String sqlUpdateSync = &quot;UPDATE dbreplicasyncverifier SET lastupdate=getDate()&quot;;
+	final private static String sqlValidateDBAddress = &quot;SELECT DBAddress FROM AD_System&quot;;
+<span class="nc" id="L51">	private volatile static int shift = 0; // for load balancing between different replicas</span>
+
+	/**	Logger							*/
+<span class="nc" id="L54">	private static CLogger			log = CLogger.getCLogger (DBReadReplica.class);</span>
+
+	/**
+	 *	Prepare Normal Read Replica Statement
+	 *  @param sql sql statement
+	 *  @param resultSetType - ResultSet.TYPE_FORWARD_ONLY, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.TYPE_SCROLL_SENSITIVE
+	 *  @param resultSetConcurrency - ResultSet.CONCUR_READ_ONLY or ResultSet.CONCUR_UPDATABLE
+	 * 	@param trxName transaction
+	 *  @return Prepared Statement (from replica if possible, otherwise null)
+	 *
+	 *  @TODO: Add profiles fast and slow for other read replica statements
+	 * 
+	 */
+	public static PreparedStatement prepareNormalReadReplicaStatement(String sql, int resultSetType, int resultSetConcurrency, String trxName) {
+<span class="nc" id="L68">		Connection conn = getConnectionRO();</span>
+<span class="nc" id="L69">		PreparedStatement statementToReturn = null;</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">		if (conn != null) {</span>
+			try {
+<span class="nc" id="L72">				sql = DB.getDatabase().convertStatement(sql);</span>
+<span class="nc" id="L73">				statementToReturn = conn.prepareStatement(sql, resultSetType, resultSetConcurrency);</span>
+<span class="nc" id="L74">			} catch (SQLException e) {</span>
+<span class="nc" id="L75">				log.warning(&quot;Error preparing statement in replica -&gt; SQL = &quot; + sql);</span>
+<span class="nc" id="L76">				statementToReturn = null;</span>
+<span class="nc" id="L77">				throw new AdempiereException(e);</span>
+			}
+		}
+<span class="nc" id="L80">		return statementToReturn;</span>
+	}
+
+	private static Timestamp getReplicaVerificationTimestamp(Connection conn) {
+<span class="nc" id="L84">		PreparedStatement stVerifySync = null;</span>
+<span class="nc" id="L85">		ResultSet rsVerifySync = null;</span>
+<span class="nc" id="L86">		Timestamp replicaTs = null;</span>
+		try {
+<span class="nc" id="L88">			stVerifySync = conn.prepareStatement(sqlValidateSync);</span>
+<span class="nc" id="L89">			rsVerifySync = stVerifySync.executeQuery();</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">			if (rsVerifySync.next())</span>
+<span class="nc" id="L91">				replicaTs = rsVerifySync.getTimestamp(&quot;lastupdate&quot;);</span>
+<span class="nc" id="L92">		} catch (SQLException e) {</span>
+<span class="nc" id="L93">			replicaTs = null;</span>
+		} finally {
+<span class="nc" id="L95">			DB.close(rsVerifySync, stVerifySync);</span>
+		}
+<span class="nc" id="L97">		return replicaTs;</span>
+	}
+
+	private static String getReplicaDBAddress(Connection conn) {
+<span class="nc" id="L101">		PreparedStatement stVerifyAddr = null;</span>
+<span class="nc" id="L102">		ResultSet rsVerifyAddr = null;</span>
+<span class="nc" id="L103">		String dbAddr = null;</span>
+		try {
+<span class="nc" id="L105">			stVerifyAddr = conn.prepareStatement(sqlValidateDBAddress);</span>
+<span class="nc" id="L106">			rsVerifyAddr = stVerifyAddr.executeQuery();</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			if (rsVerifyAddr.next())</span>
+<span class="nc" id="L108">				dbAddr = rsVerifyAddr.getString(&quot;DBAddress&quot;);</span>
+<span class="nc" id="L109">		} catch (SQLException e) {</span>
+<span class="nc" id="L110">			dbAddr = null;</span>
+		} finally {
+<span class="nc" id="L112">			DB.close(rsVerifyAddr, stVerifyAddr);</span>
+		}
+<span class="nc" id="L114">		return dbAddr;</span>
+	}
+
+	private static Connection tryConnect(String replicaURL) {
+		// open connection to replica
+<span class="nc" id="L119">		Connection conn = null;</span>
+		try {
+<span class="nc" id="L121">			conn = DB.getDatabase(replicaURL).getDriverConnection(replicaURL, m_user, m_pass);</span>
+<span class="nc" id="L122">			conn.setReadOnly(true);</span>
+<span class="nc" id="L123">		} catch (SQLException e) {</span>
+<span class="nc" id="L124">			log.warning(&quot;Could not get a connection to &quot; + replicaURL + &quot;, cause = &quot; + e.getLocalizedMessage());</span>
+<span class="nc" id="L125">			conn = null;</span>
+		}
+<span class="nc" id="L127">		return conn;</span>
+	}
+
+	private static Timestamp setMasterVerificationTimestamp() {
+		// update time in master database to verify synchronization of replicas
+<span class="nc" id="L132">		Timestamp lastTs = null;</span>
+		try {
+<span class="nc" id="L134">			DB.executeUpdateEx(sqlUpdateSync, null);</span>
+<span class="nc" id="L135">			lastTs = DB.getSQLValueTSEx(null, sqlValidateSync);</span>
+<span class="nc" id="L136">		} catch (DBException e1) {</span>
+<span class="nc" id="L137">			log.warning(&quot;Could not sync dbreplicasyncverifier, cause = &quot; + e1.getLocalizedMessage());</span>
+<span class="nc" id="L138">			lastTs = null;</span>
+		}
+<span class="nc" id="L140">		return lastTs;</span>
+	}
+
+	public static void closeReadReplicaStatement(Statement st) {
+		// close the connection associated to the statement
+		try {
+<span class="nc" id="L146">			st.getConnection().close();</span>
+<span class="nc" id="L147">		} catch (SQLException e) {</span>
+<span class="nc" id="L148">			log.warning(&quot;Error closing the read replica statement, cause = &quot; + e.getLocalizedMessage());</span>
+		}
+<span class="nc" id="L150">	}</span>
+
+	/**
+	 *  Set Attributes from String (pares toStringLong())
+	 *  @param attributes attributes
+	 */
+	private static void setUserPass() {
+<span class="nc bnc" id="L157" title="All 4 branches missed.">		if (m_user != null || m_pass != null)</span>
+<span class="nc" id="L158">			return;</span>
+<span class="nc" id="L159">		String attributes = Ini.getProperty (Ini.P_CONNECTION);</span>
+		try {
+<span class="nc" id="L161">			attributes = attributes.substring(attributes.indexOf(&quot;[&quot;)+1, attributes.length() - 1);</span>
+<span class="nc" id="L162">			String[] pairs= attributes.split(&quot;[,]&quot;);</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">			for(String pair : pairs)</span>
+			{
+<span class="nc" id="L165">				String[] pairComponents = pair.split(&quot;[=]&quot;);</span>
+<span class="nc" id="L166">				String key = pairComponents[0];</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">				String value = pairComponents.length == 2 ? unescape(pairComponents[1]) : &quot;&quot;;</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">				if (&quot;UID&quot;.equalsIgnoreCase(key)) {</span>
+<span class="nc" id="L169">					m_user = value;</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">				} else if (&quot;PWD&quot;.equalsIgnoreCase(key)) {</span>
+<span class="nc" id="L171">					m_pass = value;</span>
+				}
+			}
+<span class="nc bnc" id="L174" title="All 4 branches missed.">			if (m_pass == null &amp;&amp; MSystem.isSecureProps())</span>
+<span class="nc" id="L175">				m_pass = Ini.getVar(&quot;ADEMPIERE_DB_PASSWORD&quot;);</span>
+<span class="nc" id="L176">		} catch (Exception e) {</span>
+<span class="nc" id="L177">			log.log(Level.SEVERE, attributes + &quot; - &quot; + e.toString (), e);</span>
+		}
+<span class="nc" id="L179">	}	//  setAttributes</span>
+
+	private static String unescape(String value) {
+<span class="nc" id="L182">		value = value.replace(&quot;&amp;eq;&quot;, &quot;=&quot;);</span>
+<span class="nc" id="L183">		value = value.replace(&quot;&amp;comma;&quot;, &quot;,&quot;);</span>
+<span class="nc" id="L184">		return value;</span>
+	}
+
+	/**
+	 * URL connection class for DB Read Replica
+	 *
+	 */
+	private static class URLReplicaConnection implements Comparable&lt;URLReplicaConnection&gt; {
+
+		private String replicaURL;
+		private int index;
+<span class="nc" id="L195">		private boolean usable = true;</span>
+<span class="nc" id="L196">		private Connection conn = null;</span>
+
+<span class="nc" id="L198">		public URLReplicaConnection(String replicaURL, int index) {</span>
+<span class="nc" id="L199">			this.replicaURL = replicaURL;</span>
+<span class="nc" id="L200">			this.index = index;</span>
+<span class="nc" id="L201">		}</span>
+
+		public String getReplicaURL() {
+<span class="nc" id="L204">			return replicaURL;</span>
+		}
+
+		public boolean isUsable() {
+<span class="nc" id="L208">			return usable;</span>
+		}
+
+		public void setUsable(boolean usable) {
+<span class="nc" id="L212">			this.usable = usable;</span>
+<span class="nc" id="L213">		}</span>
+
+		public Connection getConnection() {
+<span class="nc" id="L216">			return conn;</span>
+		}
+
+		public void setConnection(Connection conn) {
+<span class="nc" id="L220">			this.conn = conn;</span>
+<span class="nc" id="L221">		}</span>
+
+		@Override
+		public int compareTo(URLReplicaConnection o) {
+<span class="nc bnc" id="L225" title="All 2 branches missed.">			if (index &gt; o.index)</span>
+<span class="nc" id="L226">				return 1;</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">			else if (index &lt; o.index)</span>
+<span class="nc" id="L228">				return -1;</span>
+<span class="nc" id="L229">			return 0;</span>
+		}
+
+		@Override
+		public String toString() {
+<span class="nc" id="L234">			return &quot;replicaURL=&quot; + replicaURL</span>
+<span class="nc" id="L235">					+ &quot; index=&quot; + index</span>
+<span class="nc" id="L236">					+ &quot; usable=&quot; + usable</span>
+<span class="nc" id="L237">					+ &quot; connection=&quot; + conn;</span>
+		}
+
+	}
+
+	/**
+	 * Get read only connection from replica DB
+	 * @return connection
+	 */
+	public static Connection getConnectionRO() {
+<span class="nc" id="L247">		String replicaURLsConfig = MSysConfig.getValue(MSysConfig.DB_READ_REPLICA_URLS); // list of JDBC URLs separated by |</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">		if (Util.isEmpty(replicaURLsConfig, true))</span>
+<span class="nc" id="L249">			return null;</span>
+<span class="nc" id="L250">		int DB_READ_REPLICA_NORMAL_TIMEOUT_IN_MILLISECONDS = MSysConfig.getIntValue(MSysConfig.DB_READ_REPLICA_NORMAL_TIMEOUT_IN_MILLISECONDS, 5000); </span>
+<span class="nc" id="L251">		int DB_READ_REPLICA_NORMAL_MAX_ITERATIONS = MSysConfig.getIntValue(MSysConfig.DB_READ_REPLICA_NORMAL_MAX_ITERATIONS, 3);</span>
+
+<span class="nc" id="L253">		setUserPass();</span>
+
+<span class="nc" id="L255">		Timestamp lastTs = setMasterVerificationTimestamp();</span>
+<span class="nc" id="L256">		String masterDBAddress = MSystem.get(Env.getCtx()).getDBAddress();</span>
+
+<span class="nc" id="L258">		List&lt;URLReplicaConnection&gt; urlConnList = new ArrayList&lt;URLReplicaConnection&gt;();</span>
+
+<span class="nc" id="L260">		String[] replicaURLs = replicaURLsConfig.split(&quot;\\|&quot;);</span>
+<span class="nc" id="L261">		int index = 0;</span>
+<span class="nc" id="L262">		int length = replicaURLs.length;</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">		for (int i = 0; i &lt; length; i++) {</span>
+<span class="nc" id="L264">			String replicaURL = replicaURLs[i].trim();</span>
+<span class="nc" id="L265">			index = (i + shift) % length;</span>
+<span class="nc" id="L266">			URLReplicaConnection urc = new URLReplicaConnection(replicaURL, index);</span>
+<span class="nc" id="L267">			urlConnList.add(urc);</span>
+		}
+<span class="nc" id="L269">		shift++;</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">		if (shift &gt;= length)</span>
+<span class="nc" id="L271">			shift = 0;</span>
+
+		// sort URLs by index - for load balancing
+<span class="nc" id="L274">		Collections.sort(urlConnList);</span>
+
+<span class="nc" id="L276">		String usedReplicaURL = null;</span>
+<span class="nc" id="L277">		Connection retConn = null;</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">		for (int i = 0; i &lt; DB_READ_REPLICA_NORMAL_MAX_ITERATIONS; i++) {</span>
+
+<span class="nc bnc" id="L280" title="All 2 branches missed.">			for (URLReplicaConnection urlConn : urlConnList) {</span>
+
+<span class="nc bnc" id="L282" title="All 2 branches missed.">				if (! urlConn.isUsable())</span>
+<span class="nc" id="L283">					continue; // next urlConn</span>
+
+<span class="nc" id="L285">				String replicaURL = urlConn.getReplicaURL();</span>
+
+<span class="nc" id="L287">				Connection conn = urlConn.getConnection();</span>
+<span class="nc bnc" id="L288" title="All 4 branches missed.">				if (conn == null &amp;&amp; urlConn.isUsable()) {</span>
+<span class="nc" id="L289">					conn = tryConnect(replicaURL);</span>
+				}
+<span class="nc bnc" id="L291" title="All 2 branches missed.">				if (conn == null) {</span>
+<span class="nc" id="L292">					urlConn.setUsable(false);</span>
+<span class="nc" id="L293">					continue; // next urlConn</span>
+				}
+<span class="nc" id="L295">				urlConn.setConnection(conn);</span>
+
+<span class="nc" id="L297">				String replicaDBAddress = getReplicaDBAddress(conn);</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">				if (!masterDBAddress.equals(replicaDBAddress)) {</span>
+<span class="nc" id="L299">					log.warning(&quot;Replica DB Address doesn't match with master DB Address -&gt; &quot; + replicaURL);</span>
+<span class="nc" id="L300">					urlConn.setUsable(false);</span>
+<span class="nc" id="L301">					continue; // next urlConn</span>
+				}
+
+<span class="nc" id="L304">				Timestamp replicaTs = getReplicaVerificationTimestamp(conn);</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">				if (replicaTs == null) {</span>
+<span class="nc" id="L306">					log.warning(&quot;Could not get replica verification timestamp -&gt; &quot; + replicaURL);</span>
+<span class="nc" id="L307">					urlConn.setUsable(false);</span>
+<span class="nc" id="L308">					continue; // next urlConn</span>
+				}
+
+<span class="nc bnc" id="L311" title="All 2 branches missed.">				if (replicaTs.before(lastTs)) {</span>
+					// not usable yet
+<span class="nc" id="L313">					continue; // next urlConn</span>
+				}
+<span class="nc bnc" id="L315" title="All 2 branches missed.">				if (conn != null) {</span>
+<span class="nc" id="L316">					retConn = conn;</span>
+<span class="nc" id="L317">					usedReplicaURL = urlConn.getReplicaURL();</span>
+<span class="nc" id="L318">					break; // break urlConnList</span>
+				}
+			} // end for urlConnList
+
+<span class="nc bnc" id="L322" title="All 2 branches missed.">			if (retConn != null) {</span>
+<span class="nc" id="L323">				break; // break iterations</span>
+			}
+
+<span class="nc" id="L326">			boolean noMoreUsables = true;</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">			for (URLReplicaConnection urlConn : urlConnList) {</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">				if (urlConn.isUsable()) {</span>
+<span class="nc" id="L329">					noMoreUsables = false;</span>
+<span class="nc" id="L330">					break;</span>
+				}
+			}
+
+<span class="nc bnc" id="L334" title="All 2 branches missed.">			if (noMoreUsables)</span>
+<span class="nc" id="L335">				break;</span>
+
+<span class="nc bnc" id="L337" title="All 2 branches missed.">			if (i &lt; DB_READ_REPLICA_NORMAL_MAX_ITERATIONS-1) {</span>
+				try {
+<span class="nc" id="L339">					log.warning(&quot;Waiting &quot; + DB_READ_REPLICA_NORMAL_TIMEOUT_IN_MILLISECONDS + &quot; milliseconds for replication to sync&quot;);</span>
+<span class="nc" id="L340">					Thread.sleep(DB_READ_REPLICA_NORMAL_TIMEOUT_IN_MILLISECONDS);</span>
+<span class="nc" id="L341">				} catch (InterruptedException e) {</span>
+					;
+				}
+			}
+		} // end for iterations
+
+<span class="nc bnc" id="L347" title="All 2 branches missed.">		if (retConn == null)</span>
+<span class="nc" id="L348">			log.warning(&quot;Abandoning replicas: none usable or max wait reached without sync&quot;);</span>
+
+		// close any connection not used in the statement to return
+<span class="nc bnc" id="L351" title="All 2 branches missed.">		for (URLReplicaConnection urlConn : urlConnList) {</span>
+<span class="nc" id="L352">			Connection conn = urlConn.getConnection();</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">			if (conn == null)</span>
+<span class="nc" id="L354">				continue;</span>
+<span class="nc bnc" id="L355" title="All 4 branches missed.">			if (retConn != null &amp;&amp; retConn == conn)</span>
+<span class="nc" id="L356">				continue; // next connection</span>
+			try {
+<span class="nc" id="L358">				conn.close();</span>
+<span class="nc" id="L359">			} catch (SQLException e) {</span>
+<span class="nc" id="L360">				log.warning(&quot;Could not close connection statement on replica, URL = &quot; + urlConn.getReplicaURL() + &quot;, cause = &quot; + e.getLocalizedMessage());</span>
+			}
+		}
+
+<span class="nc bnc" id="L364" title="All 2 branches missed.">		if (retConn != null)</span>
+<span class="nc" id="L365">			log.warning(&quot;Using replica for connection, URL = &quot; + usedReplicaURL);</span>
+<span class="nc" id="L366">		return retConn;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

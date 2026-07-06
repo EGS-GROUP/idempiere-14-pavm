@@ -1,0 +1,664 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>RequestProcessor.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.server</a> &gt; <span class="el_source">RequestProcessor.java</span></div><h1>RequestProcessor.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.server;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.Properties;
+import java.util.StringTokenizer;
+import java.util.logging.Level;
+
+import org.compiere.model.MChangeRequest;
+import org.compiere.model.MClient;
+import org.compiere.model.MGroup;
+import org.compiere.model.MRequest;
+import org.compiere.model.MRequestProcessor;
+import org.compiere.model.MRequestProcessorLog;
+import org.compiere.model.MRequestProcessorRoute;
+import org.compiere.model.MStatus;
+import org.compiere.model.MUser;
+import org.compiere.util.DB;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+
+/**
+ *	Request Processor
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: RequestProcessor.java,v 1.3 2006/07/30 00:53:33 jjanke Exp $
+ */
+public class RequestProcessor extends AdempiereServer
+{
+	/**
+	 * 	RequestProcessor
+	 *	@param model model
+	 */
+	public RequestProcessor (MRequestProcessor model)
+	{
+<span class="nc" id="L54">		super (model, 30);	//	30 seconds delay</span>
+<span class="nc" id="L55">		m_model = model;</span>
+<span class="nc" id="L56">		m_client = MClient.get(model.getCtx(), model.getAD_Client_ID());</span>
+<span class="nc" id="L57">	}	//	RequestProcessor</span>
+	
+	/**	The Concrete Model			*/
+<span class="nc" id="L60">	protected MRequestProcessor	m_model = null;</span>
+	/**	Last Summary				*/
+<span class="nc" id="L62">	protected StringBuffer 		m_summary = new StringBuffer();</span>
+	/** Client onfo					*/
+<span class="nc" id="L64">	protected MClient 			m_client = null;</span>
+
+	/**************************************************************************
+	 * 	Do the actual Work
+	 */
+	protected void doWork()
+	{
+<span class="nc" id="L71">		m_summary = new StringBuffer();</span>
+		//
+<span class="nc" id="L73">		processEMail();</span>
+<span class="nc" id="L74">		findSalesRep ();</span>
+<span class="nc" id="L75">		processStatus();</span>
+<span class="nc" id="L76">		processRequests ();</span>
+<span class="nc" id="L77">		processECR();</span>
+		//
+<span class="nc" id="L79">		int no = m_model.deleteLog();</span>
+<span class="nc" id="L80">		m_summary.append(&quot;Logs deleted=&quot;).append(no);</span>
+		//
+<span class="nc" id="L82">		MRequestProcessorLog pLog = new MRequestProcessorLog(m_model, m_summary.toString());</span>
+<span class="nc" id="L83">		pLog.setReference(&quot;#&quot; + String.valueOf(p_runCount) </span>
+<span class="nc" id="L84">			+ &quot; - &quot; + TimeUtil.formatElapsed(new Timestamp(p_startWork)));</span>
+<span class="nc" id="L85">		pLog.saveEx();</span>
+<span class="nc" id="L86">	}	//	doWork</span>
+
+	
+	/**************************************************************************
+	 *  Process requests.
+	 *  Scheduled - are they due?
+	 */
+	protected void processRequests ()
+	{
+		/**
+		 *  Due Requests
+		 */
+<span class="nc" id="L98">		String sql = &quot;SELECT * FROM R_Request &quot;</span>
+			+ &quot;WHERE DueType='&quot; + MRequest.DUETYPE_Scheduled + &quot;' AND Processed='N'&quot;
+			+ &quot; AND DateNextAction &lt; getDate()&quot;
+			+ &quot; AND AD_Client_ID=?&quot;; 
+<span class="nc bnc" id="L102" title="All 2 branches missed.">		if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L103">			sql += &quot; AND R_RequestType_ID=?&quot;;</span>
+<span class="nc" id="L104">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L105">		ResultSet rs = null;</span>
+<span class="nc" id="L106">		int count = 0;</span>
+<span class="nc" id="L107">		int countEMails = 0;</span>
+		try
+		{
+<span class="nc" id="L110">			pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L111">			pstmt.setInt (1, m_model.getAD_Client_ID());</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">			if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L113">				pstmt.setInt(2, m_model.getR_RequestType_ID());</span>
+<span class="nc" id="L114">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L117">				MRequest request = new MRequest (getCtx(), rs, null);</span>
+<span class="nc" id="L118">				request.setDueType();</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">				if (request.isDue())</span>
+				{
+<span class="nc bnc" id="L121" title="All 2 branches missed.">					if (request.getRequestType().isEMailWhenDue())</span>
+					{
+<span class="nc bnc" id="L123" title="All 2 branches missed.">						if (sendEmail (request, &quot;RequestDue&quot;))</span>
+						{
+<span class="nc" id="L125">							request.setDateLastAlert();</span>
+<span class="nc" id="L126">							countEMails++;</span>
+						}
+					}
+<span class="nc" id="L129">					request.saveEx();</span>
+<span class="nc" id="L130">					count++;</span>
+				}
+			}
+<span class="nc" id="L133">		}</span>
+<span class="nc" id="L134">		catch (Exception e)</span>
+		{
+<span class="nc" id="L136">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L140">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L141">			rs = null;</span>
+<span class="nc" id="L142">			pstmt = null;</span>
+		}
+<span class="nc" id="L144">		m_summary.append(&quot;New Due #&quot;).append(count);</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">		if (countEMails &gt; 0)</span>
+<span class="nc" id="L146">			m_summary.append(&quot; (&quot;).append(countEMails).append(&quot; EMail)&quot;);</span>
+<span class="nc" id="L147">		m_summary.append (&quot; - &quot;);</span>
+		
+		/**
+		 *  Overdue Requests.
+		 *  Due Requests - are they overdue?
+		 */
+<span class="nc" id="L153">		sql = &quot;SELECT * FROM R_Request r &quot;</span>
+			+ &quot;WHERE r.DueType='&quot; + MRequest.DUETYPE_Due + &quot;' AND r.Processed='N'&quot;
+			+ &quot; AND AD_Client_ID=?&quot;
+			+ &quot; AND EXISTS (SELECT * FROM R_RequestType rt &quot;
+				+ &quot;WHERE r.R_RequestType_ID=rt.R_RequestType_ID&quot;
+				+ &quot; AND (r.DateNextAction+rt.DueDateTolerance) &lt; getDate())&quot;;
+<span class="nc bnc" id="L159" title="All 2 branches missed.">		if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L160">			sql += &quot; AND r.R_RequestType_ID=?&quot;;</span>
+<span class="nc" id="L161">		count = 0;</span>
+<span class="nc" id="L162">		countEMails = 0;</span>
+		try
+		{
+<span class="nc" id="L165">			pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L166">			pstmt.setInt (1, m_model.getAD_Client_ID());</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">			if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L168">				pstmt.setInt(2, m_model.getR_RequestType_ID());</span>
+<span class="nc" id="L169">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L172">				MRequest request = new MRequest (getCtx(), rs, null);</span>
+<span class="nc" id="L173">				request.setDueType();</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">				if (request.isOverdue())</span>
+				{
+<span class="nc bnc" id="L176" title="All 2 branches missed.">					if (request.getRequestType().isEMailWhenOverdue()</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">						&amp;&amp; !TimeUtil.isSameDay(request.getDateLastAlert(), null))</span>
+					{
+<span class="nc bnc" id="L179" title="All 2 branches missed.">						if (sendEmail (request, &quot;RequestDue&quot;))</span>
+						{
+<span class="nc" id="L181">							request.setDateLastAlert();</span>
+<span class="nc" id="L182">							countEMails++;</span>
+						}
+					}
+<span class="nc" id="L185">					request.saveEx();</span>
+<span class="nc" id="L186">					count++;</span>
+				}
+			}
+<span class="nc" id="L189">		}</span>
+<span class="nc" id="L190">		catch (Exception e)</span>
+		{
+<span class="nc" id="L192">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L196">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L197">			rs = null;</span>
+<span class="nc" id="L198">			pstmt = null;</span>
+		}
+<span class="nc" id="L200">		m_summary.append(&quot;New Overdue #&quot;).append(count);</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">		if (countEMails &gt; 0)</span>
+<span class="nc" id="L202">			m_summary.append(&quot; (&quot;).append(countEMails).append(&quot; EMail)&quot;);</span>
+<span class="nc" id="L203">		m_summary.append (&quot; - &quot;);</span>
+		
+		/**
+		 *  Send (over)due alerts
+		 */
+<span class="nc bnc" id="L208" title="All 2 branches missed.">		if (m_model.getOverdueAlertDays() &gt; 0)</span>
+		{
+<span class="nc" id="L210">			sql = &quot;SELECT * FROM R_Request &quot;</span>
+				+ &quot;WHERE Processed='N'&quot;
+				+ &quot; AND AD_Client_ID=?&quot;
+<span class="nc" id="L213">				+ &quot; AND (DateNextAction+&quot; + m_model.getOverdueAlertDays() + &quot;) &lt; getDate()&quot;</span>
+				+ &quot; AND (DateLastAlert IS NULL&quot;;
+<span class="nc bnc" id="L215" title="All 2 branches missed.">			if (m_model.getRemindDays() &gt; 0)</span>
+<span class="nc" id="L216">				sql += &quot; OR (DateLastAlert+&quot; + m_model.getRemindDays() </span>
+					+ &quot;) &lt; getDate()&quot;;
+<span class="nc" id="L218">			sql += &quot;)&quot;;</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">			if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L220">				sql += &quot; AND R_RequestType_ID=?&quot;;</span>
+<span class="nc" id="L221">			count = 0;</span>
+<span class="nc" id="L222">			countEMails = 0;</span>
+			try
+			{
+<span class="nc" id="L225">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L226">				pstmt.setInt(1, m_model.getAD_Client_ID());</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">				if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L228">					pstmt.setInt(2, m_model.getR_RequestType_ID());</span>
+<span class="nc" id="L229">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">				while (rs.next())</span>
+				{
+<span class="nc" id="L232">					MRequest request = new MRequest (getCtx(), rs, null);</span>
+<span class="nc" id="L233">					request.setDueType();</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">					if (request.getRequestType().isEMailWhenOverdue()</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">						&amp;&amp; (request.getDateLastAlert() == null</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">							|| !TimeUtil.isSameDay(request.getDateLastAlert(), null)))</span>
+					{
+<span class="nc bnc" id="L238" title="All 2 branches missed.">						if (sendEmail (request, &quot;RequestAlert&quot;))</span>
+						{
+<span class="nc" id="L240">							request.setDateLastAlert();</span>
+<span class="nc" id="L241">							countEMails++;</span>
+						}
+					}
+<span class="nc" id="L244">					request.saveEx();</span>
+<span class="nc" id="L245">					count++;</span>
+				}
+<span class="nc" id="L247">			}</span>
+<span class="nc" id="L248">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L250">				log.log(Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L254">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L255">				rs = null;</span>
+<span class="nc" id="L256">				pstmt = null;</span>
+			}
+<span class="nc" id="L258">			m_summary.append(&quot;Alerts #&quot;).append(count);</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">			if (countEMails &gt; 0)</span>
+<span class="nc" id="L260">				m_summary.append(&quot; (&quot;).append(countEMails).append(&quot; EMail)&quot;);</span>
+<span class="nc" id="L261">			m_summary.append (&quot; - &quot;);</span>
+		}	//	Overdue
+		
+		/**
+		 *  Escalate
+		 */
+<span class="nc bnc" id="L267" title="All 2 branches missed.">		if (m_model.getOverdueAssignDays() &gt; 0)</span>
+		{
+<span class="nc" id="L269">			sql = &quot;SELECT * FROM R_Request &quot;</span>
+				+ &quot;WHERE Processed='N'&quot;
+				+ &quot; AND AD_Client_ID=?&quot;
+				+ &quot; AND IsEscalated='N'&quot;
+<span class="nc" id="L273">				+ &quot; AND (DateNextAction+&quot; + m_model.getOverdueAssignDays() </span>
+					+ &quot;) &lt; getDate()&quot;;
+<span class="nc bnc" id="L275" title="All 2 branches missed.">			if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L276">				sql += &quot; AND R_RequestType_ID=?&quot;;</span>
+<span class="nc" id="L277">			count = 0;</span>
+<span class="nc" id="L278">			countEMails = 0;</span>
+			try
+			{
+<span class="nc" id="L281">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L282">				pstmt.setInt(1, m_model.getAD_Client_ID());</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">				if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L284">					pstmt.setInt(2, m_model.getR_RequestType_ID());</span>
+<span class="nc" id="L285">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">				while (rs.next())</span>
+				{
+<span class="nc" id="L288">					MRequest request = new MRequest (getCtx(), rs, null);</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">					if (escalate(request))</span>
+<span class="nc" id="L290">						count++;</span>
+				}
+<span class="nc" id="L292">			}</span>
+<span class="nc" id="L293">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L295">				log.log(Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L299">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L300">				rs = null;</span>
+<span class="nc" id="L301">				pstmt = null;</span>
+			}
+<span class="nc" id="L303">			m_summary.append(&quot;Escalated #&quot;).append(count).append(&quot; - &quot;);</span>
+		}	//	Esacalate
+		
+		/**
+		 *  Send inactivity alerts
+		 */
+<span class="nc bnc" id="L309" title="All 2 branches missed.">		if (m_model.getInactivityAlertDays() &gt; 0)</span>
+		{
+<span class="nc" id="L311">			sql = &quot;SELECT * FROM R_Request &quot;</span>
+				+ &quot;WHERE Processed='N'&quot;
+				+ &quot; AND AD_Client_ID=?&quot;
+<span class="nc" id="L314">				+ &quot; AND (Updated+&quot; + m_model.getInactivityAlertDays() + &quot;) &lt; getDate()&quot;</span>
+				+ &quot; AND (DateLastAlert IS NULL&quot;;
+<span class="nc bnc" id="L316" title="All 2 branches missed.">			if (m_model.getRemindDays() &gt; 0)</span>
+<span class="nc" id="L317">				sql += &quot; OR (DateLastAlert+&quot; + m_model.getRemindDays() </span>
+					+ &quot;) &lt; getDate()&quot;;
+<span class="nc" id="L319">			sql += &quot;)&quot;;</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">			if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L321">				sql += &quot; AND R_RequestType_ID=?&quot;;</span>
+<span class="nc" id="L322">			count = 0;</span>
+<span class="nc" id="L323">			countEMails = 0;</span>
+			try
+			{
+<span class="nc" id="L326">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L327">				pstmt.setInt(1, m_model.getAD_Client_ID());</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">				if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L329">					pstmt.setInt(2, m_model.getR_RequestType_ID());</span>
+<span class="nc" id="L330">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">				while (rs.next())</span>
+				{
+<span class="nc" id="L333">					MRequest request = new MRequest (getCtx(), rs, null);</span>
+<span class="nc" id="L334">					request.setDueType();</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">					if (request.getDateLastAlert() == null</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">						|| !TimeUtil.isSameDay(request.getDateLastAlert(), null))</span>
+					{
+<span class="nc bnc" id="L338" title="All 2 branches missed.">						if (sendEmail (request, &quot;RequestInactive&quot;))</span>
+						{
+<span class="nc" id="L340">							request.setDateLastAlert();</span>
+<span class="nc" id="L341">							countEMails++;</span>
+						}
+<span class="nc" id="L343">						request.saveEx();</span>
+<span class="nc" id="L344">						count++;</span>
+					}
+				}
+<span class="nc" id="L347">			}</span>
+<span class="nc" id="L348">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L350">				log.log(Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L354">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L355">				rs = null;</span>
+<span class="nc" id="L356">				pstmt = null;</span>
+			}
+<span class="nc" id="L358">			m_summary.append(&quot;Inactivity #&quot;).append(count);</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">			if (countEMails &gt; 0)</span>
+<span class="nc" id="L360">				m_summary.append(&quot; (&quot;).append(countEMails).append(&quot; EMail)&quot;);</span>
+<span class="nc" id="L361">			m_summary.append (&quot; - &quot;);</span>
+		}	//	Inactivity		
+<span class="nc" id="L363">	}	//  processRequests</span>
+
+	/**
+	 *  Send Alert EMail
+	 *  @param request request
+	 *  @param AD_Message message
+	 *  @return true if sent
+	 */
+	protected boolean sendEmail (MRequest request, String AD_Message)
+	{
+		//  Alert: Request {0} overdue
+<span class="nc" id="L374">		String subject = Msg.getMsg(m_client.getAD_Language(), AD_Message, </span>
+<span class="nc" id="L375">			new String[] {request.getDocumentNo()});</span>
+<span class="nc" id="L376">		return m_client.sendEMail(request.getSalesRep_ID(), </span>
+<span class="nc" id="L377">			subject, request.getSummary(), request.createPDF());</span>
+	}   //  sendAlert
+
+	/**
+	 *  Escalate
+	 *  @param request request
+	 * 	@return true if saved
+	 */
+	protected boolean escalate (MRequest request)
+	{
+		//  Get Supervisor
+<span class="nc" id="L388">		MUser supervisor = request.getSalesRep();	//	self</span>
+<span class="nc" id="L389">		int supervisor_ID = request.getSalesRep().getSupervisor_ID();</span>
+<span class="nc bnc" id="L390" title="All 4 branches missed.">		if (supervisor_ID == 0 &amp;&amp; m_model.getSupervisor_ID() != 0)</span>
+<span class="nc" id="L391">			supervisor_ID = m_model.getSupervisor_ID();</span>
+<span class="nc bnc" id="L392" title="All 4 branches missed.">		if (supervisor_ID != 0 &amp;&amp; supervisor_ID != request.getSalesRep_ID()) // IDEMPIERE-273</span>
+<span class="nc" id="L393">			supervisor = MUser.get(getCtx(), supervisor_ID);</span>
+		
+		//  Escalated: Request {0} to {1}
+<span class="nc" id="L396">		String subject = Msg.getMsg(m_client.getAD_Language(), &quot;RequestEscalate&quot;, </span>
+<span class="nc" id="L397">			new String[] {request.getDocumentNo(), supervisor.getName()});</span>
+<span class="nc" id="L398">		String to = request.getSalesRep().getEMail();</span>
+<span class="nc bnc" id="L399" title="All 4 branches missed.">		if (to == null || to.length() == 0)</span>
+<span class="nc" id="L400">			log.warning(&quot;SalesRep has no EMail - &quot; + request.getSalesRep());</span>
+		else
+<span class="nc" id="L402">			m_client.sendEMail(request.getSalesRep_ID(), </span>
+<span class="nc" id="L403">				subject, request.getSummary(), request.createPDF());</span>
+
+		//	Not the same - send mail to supervisor
+<span class="nc bnc" id="L406" title="All 2 branches missed.">		if (request.getSalesRep_ID() != supervisor.getAD_User_ID())</span>
+		{
+<span class="nc" id="L408">			to = supervisor.getEMail();</span>
+<span class="nc bnc" id="L409" title="All 4 branches missed.">			if (to == null || to.length() == 0)</span>
+<span class="nc" id="L410">				log.warning(&quot;Supervisor has no EMail - &quot; + supervisor);</span>
+			else
+<span class="nc" id="L412">				m_client.sendEMail(supervisor.getAD_User_ID(), </span>
+<span class="nc" id="L413">					subject, request.getSummary(), request.createPDF());</span>
+		}
+		
+		//  ----------------
+<span class="nc" id="L417">		request.setDueType();</span>
+<span class="nc" id="L418">		request.setIsEscalated(true);</span>
+<span class="nc" id="L419">		request.setResult(subject);</span>
+<span class="nc" id="L420">		return request.save();</span>
+	}   //  escalate
+
+
+	/**************************************************************************
+	 * 	Process Request Status
+	 */
+	protected void processStatus()
+	{
+<span class="nc" id="L429">		int count = 0;</span>
+		//	Requests with status with after timeout
+<span class="nc" id="L431">		String sql = &quot;SELECT * FROM R_Request r WHERE EXISTS (&quot;</span>
+			+ &quot;SELECT * FROM R_Status s &quot;
+			+ &quot;WHERE r.R_Status_ID=s.R_Status_ID&quot;
+			+ &quot; AND s.TimeoutDays &gt; 0 AND s.Next_Status_ID &gt; 0&quot;
+			+ &quot; AND r.DateLastAction+s.TimeoutDays &lt; getDate()&quot;
+			+ &quot;) AND r.AD_Client_ID = ? &quot;
+			+ &quot;ORDER BY R_Status_ID&quot;;
+<span class="nc" id="L438">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L439">		ResultSet rs = null;</span>
+<span class="nc" id="L440">		MStatus status = null;</span>
+<span class="nc" id="L441">		MStatus next = null;</span>
+		try
+		{
+<span class="nc" id="L444">			pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L445">			pstmt.setInt(1, m_model.getAD_Client_ID());</span>
+<span class="nc" id="L446">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L449">				MRequest r = new MRequest(getCtx(), rs, null);</span>
+				//	Get/Check Status
+<span class="nc bnc" id="L451" title="All 4 branches missed.">				if (status == null || status.getR_Status_ID() != r.getR_Status_ID())</span>
+<span class="nc" id="L452">					status = MStatus.get(getCtx(), r.getR_Status_ID());</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">				if (status.getTimeoutDays() &lt;= 0</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">					|| status.getNext_Status_ID() == 0)</span>
+<span class="nc" id="L455">					continue;</span>
+				//	Next Status
+<span class="nc bnc" id="L457" title="All 4 branches missed.">				if (next == null || next.getR_Status_ID() != status.getNext_Status_ID())</span>
+<span class="nc" id="L458">					next = MStatus.get(getCtx(), status.getNext_Status_ID());</span>
+				//
+<span class="nc" id="L460">				String result = Msg.getMsg(getCtx(), &quot;RequestStatusTimeout&quot;)</span>
+<span class="nc" id="L461">					+ &quot;: &quot; + status.getName() + &quot; -&gt; &quot; + next.getName();</span>
+<span class="nc" id="L462">				r.setResult(result);</span>
+<span class="nc" id="L463">				r.setR_Status_ID(status.getNext_Status_ID());</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">				if (r.save())</span>
+<span class="nc" id="L465">					count++;</span>
+			}
+<span class="nc" id="L467">		}</span>
+<span class="nc" id="L468">		catch (Exception e)</span>
+		{
+<span class="nc" id="L470">			log.log (Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L474">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L475">			rs = null;</span>
+<span class="nc" id="L476">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L479">		m_summary.append(&quot;Status Timeout #&quot;).append(count)</span>
+<span class="nc" id="L480">			.append(&quot; - &quot;);</span>
+<span class="nc" id="L481">	}	//	processStatus</span>
+	
+	/**
+	 * 	Create ECR
+	 */
+	protected void processECR()
+	{
+		//	Get Requests with Request Type-AutoChangeRequest and Group with info
+<span class="nc" id="L489">		String sql = &quot;SELECT * FROM R_Request r &quot;</span>
+			+ &quot;WHERE M_ChangeRequest_ID IS NULL&quot;
+			+ &quot; AND EXISTS (&quot;
+				+ &quot;SELECT * FROM R_RequestType rt &quot;
+				+ &quot;WHERE rt.R_RequestType_ID=r.R_RequestType_ID&quot;
+				+ &quot; AND rt.IsAutoChangeRequest='Y') &quot;
+			+ &quot; AND EXISTS (&quot;
+				+ &quot;SELECT * FROM R_Group g &quot;
+				+ &quot;WHERE g.R_Group_ID=r.R_Group_ID&quot;
+				+ &quot; AND (g.M_BOM_ID IS NOT NULL OR g.M_ChangeNotice_ID IS NOT NULL)	)&quot;
+			+ &quot; AND r.AD_CLient_ID = ? &quot;;
+		//
+<span class="nc" id="L501">		int count = 0;</span>
+<span class="nc" id="L502">		int failure = 0;</span>
+		//
+<span class="nc" id="L504">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L505">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L508">			pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L509">			pstmt.setInt(1, m_model.getAD_Client_ID());</span>
+<span class="nc" id="L510">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L511" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L513">				MRequest r = new MRequest (getCtx(), rs, null);</span>
+<span class="nc" id="L514">				MGroup rg = MGroup.get(getCtx(), r.getR_Group_ID());</span>
+<span class="nc" id="L515">				MChangeRequest ecr = new MChangeRequest (r, rg);</span>
+<span class="nc bnc" id="L516" title="All 2 branches missed.">				if (r.save())</span>
+				{
+<span class="nc" id="L518">					r.setM_ChangeRequest_ID(ecr.getM_ChangeRequest_ID());</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">					if (r.save())</span>
+<span class="nc" id="L520">						count++;</span>
+					else
+<span class="nc" id="L522">						failure++;</span>
+<span class="nc" id="L523">				}</span>
+				else
+<span class="nc" id="L525">					failure++;</span>
+			}
+<span class="nc" id="L527">		}</span>
+<span class="nc" id="L528">		catch (Exception e)</span>
+		{
+<span class="nc" id="L530">			log.log (Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L534">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L535">			rs = null;</span>
+<span class="nc" id="L536">			pstmt = null;</span>
+		}
+
+<span class="nc" id="L539">		m_summary.append(&quot;Auto Change Request #&quot;).append(count);</span>
+<span class="nc bnc" id="L540" title="All 2 branches missed.">		if (failure &gt; 0)</span>
+<span class="nc" id="L541">			m_summary.append(&quot;(fail=&quot;).append(failure).append(&quot;)&quot;);</span>
+<span class="nc" id="L542">		m_summary.append(&quot; - &quot;);</span>
+<span class="nc" id="L543">	}	//	processECR</span>
+	
+	
+	/**************************************************************************
+	 *	Create Reauest / Updates from EMail
+	 */
+	protected void processEMail ()
+	{
+	//	m_summary.append(&quot;Mail #&quot;).append(count)
+	//		.append(&quot; - &quot;);
+<span class="nc" id="L553">	}   //  processEMail</span>
+
+	
+	/**************************************************************************
+	 * 	Allocate Sales Rep
+	 */
+	protected void findSalesRep ()
+	{
+<span class="nc" id="L561">		int changed = 0;</span>
+<span class="nc" id="L562">		int notFound = 0;</span>
+<span class="nc" id="L563">		Properties ctx = new Properties();</span>
+		//
+<span class="nc" id="L565">		String sql = &quot;SELECT * FROM R_Request &quot;</span>
+			+ &quot;WHERE AD_Client_ID=?&quot;
+			+ &quot; AND SalesRep_ID=0 AND Processed='N'&quot;;
+<span class="nc bnc" id="L568" title="All 2 branches missed.">		if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L569">			sql += &quot; AND R_RequestType_ID=?&quot;;</span>
+<span class="nc" id="L570">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L571">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L574">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L575">			pstmt.setInt(1, m_model.getAD_Client_ID());</span>
+<span class="nc bnc" id="L576" title="All 2 branches missed.">			if (m_model.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L577">				pstmt.setInt(2, m_model.getR_RequestType_ID());</span>
+<span class="nc" id="L578">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L579" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L581">				MRequest request = new MRequest (ctx, rs, null);</span>
+<span class="nc bnc" id="L582" title="All 2 branches missed.">				if (request.getSalesRep_ID() != 0)</span>
+<span class="nc" id="L583">					continue;</span>
+<span class="nc" id="L584">				int SalesRep_ID = findSalesRep(request);</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">				if (SalesRep_ID != 0)</span>
+				{
+<span class="nc" id="L587">					request.setSalesRep_ID(SalesRep_ID);</span>
+<span class="nc" id="L588">					request.saveEx();</span>
+<span class="nc" id="L589">					changed++;</span>
+<span class="nc" id="L590">				}</span>
+				else
+<span class="nc" id="L592">					notFound++;</span>
+			}
+<span class="nc" id="L594">		}</span>
+<span class="nc" id="L595">		catch (SQLException ex)</span>
+		{
+<span class="nc" id="L597">			log.log(Level.SEVERE, sql, ex);</span>
+		}
+		finally
+		{
+<span class="nc" id="L601">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L602">			rs = null;</span>
+<span class="nc" id="L603">			pstmt = null;</span>
+		}
+		//
+<span class="nc bnc" id="L606" title="All 4 branches missed.">		if (changed == 0 &amp;&amp; notFound == 0)</span>
+<span class="nc" id="L607">			m_summary.append(&quot;No unallocated Requests&quot;);</span>
+		else
+<span class="nc" id="L609">			m_summary.append(&quot;Allocated SalesRep=&quot;).append(changed);</span>
+<span class="nc bnc" id="L610" title="All 2 branches missed.">		if (notFound &gt; 0)</span>
+<span class="nc" id="L611">			m_summary.append(&quot;,Not=&quot;).append(notFound);</span>
+<span class="nc" id="L612">		m_summary.append(&quot; - &quot;);</span>
+<span class="nc" id="L613">	}	//	findSalesRep</span>
+
+	/**
+	 *  Find SalesRep/User based on Request Type and Question.
+	 *  @param request request
+	 *  @return SalesRep_ID user
+	 */
+	protected int findSalesRep (MRequest request)
+	{
+<span class="nc" id="L622">		String QText = request.getSummary();</span>
+<span class="nc bnc" id="L623" title="All 2 branches missed.">		if (QText == null)</span>
+<span class="nc" id="L624">			QText = &quot;&quot;;</span>
+		else
+<span class="nc" id="L626">			QText = QText.toUpperCase();</span>
+		//
+<span class="nc" id="L628">		MRequestProcessorRoute[] routes = m_model.getRoutes(false);</span>
+<span class="nc bnc" id="L629" title="All 2 branches missed.">		for (int i = 0; i &lt; routes.length; i++)</span>
+		{
+<span class="nc" id="L631">			MRequestProcessorRoute route = routes[i];</span>
+			
+			//	Match first on Request Type
+<span class="nc bnc" id="L634" title="All 2 branches missed.">			if (request.getR_RequestType_ID() == route.getR_RequestType_ID()</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">				&amp;&amp; route.getR_RequestType_ID() != 0)</span>
+<span class="nc" id="L636">				return route.getAD_User_ID();</span>
+			
+			//	Match on element of keyword
+<span class="nc" id="L639">			String keyword = route.getKeyword();</span>
+<span class="nc bnc" id="L640" title="All 2 branches missed.">			if (keyword != null)</span>
+			{
+<span class="nc" id="L642">				StringTokenizer st = new StringTokenizer(keyword.toUpperCase(), &quot; ,;\t\n\r\f&quot;);</span>
+<span class="nc bnc" id="L643" title="All 2 branches missed.">				while (st.hasMoreElements())</span>
+				{
+<span class="nc bnc" id="L645" title="All 2 branches missed.">					if (QText.indexOf(st.nextToken()) != -1)</span>
+<span class="nc" id="L646">						return route.getAD_User_ID();</span>
+				}
+			}
+		}	//	for all routes
+
+<span class="nc" id="L651">		return m_model.getSupervisor_ID();</span>
+	}   //  findSalesRep
+	
+	/**
+	 * 	Get Server Info
+	 *	@return info
+	 */
+	public String getServerInfo()
+	{
+<span class="nc" id="L660">		return &quot;#&quot; + p_runCount + &quot; - Last=&quot; + m_summary.toString();</span>
+	}	//	getServerInfo
+	
+}	//	RequestProcessor
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

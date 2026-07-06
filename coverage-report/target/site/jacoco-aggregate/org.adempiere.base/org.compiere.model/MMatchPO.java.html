@@ -1,0 +1,1481 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MMatchPO.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MMatchPO.java</span></div><h1>MMatchPO.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Savepoint;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.util.IReservationTracer;
+import org.adempiere.util.IReservationTracerFactory;
+import org.compiere.process.DocAction;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+import org.idempiere.acct.IDoc;
+
+/**
+ *	Match PO Model.
+ *  &lt;pre&gt;
+ *  Created when processing Shipment or Order
+ *  - Updates Order (delivered, invoiced)
+ *  - Creates PPV acct
+ *	&lt;/pre&gt;
+ *  @author Jorg Janke
+ *  @version $Id: MMatchPO.java,v 1.3 2006/07/30 00:51:03 jjanke Exp $
+ *  
+ *  @author Bayu Cahya, Sistematika
+ *  		&lt;li&gt;BF [ 2240484 ] Re MatchingPO, MMatchPO doesn't contains Invoice info
+ *  
+ *  @author Teo Sarca, www.arhipac.ro
+ *  		&lt;li&gt;BF [ 2314749 ] MatchPO not considering currency PriceMatchDifference
+ *
+ *  @author Armen Rizal, Goodwill Consulting
+ *  		&lt;li&gt;BF [ 2215840 ] MatchPO Bug Collection
+ *  		&lt;li&gt;BF [ 2858043 ] Correct Included Tax in Average Costing
+ *
+ *  @author victor.perez@e-evolution.com, e-Evolution http://www.e-evolution.com
+ * 			&lt;li&gt; FR [ 2520591 ] Support multiples calendar for Org 
+ *			@see https://sourceforge.net/p/adempiere/feature-requests/631/
+ */
+public class MMatchPO extends X_M_MatchPO
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = 487498668807522050L;
+
+	/**
+	 * 	Get PO Match with order/invoice
+	 *	@param ctx context
+	 *	@param C_OrderLine_ID order
+	 *	@param C_InvoiceLine_ID invoice
+	 *	@param trxName transaction
+	 *	@return array of matches
+	 */
+	public static MMatchPO[] get (Properties ctx, 
+		int C_OrderLine_ID, int C_InvoiceLine_ID, String trxName)
+	{
+<span class="nc bnc" id="L89" title="All 4 branches missed.">		if (C_OrderLine_ID == 0 || C_InvoiceLine_ID == 0)</span>
+<span class="nc" id="L90">			return new MMatchPO[]{};</span>
+		//
+<span class="nc" id="L92">		String sql = &quot;SELECT * FROM M_MatchPO WHERE C_OrderLine_ID=? AND C_InvoiceLine_ID=?&quot;;</span>
+<span class="nc" id="L93">		ArrayList&lt;MMatchPO&gt; list = new ArrayList&lt;MMatchPO&gt;();</span>
+<span class="nc" id="L94">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L95">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L98">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L99">			pstmt.setInt (1, C_OrderLine_ID);</span>
+<span class="nc" id="L100">			pstmt.setInt (2, C_InvoiceLine_ID);</span>
+<span class="nc" id="L101">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">			while (rs.next ())</span>
+<span class="nc" id="L103">				list.add (new MMatchPO (ctx, rs, trxName));</span>
+<span class="nc" id="L104">		}</span>
+<span class="nc" id="L105">		catch (Exception e)</span>
+		{
+<span class="nc" id="L107">			s_log.log(Level.SEVERE, sql, e); </span>
+		}
+		finally
+		{
+<span class="nc" id="L111">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L112">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L114">		MMatchPO[] retValue = new MMatchPO[list.size()];</span>
+<span class="nc" id="L115">		list.toArray (retValue);</span>
+<span class="nc" id="L116">		return retValue;</span>
+	}	//	get
+
+	/**
+	 * 	Get PO Match of Receipt Line
+	 *	@param ctx context
+	 *	@param M_InOutLine_ID receipt
+	 *	@param trxName transaction
+	 *	@return array of matches
+	 */
+	public static MMatchPO[] get (Properties ctx,
+		int M_InOutLine_ID, String trxName)
+	{
+<span class="nc bnc" id="L129" title="All 2 branches missed.">		if (M_InOutLine_ID == 0)</span>
+<span class="nc" id="L130">			return new MMatchPO[]{};</span>
+		//
+<span class="nc" id="L132">		String sql = &quot;SELECT * FROM M_MatchPO WHERE M_InOutLine_ID=?&quot;;</span>
+<span class="nc" id="L133">		ArrayList&lt;MMatchPO&gt; list = new ArrayList&lt;MMatchPO&gt;();</span>
+<span class="nc" id="L134">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L135">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L138">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L139">			pstmt.setInt (1, M_InOutLine_ID);</span>
+<span class="nc" id="L140">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">			while (rs.next ())</span>
+<span class="nc" id="L142">				list.add (new MMatchPO (ctx, rs, trxName));</span>
+<span class="nc" id="L143">		}</span>
+<span class="nc" id="L144">		catch (Exception e)</span>
+		{
+<span class="nc" id="L146">			s_log.log(Level.SEVERE, sql, e);</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">			if (e instanceof RuntimeException)</span>
+			{
+<span class="nc" id="L149">				throw (RuntimeException)e;</span>
+			}
+			else
+			{
+<span class="nc" id="L153">				throw new IllegalStateException(e);</span>
+			}
+		}
+		finally 
+		{
+<span class="nc" id="L158">			DB.close(rs, pstmt);</span>
+		}
+		
+<span class="nc" id="L161">		MMatchPO[] retValue = new MMatchPO[list.size()];</span>
+<span class="nc" id="L162">		list.toArray (retValue);</span>
+<span class="nc" id="L163">		return retValue;</span>
+	}	//	get
+	
+	/**
+	 * 	Get PO Matches of receipt
+	 *	@param ctx context
+	 *	@param M_InOut_ID receipt
+	 *	@param trxName transaction
+	 *	@return array of matches
+	 */
+	public static MMatchPO[] getInOut (Properties ctx, 
+		int M_InOut_ID, String trxName)
+	{
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		if (M_InOut_ID == 0)</span>
+<span class="nc" id="L177">			return new MMatchPO[]{};</span>
+		//
+<span class="nc" id="L179">		String sql = &quot;SELECT * FROM M_MatchPO m&quot;</span>
+			+ &quot; INNER JOIN M_InOutLine l ON (m.M_InOutLine_ID=l.M_InOutLine_ID) &quot;
+			+ &quot;WHERE l.M_InOut_ID=?&quot;; 
+<span class="nc" id="L182">		ArrayList&lt;MMatchPO&gt; list = new ArrayList&lt;MMatchPO&gt;();</span>
+<span class="nc" id="L183">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L184">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L187">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L188">			pstmt.setInt (1, M_InOut_ID);</span>
+<span class="nc" id="L189">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">			while (rs.next ())</span>
+<span class="nc" id="L191">				list.add (new MMatchPO (ctx, rs, trxName));</span>
+<span class="nc" id="L192">		}</span>
+<span class="nc" id="L193">		catch (Exception e)</span>
+		{
+<span class="nc" id="L195">			s_log.log(Level.SEVERE, sql, e); </span>
+		}
+		finally
+		{
+<span class="nc" id="L199">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L200">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L202">		MMatchPO[] retValue = new MMatchPO[list.size()];</span>
+<span class="nc" id="L203">		list.toArray (retValue);</span>
+<span class="nc" id="L204">		return retValue;</span>
+	}	//	getInOut
+
+	/**
+	 * 	Get PO Matches of Invoice
+	 *	@param ctx context
+	 *	@param C_Invoice_ID invoice
+	 *	@param trxName transaction
+	 *	@return array of matches
+	 */
+	public static MMatchPO[] getInvoice (Properties ctx, 
+		int C_Invoice_ID, String trxName)
+	{
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		if (C_Invoice_ID == 0)</span>
+<span class="nc" id="L218">			return new MMatchPO[]{};</span>
+		//
+<span class="nc" id="L220">		String sql = &quot;SELECT * FROM M_MatchPO mi&quot;</span>
+			+ &quot; INNER JOIN C_InvoiceLine il ON (mi.C_InvoiceLine_ID=il.C_InvoiceLine_ID) &quot;
+			+ &quot;WHERE il.C_Invoice_ID=?&quot;;
+<span class="nc" id="L223">		ArrayList&lt;MMatchPO&gt; list = new ArrayList&lt;MMatchPO&gt;();</span>
+<span class="nc" id="L224">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L225">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L228">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L229">			pstmt.setInt (1, C_Invoice_ID);</span>
+<span class="nc" id="L230">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">			while (rs.next ())</span>
+<span class="nc" id="L232">				list.add (new MMatchPO (ctx, rs, trxName));</span>
+<span class="nc" id="L233">		}</span>
+<span class="nc" id="L234">		catch (Exception e)</span>
+		{
+<span class="nc" id="L236">			s_log.log(Level.SEVERE, sql, e); </span>
+		}
+		finally
+		{
+<span class="nc" id="L240">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L241">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L243">		MMatchPO[] retValue = new MMatchPO[list.size()];</span>
+<span class="nc" id="L244">		list.toArray (retValue);</span>
+<span class="nc" id="L245">		return retValue;</span>
+	}	//	getInvoice
+
+	/**
+	 * 	Get PO Matches for OrderLine
+	 *	@param ctx context
+	 *	@param C_OrderLine_ID order
+	 *	@param trxName transaction
+	 *	@return array of matches
+	 */
+	public static MMatchPO[] getOrderLine (Properties ctx, int C_OrderLine_ID, String trxName)
+	{
+<span class="nc bnc" id="L257" title="All 2 branches missed.">		if (C_OrderLine_ID == 0)</span>
+<span class="nc" id="L258">			return new MMatchPO[]{};</span>
+		//
+<span class="nc" id="L260">		String sql = &quot;SELECT * FROM M_MatchPO WHERE C_OrderLine_ID=?&quot;;</span>
+<span class="nc" id="L261">		ArrayList&lt;MMatchPO&gt; list = new ArrayList&lt;MMatchPO&gt;();</span>
+<span class="nc" id="L262">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L263">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L266">			pstmt = DB.prepareStatement (sql, trxName);</span>
+<span class="nc" id="L267">			pstmt.setInt (1, C_OrderLine_ID);</span>
+<span class="nc" id="L268">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">			while (rs.next ())</span>
+<span class="nc" id="L270">				list.add (new MMatchPO (ctx, rs, trxName));</span>
+<span class="nc" id="L271">		}</span>
+<span class="nc" id="L272">		catch (Exception e)</span>
+		{
+<span class="nc" id="L274">			s_log.log(Level.SEVERE, sql, e); </span>
+		}
+		finally
+		{
+<span class="nc" id="L278">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L279">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L281">		MMatchPO[] retValue = new MMatchPO[list.size()];</span>
+<span class="nc" id="L282">		list.toArray (retValue);</span>
+<span class="nc" id="L283">		return retValue;</span>
+	}	//	getOrderLine
+	
+	/**
+	 * 	Update or Create Match PO record
+	 *	@param iLine invoice line
+	 *	@param sLine receipt line
+	 *	@param dateTrx transaction date
+	 *	@param qty qty to match
+	 *	@return Match PO Record
+	 */
+	public static MMatchPO create (MInvoiceLine iLine, MInOutLine sLine,  
+		Timestamp dateTrx, BigDecimal qty)
+	{
+<span class="nc" id="L297">		String trxName = null;</span>
+<span class="nc" id="L298">		Properties ctx = null;</span>
+<span class="nc" id="L299">		int C_OrderLine_ID = 0;</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">		if (iLine != null)</span>
+		{
+<span class="nc" id="L302">			trxName = iLine.get_TrxName();</span>
+<span class="nc" id="L303">			ctx = iLine.getCtx();</span>
+<span class="nc" id="L304">			C_OrderLine_ID = iLine.getC_OrderLine_ID();</span>
+		}
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (sLine != null)</span>
+		{
+<span class="nc" id="L308">			trxName = sLine.get_TrxName();</span>
+<span class="nc" id="L309">			ctx = sLine.getCtx();</span>
+<span class="nc" id="L310">			C_OrderLine_ID = sLine.getC_OrderLine_ID();</span>
+		}
+		
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		if (C_OrderLine_ID &gt; 0)</span>
+		{
+<span class="nc" id="L315">			return create(ctx, iLine, sLine, C_OrderLine_ID, dateTrx, qty, trxName);</span>
+		}
+		else
+		{
+<span class="nc bnc" id="L319" title="All 4 branches missed.">			if (sLine != null &amp;&amp; iLine != null)</span>
+			{
+<span class="nc" id="L321">				MMatchPO[] matchpos = MMatchPO.get(ctx, sLine.getM_InOutLine_ID(), trxName);</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">				for (MMatchPO matchpo : matchpos)</span>
+				{
+<span class="nc" id="L324">					C_OrderLine_ID = matchpo.getC_OrderLine_ID();</span>
+<span class="nc" id="L325">					MOrderLine orderLine = new MOrderLine(ctx, C_OrderLine_ID, trxName);</span>
+<span class="nc" id="L326">					BigDecimal toInvoice = orderLine.getQtyOrdered().subtract(orderLine.getQtyInvoiced());</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">					if (toInvoice.signum() &lt;= 0) </span>
+<span class="nc" id="L328">						continue;</span>
+<span class="nc" id="L329">					BigDecimal matchQty = qty;</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">					if (matchQty.compareTo(toInvoice) &gt; 0)</span>
+<span class="nc" id="L331">						matchQty = toInvoice;</span>
+					
+<span class="nc bnc" id="L333" title="All 2 branches missed.">					if (matchQty.signum() &lt;= 0)</span>
+<span class="nc" id="L334">						continue;</span>
+					
+<span class="nc" id="L336">					MMatchPO newMatchPO = create(ctx, iLine, sLine, C_OrderLine_ID, dateTrx, matchQty, trxName);</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">					if (!newMatchPO.save())</span>
+					{
+<span class="nc" id="L339">						String msg = &quot;Failed to update match po.&quot;;</span>
+<span class="nc" id="L340">						ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">						if (error != null)</span>
+						{
+<span class="nc" id="L343">							msg = msg + &quot; &quot; + error.getName();</span>
+						}
+<span class="nc" id="L345">						throw new RuntimeException(msg);</span>
+					}
+<span class="nc" id="L347">					qty = qty.subtract(matchQty);</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">					if (qty.signum() &lt;= 0)</span>
+<span class="nc" id="L349">						return newMatchPO;</span>
+				}
+			}
+<span class="nc" id="L352">			return null;</span>
+		}
+	}
+	
+	/**
+	 * Update or create MatchPO record (if needed, create MatchInv too). 
+	 * @param ctx
+	 * @param iLine
+	 * @param sLine
+	 * @param C_OrderLine_ID
+	 * @param dateTrx
+	 * @param qty
+	 * @param trxName
+	 * @return Match PO record
+	 */
+	protected static MMatchPO create(Properties ctx, MInvoiceLine iLine,
+			MInOutLine sLine, int C_OrderLine_ID, Timestamp dateTrx,
+			BigDecimal qty, String trxName) {
+<span class="nc" id="L370">		MMatchPO retValue = null;</span>
+<span class="nc" id="L371">		List&lt;MMatchPO&gt; matchPOList = MatchPOAutoMatch.getNotMatchedMatchPOList(ctx, C_OrderLine_ID, trxName);</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">		if (!matchPOList.isEmpty())</span>
+		{
+<span class="nc bnc" id="L374" title="All 2 branches missed.">			for (MMatchPO mpo : matchPOList)</span>
+			{
+<span class="nc bnc" id="L376" title="All 2 branches missed.">				if (qty.compareTo(mpo.getQty()) &gt;= 0)</span>
+				{
+<span class="nc" id="L378">					BigDecimal toMatch = qty;</span>
+<span class="nc" id="L379">					BigDecimal matchQty = mpo.getQty();</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">					if (toMatch.compareTo(matchQty) &gt; 0)</span>
+<span class="nc" id="L381">						toMatch = matchQty;</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">					if (iLine != null)</span>
+					{
+<span class="nc bnc" id="L384" title="All 2 branches missed.">						if ((mpo.getC_InvoiceLine_ID() == 0)</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">							|| (mpo.getC_InvoiceLine_ID() == iLine.getC_InvoiceLine_ID()))</span>
+						{
+<span class="nc bnc" id="L387" title="All 2 branches missed.">							if (iLine.getM_AttributeSetInstance_ID() != 0)</span>
+							{
+<span class="nc bnc" id="L389" title="All 2 branches missed.">								if (mpo.getM_AttributeSetInstance_ID() == 0)</span>
+<span class="nc" id="L390">									mpo.setM_AttributeSetInstance_ID(iLine.getM_AttributeSetInstance_ID());</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">								else if (mpo.getM_AttributeSetInstance_ID() != iLine.getM_AttributeSetInstance_ID())</span>
+<span class="nc" id="L392">									continue;</span>
+							}
+						}
+						else
+							continue;
+					}
+<span class="nc bnc" id="L398" title="All 2 branches missed.">					if (sLine != null)</span>
+					{
+<span class="nc bnc" id="L400" title="All 2 branches missed.">						if ((mpo.getM_InOutLine_ID() == 0)</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">							|| (mpo.getM_InOutLine_ID() == sLine.getM_InOutLine_ID()))</span>
+						{
+							
+<span class="nc bnc" id="L404" title="All 2 branches missed.">							if (sLine.getM_AttributeSetInstance_ID() != 0)</span>
+							{
+<span class="nc bnc" id="L406" title="All 2 branches missed.">								if (mpo.getM_AttributeSetInstance_ID() == 0)</span>
+<span class="nc" id="L407">									mpo.setM_AttributeSetInstance_ID(sLine.getM_AttributeSetInstance_ID());</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">								else if (mpo.getM_AttributeSetInstance_ID() != sLine.getM_AttributeSetInstance_ID())</span>
+<span class="nc" id="L409">									continue;</span>
+							}
+						}						
+						else
+							continue;
+<span class="nc bnc" id="L414" title="All 4 branches missed.">						if (iLine == null &amp;&amp; mpo.isPosted())</span>
+<span class="nc" id="L415">							continue;</span>
+					}
+<span class="nc bnc" id="L417" title="All 6 branches missed.">					if (iLine != null &amp;&amp; sLine == null &amp;&amp; mpo.getC_InvoiceLine_ID() == 0)</span>
+					{
+						//verify m_matchinv not created for other invoice
+<span class="nc" id="L420">						int cnt = DB.getSQLValue(iLine.get_TrxName(), &quot;SELECT Count(*) FROM M_MatchInv WHERE M_InOutLine_ID=&quot;+mpo.getM_InOutLine_ID()</span>
+<span class="nc" id="L421">								+&quot; AND C_InvoiceLine_ID != &quot;+iLine.getC_InvoiceLine_ID() + &quot; AND Reversal_ID=0&quot;);</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">						if (cnt &gt; 0)</span>
+<span class="nc" id="L423">							continue;</span>
+					}
+<span class="nc bnc" id="L425" title="All 8 branches missed.">					if ((iLine != null || mpo.getC_InvoiceLine_ID() &gt; 0) &amp;&amp; (sLine != null || mpo.getM_InOutLine_ID() &gt; 0))</span>
+					{
+<span class="nc bnc" id="L427" title="All 2 branches missed.">						int M_InOutLine_ID = sLine != null ? sLine.getM_InOutLine_ID() : mpo.getM_InOutLine_ID();</span>
+<span class="nc bnc" id="L428" title="All 2 branches missed.">						int C_InvoiceLine_ID = iLine != null ? iLine.getC_InvoiceLine_ID() : mpo.getC_InvoiceLine_ID();</span>
+						
+						//verify invoiceline not already linked to another inoutline
+<span class="nc" id="L431">						int tmpInOutLineId = DB.getSQLValue(mpo.get_TrxName(), &quot;SELECT M_InOutLine_ID FROM C_InvoiceLine WHERE C_InvoiceLine_ID=&quot;+C_InvoiceLine_ID);</span>
+<span class="nc bnc" id="L432" title="All 4 branches missed.">						if (tmpInOutLineId &gt; 0 &amp;&amp; tmpInOutLineId != M_InOutLine_ID) </span>
+						{
+<span class="nc" id="L434">							continue;</span>
+						}
+						
+						//verify m_matchinv not created yet
+<span class="nc" id="L438">						int cnt = DB.getSQLValue(mpo.get_TrxName(), &quot;SELECT Count(*) FROM M_MatchInv WHERE M_InOutLine_ID=&quot;+M_InOutLine_ID</span>
+<span class="nc" id="L439">								+&quot; AND C_InvoiceLine_ID=&quot;+C_InvoiceLine_ID);</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">						if (cnt &lt;= 0)</span>
+						{
+<span class="nc" id="L442">							MMatchInv matchInv = createMatchInv(mpo, C_InvoiceLine_ID, M_InOutLine_ID, mpo.getQty(), dateTrx, trxName);</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">							if (matchInv == null)</span>
+<span class="nc" id="L444">								continue;</span>
+<span class="nc" id="L445">							mpo.setMatchInvCreated(matchInv);</span>
+						}
+					}
+<span class="nc bnc" id="L448" title="All 2 branches missed.">					if (iLine != null)</span>
+<span class="nc" id="L449">						mpo.setC_InvoiceLine_ID(iLine);</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">					if (sLine != null){</span>
+<span class="nc" id="L451">						mpo.setM_InOutLine_ID(sLine.getM_InOutLine_ID());</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">						if (!mpo.isPosted())</span>
+<span class="nc" id="L453">							mpo.setDateAcct(sLine.getParent().getDateAcct());</span>
+					}
+					
+<span class="nc bnc" id="L456" title="All 2 branches missed.">					if (!mpo.save())</span>
+					{
+<span class="nc" id="L458">						String msg = &quot;Failed to update match po.&quot;;</span>
+<span class="nc" id="L459">						ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L460" title="All 2 branches missed.">						if (error != null)</span>
+						{
+<span class="nc" id="L462">							msg = msg + &quot; &quot; + error.getName();</span>
+						}
+<span class="nc" id="L464">						throw new RuntimeException(msg);</span>
+					}
+					
+<span class="nc" id="L467">					qty = qty.subtract(toMatch);					</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">					if (qty.signum() &lt;= 0)</span>
+					{
+<span class="nc" id="L470">						retValue = mpo;</span>
+<span class="nc" id="L471">						break;</span>
+					}
+				}
+			}
+		}
+		
+		//	Create New
+<span class="nc bnc" id="L478" title="All 2 branches missed.">		if (retValue == null)</span>
+		{
+<span class="nc" id="L480">			BigDecimal sLineMatchedQty = null; </span>
+<span class="nc bnc" id="L481" title="All 4 branches missed.">			if (sLine != null &amp;&amp; iLine != null)</span>
+			{
+<span class="nc" id="L483">				sLineMatchedQty = DB.getSQLValueBD(sLine.get_TrxName(), &quot;SELECT Sum(Qty) FROM M_MatchPO WHERE C_OrderLine_ID=&quot;+C_OrderLine_ID+&quot; AND M_InOutLine_ID=?&quot;, sLine.getM_InOutLine_ID());</span>
+			}
+			
+<span class="nc bnc" id="L486" title="All 6 branches missed.">			if (sLine != null &amp;&amp; (sLine.getC_OrderLine_ID() == C_OrderLine_ID || iLine == null)</span>
+<span class="nc bnc" id="L487" title="All 4 branches missed.">				&amp;&amp; (sLineMatchedQty == null || sLineMatchedQty.signum() &lt;= 0))</span>
+			{				
+<span class="nc bnc" id="L489" title="All 2 branches missed.">				if (qty.signum() != 0)</span>
+				{
+<span class="nc" id="L491">					retValue = new MMatchPO (sLine, dateTrx, qty);</span>
+<span class="nc" id="L492">					retValue.setC_OrderLine_ID(C_OrderLine_ID);</span>
+<span class="nc" id="L493">					MMatchPO otherMatchPO = null;</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">					if (iLine == null) {</span>
+<span class="nc" id="L495">						MMatchPO[] matchPOs = MMatchPO.getOrderLine(retValue.getCtx(), sLine.getC_OrderLine_ID(), retValue.get_TrxName());</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">						for (MMatchPO matchPO : matchPOs)</span>
+						{
+<span class="nc bnc" id="L498" title="All 8 branches missed.">							if (matchPO.getC_InvoiceLine_ID() &gt; 0 &amp;&amp; matchPO.getM_InOutLine_ID() == 0 &amp;&amp; matchPO.getReversal_ID() == 0 &amp;&amp; matchPO.getQty().compareTo(retValue.getQty()) &gt;=0 )</span>
+							{
+								//check m_matchinv not created with different qty
+<span class="nc" id="L501">								int cnt = DB.getSQLValueEx(sLine.get_TrxName(), &quot;SELECT Count(*) FROM M_MatchInv WHERE M_InOutLine_ID=&quot;+sLine.getM_InOutLine_ID()</span>
+<span class="nc" id="L502">										+&quot; AND C_InvoiceLine_ID=&quot;+ matchPO.getC_InvoiceLine_ID() + &quot; AND Qty != ?&quot;, retValue.getQty());</span>
+<span class="nc bnc" id="L503" title="All 2 branches missed.">								if (cnt &lt;= 0) {</span>
+<span class="nc bnc" id="L504" title="All 4 branches missed.">									if (!matchPO.isPosted() &amp;&amp; matchPO.getQty().compareTo(retValue.getQty()) &gt;=0 )  // greater than or equal quantity</span>
+									{
+<span class="nc" id="L506">										otherMatchPO = matchPO;</span>
+<span class="nc" id="L507">										iLine = new MInvoiceLine(retValue.getCtx(), matchPO.getC_InvoiceLine_ID(), retValue.get_TrxName());</span>
+<span class="nc" id="L508">										matchPO.setQty(matchPO.getQty().subtract(retValue.getQty()));										</span>
+<span class="nc" id="L509">										matchPO.saveEx();</span>
+<span class="nc" id="L510">										break;</span>
+									}
+									
+								}
+							}
+						}
+					}
+<span class="nc bnc" id="L517" title="All 2 branches missed.">					if (iLine != null) { </span>
+<span class="nc bnc" id="L518" title="All 2 branches missed.">						if (otherMatchPO == null)</span>
+<span class="nc" id="L519">							retValue.setC_InvoiceLine_ID(iLine);</span>
+						//auto create matchinv
+<span class="nc bnc" id="L521" title="All 2 branches missed.">						if (otherMatchPO != null)</span>
+						{
+							//verify m_matchinv not created yet
+<span class="nc" id="L524">							int cnt = DB.getSQLValue(retValue.get_TrxName(), &quot;SELECT Count(*) FROM M_MatchInv WHERE M_InOutLine_ID=&quot;+retValue.getM_InOutLine_ID()</span>
+<span class="nc" id="L525">									+&quot; AND C_InvoiceLine_ID=&quot;+otherMatchPO.getC_InvoiceLine_ID());</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">							if (cnt &lt;= 0)</span>
+							{
+<span class="nc" id="L528">								MMatchInv matchInv = createMatchInv(retValue, otherMatchPO.getC_InvoiceLine_ID(), retValue.getM_InOutLine_ID(), retValue.getQty(), dateTrx, trxName);</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">								if (matchInv == null)</span>
+								{
+<span class="nc" id="L531">									String msg = &quot;Failed to create match inv.&quot;;</span>
+<span class="nc" id="L532">									ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">									if (error != null)</span>
+									{
+<span class="nc" id="L535">										msg = msg + &quot; &quot; + error.getName();</span>
+									}
+<span class="nc" id="L537">									throw new RuntimeException(msg);</span>
+								}
+<span class="nc" id="L539">								retValue.setMatchInvCreated(matchInv);</span>
+							}
+<span class="nc bnc" id="L541" title="All 2 branches missed.">							if (otherMatchPO.getQty().signum() == 0 )</span>
+<span class="nc" id="L542">								otherMatchPO.deleteEx(true);</span>
+						}
+					}
+<span class="nc bnc" id="L545" title="All 2 branches missed.">					if (!retValue.save())</span>
+					{
+<span class="nc" id="L547">						String msg = &quot;Failed to update match po.&quot;;</span>
+<span class="nc" id="L548">						ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L549" title="All 2 branches missed.">						if (error != null)</span>
+						{
+<span class="nc" id="L551">							msg = msg + &quot; &quot; + error.getName();</span>
+						}
+<span class="nc" id="L553">						throw new RuntimeException(msg);</span>
+					}
+				}
+			}
+<span class="nc bnc" id="L557" title="All 2 branches missed.">			else if (iLine != null)</span>
+			{
+<span class="nc bnc" id="L559" title="All 2 branches missed.">				if (qty.signum() != 0)</span>
+				{
+<span class="nc" id="L561">					retValue = new MMatchPO (iLine, dateTrx, qty);</span>
+<span class="nc" id="L562">					retValue.setC_OrderLine_ID(C_OrderLine_ID);</span>
+<span class="nc bnc" id="L563" title="All 2 branches missed.">					if (!retValue.save())</span>
+					{
+<span class="nc" id="L565">						String msg = &quot;Failed to update match po.&quot;;</span>
+<span class="nc" id="L566">						ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">						if (error != null)</span>
+						{
+<span class="nc" id="L569">							msg = msg + &quot; &quot; + error.getName();</span>
+						}
+<span class="nc" id="L571">						throw new RuntimeException(msg);</span>
+					}
+					
+					//auto create m_matchinv
+<span class="nc" id="L575">					Map&lt;Integer, BigDecimal[]&gt; noInvoiceLines = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L576">					Map&lt;Integer, List&lt;MMatchPO&gt;&gt; invoiceMatched = new HashMap&lt;Integer, List&lt;MMatchPO&gt;&gt;();</span>
+<span class="nc" id="L577">					List&lt;MMatchPO&gt; noInvoiceList = new ArrayList&lt;MMatchPO&gt;();</span>
+					//get all matchpo with inoutline for C_OrderLine_ID
+<span class="nc" id="L579">					MMatchPO[] matchPOs = MMatchPO.getOrderLine(iLine.getCtx(), C_OrderLine_ID, iLine.get_TrxName());</span>
+<span class="nc bnc" id="L580" title="All 2 branches missed.">					for (MMatchPO matchPO : matchPOs)</span>
+					{
+<span class="nc bnc" id="L582" title="All 2 branches missed.">						if (matchPO.getM_MatchPO_ID() == retValue.getM_MatchPO_ID())</span>
+<span class="nc" id="L583">							continue;</span>
+						
+<span class="nc bnc" id="L585" title="All 6 branches missed.">						if (matchPO.getM_InOutLine_ID() &gt; 0 &amp;&amp; matchPO.getReversal_ID() == 0 &amp;&amp; matchPO.getRef_MatchPO_ID() == 0)</span>
+						{
+<span class="nc bnc" id="L587" title="All 2 branches missed.">							if (matchPO.getC_InvoiceLine_ID() == 0)</span>
+							{
+<span class="nc" id="L589">								MInOutLine iol = new MInOutLine(iLine.getCtx(), matchPO.getM_InOutLine_ID(), iLine.get_TrxName());</span>
+<span class="nc" id="L590">								String docStatus = iol.getParent().getDocStatus();</span>
+<span class="nc bnc" id="L591" title="All 4 branches missed.">								if (docStatus.equals(DocAction.STATUS_Completed) || docStatus.equals(DocAction.STATUS_Closed)) </span>
+								{
+<span class="nc" id="L593">									noInvoiceLines.put(matchPO.getM_MatchPO_ID(), new BigDecimal[]{matchPO.getQty()});</span>
+<span class="nc" id="L594">									noInvoiceList.add(matchPO);</span>
+								}
+<span class="nc" id="L596">							}</span>
+							else
+							{
+<span class="nc" id="L599">								List&lt;MMatchPO&gt; invoices = invoiceMatched.get(matchPO.getM_InOutLine_ID());</span>
+<span class="nc bnc" id="L600" title="All 2 branches missed.">								if (invoices == null) </span>
+								{
+<span class="nc" id="L602">									invoices = new ArrayList&lt;MMatchPO&gt;();</span>
+<span class="nc" id="L603">									invoiceMatched.put(matchPO.getM_InOutLine_ID(), invoices);</span>
+								}
+<span class="nc" id="L605">								invoices.add(matchPO);</span>
+							}
+						} 
+					}
+					
+					//sort in created sequence
+<span class="nc" id="L611">					Collections.sort(noInvoiceList, new Comparator&lt;MMatchPO&gt;() {</span>
+						@Override
+						public int compare(MMatchPO arg0, MMatchPO arg1) {
+<span class="nc bnc" id="L614" title="All 2 branches missed.">							return arg0.getM_MatchPO_ID() &gt; arg1.getM_MatchPO_ID() </span>
+<span class="nc" id="L615">									? 1</span>
+<span class="nc bnc" id="L616" title="All 2 branches missed.">									: (arg0.getM_MatchPO_ID()==arg1.getM_MatchPO_ID() ? 0 : -1);</span>
+						}
+					});
+					
+					//goes through all matchpo that potentially have not been matched to any invoice yet
+					//calculate balance that have not been matched to invoice line 
+<span class="nc bnc" id="L622" title="All 2 branches missed.">					for (MMatchPO matchPO : noInvoiceList)</span>
+					{
+<span class="nc" id="L624">						BigDecimal[] qtyHolder = noInvoiceLines.get(matchPO.getM_MatchPO_ID());</span>
+<span class="nc" id="L625">						List&lt;MMatchPO&gt; matchedInvoices = invoiceMatched.get(matchPO.getM_InOutLine_ID());</span>
+<span class="nc" id="L626">						MMatchInv[] matchInvoices = MMatchInv.getInOutLine(iLine.getCtx(), matchPO.getM_InOutLine_ID(), iLine.get_TrxName());</span>
+<span class="nc bnc" id="L627" title="All 2 branches missed.">						for (MMatchInv matchInv : matchInvoices)</span>
+						{
+<span class="nc bnc" id="L629" title="All 2 branches missed.">							if (matchInv.getReversal_ID() &gt; 0)</span>
+<span class="nc" id="L630">								continue;</span>
+<span class="nc" id="L631">							BigDecimal alreadyMatch = BigDecimal.ZERO;</span>
+<span class="nc bnc" id="L632" title="All 2 branches missed.">							if (matchedInvoices != null)</span>
+							{
+<span class="nc bnc" id="L634" title="All 2 branches missed.">								for(MMatchPO matchedInvoice : matchedInvoices)</span>
+								{
+<span class="nc bnc" id="L636" title="All 2 branches missed.">									if (matchedInvoice.getC_InvoiceLine_ID()==matchInv.getC_InvoiceLine_ID())</span>
+<span class="nc" id="L637">										alreadyMatch = alreadyMatch.add(matchedInvoice.getQty());</span>
+								}
+							}
+<span class="nc" id="L640">							BigDecimal balance = matchInv.getQty().subtract(alreadyMatch);</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">							if (balance.signum() &gt; 0)</span>
+							{
+<span class="nc" id="L643">								MInvoiceLine il = new MInvoiceLine(ctx, matchInv.getC_InvoiceLine_ID(), trxName);</span>
+<span class="nc" id="L644">								String docStatus = il.getParent().getDocStatus();</span>
+<span class="nc bnc" id="L645" title="All 4 branches missed.">								if (docStatus.equals(DocAction.STATUS_Completed) || docStatus.equals(DocAction.STATUS_Closed)) </span>
+								{
+<span class="nc" id="L647">									qtyHolder[0] = qtyHolder[0].subtract(balance);</span>
+								}
+							}
+						}							
+					}
+					
+					//do matching
+<span class="nc" id="L654">					BigDecimal toMatch = retValue.getQty();</span>
+<span class="nc bnc" id="L655" title="All 2 branches missed.">					for (MMatchPO matchPO : noInvoiceList)</span>
+					{
+<span class="nc" id="L657">						BigDecimal[] qtyHolder = noInvoiceLines.get(matchPO.getM_MatchPO_ID());</span>
+<span class="nc bnc" id="L658" title="All 2 branches missed.">						if (qtyHolder[0].signum() &gt; 0)</span>
+						{
+<span class="nc" id="L660">							BigDecimal autoMatchQty = null;</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">							if (qtyHolder[0].compareTo(toMatch) &gt;= 0)</span>
+							{
+<span class="nc" id="L663">								autoMatchQty = toMatch;</span>
+<span class="nc" id="L664">								toMatch = BigDecimal.ZERO;</span>
+<span class="nc" id="L665">							}</span>
+							else
+							{
+<span class="nc" id="L668">								autoMatchQty = qtyHolder[0];</span>
+<span class="nc" id="L669">								toMatch = toMatch.subtract(autoMatchQty);</span>
+							}
+<span class="nc bnc" id="L671" title="All 4 branches missed.">							if (autoMatchQty != null &amp;&amp; autoMatchQty.signum() &gt; 0)</span>
+							{
+<span class="nc" id="L673">								MMatchInv[] matchInvoices = MMatchInv.get(Env.getCtx(), matchPO.getM_InOutLine_ID(), retValue.getC_InvoiceLine_ID(), trxName);</span>
+<span class="nc bnc" id="L674" title="All 4 branches missed.">								if (matchInvoices == null || matchInvoices.length == 0)</span>
+								{
+<span class="nc" id="L676">									MMatchInv matchInv = createMatchInv(retValue, retValue.getC_InvoiceLine_ID(), matchPO.getM_InOutLine_ID(), autoMatchQty, dateTrx, trxName);</span>
+<span class="nc" id="L677">									retValue.setMatchInvCreated(matchInv);</span>
+<span class="nc bnc" id="L678" title="All 2 branches missed.">									if (matchInv == null)</span>
+<span class="nc" id="L679">										break;</span>
+								}
+							}
+						}
+<span class="nc bnc" id="L683" title="All 2 branches missed.">						if (toMatch.signum() &lt;= 0)</span>
+<span class="nc" id="L684">							break;</span>
+					}
+				}
+			}
+		}
+		
+<span class="nc bnc" id="L690" title="All 4 branches missed.">		if (C_OrderLine_ID &gt; 0 &amp;&amp; retValue != null)</span>
+<span class="nc" id="L691">			MatchPOAutoMatch.match(ctx, C_OrderLine_ID, retValue, trxName);</span>
+				
+<span class="nc" id="L693">		return retValue;</span>
+	}	//	create
+	
+	/**
+	 * Create MatchInv record
+	 * @param mpo
+	 * @param C_InvoiceLine_ID
+	 * @param M_InOutLine_ID
+	 * @param qty
+	 * @param dateTrx
+	 * @param trxName
+	 * @return Match Inv record
+	 */
+	protected static MMatchInv createMatchInv(MMatchPO mpo, int C_InvoiceLine_ID, int M_InOutLine_ID, BigDecimal qty, Timestamp dateTrx, String trxName) 
+	{
+<span class="nc" id="L708">		Savepoint savepoint = null;</span>
+<span class="nc" id="L709">		Trx trx = null;</span>
+<span class="nc" id="L710">		MMatchInv matchInv = null;</span>
+		try
+		{
+<span class="nc bnc" id="L713" title="All 2 branches missed.">			trx = trxName != null ? Trx.get(trxName, false) : null;</span>
+<span class="nc bnc" id="L714" title="All 2 branches missed.">			savepoint = trx != null ? trx.getConnection().setSavepoint() : null;</span>
+<span class="nc" id="L715">			matchInv = new MMatchInv(mpo.getCtx(), 0, mpo.get_TrxName());</span>
+<span class="nc" id="L716">			matchInv.setC_InvoiceLine_ID(C_InvoiceLine_ID);</span>
+<span class="nc" id="L717">			matchInv.setM_Product_ID(mpo.getM_Product_ID());</span>
+<span class="nc" id="L718">			matchInv.setM_InOutLine_ID(M_InOutLine_ID);</span>
+<span class="nc" id="L719">			matchInv.setAD_Client_ID(mpo.getAD_Client_ID());</span>
+<span class="nc" id="L720">			matchInv.setAD_Org_ID(mpo.getAD_Org_ID());</span>
+<span class="nc" id="L721">			matchInv.setM_AttributeSetInstance_ID(mpo.getM_AttributeSetInstance_ID());</span>
+<span class="nc" id="L722">			matchInv.setQty(qty);</span>
+<span class="nc" id="L723">			matchInv.setDateTrx(dateTrx);</span>
+<span class="nc" id="L724">			matchInv.setProcessed(true);</span>
+<span class="nc bnc" id="L725" title="All 2 branches missed.">			if (!matchInv.save())</span>
+			{
+<span class="nc bnc" id="L727" title="All 2 branches missed.">				if (savepoint != null)</span>
+				{
+<span class="nc" id="L729">					trx.getConnection().rollback(savepoint);								</span>
+<span class="nc" id="L730">					savepoint = null;</span>
+<span class="nc" id="L731">				}</span>
+				else
+				{
+<span class="nc" id="L734">					matchInv.delete(true);</span>
+				}
+<span class="nc" id="L736">				String msg = &quot;Failed to auto match invoice.&quot;;</span>
+<span class="nc" id="L737">				ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L738" title="All 2 branches missed.">				if (error != null)</span>
+				{
+<span class="nc" id="L740">					msg = msg + &quot; &quot; + error.getName();</span>
+				}
+<span class="nc" id="L742">				s_log.severe(msg);</span>
+<span class="nc" id="L743">				matchInv = null;</span>
+			}
+<span class="nc" id="L745">		} catch (Exception e) {						</span>
+<span class="nc" id="L746">			s_log.log(Level.SEVERE, &quot;Failed to auto match Invoice.&quot;, e);</span>
+<span class="nc" id="L747">			matchInv = null;</span>
+		} finally {
+<span class="nc bnc" id="L749" title="All 2 branches missed.">			if (savepoint != null) </span>
+			{
+				try {
+<span class="nc" id="L752">					trx.getConnection().releaseSavepoint(savepoint);</span>
+<span class="nc" id="L753">				} catch (Exception e) {}</span>
+			}	
+		}
+		
+<span class="nc" id="L757">		return matchInv;</span>
+	}
+
+	protected MMatchInv m_matchInv;
+
+	/**
+	 * Register the match inv created for immediate accounting posting
+	 * @param matchInv
+	 */
+	protected void setMatchInvCreated(MMatchInv matchInv) {
+<span class="nc" id="L767">		m_matchInv = matchInv;</span>
+<span class="nc" id="L768">	}</span>
+
+	/**
+	 * Get the match inv created for immediate accounting posting. &lt;br/&gt;
+	 * The Match Inv record reference is set to null after call, so if you call this method twice, the second call will returns null.
+	 * @return Match Inv record or null
+	 */
+	public MMatchInv getMatchInvCreated() {
+<span class="nc" id="L776">		MMatchInv tmp = m_matchInv;</span>
+<span class="nc" id="L777">		m_matchInv = null;</span>
+<span class="nc" id="L778">		return tmp;</span>
+	}
+
+	/**	Static Logger	*/
+<span class="nc" id="L782">	private static CLogger	s_log	= CLogger.getCLogger (MMatchPO.class);</span>
+
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param M_MatchPO_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MMatchPO(Properties ctx, String M_MatchPO_UU, String trxName) {
+<span class="nc" id="L791">        super(ctx, M_MatchPO_UU, trxName);</span>
+<span class="nc bnc" id="L792" title="All 2 branches missed.">		if (Util.isEmpty(M_MatchPO_UU))</span>
+<span class="nc" id="L793">			setInitialDefaults();</span>
+<span class="nc" id="L794">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param M_MatchPO_ID id
+	 *	@param trxName transaction
+	 */
+	public MMatchPO (Properties ctx, int M_MatchPO_ID, String trxName)
+	{
+<span class="nc" id="L804">		super (ctx, M_MatchPO_ID, trxName);</span>
+<span class="nc bnc" id="L805" title="All 2 branches missed.">		if (M_MatchPO_ID == 0)</span>
+<span class="nc" id="L806">			setInitialDefaults();</span>
+<span class="nc" id="L807">	}	//	MMatchPO</span>
+
+	/**
+	 * Set the initial defaults for a new record
+	 */
+	private void setInitialDefaults() {
+<span class="nc" id="L813">		setM_AttributeSetInstance_ID(0);</span>
+<span class="nc" id="L814">		setPosted (false);</span>
+<span class="nc" id="L815">		setProcessed (false);</span>
+<span class="nc" id="L816">		setProcessing (false);</span>
+<span class="nc" id="L817">	}</span>
+
+	/**
+	 * 	Load Construor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MMatchPO (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L827">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L828">	}	//	MMatchPO</span>
+	
+	/**
+	 * 	Shipment Line Constructor
+	 *	@param sLine shipment line
+	 *	@param dateTrx optional date
+	 *	@param qty matched quantity
+	 */
+	public MMatchPO (MInOutLine sLine, Timestamp dateTrx, BigDecimal qty)
+	{
+<span class="nc" id="L838">		this (sLine.getCtx(), 0, sLine.get_TrxName());</span>
+<span class="nc" id="L839">		setClientOrg(sLine);</span>
+<span class="nc" id="L840">		setM_InOutLine_ID (sLine.getM_InOutLine_ID());</span>
+<span class="nc" id="L841">		setC_OrderLine_ID (sLine.getC_OrderLine_ID());</span>
+<span class="nc bnc" id="L842" title="All 2 branches missed.">		if (dateTrx != null)</span>
+<span class="nc" id="L843">			setDateTrx (dateTrx);</span>
+<span class="nc" id="L844">		setM_Product_ID (sLine.getM_Product_ID());</span>
+<span class="nc" id="L845">		setM_AttributeSetInstance_ID(sLine.getM_AttributeSetInstance_ID());</span>
+<span class="nc" id="L846">		setQty (qty);</span>
+<span class="nc" id="L847">		setProcessed(true);		//	auto</span>
+<span class="nc" id="L848">	}	//	MMatchPO</span>
+
+	/**
+	 * 	Invoice Line Constructor
+	 *	@param iLine invoice line
+	 *	@param dateTrx optional date
+	 *	@param qty matched quantity
+	 */
+	public MMatchPO (MInvoiceLine iLine, Timestamp dateTrx, BigDecimal qty)
+	{
+<span class="nc" id="L858">		this (iLine.getCtx(), 0, iLine.get_TrxName());</span>
+<span class="nc" id="L859">		setClientOrg(iLine);</span>
+<span class="nc" id="L860">		setC_InvoiceLine_ID(iLine);</span>
+<span class="nc bnc" id="L861" title="All 2 branches missed.">		if (iLine.getC_OrderLine_ID() != 0)</span>
+<span class="nc" id="L862">			setC_OrderLine_ID (iLine.getC_OrderLine_ID());</span>
+<span class="nc bnc" id="L863" title="All 2 branches missed.">		if (dateTrx != null)</span>
+<span class="nc" id="L864">			setDateTrx (dateTrx);</span>
+<span class="nc" id="L865">		setM_Product_ID (iLine.getM_Product_ID());</span>
+<span class="nc" id="L866">		setM_AttributeSetInstance_ID(iLine.getM_AttributeSetInstance_ID());</span>
+<span class="nc" id="L867">		setQty (qty);</span>
+<span class="nc" id="L868">		setProcessed(true);		//	auto</span>
+<span class="nc" id="L869">	}	//	MMatchPO</span>
+	
+	/** Invoice Line Changed			*/
+<span class="nc" id="L872">	protected boolean m_isInvoiceLineChange = false;</span>
+	/** InOut Line Changed			*/
+<span class="nc" id="L874">	protected boolean m_isInOutLineChange = false;</span>
+	/** Order Line				*/
+<span class="nc" id="L876">	protected MOrderLine		m_oLine = null;</span>
+	/** Invoice Line			*/
+<span class="nc" id="L878">	protected MInvoiceLine	m_iLine = null;</span>
+		
+	/**
+	 * 	Set C_InvoiceLine_ID
+	 *	@param line line
+	 */
+	public void setC_InvoiceLine_ID (MInvoiceLine line)
+	{
+<span class="nc" id="L886">		m_iLine = line;</span>
+<span class="nc bnc" id="L887" title="All 2 branches missed.">		if (line == null)</span>
+<span class="nc" id="L888">			setC_InvoiceLine_ID(0);</span>
+		else
+<span class="nc" id="L890">			setC_InvoiceLine_ID(line.getC_InvoiceLine_ID());</span>
+<span class="nc" id="L891">	}	//	setC_InvoiceLine_ID</span>
+
+	/**
+	 * 	Set C_InvoiceLine_ID
+	 *	@param C_InvoiceLine_ID id
+	 */
+	public void setC_InvoiceLine_ID (int C_InvoiceLine_ID)
+	{
+<span class="nc" id="L899">		int old = getC_InvoiceLine_ID();</span>
+<span class="nc bnc" id="L900" title="All 2 branches missed.">		if (old != C_InvoiceLine_ID)</span>
+		{
+<span class="nc" id="L902">			super.setC_InvoiceLine_ID (C_InvoiceLine_ID);</span>
+<span class="nc" id="L903">			m_isInvoiceLineChange = true;</span>
+		}
+<span class="nc" id="L905">	}	//	setC_InvoiceLine_ID</span>
+
+	/**
+	 * 	Get Invoice Line
+	 *	@return invoice line or null
+	 */
+	public MInvoiceLine getInvoiceLine()
+	{
+<span class="nc bnc" id="L913" title="All 4 branches missed.">		if (m_iLine == null &amp;&amp; getC_InvoiceLine_ID() != 0)</span>
+<span class="nc" id="L914">			m_iLine = new MInvoiceLine(getCtx(), getC_InvoiceLine_ID(), get_TrxName());</span>
+<span class="nc" id="L915">		return m_iLine;</span>
+	}	//	getInvoiceLine
+	
+	/**
+	 * 	Set M_InOutLine_ID
+	 *	@param M_InOutLine_ID id
+	 */
+	public void setM_InOutLine_ID (int M_InOutLine_ID)
+	{
+<span class="nc" id="L924">		int old = getM_InOutLine_ID();</span>
+<span class="nc bnc" id="L925" title="All 2 branches missed.">		if (old != M_InOutLine_ID)</span>
+		{
+<span class="nc" id="L927">			super.setM_InOutLine_ID (M_InOutLine_ID);</span>
+<span class="nc" id="L928">			m_isInOutLineChange = true;</span>
+		}
+<span class="nc" id="L930">	}	//	setM_InOutLine_ID</span>
+	
+	/**
+	 * 	Set C_OrderLine_ID
+	 *	@param line line
+	 */
+	public void setC_OrderLine_ID (MOrderLine line)
+	{
+<span class="nc" id="L938">		m_oLine = line;</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">		if (line == null)</span>
+<span class="nc" id="L940">			setC_OrderLine_ID(0);</span>
+		else
+<span class="nc" id="L942">			setC_OrderLine_ID(line.getC_OrderLine_ID());</span>
+<span class="nc" id="L943">	}	//	setC_InvoiceLine_ID</span>
+
+	/**
+	 * 	Get Order Line
+	 *	@return order line or null
+	 */
+	public MOrderLine getOrderLine()
+	{
+<span class="nc bnc" id="L951" title="All 4 branches missed.">		if ((m_oLine == null &amp;&amp; getC_OrderLine_ID() != 0) </span>
+<span class="nc bnc" id="L952" title="All 2 branches missed.">			|| getC_OrderLine_ID() != m_oLine.getC_OrderLine_ID())</span>
+<span class="nc" id="L953">			m_oLine = new MOrderLine(getCtx(), getC_OrderLine_ID(), get_TrxName());</span>
+<span class="nc" id="L954">		return m_oLine;</span>
+	}	//	getOrderLine
+	
+	/**
+	 * Get PriceActual from Invoice and convert it to Order Currency.
+	 * @return Price Actual in Order Currency
+	 */
+	public BigDecimal getInvoicePriceActual()
+	{
+<span class="nc" id="L963">		MInvoiceLine iLine = getInvoiceLine();</span>
+<span class="nc" id="L964">		MInvoice invoice = iLine.getParent();</span>
+<span class="nc" id="L965">		MOrder order = getOrderLine().getParent();</span>
+
+<span class="nc" id="L967">		BigDecimal priceActual = iLine.getPriceActual();</span>
+<span class="nc" id="L968">		int invoiceCurrency_ID = invoice.getC_Currency_ID();</span>
+<span class="nc" id="L969">		int orderCurrency_ID = order.getC_Currency_ID();</span>
+<span class="nc bnc" id="L970" title="All 2 branches missed.">		if (invoiceCurrency_ID != orderCurrency_ID)</span>
+		{
+<span class="nc" id="L972">			priceActual = MConversionRate.convert(getCtx(), priceActual, invoiceCurrency_ID, orderCurrency_ID,</span>
+<span class="nc" id="L973">										invoice.getDateInvoiced(), invoice.getC_ConversionType_ID(),</span>
+<span class="nc" id="L974">										getAD_Client_ID(), getAD_Org_ID());</span>
+			
+<span class="nc bnc" id="L976" title="All 2 branches missed.">			if (priceActual == null)</span>
+<span class="nc" id="L977">				throw new AdempiereException(MConversionRateUtil.getErrorMessage(getCtx(), &quot;ErrorConvertingCurrencyToBaseCurrency&quot;,</span>
+<span class="nc" id="L978">						invoiceCurrency_ID, orderCurrency_ID, invoice.getC_ConversionType_ID(), invoice.getDateInvoiced(), get_TrxName()));</span>
+		}
+<span class="nc" id="L980">		return priceActual;</span>
+	}
+	
+	@Override
+	protected boolean beforeSave (boolean newRecord)
+	{
+		//	Set DateTrx to today date
+<span class="nc bnc" id="L987" title="All 2 branches missed.">		if (getDateTrx() == null)</span>
+<span class="nc" id="L988">			setDateTrx (new Timestamp(System.currentTimeMillis()));</span>
+		//	Set Acct Date
+<span class="nc bnc" id="L990" title="All 2 branches missed.">		if (getDateAcct() == null)</span>
+		{
+<span class="nc" id="L992">			Timestamp ts = getNewerDateAcct();</span>
+<span class="nc bnc" id="L993" title="All 2 branches missed.">			if (ts == null)</span>
+<span class="nc" id="L994">				ts = getDateTrx();</span>
+<span class="nc" id="L995">			setDateAcct (ts);</span>
+		}
+		//	Set ASI from Receipt
+<span class="nc bnc" id="L998" title="All 4 branches missed.">		if (getM_AttributeSetInstance_ID() == 0 &amp;&amp; getM_InOutLine_ID() != 0)</span>
+		{
+<span class="nc" id="L1000">			MInOutLine iol = new MInOutLine (getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1001">			setM_AttributeSetInstance_ID(iol.getM_AttributeSetInstance_ID());</span>
+		}
+		
+		// Set C_InvoiceLine_ID from MatchInv records
+<span class="nc bnc" id="L1005" title="All 6 branches missed.">		if (newRecord &amp;&amp; getC_InvoiceLine_ID() == 0 &amp;&amp; getReversal_ID()==0) </span>
+		{
+<span class="nc" id="L1007">			MMatchInv[] mpi = MMatchInv.getInOutLine(getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">			for (int i = 0; i &lt; mpi.length; i++) </span>
+			{
+<span class="nc bnc" id="L1010" title="All 2 branches missed.">				if (mpi[i].getC_InvoiceLine_ID() != 0 &amp;&amp; </span>
+<span class="nc bnc" id="L1011" title="All 2 branches missed.">						mpi[i].getM_AttributeSetInstance_ID() == getM_AttributeSetInstance_ID()) </span>
+				{
+					// skip if m_matchpo have been created
+<span class="nc" id="L1014">					int cnt = DB.getSQLValue(get_TrxName(), &quot;SELECT Count(*) FROM M_MatchPO WHERE M_InOutLine_ID=&quot;+getM_InOutLine_ID()</span>
+<span class="nc" id="L1015">							+&quot; AND C_InvoiceLine_ID=&quot;+mpi[i].getC_InvoiceLine_ID());</span>
+<span class="nc bnc" id="L1016" title="All 2 branches missed.">					if (cnt &gt; 0)</span>
+<span class="nc" id="L1017">						continue;</span>
+					
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">					if (mpi[i].getQty().compareTo(getQty()) == 0)  // same quantity</span>
+					{
+<span class="nc" id="L1021">						setC_InvoiceLine_ID(mpi[i].getC_InvoiceLine_ID());</span>
+<span class="nc" id="L1022">						break;</span>
+					}
+					else 
+					{
+						// Create new MatchPO record for PO-Invoice if quantity is different
+<span class="nc" id="L1027">						MInvoiceLine il = new MInvoiceLine(getCtx(), mpi[i].getC_InvoiceLine_ID(), get_TrxName());						</span>
+<span class="nc" id="L1028">						MMatchPO match = new MMatchPO(il, getDateTrx(), mpi[i].getQty());</span>
+<span class="nc" id="L1029">						match.setC_OrderLine_ID(getC_OrderLine_ID());</span>
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">						if (!match.save())</span>
+						{
+<span class="nc" id="L1032">							String msg = &quot;Failed to create match po&quot;;</span>
+<span class="nc" id="L1033">							ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">							if (error != null)</span>
+<span class="nc" id="L1035">								msg = msg + &quot; &quot; + error.getName();</span>
+<span class="nc" id="L1036">							throw new RuntimeException(msg);</span>
+						}
+					}
+				}
+			}
+		}
+		
+		//	Find OrderLine or invoice line or material receipt line
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">		if (getC_OrderLine_ID() == 0)</span>
+		{
+<span class="nc" id="L1046">			MInvoiceLine il = null;</span>
+<span class="nc bnc" id="L1047" title="All 2 branches missed.">			if (getC_InvoiceLine_ID() != 0)</span>
+			{
+				// get from invoice
+<span class="nc" id="L1050">				il = getInvoiceLine();</span>
+<span class="nc bnc" id="L1051" title="All 2 branches missed.">				if (il.getC_OrderLine_ID() != 0)</span>
+<span class="nc" id="L1052">					setC_OrderLine_ID(il.getC_OrderLine_ID());</span>
+			}	
+<span class="nc bnc" id="L1054" title="All 4 branches missed.">			if (getC_OrderLine_ID() == 0 &amp;&amp; getM_InOutLine_ID() != 0)</span>
+			{
+<span class="nc" id="L1056">				MInOutLine iol = new MInOutLine (getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">				if (iol.getC_OrderLine_ID() != 0)</span>
+				{
+<span class="nc" id="L1059">					setC_OrderLine_ID(iol.getC_OrderLine_ID());</span>
+<span class="nc bnc" id="L1060" title="All 2 branches missed.">					if (il != null)</span>
+					{
+<span class="nc" id="L1062">						il.setC_OrderLine_ID(iol.getC_OrderLine_ID());</span>
+<span class="nc" id="L1063">						il.saveEx();</span>
+					}
+				}
+			}	//	get from shipment
+		}	//	find order line
+		
+		//	Set PriceMatchDifference to difference between PO price and Invoice price
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">		if (getC_OrderLine_ID() != 0 </span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">			&amp;&amp; getC_InvoiceLine_ID() != 0</span>
+<span class="nc bnc" id="L1072" title="All 2 branches missed.">			&amp;&amp; (newRecord || </span>
+<span class="nc bnc" id="L1073" title="All 4 branches missed.">				is_ValueChanged(&quot;C_OrderLine_ID&quot;) || is_ValueChanged(&quot;C_InvoiceLine_ID&quot;)))</span>
+		{
+<span class="nc" id="L1075">			BigDecimal poPrice = getOrderLine().getPriceActual();</span>
+<span class="nc" id="L1076">			BigDecimal invPrice = getInvoicePriceActual();</span>
+<span class="nc" id="L1077">			BigDecimal difference = poPrice.subtract(invPrice);</span>
+<span class="nc bnc" id="L1078" title="All 2 branches missed.">			if (difference.signum() != 0)</span>
+			{
+<span class="nc" id="L1080">				difference = difference.multiply(getQty());</span>
+<span class="nc" id="L1081">				setPriceMatchDifference(difference);</span>
+				//	Validate against PriceMatchTolerance of business partner group and update IsApproved
+<span class="nc" id="L1083">				MBPGroup group = MBPGroup.getOfBPartner(getCtx(), getOrderLine().getC_BPartner_ID());</span>
+<span class="nc" id="L1084">				BigDecimal mt = group.getPriceMatchTolerance();</span>
+<span class="nc bnc" id="L1085" title="All 4 branches missed.">				if (mt != null &amp;&amp; mt.signum() != 0)</span>
+				{
+<span class="nc" id="L1087">					BigDecimal poAmt = poPrice.multiply(getQty());</span>
+<span class="nc" id="L1088">					BigDecimal maxTolerance = poAmt.multiply(mt);</span>
+<span class="nc" id="L1089">					maxTolerance = maxTolerance.abs()</span>
+<span class="nc" id="L1090">						.divide(Env.ONEHUNDRED, 2, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L1091">					difference = difference.abs();</span>
+<span class="nc bnc" id="L1092" title="All 2 branches missed.">					boolean ok = difference.compareTo(maxTolerance) &lt;= 0;</span>
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">					if (log.isLoggable(Level.CONFIG)) log.config(&quot;Difference=&quot; + getPriceMatchDifference() </span>
+<span class="nc" id="L1094">						+ &quot;, Max=&quot; + maxTolerance + &quot; =&gt; &quot; + ok);</span>
+<span class="nc" id="L1095">					setIsApproved(ok);</span>
+				}
+<span class="nc" id="L1097">			}</span>
+			else
+			{
+<span class="nc" id="L1100">				setPriceMatchDifference(difference);</span>
+<span class="nc" id="L1101">				setIsApproved(true);</span>
+			}
+			
+			// Validate existence of corresponding invoice matching record.
+<span class="nc bnc" id="L1105" title="All 4 branches missed.">			if (getM_InOutLine_ID() &gt; 0 &amp;&amp; getC_InvoiceLine_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L1107">				int cnt = DB.getSQLValue(get_TrxName(), &quot;SELECT Count(*) FROM M_MatchInv WHERE M_InOutLine_ID=&quot;+getM_InOutLine_ID()</span>
+<span class="nc" id="L1108">						+&quot; AND C_InvoiceLine_ID=&quot;+getC_InvoiceLine_ID());</span>
+<span class="nc bnc" id="L1109" title="All 2 branches missed.">				if (cnt &lt;= 0)</span>
+				{
+<span class="nc" id="L1111">					MInvoiceLine invoiceLine = new MInvoiceLine(getCtx(), getC_InvoiceLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1112">					MInOutLine inoutLine = new MInOutLine(getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1113">					throw new IllegalStateException(&quot;[MatchPO] Missing corresponding invoice matching record for invoice line &quot;</span>
+<span class="nc" id="L1114">							+ invoiceLine + &quot; and receipt line &quot; + inoutLine);</span>
+				}
+			}
+		}
+		
+<span class="nc" id="L1119">		return true;</span>
+	}	//	beforeSave	
+	
+	@Override
+	protected boolean afterSave (boolean newRecord, boolean success)
+	{
+		// Perform matched qty validation
+<span class="nc bnc" id="L1126" title="All 2 branches missed.">		if (success)</span>
+		{
+			// Validate total M_MatchPO.Qty for M_InOutLine_ID against M_InOutLine.MovementQty
+<span class="nc bnc" id="L1129" title="All 2 branches missed.">			if (getM_InOutLine_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L1131">				MInOutLine line = new MInOutLine(getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1132">				BigDecimal matchedQty = DB.getSQLValueBD(get_TrxName(), &quot;SELECT Coalesce(SUM(Qty),0) FROM M_MatchPO WHERE M_InOutLine_ID=?&quot; , getM_InOutLine_ID());</span>
+<span class="nc bnc" id="L1133" title="All 6 branches missed.">				if (line.getMovementQty().signum() &gt; 0 &amp;&amp; matchedQty != null &amp;&amp; matchedQty.compareTo(line.getMovementQty()) &gt; 0)</span>
+				{
+<span class="nc" id="L1135">					throw new IllegalStateException(&quot;Total matched qty &gt; movement qty. MatchedQty=&quot;+matchedQty+&quot;, MovementQty=&quot;+line.getMovementQty()+&quot;, Line=&quot;+line);</span>
+				}
+			}
+			
+			// Validate total M_MatchPO.Qty for C_InvoiceLine_ID against C_InvoiceLine.QtyInvoiced
+<span class="nc bnc" id="L1140" title="All 2 branches missed.">			if (getC_InvoiceLine_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L1142">				MInvoiceLine line = new MInvoiceLine(getCtx(), getC_InvoiceLine_ID(), get_TrxName());				</span>
+<span class="nc" id="L1143">				BigDecimal matchedQty = DB.getSQLValueBD(get_TrxName(), &quot;SELECT Coalesce(SUM(Qty),0) FROM M_MatchPO WHERE C_InvoiceLine_ID=?  AND Reversal_ID IS NULL &quot; , getC_InvoiceLine_ID() );</span>
+<span class="nc bnc" id="L1144" title="All 4 branches missed.">				if (matchedQty != null &amp;&amp; matchedQty.compareTo(line.getQtyInvoiced()) &gt; 0)</span>
+				{
+<span class="nc" id="L1146">					throw new IllegalStateException(&quot;Total matched qty &gt; invoiced qty. MatchedQty=&quot;+matchedQty+&quot;, InvoicedQty=&quot;+line.getQtyInvoiced()+&quot;, Line=&quot;+line);</span>
+				}
+			}
+			
+			// Validate matching for QtyOrdered
+<span class="nc bnc" id="L1151" title="All 2 branches missed.">			if (getC_OrderLine_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L1153">				boolean validateOrderedQty = MSysConfig.getBooleanValue(MSysConfig.VALIDATE_MATCHING_TO_ORDERED_QTY, true, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">				if (validateOrderedQty)</span>
+				{
+					// Validate total M_MatchPO.Qty (with C_InvoiceLine) for C_OrderLine_ID against C_OrderLine.QtyOrdered
+<span class="nc" id="L1157">					MOrderLine line = new MOrderLine(getCtx(), getC_OrderLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1158">					BigDecimal qtyOrdered = line.getQtyOrdered();</span>
+<span class="nc" id="L1159">					BigDecimal invoicedQty = DB.getSQLValueBD(get_TrxName(), &quot;SELECT Coalesce(SUM(Qty),0) FROM M_MatchPO WHERE C_InvoiceLine_ID &gt; 0 and C_OrderLine_ID=? AND Reversal_ID IS NULL&quot; , getC_OrderLine_ID());</span>
+<span class="nc bnc" id="L1160" title="All 2 branches missed.">					if (    invoicedQty != null</span>
+<span class="nc bnc" id="L1161" title="All 4 branches missed.">						&amp;&amp; (   (qtyOrdered.signum() &gt; 0 &amp;&amp; invoicedQty.compareTo(qtyOrdered) &gt; 0)</span>
+<span class="nc bnc" id="L1162" title="All 4 branches missed.">						    || (qtyOrdered.signum() &lt; 0 &amp;&amp; invoicedQty.compareTo(qtyOrdered) &lt; 0)</span>
+						   )
+					   )
+					{
+<span class="nc" id="L1166">						throw new IllegalStateException(&quot;Total matched invoiced qty &gt; ordered qty. MatchedInvoicedQty=&quot;+invoicedQty+&quot;, OrderedQty=&quot;+qtyOrdered+&quot;, Line=&quot;+line);</span>
+					}
+					// Validate total M_MatchPO.Qty (with M_InOutLine) for C_OrderLine_ID against C_OrderLine.QtyOrdered
+<span class="nc" id="L1169">					BigDecimal deliveredQty = DB.getSQLValueBD(get_TrxName(), &quot;SELECT Coalesce(SUM(Qty),0) FROM M_MatchPO WHERE M_InOutLine_ID &gt; 0 and C_OrderLine_ID=? AND Reversal_ID IS NULL&quot; , getC_OrderLine_ID());</span>
+<span class="nc bnc" id="L1170" title="All 2 branches missed.">					if (   deliveredQty != null</span>
+<span class="nc bnc" id="L1171" title="All 4 branches missed.">						&amp;&amp; (   (qtyOrdered.signum() &gt; 0 &amp;&amp; deliveredQty.compareTo(qtyOrdered) &gt; 0)</span>
+<span class="nc bnc" id="L1172" title="All 4 branches missed.">						    || (qtyOrdered.signum() &lt; 0 &amp;&amp; deliveredQty.compareTo(qtyOrdered) &lt; 0)</span>
+						   )
+					   )
+					{
+<span class="nc" id="L1176">						throw new IllegalStateException(&quot;Total matched delivered qty &gt; ordered qty. MatchedDeliveredQty=&quot;+deliveredQty+&quot;, OrderedQty=&quot;+qtyOrdered+&quot;, Line=&quot;+line);</span>
+					}
+				}
+			}
+		}
+				
+		//	Purchase Order Delivered/Invoiced
+		//	(Reserved in WMatch and MInOut.completeIt)
+<span class="nc bnc" id="L1184" title="All 4 branches missed.">		if (success &amp;&amp; getC_OrderLine_ID() != 0)</span>
+		{
+<span class="nc" id="L1186">			MOrderLine orderLine = getOrderLine();</span>
+			// Update C_OrderLine.QtyDelivered and C_OrderLine.DateDelivered
+<span class="nc bnc" id="L1188" title="All 6 branches missed.">			if (m_isInOutLineChange &amp;&amp; (newRecord || getM_InOutLine_ID() != get_ValueOldAsInt(&quot;M_InOutLine_ID&quot;)))</span>
+			{
+<span class="nc bnc" id="L1190" title="All 2 branches missed.">				if (getM_InOutLine_ID() != 0)							//	new delivery</span>
+<span class="nc" id="L1191">					orderLine.setQtyDelivered(orderLine.getQtyDelivered().add(getQty()));</span>
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">				else if (!newRecord) //	if (getM_InOutLine_ID() == 0)					//	reset to 0</span>
+<span class="nc" id="L1193">					orderLine.setQtyDelivered(orderLine.getQtyDelivered().subtract(getQty()));</span>
+<span class="nc" id="L1194">				orderLine.setDateDelivered(getDateTrx());	//	overwrite=last</span>
+<span class="nc" id="L1195">			}</span>
+<span class="nc bnc" id="L1196" title="All 6 branches missed.">			else if (!newRecord &amp;&amp; getM_InOutLine_ID() &gt; 0 &amp;&amp; is_ValueChanged(COLUMNNAME_Qty))</span>
+			{
+<span class="nc" id="L1198">				BigDecimal oldQty = (BigDecimal)(get_ValueOld(COLUMNNAME_Qty));</span>
+<span class="nc" id="L1199">				orderLine.setQtyDelivered(orderLine.getQtyDelivered().subtract(oldQty.subtract(getQty())));</span>
+			}
+			// Update C_OrderLine.QtyInvoiced and C_OrderLine.DateInvoiced
+<span class="nc bnc" id="L1202" title="All 6 branches missed.">			if (m_isInvoiceLineChange &amp;&amp; (newRecord || getC_InvoiceLine_ID() != get_ValueOldAsInt(&quot;C_InvoiceLine_ID&quot;)))</span>
+			{
+<span class="nc bnc" id="L1204" title="All 2 branches missed.">				if (getC_InvoiceLine_ID() != 0)						//	first time</span>
+<span class="nc" id="L1205">					orderLine.setQtyInvoiced(orderLine.getQtyInvoiced().add(getQty()));</span>
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">				else if (!newRecord) //	if (getC_InvoiceLine_ID() == 0)				//	set to 0</span>
+<span class="nc" id="L1207">					orderLine.setQtyInvoiced(orderLine.getQtyInvoiced().subtract(getQty()));</span>
+<span class="nc" id="L1208">				orderLine.setDateInvoiced(getDateTrx());	//	overwrite=last</span>
+<span class="nc" id="L1209">			}</span>
+<span class="nc bnc" id="L1210" title="All 6 branches missed.">			else if (!newRecord &amp;&amp; getC_InvoiceLine_ID() &gt; 0 &amp;&amp; is_ValueChanged(COLUMNNAME_Qty))</span>
+			{
+<span class="nc" id="L1212">				BigDecimal oldQty = (BigDecimal)(get_ValueOld(COLUMNNAME_Qty));</span>
+<span class="nc" id="L1213">				orderLine.setQtyInvoiced(orderLine.getQtyInvoiced().subtract(oldQty.subtract(getQty())));</span>
+			}
+			
+			//	Update Order ASI from M_InOutLine if it is exact quantity match between C_OrderLine and M_InOutLine
+<span class="nc bnc" id="L1217" title="All 2 branches missed.">			if (orderLine.getM_AttributeSetInstance_ID() == 0</span>
+<span class="nc bnc" id="L1218" title="All 2 branches missed.">				&amp;&amp; getM_InOutLine_ID() != 0)</span>
+			{
+<span class="nc" id="L1220">				MInOutLine iol = new MInOutLine (getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1221" title="All 2 branches missed.">				if (iol.getMovementQty().compareTo(orderLine.getQtyOrdered()) == 0)</span>
+<span class="nc" id="L1222">					orderLine.setM_AttributeSetInstance_ID(iol.getM_AttributeSetInstance_ID());</span>
+			}
+<span class="nc" id="L1224">			return orderLine.save();</span>
+		}
+		//
+<span class="nc" id="L1227">		return success;</span>
+	}	//	afterSave
+	
+	/**
+	 * 	Get the newer Date Acct between invoice and shipment
+	 *	@return date or null
+	 */
+	public Timestamp getNewerDateAcct()
+	{
+<span class="nc" id="L1236">		Timestamp invoiceDate = null;</span>
+<span class="nc" id="L1237">		Timestamp shipDate = null;</span>
+		
+<span class="nc bnc" id="L1239" title="All 2 branches missed.">		if (getC_InvoiceLine_ID() != 0)</span>
+		{
+<span class="nc" id="L1241">			String sql = &quot;SELECT i.DateAcct &quot;</span>
+				+ &quot;FROM C_InvoiceLine il&quot;
+				+ &quot; INNER JOIN C_Invoice i ON (i.C_Invoice_ID=il.C_Invoice_ID) &quot;
+				+ &quot;WHERE C_InvoiceLine_ID=?&quot;;
+<span class="nc" id="L1245">			invoiceDate = DB.getSQLValueTS(null, sql, getC_InvoiceLine_ID());</span>
+		}
+		//
+<span class="nc bnc" id="L1248" title="All 2 branches missed.">		if (getM_InOutLine_ID() != 0)</span>
+		{
+<span class="nc" id="L1250">			String sql = &quot;SELECT io.DateAcct &quot;</span>
+				+ &quot;FROM M_InOutLine iol&quot;
+				+ &quot; INNER JOIN M_InOut io ON (io.M_InOut_ID=iol.M_InOut_ID) &quot;
+				+ &quot;WHERE iol.M_InOutLine_ID=?&quot;;
+<span class="nc" id="L1254">			shipDate = DB.getSQLValueTS(null, sql, getM_InOutLine_ID());</span>
+		}
+		//
+		//	Assuming that order date is always earlier
+<span class="nc bnc" id="L1258" title="All 2 branches missed.">		if (invoiceDate == null)</span>
+<span class="nc" id="L1259">			return shipDate;</span>
+<span class="nc bnc" id="L1260" title="All 2 branches missed.">		if (shipDate == null)</span>
+<span class="nc" id="L1261">			return invoiceDate;</span>
+<span class="nc bnc" id="L1262" title="All 2 branches missed.">		if (invoiceDate.after(shipDate))</span>
+<span class="nc" id="L1263">			return invoiceDate;</span>
+<span class="nc" id="L1264">		return shipDate;</span>
+	}	//	getNewerDateAcct
+	
+	@Override
+	protected boolean beforeDelete ()
+	{
+		// Check is period open and delete postings (Fact_Acct)
+<span class="nc bnc" id="L1271" title="All 2 branches missed.">		if (isPosted())</span>
+		{
+<span class="nc" id="L1273">			MPeriod.testPeriodOpen(getCtx(), getDateTrx(), MDocType.DOCBASETYPE_MatchPO, getAD_Org_ID());</span>
+<span class="nc" id="L1274">			setPosted(false);</span>
+<span class="nc" id="L1275">			MFactAcct.deleteEx (Table_ID, get_ID(), get_TrxName());</span>
+		}
+<span class="nc" id="L1277">		return true;</span>
+	}	//	beforeDelete
+	
+	@Override
+	protected boolean afterDelete (boolean success)
+	{
+		// Update QtyDelivered and QtyInvoiced of order line
+<span class="nc bnc" id="L1284" title="All 4 branches missed.">		if (success &amp;&amp; getC_OrderLine_ID() != 0)</span>
+		{
+<span class="nc" id="L1286">			MOrderLine orderLine = new MOrderLine (getCtx(), getC_OrderLine_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1287" title="All 2 branches missed.">			if (getM_InOutLine_ID() != 0)</span>
+<span class="nc" id="L1288">				orderLine.setQtyDelivered(orderLine.getQtyDelivered().subtract(getQty()));</span>
+<span class="nc bnc" id="L1289" title="All 2 branches missed.">			if (getC_InvoiceLine_ID() != 0)</span>
+<span class="nc" id="L1290">				orderLine.setQtyInvoiced(orderLine.getQtyInvoiced().subtract(getQty()));</span>
+<span class="nc" id="L1291">			return orderLine.save(get_TrxName());</span>
+		}
+<span class="nc" id="L1293">		return success;</span>
+	}	//	afterDelete
+		
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L1303">		StringBuilder sb = new StringBuilder (&quot;MMatchPO[&quot;);</span>
+<span class="nc" id="L1304">		sb.append (get_ID())</span>
+<span class="nc" id="L1305">			.append (&quot;,Qty=&quot;).append (getQty())</span>
+<span class="nc" id="L1306">			.append (&quot;,C_OrderLine_ID=&quot;).append (getC_OrderLine_ID())</span>
+<span class="nc" id="L1307">			.append (&quot;,M_InOutLine_ID=&quot;).append (getM_InOutLine_ID())</span>
+<span class="nc" id="L1308">			.append (&quot;,C_InvoiceLine_ID=&quot;).append (getC_InvoiceLine_ID())</span>
+<span class="nc" id="L1309">			.append (&quot;,Processed=&quot;).append(isProcessed())</span>
+<span class="nc" id="L1310">			.append (&quot;,Posted=&quot;).append(isPosted())</span>
+<span class="nc" id="L1311">			.append (&quot;]&quot;);</span>
+<span class="nc" id="L1312">		return sb.toString ();</span>
+	}	//	toString
+	
+	/**
+	 * 	Reverse this MatchPO document.
+	 *  @param reversalDate
+	 *	@return true if reversed
+	 *	@throws Exception
+	 */
+	public boolean reverse(Timestamp reversalDate)
+	{
+<span class="nc" id="L1323">		return reverse(reversalDate, false);</span>
+	}
+	
+	/**
+	 * 	Reverse this MatchPO document.
+	 *  @param reversalDate
+	 *  @param reverseMatchingOnly true if MR is not reverse
+	 *	@return true if reversed
+	 *	@throws Exception
+	 */
+
+	public boolean reverse(Timestamp reversalDate, boolean reverseMatchingOnly)  
+	{
+<span class="nc bnc" id="L1336" title="All 4 branches missed.">		if (this.isProcessed() &amp;&amp; this.getReversal_ID() == 0)</span>
+		{		
+<span class="nc" id="L1338">			MMatchPO reversal = new MMatchPO (getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L1339">			reversal.setC_InvoiceLine_ID(getC_InvoiceLine_ID()); </span>
+<span class="nc" id="L1340">			reversal.setM_InOutLine_ID(getM_InOutLine_ID());</span>
+<span class="nc bnc" id="L1341" title="All 2 branches missed.">			if (getC_OrderLine_ID() != 0)			</span>
+<span class="nc" id="L1342">				reversal.setC_OrderLine_ID(getC_OrderLine_ID());</span>
+			else{
+<span class="nc" id="L1344">				MInOutLine inoutLine = new MInOutLine(getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1345">				reversal.setC_OrderLine_ID(inoutLine.getC_OrderLine_ID());</span>
+			}
+<span class="nc" id="L1347">			reversal.setM_Product_ID(getM_Product_ID());</span>
+<span class="nc" id="L1348">			reversal.setM_AttributeSetInstance_ID(getM_AttributeSetInstance_ID());</span>
+<span class="nc" id="L1349">			reversal.setAD_Org_ID(this.getAD_Org_ID());</span>
+<span class="nc" id="L1350">			reversal.setDescription(&quot;(-&gt;&quot; + this.getDocumentNo() + &quot;)&quot;);</span>
+<span class="nc" id="L1351">			reversal.setQty(this.getQty().negate());</span>
+<span class="nc" id="L1352">			reversal.setDateAcct(reversalDate);</span>
+<span class="nc" id="L1353">			reversal.setDateTrx(reversalDate);</span>
+<span class="nc" id="L1354">			reversal.set_ValueNoCheck (&quot;DocumentNo&quot;, null);</span>
+<span class="nc" id="L1355">			reversal.setPosted (false);</span>
+<span class="nc" id="L1356">			reversal.setProcessed(true);</span>
+<span class="nc" id="L1357">			reversal.setRef_MatchPO_ID(getRef_MatchPO_ID());</span>
+<span class="nc" id="L1358">			reversal.setReversal_ID(getM_MatchPO_ID());   	</span>
+<span class="nc" id="L1359">			reversal.saveEx();</span>
+
+<span class="nc" id="L1361">			this.setDescription(&quot;(&quot; + reversal.getDocumentNo() + &quot;&lt;-)&quot;);			</span>
+<span class="nc" id="L1362">			this.setReversal_ID(reversal.getM_MatchPO_ID());</span>
+<span class="nc" id="L1363">			this.saveEx();</span>
+
+			//update qtyOrdered
+<span class="nc bnc" id="L1366" title="All 6 branches missed.">			if (reverseMatchingOnly &amp;&amp; reversal.getM_InOutLine_ID() &gt; 0 &amp;&amp; reversal.getC_OrderLine_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L1368">				MInOutLine sLine = new MInOutLine(Env.getCtx(), reversal.getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1369" title="All 4 branches missed.">				if (sLine.getMovementQty().compareTo(this.getQty()) == 0 &amp;&amp; sLine.getC_OrderLine_ID() == reversal.getC_OrderLine_ID())</span>
+				{
+					//clear c_orderline from shipment so we can match the shipment again (to the same or different order line)
+<span class="nc" id="L1372">					sLine.setC_OrderLine_ID(0);</span>
+<span class="nc" id="L1373">					sLine.saveEx();					</span>
+				}
+				//add back qtyOrdered
+<span class="nc" id="L1376">				MOrderLine oLine = new MOrderLine(Env.getCtx(), reversal.getC_OrderLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1377">				BigDecimal storageReservationToUpdate = oLine.getQtyReserved();</span>
+<span class="nc" id="L1378">				oLine.setQtyReserved(oLine.getQtyReserved().add(getQty()));</span>
+<span class="nc" id="L1379">				BigDecimal reservedAndDelivered = oLine.getQtyDelivered().add(oLine.getQtyReserved());</span>
+<span class="nc bnc" id="L1380" title="All 2 branches missed.">				if (reservedAndDelivered.compareTo(oLine.getQtyOrdered()) &gt; 0) </span>
+				{
+<span class="nc" id="L1382">					oLine.setQtyReserved(oLine.getQtyReserved().subtract(reservedAndDelivered.subtract(oLine.getQtyOrdered())));</span>
+<span class="nc bnc" id="L1383" title="All 2 branches missed.">					if (oLine.getQtyReserved().signum()==-1)</span>
+<span class="nc" id="L1384">						oLine.setQtyReserved(Env.ZERO);</span>
+				}
+<span class="nc" id="L1386">				oLine.saveEx();</span>
+<span class="nc" id="L1387">				storageReservationToUpdate = storageReservationToUpdate.subtract(oLine.getQtyReserved());</span>
+<span class="nc bnc" id="L1388" title="All 2 branches missed.">				if (storageReservationToUpdate.signum() != 0)</span>
+				{
+<span class="nc" id="L1390">					IReservationTracer tracer = null;</span>
+<span class="nc" id="L1391">					IReservationTracerFactory factory = Core.getReservationTracerFactory();</span>
+<span class="nc bnc" id="L1392" title="All 2 branches missed.">					if (factory != null) </span>
+					{
+<span class="nc" id="L1394">						int docTypeId = DB.getSQLValue((String)null, IDoc.DOC_TYPE_BY_DOC_BASE_TYPE_SQL, getAD_Client_ID(), IDoc.DOCTYPE_MatMatchPO);</span>
+<span class="nc" id="L1395">						tracer = factory.newTracer(docTypeId, reversal.getDocumentNo(), 10, </span>
+<span class="nc" id="L1396">								reversal.get_Table_ID(), reversal.get_ID(), oLine.getM_Warehouse_ID(), </span>
+<span class="nc" id="L1397">								oLine.getM_Product_ID(), oLine.getM_AttributeSetInstance_ID(), oLine.getParent().isSOTrx(), </span>
+<span class="nc" id="L1398">								get_TrxName());</span>
+					}
+<span class="nc" id="L1400">					boolean success = MStorageReservation.add (Env.getCtx(), oLine.getM_Warehouse_ID(),</span>
+<span class="nc" id="L1401">						oLine.getM_Product_ID(),</span>
+<span class="nc" id="L1402">						oLine.getM_AttributeSetInstance_ID(),</span>
+<span class="nc" id="L1403">						storageReservationToUpdate.negate(), oLine.getParent().isSOTrx(), get_TrxName(), tracer);</span>
+<span class="nc bnc" id="L1404" title="All 2 branches missed.">					if (!success)</span>
+<span class="nc" id="L1405">						return false;</span>
+				}
+			}
+			
+			// auto create new matchpo if have invoice line
+<span class="nc bnc" id="L1410" title="All 4 branches missed.">			if ( reversal.getC_InvoiceLine_ID() &gt; 0 &amp;&amp; reversal.getM_InOutLine_ID() &gt; 0 )</span>
+			{
+<span class="nc" id="L1412">				MMatchPO[] matchPOs = MMatchPO.getOrderLine(reversal.getCtx(), reversal.getC_OrderLine_ID(), reversal.get_TrxName());</span>
+<span class="nc" id="L1413">				BigDecimal matchQty = getQty();</span>
+<span class="nc bnc" id="L1414" title="All 2 branches missed.">				for (MMatchPO matchPO : matchPOs)</span>
+				{
+<span class="nc bnc" id="L1416" title="All 4 branches missed.">					if (matchPO.getReversal_ID() == 0 &amp;&amp; !matchPO.isPosted() </span>
+<span class="nc bnc" id="L1417" title="All 2 branches missed.">							&amp;&amp; matchPO.getC_InvoiceLine_ID() == reversal.getC_InvoiceLine_ID() </span>
+<span class="nc bnc" id="L1418" title="All 2 branches missed.">							&amp;&amp; matchPO.getM_InOutLine_ID() == 0 )  </span>
+					{
+<span class="nc" id="L1420">						matchPO.setQty(matchPO.getQty().add(matchQty));</span>
+<span class="nc" id="L1421">						matchPO.saveEx();</span>
+<span class="nc" id="L1422">						matchQty = BigDecimal.ZERO;</span>
+<span class="nc" id="L1423">						break;</span>
+					}
+				}
+				
+<span class="nc bnc" id="L1427" title="All 2 branches missed.">				if (matchQty.signum() != 0)</span>
+				{
+<span class="nc" id="L1429">					MMatchPO matchPO = new MMatchPO (getCtx(), 0, get_TrxName());		</span>
+<span class="nc" id="L1430">					matchPO.setC_OrderLine_ID(getC_OrderLine_ID());</span>
+<span class="nc" id="L1431">					matchPO.setC_InvoiceLine_ID(getC_InvoiceLine_ID()); </span>
+<span class="nc" id="L1432">					matchPO.setM_InOutLine_ID(0);</span>
+<span class="nc" id="L1433">					matchPO.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc" id="L1434">					matchPO.setQty(getQty());</span>
+<span class="nc" id="L1435">					matchPO.setDateAcct(getDateAcct());</span>
+<span class="nc" id="L1436">					matchPO.setDateTrx(getDateTrx());</span>
+<span class="nc" id="L1437">					matchPO.setM_AttributeSetInstance_ID(getM_AttributeSetInstance_ID());</span>
+<span class="nc" id="L1438">					matchPO.setM_Product_ID(getM_Product_ID());</span>
+<span class="nc" id="L1439">					matchPO.setDescription(null);</span>
+<span class="nc" id="L1440">					matchPO.setProcessed(true);</span>
+<span class="nc" id="L1441">					matchPO.setPosted (false);					</span>
+<span class="nc" id="L1442">					matchPO.saveEx();</span>
+				}
+			}
+<span class="nc" id="L1445">			return true;</span>
+		}
+<span class="nc" id="L1447">		return false;</span>
+	}
+	
+	/**
+	 * @return true if this is created to reverse another match po document
+	 */
+	public boolean isReversal() {
+<span class="nc bnc" id="L1454" title="All 2 branches missed.">		if (getReversal_ID() &gt; 0) {</span>
+<span class="nc" id="L1455">			MMatchPO reversal = new MMatchPO (getCtx(), getReversal_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1456" title="All 2 branches missed.">			if (reversal.getM_MatchPO_ID() &lt; getM_MatchPO_ID())</span>
+<span class="nc" id="L1457">				return true;</span>
+		}
+<span class="nc" id="L1459">		return false;</span>
+	}
+	
+	/**
+	 * Get or create Match PO record for order line.
+	 * @param C_OrderLine_ID
+	 * @param qty
+	 * @param sLine
+	 * @param trxName
+	 * @return new or existing MMatchPO record
+	 */
+	public static MMatchPO getOrCreate(int C_OrderLine_ID, BigDecimal qty, MInOutLine sLine, String trxName) {
+<span class="nc" id="L1471">		Query query = new Query(Env.getCtx(), MMatchPO.Table_Name, &quot;C_OrderLine_ID=? AND Qty=? AND Posted IN (?,?) AND M_InOutLine_ID IS NULL&quot;, trxName);</span>
+<span class="nc" id="L1472">		MMatchPO matchPO = query.setParameters(C_OrderLine_ID, qty, IDoc.STATUS_NotPosted, IDoc.STATUS_Deferred).first();</span>
+<span class="nc bnc" id="L1473" title="All 2 branches missed.">		if (matchPO != null) {</span>
+<span class="nc" id="L1474">			matchPO.setM_InOutLine_ID(sLine.getM_InOutLine_ID());</span>
+<span class="nc" id="L1475">			return matchPO;</span>
+		} else {
+<span class="nc" id="L1477">			return new MMatchPO (sLine, null, qty);</span>
+		}
+	}
+}	//	MMatchPO
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

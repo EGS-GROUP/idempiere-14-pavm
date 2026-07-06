@@ -1,0 +1,899 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ModelValidationEngine.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">ModelValidationEngine.java</span></div><h1>ModelValidationEngine.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.StringTokenizer;
+import java.util.logging.Level;
+
+import javax.script.Bindings;
+import javax.script.CompiledScript;
+import javax.script.ScriptEngine;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.event.EventManager;
+import org.adempiere.base.event.EventProperty;
+import org.adempiere.base.event.IEventManager;
+import org.adempiere.base.event.IEventTopics;
+import org.adempiere.base.event.ImportEventData;
+import org.adempiere.base.event.LoginEventData;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.model.ImportValidator;
+import org.adempiere.process.ImportProcess;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Util;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.launch.Framework;
+import org.osgi.service.event.Event;
+
+/**
+ *	Model Validation Engine
+ *
+ *  @author Jorg Janke
+ *  @version $Id: ModelValidationEngine.java,v 1.2 2006/07/30 00:58:38 jjanke Exp $
+ *
+ *  @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 				&lt;li&gt;FR [ 1670025 ] ModelValidator.afterLoadPreferences will be useful
+ * 				&lt;li&gt;BF [ 1679692 ] fireDocValidate doesn't treat exceptions as errors
+ * 				&lt;li&gt;FR [ 1724662 ] Support Email should contain model validators info
+ * 				&lt;li&gt;FR [ 2788276 ] Data Import Validator
+ * 					https://sourceforge.net/p/adempiere/feature-requests/712/
+ * 				&lt;li&gt;BF [ 2819617 ] NPE if script validator rule returns null
+ * 					https://sourceforge.net/p/adempiere/bugs/1976/
+ *  @author victor.perez@e-evolution.com, www.e-evolution.com
+ * 				&lt;li&gt;BF [ 2947607 ] Model Validator Engine duplicate listeners
+ */
+public class ModelValidationEngine
+{
+	/**
+	 * 	Get Singleton instance
+	 *	@return singleton engine instance
+	 */
+	public synchronized static ModelValidationEngine get()
+	{
+<span class="nc bnc" id="L77" title="All 2 branches missed.">		if (s_engine == null)</span>
+<span class="nc" id="L78">			s_engine = new ModelValidationEngine();</span>
+<span class="nc" id="L79">		return s_engine;</span>
+	}	//	get
+
+	/** Engine Singleton				*/
+<span class="nc" id="L83">	private static ModelValidationEngine s_engine = null;</span>
+	/** flag to indicate a missing model validation class */
+<span class="nc" id="L85">	private String missingModelValidationMessage = &quot;&quot;;</span>
+
+	/**
+	 * 	Private Constructor.
+	 * 	Use {@link #get()} to get the singleton instance.
+	 */
+	private ModelValidationEngine ()
+	{
+<span class="nc" id="L93">		super ();</span>
+		// Load global validators
+
+<span class="nc" id="L96">		MTable table = MTable.get(Env.getCtx(), X_AD_ModelValidator.Table_ID);</span>
+<span class="nc" id="L97">		Query query = table.createQuery(&quot;IsActive='Y'&quot;, null);</span>
+<span class="nc" id="L98">		query.setOrderBy(&quot;SeqNo&quot;);</span>
+		try {
+<span class="nc" id="L100">			List&lt;X_AD_ModelValidator&gt; entityTypes = query.list();</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			for (X_AD_ModelValidator entityType : entityTypes)</span>
+			{
+<span class="nc" id="L103">				String className = entityType.getModelValidationClass();</span>
+<span class="nc bnc" id="L104" title="All 4 branches missed.">				if (className == null || className.length() == 0)</span>
+<span class="nc" id="L105">					continue;</span>
+<span class="nc" id="L106">				loadValidatorClass(null, className);</span>
+			}
+<span class="nc" id="L108">		} catch (Exception e)</span>
+		{
+			//logging to db will try to init ModelValidationEngine again!
+<span class="nc" id="L111">			e.printStackTrace();</span>
+<span class="nc" id="L112">			missingModelValidationMessage = missingModelValidationMessage + e.toString() + &quot; global&quot; + '\n';</span>
+		}
+
+		// Go through all Clients and start Validators
+<span class="nc" id="L116">		MClient[] clients = MClient.getAll(Env.getCtx());</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">		for (int i = 0; i &lt; clients.length; i++)</span>
+		{
+<span class="nc" id="L119">			String classNames = clients[i].getModelValidationClasses();</span>
+<span class="nc bnc" id="L120" title="All 4 branches missed.">			if (classNames == null || classNames.length() == 0)</span>
+<span class="nc" id="L121">				continue;</span>
+<span class="nc" id="L122">			loadValidatorClasses(clients[i], classNames);</span>
+		}
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (    MSystem.get(Env.getCtx()).isFailOnMissingModelValidator()</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			&amp;&amp; !Util.isEmpty(missingModelValidationMessage)) {</span>
+			// do not use severe, logging to db will try to init ModelValidationEngine again!
+<span class="nc" id="L127">			System.out.println(missingModelValidationMessage);</span>
+<span class="nc" id="L128">			System.out.println(&quot;Terminating&quot;);</span>
+	        try {
+<span class="nc" id="L130">	            BundleContext context = FrameworkUtil.getBundle(this.getClass()).getBundleContext();</span>
+<span class="nc" id="L131">	            context.getBundle(0).stop();</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">				if (context.getBundle(0) instanceof Framework framework)</span>
+<span class="nc" id="L133">					framework.waitForStop(60000);</span>
+<span class="nc" id="L134">			} catch (Exception e) {</span>
+			} finally {
+<span class="nc" id="L136">				System.exit(1);</span>
+			}
+		}
+
+<span class="nc" id="L140">	}	//	ModelValidatorEngine</span>
+
+	/**
+	 * Load validation instances
+	 * @param client
+	 * @param classNames Java class name list separated by semicolon
+	 */
+	private void loadValidatorClasses(MClient client, String classNames)
+	{
+<span class="nc" id="L149">		StringTokenizer st = new StringTokenizer(classNames, &quot;;&quot;);</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">		while (st.hasMoreTokens())</span>
+		{
+<span class="nc" id="L152">			String className = null;</span>
+			try
+			{
+<span class="nc" id="L155">				className = st.nextToken();</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">				if (className == null)</span>
+<span class="nc" id="L157">					continue;</span>
+<span class="nc" id="L158">				className = className.trim();</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">				if (className.length() == 0)</span>
+<span class="nc" id="L160">					continue;</span>
+				//
+<span class="nc" id="L162">				loadValidatorClass(client, className);</span>
+<span class="nc" id="L163">			}</span>
+<span class="nc" id="L164">			catch (Exception e)</span>
+			{
+				//logging to db will try to init ModelValidationEngine again!
+<span class="nc" id="L167">				e.printStackTrace();</span>
+<span class="nc" id="L168">				missingModelValidationMessage = missingModelValidationMessage + e.toString() + &quot; on tenant &quot; + client.getName() + '\n';</span>
+			}
+		}
+<span class="nc" id="L171">	}</span>
+
+	/**
+	 * Load validator instance
+	 * @param client
+	 * @param className
+	 */
+	private void loadValidatorClass(MClient client, String className) {
+		try
+		{
+			//
+<span class="nc" id="L182">			ModelValidator validator = null;</span>
+<span class="nc" id="L183">			validator = Core.getModelValidator(className);</span>
+
+<span class="nc bnc" id="L185" title="All 2 branches missed.">			if (validator == null)</span>
+			{
+<span class="nc" id="L187">				missingModelValidationMessage = missingModelValidationMessage + &quot; Missing class &quot; + className +</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">						 (client != null ? (&quot; on tenant &quot; + client.getName()) : &quot; global&quot;) + '\n';</span>
+<span class="nc" id="L189">			}</span>
+			else
+			{
+<span class="nc" id="L192">				initialize(validator, client);</span>
+			}
+<span class="nc" id="L194">		}</span>
+<span class="nc" id="L195">		catch (Exception e)</span>
+		{
+			//logging to db will try to init ModelValidationEngine again!
+<span class="nc" id="L198">			e.printStackTrace();</span>
+<span class="nc" id="L199">			missingModelValidationMessage = missingModelValidationMessage + e.toString() +</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">					 (client != null ? (&quot; on tenant &quot; + client.getName()) : &quot; global&quot;) + '\n';</span>
+		}
+<span class="nc" id="L202">	}</span>
+
+	/**	Logger					*/
+<span class="nc" id="L205">	private static CLogger log = CLogger.getCLogger(ModelValidationEngine.class);</span>
+
+	/**	Validators						*/
+<span class="nc" id="L208">	private ArrayList&lt;ModelValidator&gt;	m_validators = new ArrayList&lt;ModelValidator&gt;();</span>
+	/**	Model Change Listeners			*/
+<span class="nc" id="L210">	private Hashtable&lt;String,ArrayList&lt;ModelValidator&gt;&gt;	m_modelChangeListeners = new Hashtable&lt;String,ArrayList&lt;ModelValidator&gt;&gt;();</span>
+	/**	Document Validation Listeners			*/
+<span class="nc" id="L212">	private Hashtable&lt;String,ArrayList&lt;ModelValidator&gt;&gt;	m_docValidateListeners = new Hashtable&lt;String,ArrayList&lt;ModelValidator&gt;&gt;();</span>
+	/** Data Import Validation Listeners   */
+<span class="nc" id="L214">	private Hashtable&lt;String,ArrayList&lt;ImportValidator&gt;&gt;m_impValidateListeners = new Hashtable&lt;String,ArrayList&lt;ImportValidator&gt;&gt;();</span>
+
+<span class="nc" id="L216">	private ArrayList&lt;ModelValidator&gt; m_globalValidators = new ArrayList&lt;ModelValidator&gt;();</span>
+
+	/**
+	 * 	Initialize and add validator to global or client validator list.
+	 *	@param validator
+	 *	@param client null for global validator, not null for client specific validator
+	 */
+	private void initialize(ModelValidator validator, MClient client)
+	{
+<span class="nc bnc" id="L225" title="All 2 branches missed.">		if (client == null)</span>
+<span class="nc" id="L226">			m_globalValidators.add(validator);</span>
+<span class="nc" id="L227">		m_validators.add(validator);</span>
+<span class="nc" id="L228">		validator.initialize(this, client);</span>
+
+<span class="nc" id="L230">	}	//	initialize</span>
+
+	/**
+	 * 	Called when login is complete.&lt;br/&gt;
+	 *  - Call {@link ModelValidator#login(int, int, int)} on register validators.
+	 *  - Call script validator (AD_Table_ScriptValidator) &lt;br/&gt;
+	 *  - Fire {@link IEventTopics#AFTER_LOGIN} OSGi event.
+	 * 	@param AD_Client_ID client
+	 *	@param AD_Org_ID org
+	 *	@param AD_Role_ID role
+	 *	@param AD_User_ID user
+	 *	@return error message or null
+	 */
+	public String loginComplete (int AD_Client_ID, int AD_Org_ID, int AD_Role_ID, int AD_User_ID)
+	{
+<span class="nc bnc" id="L245" title="All 2 branches missed.">		for (int i = 0; i &lt; m_validators.size(); i++)</span>
+		{
+<span class="nc" id="L247">			ModelValidator validator = m_validators.get(i);</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if (AD_Client_ID == validator.getAD_Client_ID()</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">				|| m_globalValidators.contains(validator))</span>
+			{
+<span class="nc" id="L251">				String error = validator.login(AD_Org_ID, AD_Role_ID, AD_User_ID);</span>
+<span class="nc bnc" id="L252" title="All 4 branches missed.">				if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L253">					return error;</span>
+			}
+		}
+
+		// now process the script model validator for login
+<span class="nc" id="L258">		List&lt;MRule&gt; loginRules = MRule.getModelValidatorLoginRules (Env.getCtx());</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">		if (loginRules != null) {</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">			for (MRule loginRule : loginRules) {</span>
+				// currently just JSR 223 supported
+<span class="nc bnc" id="L262" title="All 2 branches missed.">				if (   loginRule.getRuleType().equals(MRule.RULETYPE_JSR223ScriptingAPIs)</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">					&amp;&amp; loginRule.getEventType().equals(MRule.EVENTTYPE_ModelValidatorLoginEvent)) {</span>
+					String error;
+					try {
+						// Try to use cached compiled script for better performance
+<span class="nc" id="L267">						CompiledScript compiled = Core.getCompiledScript(loginRule);</span>
+						Object retval;
+<span class="nc bnc" id="L269" title="All 2 branches missed.">						if (compiled != null) {</span>
+							// Use compiled script with bindings
+<span class="nc" id="L271">							Bindings bindings = compiled.getEngine().createBindings();</span>
+<span class="nc" id="L272">							MRule.setContext(bindings, Env.getCtx(), 0);  // no window</span>
+<span class="nc" id="L273">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, Env.getCtx());</span>
+<span class="nc" id="L274">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;AD_Client_ID&quot;, AD_Client_ID);</span>
+<span class="nc" id="L275">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;AD_Org_ID&quot;, AD_Org_ID);</span>
+<span class="nc" id="L276">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;AD_Role_ID&quot;, AD_Role_ID);</span>
+<span class="nc" id="L277">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;AD_User_ID&quot;, AD_User_ID);</span>
+<span class="nc" id="L278">							retval = compiled.eval(bindings);</span>
+<span class="nc" id="L279">						} else {</span>
+							// Fallback to non-compiled execution
+<span class="nc" id="L281">							ScriptEngine engine = loginRule.getScriptEngine();</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">							if (engine == null) {</span>
+<span class="nc" id="L283">								throw new AdempiereException(&quot;Engine not found: &quot; + loginRule.getEngineName());</span>
+							}
+<span class="nc" id="L285">							MRule.setContext(engine, Env.getCtx(), 0);  // no window</span>
+<span class="nc" id="L286">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, Env.getCtx());</span>
+<span class="nc" id="L287">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;AD_Client_ID&quot;, AD_Client_ID);</span>
+<span class="nc" id="L288">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;AD_Org_ID&quot;, AD_Org_ID);</span>
+<span class="nc" id="L289">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;AD_Role_ID&quot;, AD_Role_ID);</span>
+<span class="nc" id="L290">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;AD_User_ID&quot;, AD_User_ID);</span>
+<span class="nc" id="L291">							retval = engine.eval(loginRule.getScript());</span>
+						}
+<span class="nc bnc" id="L293" title="All 2 branches missed.">						error = (retval == null ? &quot;&quot; : retval.toString());</span>
+<span class="nc" id="L294">					} catch (Exception e) {</span>
+<span class="nc" id="L295">						e.printStackTrace();</span>
+<span class="nc" id="L296">						error = e.toString();</span>
+					}
+<span class="nc bnc" id="L298" title="All 4 branches missed.">					if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L299">						return error;</span>
+				}
+			}
+		}
+
+		//now process osgi event handler
+<span class="nc" id="L305">		LoginEventData eventData = new LoginEventData(AD_Client_ID, AD_Org_ID, AD_Role_ID, AD_User_ID);</span>
+<span class="nc" id="L306">		Event event = EventManager.newEvent(IEventTopics.AFTER_LOGIN, eventData);</span>
+<span class="nc" id="L307">		EventManager.getInstance().sendEvent(event);</span>
+		@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L309">		List&lt;String&gt; errors = (List&lt;String&gt;) event.getProperty(IEventManager.EVENT_ERROR_MESSAGES);</span>
+<span class="nc bnc" id="L310" title="All 4 branches missed.">		if (errors != null &amp;&amp; !errors.isEmpty()) {</span>
+<span class="nc" id="L311">			Collections.reverse(errors);</span>
+<span class="nc" id="L312">			StringBuilder eventErrors = new StringBuilder(&quot;&quot;);</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">			for (String error : errors) {</span>
+<span class="nc" id="L314">				eventErrors.append(error).append(&quot;&lt;br&gt;&quot;);</span>
+			}
+<span class="nc" id="L316">			return eventErrors.toString();</span>
+		}
+
+<span class="nc bnc" id="L319" title="All 2 branches missed.">		if (   !Util.isEmpty(missingModelValidationMessage)</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">			&amp;&amp; ! (   AD_Role_ID == SystemIDs.ROLE_SYSTEM</span>
+<span class="nc bnc" id="L321" title="All 4 branches missed.">				  &amp;&amp; (AD_User_ID == SystemIDs.USER_SYSTEM || AD_User_ID == SystemIDs.USER_SUPERUSER)))</span>
+<span class="nc" id="L322">			return missingModelValidationMessage;</span>
+<span class="nc" id="L323">		return null;</span>
+	}	//	loginComplete
+
+	/**
+	 * 	Add Model Change Listener for a table
+	 *	@param tableName table name
+	 *	@param listener listener (global or tenant specific)
+	 */
+	public void addModelChange (String tableName, ModelValidator listener)
+	{
+<span class="nc bnc" id="L333" title="All 4 branches missed.">		if (tableName == null || listener == null)</span>
+<span class="nc" id="L334">			return;</span>
+		//
+<span class="nc" id="L336">		String propertyName =</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">			m_globalValidators.contains(listener)</span>
+<span class="nc" id="L338">				? tableName + &quot;*&quot;</span>
+<span class="nc" id="L339">				: tableName + listener.getAD_Client_ID();</span>
+<span class="nc" id="L340">		ArrayList&lt;ModelValidator&gt; list = m_modelChangeListeners.get(propertyName);</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		if (list == null)</span>
+		{
+<span class="nc" id="L343">			list = new ArrayList&lt;ModelValidator&gt;();</span>
+<span class="nc" id="L344">			list.add(listener);</span>
+<span class="nc" id="L345">			m_modelChangeListeners.put(propertyName, list);</span>
+<span class="nc" id="L346">		}</span>
+		else
+<span class="nc" id="L348">			list.add(listener);</span>
+<span class="nc" id="L349">	}	//	addModelValidator</span>
+
+	/**
+	 * 	Remove Model Change Listener for a table
+	 *	@param tableName table name
+	 *	@param listener listener (global or tenant specific)
+	 */
+	public void removeModelChange (String tableName, ModelValidator listener)
+	{
+<span class="nc bnc" id="L358" title="All 4 branches missed.">		if (tableName == null || listener == null)</span>
+<span class="nc" id="L359">			return;</span>
+<span class="nc" id="L360">		String propertyName =</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">			m_globalValidators.contains(listener)</span>
+<span class="nc" id="L362">				? tableName + &quot;*&quot;</span>
+<span class="nc" id="L363">				: tableName + listener.getAD_Client_ID();</span>
+<span class="nc" id="L364">		ArrayList&lt;ModelValidator&gt; list = m_modelChangeListeners.get(propertyName);</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">		if (list == null)</span>
+<span class="nc" id="L366">			return;</span>
+<span class="nc" id="L367">		list.remove(listener);</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">		if (list.size() == 0)</span>
+<span class="nc" id="L369">			m_modelChangeListeners.remove(propertyName);</span>
+<span class="nc" id="L370">	}	//	removeModelValidator</span>
+
+	/**
+	 * 	Fire Model Change event of a table.
+	 * 	- Call {@link ModelValidator#modelChange(PO, int)} on register validators.&lt;br/&gt;
+	 *  - Call script validator (AD_Table_ScriptValidator) &lt;br/&gt;
+	 *  - Fire IEventTopics.PO_* OSGi event.
+	 *	@param po PO instance for the event
+	 *	@param changeType ModelValidator.TYPE_*
+	 *	@return error message or NULL for no veto
+	 */
+	public String fireModelChange (PO po, int changeType)
+	{
+<span class="nc bnc" id="L383" title="All 2 branches missed.">		if (po == null )</span>
+<span class="nc" id="L384">			return null;</span>
+
+<span class="nc" id="L386">		String propertyName = po.get_TableName() + &quot;*&quot;;</span>
+<span class="nc" id="L387">		ArrayList&lt;ModelValidator&gt; list = m_modelChangeListeners.get(propertyName);</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		if (list != null)</span>
+		{
+			//ad_entitytype.modelvalidationclasses
+<span class="nc" id="L391">			String error = fireModelChange(po, changeType, list);</span>
+<span class="nc bnc" id="L392" title="All 4 branches missed.">			if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L393">				return error;</span>
+		}
+
+<span class="nc" id="L396">		propertyName = po.get_TableName() + po.getAD_Client_ID();</span>
+<span class="nc" id="L397">		list = m_modelChangeListeners.get(propertyName);</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">		if (list != null)</span>
+		{
+			//ad_client.modelvalidationclasses
+<span class="nc" id="L401">			String error = fireModelChange(po, changeType, list);</span>
+<span class="nc bnc" id="L402" title="All 4 branches missed.">			if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L403">				return error;</span>
+		}
+
+		// now process the script model validator for this event
+<span class="nc" id="L407">		List&lt;MTableScriptValidator&gt; scriptValidators =</span>
+<span class="nc" id="L408">			MTableScriptValidator.getModelValidatorRules(</span>
+<span class="nc" id="L409">					po.getCtx(),</span>
+<span class="nc" id="L410">					po.get_Table_ID(),</span>
+<span class="nc" id="L411">					ModelValidator.tableEventValidators[changeType]);</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">		if (scriptValidators != null) {</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">			for (MTableScriptValidator scriptValidator : scriptValidators) {</span>
+<span class="nc" id="L414">				MRule rule = MRule.get(po.getCtx(), scriptValidator.getAD_Rule_ID());</span>
+				// currently just JSR 223 supported
+<span class="nc bnc" id="L416" title="All 2 branches missed.">				if (   rule != null</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">					&amp;&amp; rule.isActive()</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">					&amp;&amp; rule.getRuleType().equals(MRule.RULETYPE_JSR223ScriptingAPIs)</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">					&amp;&amp; rule.getEventType().equals(MRule.EVENTTYPE_ModelValidatorTableEvent)) {</span>
+					String error;
+					try {
+						// Try to use cached compiled script for better performance
+<span class="nc" id="L423">						CompiledScript compiled = Core.getCompiledScript(rule);</span>
+						Object retval;
+<span class="nc bnc" id="L425" title="All 2 branches missed.">						if (compiled != null) {</span>
+							// Use compiled script with bindings
+<span class="nc" id="L427">							Bindings bindings = compiled.getEngine().createBindings();</span>
+<span class="nc" id="L428">							MRule.setContext(bindings, po.getCtx(), 0);  // no window</span>
+<span class="nc" id="L429">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, po.getCtx());</span>
+<span class="nc" id="L430">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;PO&quot;, po);</span>
+<span class="nc" id="L431">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Type&quot;, changeType);</span>
+<span class="nc" id="L432">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Event&quot;, ModelValidator.tableEventValidators[changeType]);</span>
+<span class="nc" id="L433">							retval = compiled.eval(bindings);</span>
+<span class="nc" id="L434">						} else {</span>
+							// Fallback to non-compiled execution
+<span class="nc" id="L436">							ScriptEngine engine = rule.getScriptEngine();</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">							if (engine == null) {</span>
+<span class="nc" id="L438">								throw new AdempiereException(&quot;Engine not found: &quot; + rule.getEngineName());</span>
+							}
+<span class="nc" id="L440">							MRule.setContext(engine, po.getCtx(), 0);  // no window</span>
+<span class="nc" id="L441">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, po.getCtx());</span>
+<span class="nc" id="L442">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;PO&quot;, po);</span>
+<span class="nc" id="L443">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;Type&quot;, changeType);</span>
+<span class="nc" id="L444">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;Event&quot;, ModelValidator.tableEventValidators[changeType]);</span>
+<span class="nc" id="L445">							retval = engine.eval(rule.getScript());</span>
+						}
+<span class="nc bnc" id="L447" title="All 2 branches missed.">						error = (retval == null ? &quot;&quot; : retval.toString());</span>
+<span class="nc" id="L448">					} catch (Exception e) {</span>
+<span class="nc" id="L449">						e.printStackTrace();</span>
+<span class="nc" id="L450">						error = e.toString();</span>
+					}
+<span class="nc bnc" id="L452" title="All 4 branches missed.">					if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L453">						return error;</span>
+				}
+			}
+		}
+
+		//now process osgi event handlers
+<span class="nc" id="L459">		Event event = EventManager.newEvent(ModelValidator.tableEventTopics[changeType],</span>
+<span class="nc" id="L460">				new EventProperty(EventManager.EVENT_DATA, po), new EventProperty(EventManager.TABLE_NAME_PROPERTY, po.get_TableName()));</span>
+<span class="nc" id="L461">		EventManager.getInstance().sendEvent(event);</span>
+		@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L463">		List&lt;String&gt; errors = (List&lt;String&gt;) event.getProperty(IEventManager.EVENT_ERROR_MESSAGES);</span>
+<span class="nc bnc" id="L464" title="All 4 branches missed.">		if (errors != null &amp;&amp; !errors.isEmpty()) {</span>
+<span class="nc" id="L465">			Collections.reverse(errors);</span>
+<span class="nc" id="L466">			StringBuilder eventErrors = new StringBuilder(&quot;&quot;);</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">			for (String error : errors) {</span>
+<span class="nc" id="L468">				eventErrors.append(error).append(&quot;&lt;br&gt;&quot;);</span>
+			}
+<span class="nc" id="L470">			return eventErrors.toString();</span>
+		}
+
+<span class="nc" id="L473">		return null;</span>
+	}	//	fireModelChange
+
+	/**
+	 * Fire model change event of a table.&lt;br/&gt;
+	 * - Call {@link ModelValidator#modelChange(PO, int)} on register validators.
+	 * @param po PO instance for the event
+	 * @param changeType ModelValidator.TYPE_*
+	 * @param list register validators
+	 * @return error message or null
+	 */
+	private String fireModelChange(PO po, int changeType, ArrayList&lt;ModelValidator&gt; list)
+	{
+<span class="nc bnc" id="L486" title="All 2 branches missed.">		for (int i = 0; i &lt; list.size(); i++)</span>
+		{
+			try
+			{
+<span class="nc" id="L490">				ModelValidator validator = list.get(i);</span>
+<span class="nc bnc" id="L491" title="All 2 branches missed.">				if (validator.getAD_Client_ID() == po.getAD_Client_ID()</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">					|| m_globalValidators.contains(validator))</span>
+				{
+<span class="nc" id="L494">					String error = validator.modelChange(po, changeType);</span>
+<span class="nc bnc" id="L495" title="All 4 branches missed.">					if (error != null &amp;&amp; error.length() &gt; 0)</span>
+					{
+<span class="nc bnc" id="L497" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE))</span>
+						{
+<span class="nc" id="L499">							log.log(Level.FINE, &quot;po=&quot;+po+&quot; validator=&quot;+validator+&quot; changeType=&quot;+changeType);</span>
+						}
+<span class="nc" id="L501">						return error;</span>
+					}
+				}
+			}
+<span class="nc" id="L505">			catch (Exception e)</span>
+			{
+				//log the exception
+<span class="nc" id="L508">				log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L509">				String error = e.getLocalizedMessage();</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">				if (error == null)</span>
+<span class="nc" id="L511">					error = e.toString();</span>
+<span class="nc" id="L512">				return error;</span>
+			}
+		}
+<span class="nc" id="L515">		return null;</span>
+	}
+
+	/**
+	 * 	Add Document Validation Listener for a table
+	 *	@param tableName table name
+	 *	@param listener listener (global or tenant specific)
+	 */
+	public void addDocValidate (String tableName, ModelValidator listener)
+	{
+<span class="nc bnc" id="L525" title="All 4 branches missed.">		if (tableName == null || listener == null)</span>
+<span class="nc" id="L526">			return;</span>
+		//
+<span class="nc" id="L528">		String propertyName =</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">			m_globalValidators.contains(listener)</span>
+<span class="nc" id="L530">				? tableName + &quot;*&quot;</span>
+<span class="nc" id="L531">				: tableName + listener.getAD_Client_ID();</span>
+<span class="nc" id="L532">		ArrayList&lt;ModelValidator&gt; list = m_docValidateListeners.get(propertyName);</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">		if (list == null)</span>
+		{
+<span class="nc" id="L535">			list = new ArrayList&lt;ModelValidator&gt;();</span>
+<span class="nc" id="L536">			list.add(listener);</span>
+<span class="nc" id="L537">			m_docValidateListeners.put(propertyName, list);</span>
+<span class="nc" id="L538">		}</span>
+<span class="nc bnc" id="L539" title="All 2 branches missed.">		else if (!list.contains(listener))</span>
+		{
+<span class="nc" id="L541">		    list.add(listener);</span>
+		}
+<span class="nc" id="L543">	}	//	addDocValidate</span>
+
+	/**
+	 * 	Remove Document Validation Listener of a table
+	 *	@param tableName table name
+	 *	@param listener listener (global or tenant specific)
+	 */
+	public void removeDocValidate (String tableName, ModelValidator listener)
+	{
+<span class="nc bnc" id="L552" title="All 4 branches missed.">		if (tableName == null || listener == null)</span>
+<span class="nc" id="L553">			return;</span>
+<span class="nc" id="L554">		String propertyName =</span>
+<span class="nc bnc" id="L555" title="All 2 branches missed.">			m_globalValidators.contains(listener)</span>
+<span class="nc" id="L556">				? tableName + &quot;*&quot;</span>
+<span class="nc" id="L557">				: tableName + listener.getAD_Client_ID();</span>
+<span class="nc" id="L558">		ArrayList&lt;ModelValidator&gt; list = m_docValidateListeners.get(propertyName);</span>
+<span class="nc bnc" id="L559" title="All 2 branches missed.">		if (list == null)</span>
+<span class="nc" id="L560">			return;</span>
+<span class="nc" id="L561">		list.remove(listener);</span>
+<span class="nc bnc" id="L562" title="All 2 branches missed.">		if (list.size() == 0)</span>
+<span class="nc" id="L563">			m_docValidateListeners.remove(propertyName);</span>
+<span class="nc" id="L564">	}	//	removeDocValidate</span>
+
+	/**
+	 * 	Fire Document Validation event of a table.&lt;br/&gt;
+	 * 	- Call {@link ModelValidator#docValidate(PO, int)} on register validators.&lt;br/&gt;
+	 *  - Call script validator (AD_Table_ScriptValidator) &lt;br/&gt;
+	 *  - Fire IEventTopics.DOC_* OSGi event.
+	 *	@param po PO instance for the event
+	 *	@param docTiming see ModelValidator.TIMING_ constants
+     *	@return error message or null
+	 */
+	public String fireDocValidate (PO po, int docTiming)
+	{
+<span class="nc bnc" id="L577" title="All 2 branches missed.">		if (po == null)</span>
+<span class="nc" id="L578">			return null;</span>
+
+<span class="nc" id="L580">		String propertyName = po.get_TableName() + &quot;*&quot;;</span>
+<span class="nc" id="L581">		ArrayList&lt;ModelValidator&gt; list = m_docValidateListeners.get(propertyName);</span>
+<span class="nc bnc" id="L582" title="All 2 branches missed.">		if (list != null)</span>
+		{
+			//ad_entitytype.modelvalidationclasses
+<span class="nc" id="L585">			String error = fireDocValidate(po, docTiming, list);</span>
+<span class="nc bnc" id="L586" title="All 4 branches missed.">			if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L587">				return error;</span>
+		}
+
+<span class="nc" id="L590">		propertyName = po.get_TableName() + po.getAD_Client_ID();</span>
+<span class="nc" id="L591">		list = m_docValidateListeners.get(propertyName);</span>
+<span class="nc bnc" id="L592" title="All 2 branches missed.">		if (list != null)</span>
+		{
+			//ad_client.modelvalidationclasses
+<span class="nc" id="L595">			String error = fireDocValidate(po, docTiming, list);</span>
+<span class="nc bnc" id="L596" title="All 4 branches missed.">			if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L597">				return error;</span>
+		}
+
+<span class="nc" id="L600">		List&lt;MTableScriptValidator&gt; scriptValidators =</span>
+<span class="nc" id="L601">		MTableScriptValidator.getModelValidatorRules(po.getCtx(),</span>
+<span class="nc" id="L602">			po.get_Table_ID(), ModelValidator.documentEventValidators[docTiming]);</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">		if (scriptValidators != null) {</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">			for (MTableScriptValidator scriptValidator : scriptValidators) {</span>
+<span class="nc" id="L605">				MRule rule = MRule.get(po.getCtx(), scriptValidator.getAD_Rule_ID());</span>
+				// currently just JSR 223 supported
+<span class="nc bnc" id="L607" title="All 2 branches missed.">				if (   rule != null</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">					&amp;&amp; rule.isActive()</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">					&amp;&amp; rule.getRuleType().equals(MRule.RULETYPE_JSR223ScriptingAPIs)</span>
+<span class="nc bnc" id="L610" title="All 2 branches missed.">					&amp;&amp; rule.getEventType().equals(MRule.EVENTTYPE_ModelValidatorDocumentEvent)) {</span>
+					String error;
+					try {
+						// Try to use cached compiled script for better performance
+<span class="nc" id="L614">						CompiledScript compiled = Core.getCompiledScript(rule);</span>
+						Object retval;
+<span class="nc bnc" id="L616" title="All 2 branches missed.">						if (compiled != null) {</span>
+							// Use compiled script with bindings
+<span class="nc" id="L618">							Bindings bindings = compiled.getEngine().createBindings();</span>
+<span class="nc" id="L619">							MRule.setContext(bindings, po.getCtx(), 0);  // no window</span>
+<span class="nc" id="L620">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, po.getCtx());</span>
+<span class="nc" id="L621">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;PO&quot;, po);</span>
+<span class="nc" id="L622">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Type&quot;, docTiming);</span>
+<span class="nc" id="L623">							bindings.put(MRule.ARGUMENTS_PREFIX + &quot;Event&quot;, ModelValidator.documentEventValidators[docTiming]);</span>
+<span class="nc" id="L624">							retval = compiled.eval(bindings);</span>
+<span class="nc" id="L625">						} else {</span>
+							// Fallback to non-compiled execution
+<span class="nc" id="L627">							ScriptEngine engine = rule.getScriptEngine();</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">							if (engine == null) {</span>
+<span class="nc" id="L629">								throw new AdempiereException(&quot;Engine not found: &quot; + rule.getEngineName());</span>
+							}
+<span class="nc" id="L631">							MRule.setContext(engine, po.getCtx(), 0);  // no window</span>
+<span class="nc" id="L632">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, po.getCtx());</span>
+<span class="nc" id="L633">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;PO&quot;, po);</span>
+<span class="nc" id="L634">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;Type&quot;, docTiming);</span>
+<span class="nc" id="L635">							engine.put(MRule.ARGUMENTS_PREFIX + &quot;Event&quot;, ModelValidator.documentEventValidators[docTiming]);</span>
+<span class="nc" id="L636">							retval = engine.eval(rule.getScript());</span>
+						}
+<span class="nc bnc" id="L638" title="All 2 branches missed.">						error = (retval == null ? &quot;&quot; : retval.toString());</span>
+<span class="nc" id="L639">					}</span>
+<span class="nc" id="L640">					catch (Exception e)</span>
+					{
+<span class="nc" id="L642">						e.printStackTrace();</span>
+<span class="nc" id="L643">						error = e.toString();</span>
+					}
+<span class="nc bnc" id="L645" title="All 4 branches missed.">					if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L646">						return error;</span>
+				}
+			}
+		}
+
+		//now process osgi event handlers
+<span class="nc" id="L652">		Event event = EventManager.newEvent(ModelValidator.documentEventTopics[docTiming],</span>
+<span class="nc" id="L653">				new EventProperty(EventManager.EVENT_DATA, po), new EventProperty(EventManager.TABLE_NAME_PROPERTY, po.get_TableName()));</span>
+<span class="nc" id="L654">		EventManager.getInstance().sendEvent(event);</span>
+		@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L656">		List&lt;String&gt; errors = (List&lt;String&gt;) event.getProperty(IEventManager.EVENT_ERROR_MESSAGES);</span>
+<span class="nc bnc" id="L657" title="All 4 branches missed.">		if (errors != null &amp;&amp; !errors.isEmpty()) {</span>
+<span class="nc" id="L658">			Collections.reverse(errors);</span>
+<span class="nc" id="L659">			StringBuilder eventErrors = new StringBuilder(&quot;&quot;);</span>
+<span class="nc bnc" id="L660" title="All 2 branches missed.">			for (String error : errors) {</span>
+<span class="nc" id="L661">				eventErrors.append(error).append(&quot;&lt;br&gt;&quot;);</span>
+			}
+<span class="nc" id="L663">			return eventErrors.toString();</span>
+		}
+<span class="nc" id="L665">		return null;</span>
+	}	//	fireDocValidate
+
+	/**
+	 * Fire Document Validation event of a table.&lt;br/&gt;
+	 * - Call {@link ModelValidator#docValidate(PO, int)} on register validators.
+	 * @param po
+	 * @param docTiming
+	 * @param list register validators
+	 * @return error message or null
+	 */
+	private String fireDocValidate(PO po, int docTiming, ArrayList&lt;ModelValidator&gt; list)
+	{
+<span class="nc bnc" id="L678" title="All 2 branches missed.">		for (int i = 0; i &lt; list.size(); i++)</span>
+		{
+<span class="nc" id="L680">			ModelValidator validator = null;</span>
+			try
+			{
+<span class="nc" id="L683">				validator = list.get(i);</span>
+<span class="nc bnc" id="L684" title="All 2 branches missed.">				if (validator.getAD_Client_ID() == po.getAD_Client_ID()</span>
+<span class="nc bnc" id="L685" title="All 2 branches missed.">					|| m_globalValidators.contains(validator))</span>
+				{
+<span class="nc" id="L687">					String error = validator.docValidate(po, docTiming);</span>
+<span class="nc bnc" id="L688" title="All 4 branches missed.">					if (error != null &amp;&amp; error.length() &gt; 0)</span>
+					{
+<span class="nc bnc" id="L690" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE))</span>
+						{
+<span class="nc" id="L692">							log.log(Level.FINE, &quot;po=&quot;+po+&quot; validator=&quot;+validator+&quot; timing=&quot;+docTiming);</span>
+						}
+<span class="nc" id="L694">						return error;</span>
+					}
+				}
+			}
+<span class="nc" id="L698">			catch (Exception e)</span>
+			{
+				//log the stack trace
+<span class="nc" id="L701">				log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+				// Exceptions are errors and should stop the document processing - teo_sarca [ 1679692 ]
+<span class="nc" id="L703">				String error = e.getLocalizedMessage();</span>
+<span class="nc bnc" id="L704" title="All 2 branches missed.">				if (error == null)</span>
+<span class="nc" id="L705">					error = e.toString();</span>
+<span class="nc" id="L706">				return error;</span>
+			}
+		}
+<span class="nc" id="L709">		return null;</span>
+	}
+
+	/**
+	 * 	Add Import Validation Listener of an import table
+	 *	@param importTableName table name
+	 *	@param listener listener
+	 */
+	public void addImportValidate (String importTableName, ImportValidator listener)
+	{
+<span class="nc" id="L719">		String propertyName = importTableName + &quot;*&quot;;</span>
+<span class="nc" id="L720">		ArrayList&lt;ImportValidator&gt; list = m_impValidateListeners.get(propertyName);</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">		if (list == null)</span>
+		{
+<span class="nc" id="L723">			list = new ArrayList&lt;ImportValidator&gt;();</span>
+<span class="nc" id="L724">			list.add(listener);</span>
+<span class="nc" id="L725">			m_impValidateListeners.put(propertyName, list);</span>
+<span class="nc" id="L726">		}</span>
+		else
+		{
+<span class="nc" id="L729">			list.add(listener);</span>
+		}
+<span class="nc" id="L731">	}</span>
+
+	/**
+	 * Fire Import Validation event.&lt;br/&gt;
+	 * - Call {@link ImportValidator#validate(ImportProcess, Object, Object, int)} on registered validators.&lt;br/&gt;
+	 * - Fire IEventTopics.IMPORT_* OSGi event.
+	 * @param process import process
+	 * @param importModel import record (e.g. X_I_BPartner)
+	 * @param targetModel target model (e.g. MBPartner, MBPartnerLocation, MUser)
+	 * @param timing see ImportValidator.TIMING_* constants
+	 */
+	public void fireImportValidate (ImportProcess process, PO importModel, PO targetModel, int timing)
+	{
+
+<span class="nc" id="L745">		String propertyName = process.getImportTableName() + &quot;*&quot;;</span>
+<span class="nc" id="L746">		ArrayList&lt;ImportValidator&gt; list = m_impValidateListeners.get(propertyName);</span>
+<span class="nc bnc" id="L747" title="All 2 branches missed.">		if (list != null)</span>
+		{
+<span class="nc bnc" id="L749" title="All 2 branches missed.">			for (ImportValidator validator : list)</span>
+			{
+<span class="nc" id="L751">				validator.validate(process, importModel, targetModel, timing);</span>
+			}
+		}
+
+		//osgi event handler
+<span class="nc" id="L756">		ImportEventData eventData = new ImportEventData(process, importModel, targetModel);</span>
+<span class="nc" id="L757">		String topic = null;</span>
+<span class="nc bnc" id="L758" title="All 2 branches missed.">		if (timing == ImportValidator.TIMING_AFTER_IMPORT)</span>
+<span class="nc" id="L759">			topic = IEventTopics.IMPORT_AFTER_IMPORT;</span>
+<span class="nc bnc" id="L760" title="All 2 branches missed.">		else if (timing == ImportValidator.TIMING_AFTER_VALIDATE)</span>
+<span class="nc" id="L761">			topic = IEventTopics.IMPORT_AFTER_VALIDATE;</span>
+<span class="nc bnc" id="L762" title="All 2 branches missed.">		else if (timing == ImportValidator.TIMING_BEFORE_IMPORT)</span>
+<span class="nc" id="L763">			topic = IEventTopics.IMPORT_BEFORE_IMPORT;</span>
+<span class="nc bnc" id="L764" title="All 2 branches missed.">		else if (timing == ImportValidator.TIMING_BEFORE_VALIDATE)</span>
+<span class="nc" id="L765">			topic = IEventTopics.IMPORT_BEFORE_VALIDATE;</span>
+<span class="nc" id="L766">		Event event = EventManager.newEvent(topic, new EventProperty(EventManager.EVENT_DATA, eventData), </span>
+<span class="nc" id="L767">				new EventProperty(EventManager.IMPORT_TABLE_NAME_PROPERTY, process.getImportTableName()));</span>
+<span class="nc" id="L768">		EventManager.getInstance().sendEvent(event);</span>
+<span class="nc" id="L769">	}</span>
+
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L778">		StringBuilder sb = new StringBuilder(&quot;ModelValidationEngine[&quot;);</span>
+<span class="nc" id="L779">		sb.append(&quot;Validators=#&quot;).append(m_validators.size())</span>
+<span class="nc" id="L780">			.append(&quot;, ModelChange=#&quot;).append(m_modelChangeListeners.size())</span>
+<span class="nc" id="L781">			.append(&quot;, DocValidate=#&quot;).append(m_docValidateListeners.size())</span>
+<span class="nc" id="L782">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L783">		return sb.toString();</span>
+	}	//	toString
+
+	/**
+	 *  Get Model Validation Engine Info
+	 *  @param sb optional string buffer
+	 *  @param ctx context
+	 *  @return Model Validation Engine Info
+	 *
+	 *  author Teo Sarca, FR [ 1724662 ]
+	 */
+	public StringBuffer getInfoDetail(StringBuffer sb, Properties ctx) {
+<span class="nc bnc" id="L795" title="All 2 branches missed.">		if (sb == null)</span>
+<span class="nc" id="L796">			sb = new StringBuffer();</span>
+<span class="nc" id="L797">		sb.append(&quot;=== ModelValidationEngine ===&quot;).append(Env.NL);</span>
+<span class="nc" id="L798">		sb.append(&quot;Validators #&quot;).append(m_validators.size()).append(Env.NL);</span>
+<span class="nc bnc" id="L799" title="All 2 branches missed.">		for (ModelValidator mv : m_validators) {</span>
+<span class="nc" id="L800">			sb.append(mv.toString()).append(Env.NL);</span>
+		}
+<span class="nc" id="L802">		sb.append(Env.NL).append(Env.NL);</span>
+		//
+<span class="nc" id="L804">		sb.append(&quot;ModelChange #&quot;).append(m_modelChangeListeners.size()).append(Env.NL);</span>
+<span class="nc" id="L805">		Iterator&lt;String&gt; it = m_modelChangeListeners.keySet().iterator();</span>
+<span class="nc bnc" id="L806" title="All 2 branches missed.">		while(it.hasNext()) {</span>
+<span class="nc" id="L807">			String key = it.next();</span>
+<span class="nc" id="L808">			ArrayList&lt;ModelValidator&gt; list = m_modelChangeListeners.get(key);</span>
+<span class="nc bnc" id="L809" title="All 2 branches missed.">			for (ModelValidator mv : list) {</span>
+<span class="nc" id="L810">				sb.append(key).append(&quot;: &quot;).append(mv.toString()).append(Env.NL);</span>
+			}
+		}
+<span class="nc" id="L813">		sb.append(Env.NL).append(Env.NL);</span>
+		//
+<span class="nc" id="L815">		sb.append(&quot;DocValidate #&quot;).append(m_docValidateListeners.size()).append(Env.NL);</span>
+<span class="nc" id="L816">		it = m_docValidateListeners.keySet().iterator();</span>
+<span class="nc bnc" id="L817" title="All 2 branches missed.">		while(it.hasNext()) {</span>
+<span class="nc" id="L818">			String key = it.next();</span>
+<span class="nc" id="L819">			ArrayList&lt;ModelValidator&gt; list = m_docValidateListeners.get(key);</span>
+<span class="nc bnc" id="L820" title="All 2 branches missed.">			for (ModelValidator mv : list) {</span>
+<span class="nc" id="L821">				sb.append(key).append(&quot;: &quot;).append(mv.toString()).append(Env.NL);</span>
+			}
+		}
+<span class="nc" id="L824">		sb.append(Env.NL).append(Env.NL);</span>
+		//
+<span class="nc" id="L826">		return sb;</span>
+	}
+
+	/**
+	 * After Load Preferences into Context for selected client. &lt;br/&gt;
+	 * Fire afterLoadPreferences model validator event and {@link IEventTopics#PREF_AFTER_LOAD} OSGi event.
+	 * @param ctx context
+	 * @see org.compiere.util.Login#loadPreferences(KeyNamePair, KeyNamePair, java.sql.Timestamp, String)
+	 * author Teo Sarca - FR [ 1670025 ] - https://sourceforge.net/p/adempiere/feature-requests/78/
+	 */
+	public void afterLoadPreferences (Properties ctx)
+	{
+<span class="nc" id="L838">		int AD_Client_ID = Env.getAD_Client_ID(ctx);</span>
+<span class="nc bnc" id="L839" title="All 2 branches missed.">		for (int i = 0; i &lt; m_validators.size(); i++)</span>
+		{
+<span class="nc" id="L841">			ModelValidator validator = m_validators.get(i);</span>
+<span class="nc bnc" id="L842" title="All 2 branches missed.">			if (AD_Client_ID == validator.getAD_Client_ID()</span>
+<span class="nc bnc" id="L843" title="All 2 branches missed.">				|| m_globalValidators.contains(validator))</span>
+			{
+<span class="nc" id="L845">				java.lang.reflect.Method m = null;</span>
+				try {
+<span class="nc" id="L847">					m = validator.getClass().getMethod(&quot;afterLoadPreferences&quot;, new Class[]{Properties.class});</span>
+<span class="nc" id="L848">				}</span>
+<span class="nc" id="L849">				catch(NoSuchMethodException e) {</span>
+					// ignore
+				}
+				try {
+<span class="nc bnc" id="L853" title="All 2 branches missed.">					if (m != null)</span>
+<span class="nc" id="L854">						m.invoke(validator, ctx);</span>
+<span class="nc" id="L855">				}</span>
+<span class="nc" id="L856">				catch (Exception e) {</span>
+<span class="nc" id="L857">					log.warning(&quot;&quot; + validator + &quot;: &quot; + e.getLocalizedMessage());</span>
+				}
+			}
+		}
+
+		//osgi event handlers
+<span class="nc" id="L863">		Event event = new Event(IEventTopics.PREF_AFTER_LOAD, (Map&lt;String, ?&gt;)null);</span>
+<span class="nc" id="L864">		EventManager.getInstance().sendEvent(event);</span>
+<span class="nc" id="L865">	}</span>
+
+	/**
+	 * Before Save Properties for selected client.
+	 * @deprecated for deprecated swing client only
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public void beforeSaveProperties ()
+	{
+<span class="nc" id="L874">		int AD_Client_ID = Env.getAD_Client_ID(Env.getCtx());</span>
+<span class="nc bnc" id="L875" title="All 2 branches missed.">		for (int i = 0; i &lt; m_validators.size(); i++)</span>
+		{
+<span class="nc" id="L877">			ModelValidator validator = m_validators.get(i);</span>
+<span class="nc bnc" id="L878" title="All 2 branches missed.">			if (AD_Client_ID == validator.getAD_Client_ID()</span>
+<span class="nc bnc" id="L879" title="All 2 branches missed.">				|| m_globalValidators.contains(validator))</span>
+			{
+<span class="nc" id="L881">				java.lang.reflect.Method m = null;</span>
+				try {
+<span class="nc" id="L883">					m = validator.getClass().getMethod(&quot;beforeSaveProperties&quot;);</span>
+<span class="nc" id="L884">				}</span>
+<span class="nc" id="L885">				catch(NoSuchMethodException e) {</span>
+					// ignore
+				}
+				try {
+<span class="nc bnc" id="L889" title="All 2 branches missed.">					if (m != null)</span>
+<span class="nc" id="L890">						m.invoke(validator);</span>
+<span class="nc" id="L891">				}</span>
+<span class="nc" id="L892">				catch (Exception e) {</span>
+<span class="nc" id="L893">					log.warning(&quot;&quot; + validator + &quot;: &quot; + e.getLocalizedMessage());</span>
+				}
+			}
+		}
+<span class="nc" id="L897">	}</span>
+}	//	ModelValidatorEngine
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

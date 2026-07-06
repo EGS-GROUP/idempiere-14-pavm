@@ -1,0 +1,1928 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MSetup.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MSetup.java</span></div><h1>MSetup.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import static org.compiere.model.SystemIDs.COUNTRY_US;
+import static org.compiere.model.SystemIDs.SCHEDULE_10_MINUTES;
+import static org.compiere.model.SystemIDs.SCHEDULE_15_MINUTES;
+
+import java.io.File;
+import java.util.Map;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.util.ProcessUtil;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.ProcessInfoParameter;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.idempiere.acct.AcctModelServices;
+import org.idempiere.acct.IAccountingSetupService;
+import org.idempiere.acct.IAccountingSetupService.AccountingSetupResult;
+
+/**
+ * Initial Setup Model
+ *
+ * @author Jorg Janke
+ * @version $Id: MSetup.java,v 1.3 2006/07/30 00:51:02 jjanke Exp $
+ * 
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;FR [ 1795384 ] Setup: create default accounts records is too rigid
+ * @author Carlos Ruiz - globalqss
+ * 			&lt;li&gt;Setup correctly IsSOTrx for return documents
+ */
+public final class MSetup
+{
+
+	public final static String TRXNAME_PREFIX = &quot;InitialClientSetup&quot;;
+	public final static String TRX_DISPLAYNAME = &quot;org.compiere.model.MSetup_createClient&quot;;
+
+	/**
+	 *  Constructor
+	 *  @param ctx context
+	 *  @param WindowNo window
+	 */
+	public MSetup(Properties ctx, int WindowNo)
+	{
+<span class="nc" id="L67">		this(ctx, WindowNo, false);</span>
+<span class="nc" id="L68">	}</span>
+	
+	/**
+	 *  Constructor
+	 *  @param ctx context
+	 *  @param WindowNo window
+	 */
+<span class="nc" id="L75">	public MSetup(Properties ctx, int WindowNo, boolean dryRun)</span>
+	{
+<span class="nc" id="L77">		m_ctx = new Properties(ctx);	//	copy</span>
+<span class="nc" id="L78">		m_lang = Env.getAD_Language(m_ctx);</span>
+<span class="nc" id="L79">		m_WindowNo = WindowNo;</span>
+<span class="nc" id="L80">		m_dryRun = dryRun;</span>
+<span class="nc" id="L81">	}   //  MSetup</span>
+
+	/**	Logger			*/
+<span class="nc" id="L84">	protected CLogger	log = CLogger.getCLogger(getClass());</span>
+
+<span class="nc" id="L86">	private Trx				m_trx = Trx.get(Trx.createTrxName(TRXNAME_PREFIX), true);</span>
+	private Properties      m_ctx;
+	private String          m_lang;
+	private int             m_WindowNo;
+	private StringBuffer    m_info;
+	//
+	private String          m_clientName;
+	//
+<span class="nc" id="L94">	private String          m_stdColumns = &quot;AD_Client_ID,AD_Org_ID,IsActive,Created,CreatedBy,Updated,UpdatedBy&quot;;</span>
+	private String          m_stdValues;
+	private String          m_stdValuesOrg;
+	//
+	private MClient			m_client;
+	private MOrg			m_org;
+<span class="nc" id="L100">	private int             C_AcctSchema_ID = -1;</span>
+	//
+	private int     		AD_User_ID;
+	private String  		AD_User_Name;
+	private int     		AD_User_U_ID;
+	private String  		AD_User_U_Name;
+	private MCalendar		m_calendar;
+	private int     		C_Cycle_ID;
+	//
+<span class="nc" id="L109">	private boolean         m_hasProject = false;</span>
+<span class="nc" id="L110">	private boolean         m_hasMCampaign = false;</span>
+<span class="nc" id="L111">	private boolean         m_hasSRegion = false;</span>
+<span class="nc" id="L112">	private boolean         m_hasActivity = false;</span>
+
+<span class="nc" id="L114">    private Map&lt;String, Integer&gt; glCategories = null;</span>
+<span class="nc" id="L115">	private boolean 		m_dryRun = false;</span>
+	
+	/**
+	 *  Create Client Info. &lt;br/&gt;
+	 *  - Client, Trees, Org, Role, User, User_Role
+	 *  @param clientName client name
+	 *  @param orgValue org Value
+	 *  @param orgName org name
+	 *  @param userClient client user name
+	 *  @param userOrg org user name
+	 *  @param phone
+	 *  @param phone2
+	 *  @param fax
+	 *  @param eMail
+	 *  @param taxID
+	 *  @param adminEmail
+	 *  @param userEmail
+	 *  @param isSetInitialPassword 
+	 *  @return true if created
+	 */
+	public boolean createClient (String clientName, String orgValue, String orgName,
+		String userClient, String userOrg, String phone, String phone2, String fax, String eMail, String taxID,
+		String adminEmail, String userEmail, boolean isSetInitialPassword)
+	{
+<span class="nc" id="L139">		log.info(clientName);</span>
+<span class="nc" id="L140">		m_trx.setDisplayName(TRX_DISPLAYNAME);</span>
+<span class="nc" id="L141">		m_trx.start();</span>
+		
+		//  info header
+<span class="nc" id="L144">		m_info = new StringBuffer();</span>
+		//  Standard columns
+<span class="nc" id="L146">		String name = null;</span>
+<span class="nc" id="L147">		String sql = null;</span>
+<span class="nc" id="L148">		int no = 0;</span>
+
+		/**
+		 *  Create Client
+		 */
+<span class="nc" id="L153">		name = clientName;</span>
+<span class="nc bnc" id="L154" title="All 4 branches missed.">		if (name == null || name.length() == 0)</span>
+<span class="nc" id="L155">			name = &quot;newClient&quot;;</span>
+<span class="nc" id="L156">		m_clientName = name;</span>
+<span class="nc" id="L157">		m_client = new MClient(m_ctx, 0, true, m_trx.getTrxName());</span>
+<span class="nc" id="L158">		m_client.setValue(m_clientName);</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">		if (MSystem.isUseLoginPrefix())</span>
+<span class="nc" id="L160">			m_client.setLoginPrefix(m_clientName);</span>
+<span class="nc" id="L161">		m_client.setName(m_clientName);</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">		if (!m_client.save())</span>
+		{
+<span class="nc" id="L164">			String err = &quot;Tenant NOT created&quot;;</span>
+<span class="nc" id="L165">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L166">			m_info.append(err);</span>
+<span class="nc" id="L167">			m_trx.rollback();</span>
+<span class="nc" id="L168">			m_trx.close();</span>
+<span class="nc" id="L169">			return false;</span>
+		}
+<span class="nc" id="L171">		int AD_Client_ID = m_client.getAD_Client_ID();</span>
+<span class="nc" id="L172">		Env.setContext(m_ctx, m_WindowNo, &quot;AD_Client_ID&quot;, AD_Client_ID);</span>
+<span class="nc" id="L173">		Env.setContext(m_ctx, Env.AD_CLIENT_ID, AD_Client_ID);</span>
+
+		//	Standard Values
+<span class="nc" id="L176">		m_stdValues = String.valueOf(AD_Client_ID) + &quot;,0,'Y',getDate(),0,getDate(),0&quot;;</span>
+		//  Info - Client
+<span class="nc" id="L178">		m_info.append(Msg.translate(m_lang, &quot;AD_Client_ID&quot;)).append(&quot;=&quot;).append(name).append(&quot;\n&quot;);</span>
+
+		//	Setup Sequences
+<span class="nc bnc" id="L181" title="All 2 branches missed.">		if (!MSequence.checkClientSequences (m_ctx, AD_Client_ID, m_trx.getTrxName()))</span>
+		{
+<span class="nc" id="L183">			String err = &quot;Sequences NOT created&quot;;</span>
+<span class="nc" id="L184">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L185">			m_info.append(err);</span>
+<span class="nc" id="L186">			m_trx.rollback();</span>
+<span class="nc" id="L187">			m_trx.close();</span>
+<span class="nc" id="L188">			return false;</span>
+		}
+		
+		//  Trees and Client Info
+<span class="nc bnc" id="L192" title="All 2 branches missed.">		if (!m_client.setupClientInfo(m_lang))</span>
+		{
+<span class="nc" id="L194">			String err = &quot;Tenant Info NOT created&quot;;</span>
+<span class="nc" id="L195">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L196">			m_info.append(err);</span>
+<span class="nc" id="L197">			m_trx.rollback();</span>
+<span class="nc" id="L198">			m_trx.close();</span>
+<span class="nc" id="L199">			return false;</span>
+		}
+
+		/**
+		 *  Create Org
+		 */
+<span class="nc" id="L205">		name = orgName;</span>
+<span class="nc bnc" id="L206" title="All 4 branches missed.">		if (name == null || name.length() == 0)</span>
+<span class="nc" id="L207">			name = &quot;newOrg&quot;;</span>
+<span class="nc bnc" id="L208" title="All 4 branches missed.">		if (orgValue == null || orgValue.length() == 0)</span>
+<span class="nc" id="L209">			orgValue = name;</span>
+<span class="nc" id="L210">		m_org = new MOrg (m_client, orgValue, name);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if (!m_org.save())</span>
+		{
+<span class="nc" id="L213">			String err = &quot;Organization NOT created&quot;;</span>
+<span class="nc" id="L214">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L215">			m_info.append(err);</span>
+<span class="nc" id="L216">			m_trx.rollback();</span>
+<span class="nc" id="L217">			m_trx.close();</span>
+<span class="nc" id="L218">			return false;</span>
+		}
+<span class="nc" id="L220">		Env.setContext(m_ctx, m_WindowNo, &quot;AD_Org_ID&quot;, getAD_Org_ID());</span>
+<span class="nc" id="L221">		Env.setContext(m_ctx, Env.AD_ORG_ID, getAD_Org_ID());</span>
+<span class="nc" id="L222">		m_stdValuesOrg = AD_Client_ID + &quot;,&quot; + getAD_Org_ID() + &quot;,'Y',getDate(),0,getDate(),0&quot;;</span>
+		//  Info
+<span class="nc" id="L224">		m_info.append(Msg.translate(m_lang, &quot;AD_Org_ID&quot;)).append(&quot;=&quot;).append(name).append(&quot;\n&quot;);</span>
+		
+		// Set Organization Phone, Phone2, Fax, EMail
+<span class="nc" id="L227">		MOrgInfo orgInfo = MOrgInfo.getCopy(m_ctx, getAD_Org_ID(), m_trx.getTrxName());</span>
+<span class="nc" id="L228">		orgInfo.setPhone(phone);</span>
+<span class="nc" id="L229">		orgInfo.setPhone2(phone2);</span>
+<span class="nc" id="L230">		orgInfo.setFax(fax);</span>
+<span class="nc" id="L231">		orgInfo.setEMail(eMail);</span>
+<span class="nc bnc" id="L232" title="All 4 branches missed.">		if (taxID != null &amp;&amp; taxID.length() &gt; 0) {</span>
+<span class="nc" id="L233">			orgInfo.setTaxID(taxID);</span>
+		}
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		if (!orgInfo.save())</span>
+		{
+<span class="nc" id="L237">			String err = &quot;Organization Info NOT Updated&quot;;</span>
+<span class="nc" id="L238">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L239">			m_info.append(err);</span>
+<span class="nc" id="L240">			m_trx.rollback();</span>
+<span class="nc" id="L241">			m_trx.close();</span>
+<span class="nc" id="L242">			return false;</span>
+		}
+		
+		/**
+		 *  Create Roles
+		 *  - Admin
+		 *  - User
+		 */
+<span class="nc" id="L250">		name = m_clientName + &quot; Admin&quot;;</span>
+<span class="nc" id="L251">		MRole admin = new MRole(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L252">		admin.setClientOrg(m_client);</span>
+<span class="nc" id="L253">		admin.setName(name);</span>
+<span class="nc" id="L254">		admin.setUserLevel(MRole.USERLEVEL_ClientPlusOrganization);</span>
+<span class="nc" id="L255">		admin.setPreferenceType(MRole.PREFERENCETYPE_Client);</span>
+<span class="nc" id="L256">		admin.setIsShowAcct(true);</span>
+<span class="nc" id="L257">		admin.setIsAccessAdvanced(true);</span>
+<span class="nc" id="L258">		admin.setIsClientAdministrator(true);</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">		if (!admin.save())</span>
+		{
+<span class="nc" id="L261">			String err = &quot;Admin Role A NOT inserted&quot;;</span>
+<span class="nc" id="L262">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L263">			m_info.append(err);</span>
+<span class="nc" id="L264">			m_trx.rollback();</span>
+<span class="nc" id="L265">			m_trx.close();</span>
+<span class="nc" id="L266">			return false;</span>
+		}
+		//	OrgAccess x, 0
+<span class="nc" id="L269">		MRoleOrgAccess adminClientAccess = new MRoleOrgAccess (admin, 0);</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">		if (!adminClientAccess.save())</span>
+<span class="nc" id="L271">			log.log(Level.SEVERE, &quot;Admin Role_OrgAccess 0 NOT created&quot;);</span>
+		//  OrgAccess x,y
+<span class="nc" id="L273">		MRoleOrgAccess adminOrgAccess = new MRoleOrgAccess (admin, m_org.getAD_Org_ID());</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">		if (!adminOrgAccess.save())</span>
+<span class="nc" id="L275">			log.log(Level.SEVERE, &quot;Admin Role_OrgAccess NOT created&quot;);</span>
+		
+		//  Info - Admin Role
+<span class="nc" id="L278">		m_info.append(Msg.translate(m_lang, &quot;AD_Role_ID&quot;)).append(&quot;=&quot;).append(name).append(&quot;\n&quot;);</span>
+
+		//
+<span class="nc" id="L281">		name = m_clientName + &quot; User&quot;;</span>
+<span class="nc" id="L282">		MRole user = new MRole (m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L283">		user.setClientOrg(m_client);</span>
+<span class="nc" id="L284">		user.setName(name);</span>
+<span class="nc" id="L285">		user.setIsAccessAdvanced(false);</span>
+<span class="nc" id="L286">		user.setIsClientAdministrator(false);</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		if (!user.save())</span>
+		{
+<span class="nc" id="L289">			String err = &quot;User Role A NOT inserted&quot;;</span>
+<span class="nc" id="L290">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L291">			m_info.append(err);</span>
+<span class="nc" id="L292">			m_trx.rollback();</span>
+<span class="nc" id="L293">			m_trx.close();</span>
+<span class="nc" id="L294">			return false;</span>
+		}
+		//  OrgAccess x,y
+<span class="nc" id="L297">		MRoleOrgAccess userOrgAccess = new MRoleOrgAccess (user, m_org.getAD_Org_ID());</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">		if (!userOrgAccess.save())</span>
+<span class="nc" id="L299">			log.log(Level.SEVERE, &quot;User Role_OrgAccess NOT created&quot;);</span>
+		
+		//  Info - Client Role
+<span class="nc" id="L302">		m_info.append(Msg.translate(m_lang, &quot;AD_Role_ID&quot;)).append(&quot;=&quot;).append(name).append(&quot;\n&quot;);</span>
+
+		/**
+		 *  Create Users
+		 *  - Client
+		 *  - Org
+		 */
+<span class="nc" id="L309">		MUser clientAdminUser = new MUser(m_ctx, 0, m_trx.getTrxName());</span>
+
+<span class="nc" id="L311">		name = userClient;</span>
+<span class="nc bnc" id="L312" title="All 4 branches missed.">		if (name == null || name.length() == 0)</span>
+<span class="nc" id="L313">			name = m_clientName + &quot;Client&quot;;</span>
+
+<span class="nc bnc" id="L315" title="All 2 branches missed.">		if (isSetInitialPassword)</span>
+<span class="nc" id="L316">			clientAdminUser.setPassword(name);</span>
+<span class="nc" id="L317">		clientAdminUser.setDescription(name);</span>
+<span class="nc" id="L318">		clientAdminUser.setName(name);</span>
+<span class="nc" id="L319">		clientAdminUser.setAD_Client_ID(AD_Client_ID);</span>
+<span class="nc" id="L320">		clientAdminUser.setAD_Org_ID(0);</span>
+<span class="nc" id="L321">		clientAdminUser.setEMail(adminEmail);</span>
+
+		try {
+<span class="nc" id="L324">			clientAdminUser.saveEx();</span>
+<span class="nc" id="L325">		} catch (AdempiereException ex) {</span>
+<span class="nc" id="L326">			String err = &quot;Admin User NOT inserted - &quot; + AD_User_Name;</span>
+<span class="nc" id="L327">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L328">			m_info.append(err);</span>
+<span class="nc" id="L329">			m_trx.rollback();</span>
+<span class="nc" id="L330">			m_trx.close();</span>
+<span class="nc" id="L331">			return false;</span>
+		}
+
+<span class="nc" id="L334">		AD_User_ID = clientAdminUser.getAD_User_ID();</span>
+<span class="nc" id="L335">		AD_User_Name = name;</span>
+
+		//  Info
+<span class="nc" id="L338">		m_info.append(Msg.translate(m_lang, &quot;AD_User_ID&quot;)).append(&quot;=&quot;).append(AD_User_Name).append(&quot;/&quot;).append(AD_User_Name).append(&quot;\n&quot;);</span>
+
+<span class="nc" id="L340">		MUser clientUser = new MUser(m_ctx, 0, m_trx.getTrxName());</span>
+
+<span class="nc" id="L342">		name = userOrg;</span>
+<span class="nc bnc" id="L343" title="All 4 branches missed.">		if (name == null || name.length() == 0)</span>
+<span class="nc" id="L344">			name = m_clientName + &quot;Org&quot;;</span>
+
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		if (isSetInitialPassword)</span>
+<span class="nc" id="L347">			clientUser.setPassword(name);</span>
+<span class="nc" id="L348">		clientUser.setDescription(name);</span>
+<span class="nc" id="L349">		clientUser.setName(name);</span>
+<span class="nc" id="L350">		clientUser.setAD_Client_ID(AD_Client_ID);</span>
+<span class="nc" id="L351">		clientUser.setAD_Org_ID(0);</span>
+<span class="nc" id="L352">		clientUser.setEMail(userEmail);</span>
+
+		try {
+<span class="nc" id="L355">			clientUser.saveEx();</span>
+<span class="nc" id="L356">		} catch (AdempiereException ex) {</span>
+<span class="nc" id="L357">			String err = &quot;Org User NOT inserted - &quot; + AD_User_U_Name;</span>
+<span class="nc" id="L358">			log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L359">			m_info.append(err);</span>
+<span class="nc" id="L360">			m_trx.rollback();</span>
+<span class="nc" id="L361">			m_trx.close();</span>
+<span class="nc" id="L362">			return false;</span>
+		}
+
+<span class="nc" id="L365">		AD_User_U_ID = clientUser.getAD_User_ID();</span>
+<span class="nc" id="L366">		AD_User_U_Name = name;</span>
+		//  Info
+<span class="nc" id="L368">		m_info.append(Msg.translate(m_lang, &quot;AD_User_ID&quot;)).append(&quot;=&quot;).append(AD_User_U_Name).append(&quot;/&quot;).append(AD_User_U_Name).append(&quot;\n&quot;);</span>
+
+		/**
+		 *  Create User-Role
+		 */
+		//  ClientUser          - Admin &amp; User
+<span class="nc" id="L374">		sql = &quot;INSERT INTO AD_User_Roles(&quot; + m_stdColumns + &quot;,AD_User_ID,AD_Role_ID,AD_User_Roles_UU)&quot;</span>
+<span class="nc" id="L375">			+ &quot; VALUES (&quot; + m_stdValues + &quot;,&quot; + AD_User_ID + &quot;,&quot; + admin.getAD_Role_ID() + &quot;,&quot; + DB.TO_STRING(Util.generateUUIDv7().toString()) + &quot;)&quot;;</span>
+<span class="nc" id="L376">		no = DB.executeUpdateEx(sql, m_trx.getTrxName());</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">		if (no != 1)</span>
+<span class="nc" id="L378">			log.log(Level.SEVERE, &quot;UserRole ClientUser+Admin NOT inserted&quot;);</span>
+<span class="nc" id="L379">		sql = &quot;INSERT INTO AD_User_Roles(&quot; + m_stdColumns + &quot;,AD_User_ID,AD_Role_ID,AD_User_Roles_UU)&quot;</span>
+<span class="nc" id="L380">			+ &quot; VALUES (&quot; + m_stdValues + &quot;,&quot; + AD_User_ID + &quot;,&quot; + user.getAD_Role_ID() + &quot;,&quot; + DB.TO_STRING(Util.generateUUIDv7().toString()) + &quot;)&quot;;</span>
+<span class="nc" id="L381">		no = DB.executeUpdateEx(sql, m_trx.getTrxName());</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">		if (no != 1)</span>
+<span class="nc" id="L383">			log.log(Level.SEVERE, &quot;UserRole ClientUser+User NOT inserted&quot;);</span>
+		//  OrgUser             - User
+<span class="nc" id="L385">		sql = &quot;INSERT INTO AD_User_Roles(&quot; + m_stdColumns + &quot;,AD_User_ID,AD_Role_ID,AD_User_Roles_UU)&quot;</span>
+<span class="nc" id="L386">			+ &quot; VALUES (&quot; + m_stdValues + &quot;,&quot; + AD_User_U_ID + &quot;,&quot; + user.getAD_Role_ID() + &quot;,&quot; + DB.TO_STRING(Util.generateUUIDv7().toString()) + &quot;)&quot;;</span>
+<span class="nc" id="L387">		no = DB.executeUpdateEx(sql, m_trx.getTrxName());</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		if (no != 1)</span>
+<span class="nc" id="L389">			log.log(Level.SEVERE, &quot;UserRole OrgUser+Org NOT inserted&quot;);</span>
+
+		//	Processors
+<span class="nc" id="L392">		MAcctProcessor ap = new MAcctProcessor(m_client, AD_User_ID);</span>
+<span class="nc" id="L393">		ap.setAD_Schedule_ID(SCHEDULE_10_MINUTES);</span>
+<span class="nc" id="L394">		ap.saveEx();</span>
+		
+<span class="nc" id="L396">		MRequestProcessor rp = new MRequestProcessor (m_client, AD_User_ID);</span>
+<span class="nc" id="L397">		rp.setAD_Schedule_ID(SCHEDULE_15_MINUTES);</span>
+<span class="nc" id="L398">		rp.saveEx();</span>
+		
+<span class="nc" id="L400">		log.info(&quot;fini&quot;);</span>
+<span class="nc" id="L401">		return true;</span>
+	}   //  createClient
+
+	/** 
+	 * preserving backward compatibility with swing client
+	 * @param currency
+	 * @param hasProduct
+	 * @param hasBPartner
+	 * @param hasProject
+	 * @param hasMCampaign
+	 * @param hasSRegion
+	 * @param AccountingFile
+	 * @return true if created
+	 * @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public boolean createAccounting(KeyNamePair currency,
+			boolean hasProduct, boolean hasBPartner, boolean hasProject,
+			boolean hasMCampaign, boolean hasSRegion,
+			File AccountingFile) {
+<span class="nc" id="L421">		return createAccounting(currency,</span>
+<span class="nc" id="L422">				hasProduct, hasBPartner, hasProject,</span>
+<span class="nc" id="L423">				hasMCampaign, hasSRegion,</span>
+<span class="nc" id="L424">				false, AccountingFile, false, false);</span>
+	}
+
+	/**
+	 *  &lt;pre&gt;
+	 *  Create Accounting elements.
+	 *  - Account Trees
+	 *  - Account Values
+	 *  - Accounting Schema
+	 *  - Default Accounts
+	 *  &lt;/pre&gt;
+	 *  @param currency currency
+	 *  @param hasProduct has product segment
+	 *  @param hasBPartner has bp segment
+	 *  @param hasProject has project segment
+	 *  @param hasMCampaign has campaign segment
+	 *  @param hasSRegion has sales region segment
+	 *  @param hasActivity has activity segment
+	 *  @param AccountingFile accounting file
+	 *  @param useDefaultCoA use the Default CoA (load and group summary account)
+	 *  @param inactivateDefaults inactivate the default accounts after created
+	 *  @return true if created
+	 */
+	public boolean createAccounting(KeyNamePair currency,
+		boolean hasProduct, boolean hasBPartner, boolean hasProject,
+		boolean hasMCampaign, boolean hasSRegion,
+		boolean hasActivity, File AccountingFile, boolean useDefaultCoA, boolean inactivateDefaults)
+	{
+<span class="nc bnc" id="L452" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(m_client.toString());</span>
+		//
+<span class="nc" id="L454">		m_hasProject = hasProject;</span>
+<span class="nc" id="L455">		m_hasMCampaign = hasMCampaign;</span>
+<span class="nc" id="L456">		m_hasSRegion = hasSRegion;</span>
+<span class="nc" id="L457">		m_hasActivity = hasActivity;</span>
+
+		//  Initialize
+<span class="nc" id="L460">		m_info = new StringBuffer();</span>
+
+		try {
+			
+<span class="nc" id="L464">			IAccountingSetupService acctService = null;</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">			if (AcctModelServices.isAccountingSetupAvailable()) {</span>
+<span class="nc" id="L466">				acctService = AcctModelServices.getAccountingSetupService();</span>
+			}
+
+<span class="nc bnc" id="L469" title="All 2 branches missed.">		    if (acctService == null) {</span>
+<span class="nc" id="L470">		        log.warning(&quot;Accounting service not available - skipping dimension links&quot;);</span>
+<span class="nc" id="L471">		        return true; // Not an error, just skip</span>
+		    }
+		    
+<span class="nc" id="L474">		    AccountingSetupResult result = acctService.createAccountingInfrastructure(</span>
+<span class="nc" id="L475">		    		m_ctx, m_client, getAD_Org_ID(), currency, </span>
+<span class="nc" id="L476">		    		hasProduct, hasBPartner, hasProject,</span>
+<span class="nc" id="L477">		    		hasMCampaign, hasSRegion, hasActivity,</span>
+<span class="nc" id="L478">		    		AccountingFile, inactivateDefaults, m_calendar.getC_Calendar_ID(),</span>
+<span class="nc" id="L479">		    		m_stdColumns, m_stdValues,</span>
+<span class="nc" id="L480">		    		m_trx.getTrxName()</span>
+		    		);
+		    
+<span class="nc bnc" id="L483" title="All 2 branches missed.">		    if (!result.isSuccess()) {</span>
+<span class="nc" id="L484">		        m_info.append(result.getInfo());</span>
+<span class="nc" id="L485">		        m_trx.rollback();</span>
+<span class="nc" id="L486">		        m_trx.close();</span>
+<span class="nc" id="L487">		        return false;</span>
+		    }
+		    
+<span class="nc" id="L490">		    m_info.append(result.getInfo());</span>
+<span class="nc" id="L491">			C_AcctSchema_ID = result.getC_AcctSchema_ID();</span>
+<span class="nc" id="L492">			glCategories = result.getGLCategories();</span>
+
+			//
+<span class="nc bnc" id="L495" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;fini&quot;);</span>
+<span class="nc" id="L496">			return true;</span>
+<span class="nc" id="L497">		} catch (Exception e) {</span>
+<span class="nc" id="L498">	        String err = &quot;Accounting setup failed: &quot; + e.getMessage();</span>
+<span class="nc" id="L499">	        log.log(Level.SEVERE, err, e);</span>
+<span class="nc" id="L500">	        m_info.append(err);</span>
+<span class="nc" id="L501">	        m_trx.rollback();</span>
+<span class="nc" id="L502">	        m_trx.close();</span>
+<span class="nc" id="L503">	        return false;</span>
+	    }
+	}   //  createAccounting
+	
+	/**
+	 * Create default document types and validates the setup
+	 * @return true if created and validated
+	 */
+	public boolean createAndValidateDocumentTypes() {
+<span class="nc bnc" id="L512" title="All 2 branches missed.">	    if (!createDocumentTypes(glCategories)) {</span>
+<span class="nc" id="L513">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L516">	    return validateDocumentTypeSetup();</span>
+	}
+
+	/**
+	 * Create document types with optional GL categories.
+	 * This method works even without accounting module installed.
+	 * If glCategories is null or empty, GL_Category_ID will be 0.
+	 * 
+	 * @param glCategories map of GL category names to IDs (can be null)
+	 * @return true if created
+	 */
+	private boolean createDocumentTypes(Map&lt;String, Integer&gt; glCategories)
+	{
+		// Get GL category IDs (default to 0 if accounting not installed)
+<span class="nc" id="L530">	    int GL_None = getGLCategoryID(glCategories, &quot;GL_None&quot;);</span>
+<span class="nc" id="L531">	    int GL_GL = getGLCategoryID(glCategories, &quot;GL_GL&quot;);</span>
+<span class="nc" id="L532">	    int GL_ARI = getGLCategoryID(glCategories, &quot;GL_ARI&quot;);</span>
+<span class="nc" id="L533">	    int GL_ARR = getGLCategoryID(glCategories, &quot;GL_ARR&quot;);</span>
+<span class="nc" id="L534">	    int GL_MM = getGLCategoryID(glCategories, &quot;GL_MM&quot;);</span>
+<span class="nc" id="L535">	    int GL_API = getGLCategoryID(glCategories, &quot;GL_API&quot;);</span>
+<span class="nc" id="L536">	    int GL_APP = getGLCategoryID(glCategories, &quot;GL_APP&quot;);</span>
+<span class="nc" id="L537">	    int GL_CASH = getGLCategoryID(glCategories, &quot;GL_CASH&quot;);</span>
+<span class="nc" id="L538">	    int GL_Manufacturing = getGLCategoryID(glCategories, &quot;GL_Manufacturing&quot;);</span>
+<span class="nc" id="L539">	    int GL_Distribution = getGLCategoryID(glCategories, &quot;GL_Distribution&quot;);</span>
+<span class="nc" id="L540">	    int GL_Payroll = getGLCategoryID(glCategories, &quot;GL_Payroll&quot;);</span>
+	    
+	    // Create all document types
+<span class="nc bnc" id="L543" title="All 2 branches missed.">	    if (!createAccountingDocTypes(GL_GL)) {</span>
+<span class="nc" id="L544">	        return false;</span>
+	    }
+	    
+<span class="nc bnc" id="L547" title="All 2 branches missed.">	    if (!createInvoiceDocTypes(GL_ARI, GL_API)) {</span>
+<span class="nc" id="L548">	        return false;</span>
+	    }
+	    
+<span class="nc bnc" id="L551" title="All 2 branches missed.">	    if (!createPaymentDocTypes(GL_ARR, GL_APP, GL_CASH)) {</span>
+<span class="nc" id="L552">	        return false;</span>
+	    }
+	    
+<span class="nc bnc" id="L555" title="All 2 branches missed.">	    if (!createBankingDocTypes(GL_CASH)) {</span>
+<span class="nc" id="L556">	        return false;</span>
+	    }
+	    
+<span class="nc bnc" id="L559" title="All 2 branches missed.">	    if (!createInventoryDocTypes(GL_MM)) {</span>
+<span class="nc" id="L560">	        return false;</span>
+	    }
+	    
+<span class="nc bnc" id="L563" title="All 2 branches missed.">	    if (!createSalesDocTypes(GL_None, GL_MM, GL_ARI)) {</span>
+<span class="nc" id="L564">	        return false;</span>
+	    }
+	    
+<span class="nc bnc" id="L567" title="All 2 branches missed.">	    if (!createManufacturingDocTypes(GL_Manufacturing, GL_Distribution, GL_Payroll)) {</span>
+<span class="nc" id="L568">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L571">	    return true;</span>
+	}
+	
+	/**
+	 * Get GL category ID from map, return 0 if not found
+	 * @param glCategories category map
+	 * @param key category key
+	 * @return GL_Category_ID or 0
+	 */
+	private int getGLCategoryID(Map&lt;String, Integer&gt; glCategories, String key)
+	{
+<span class="nc bnc" id="L582" title="All 4 branches missed.">	    if (glCategories == null || !glCategories.containsKey(key)) {</span>
+<span class="nc" id="L583">	        return 0;</span>
+	    }
+<span class="nc" id="L585">	    return glCategories.get(key);</span>
+	}
+	
+	/**
+	 * Create accounting-related document types
+	 * @return true if created
+	 */
+	private boolean createAccountingDocTypes(int GL_GL)
+	{
+<span class="nc bnc" id="L594" title="All 2 branches missed.">		if (!AcctModelServices.isAccountingSetupAvailable()) {</span>
+<span class="nc" id="L595">			return true; // Skip if accounting module not available</span>
+		}
+
+	    // GL Journal
+<span class="nc" id="L599">	    int id = createDocType(&quot;GL Journal&quot;, Msg.getElement(m_ctx, &quot;GL_Journal_ID&quot;), </span>
+<span class="nc" id="L600">	        MDocType.DOCBASETYPE_GLJournal, null, 0, 0, 1000, GL_GL, false);</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">	    if (id == 0) {</span>
+<span class="nc" id="L602">	        String err = &quot;Document Type not created&quot;;</span>
+<span class="nc" id="L603">	        m_info.append(err);</span>
+<span class="nc" id="L604">	        m_trx.rollback();</span>
+<span class="nc" id="L605">	        m_trx.close();</span>
+<span class="nc" id="L606">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L609">	    createDocType(&quot;GL Journal Batch&quot;, Msg.getElement(m_ctx, &quot;GL_JournalBatch_ID&quot;), </span>
+<span class="nc" id="L610">	        MDocType.DOCBASETYPE_GLJournal, null, 0, 0, 100, GL_GL, false);</span>
+
+<span class="nc" id="L612">	    return true;</span>
+	}
+	
+	/**
+	 * Create invoice document types
+	 * @return true if created
+	 */
+	private boolean createInvoiceDocTypes(int GL_ARI, int GL_API)
+	{
+	    // AR Invoices
+<span class="nc" id="L622">	    createDocType(&quot;AR Invoice&quot;, Msg.getElement(m_ctx, &quot;C_Invoice_ID&quot;, true), </span>
+<span class="nc" id="L623">	        MDocType.DOCBASETYPE_ARInvoice, null, 0, 0, 100000, GL_ARI, false);</span>
+<span class="nc" id="L624">	    createDocType(&quot;AR Invoice Indirect&quot;, Msg.getElement(m_ctx, &quot;C_Invoice_ID&quot;, true), </span>
+<span class="nc" id="L625">	        MDocType.DOCBASETYPE_ARInvoice, null, 0, 0, 150000, GL_ARI, false);</span>
+<span class="nc" id="L626">	    createDocType(&quot;AR Credit Memo&quot;, Msg.getMsg(m_ctx, &quot;CreditMemo&quot;), </span>
+<span class="nc" id="L627">	        MDocType.DOCBASETYPE_ARCreditMemo, null, 0, 0, 170000, GL_ARI, false);</span>
+	    
+	    // AP Invoices
+<span class="nc" id="L630">	    createDocType(&quot;AP Invoice&quot;, Msg.getElement(m_ctx, &quot;C_Invoice_ID&quot;, false), </span>
+<span class="nc" id="L631">	        MDocType.DOCBASETYPE_APInvoice, null, 0, 0, 0, GL_API, false);</span>
+<span class="nc" id="L632">	    createDocType(&quot;AP CreditMemo&quot;, Msg.getMsg(m_ctx, &quot;CreditMemo&quot;), </span>
+<span class="nc" id="L633">	        MDocType.DOCBASETYPE_APCreditMemo, null, 0, 0, 0, GL_API, false);</span>
+<span class="nc" id="L634">	    createDocType(&quot;Match Invoice&quot;, Msg.getElement(m_ctx, &quot;M_MatchInv_ID&quot;, false), </span>
+<span class="nc" id="L635">	        MDocType.DOCBASETYPE_MatchInvoice, null, 0, 0, 390000, GL_API, false);</span>
+	    
+<span class="nc" id="L637">	    return true;</span>
+	}
+	
+	/**
+	 * Create Payment document types
+	 * @return true if created
+	 */
+	private boolean createPaymentDocTypes(int GL_ARR, int GL_APP, int GL_CASH)
+	{
+	    // Payments
+<span class="nc" id="L647">	    createDocType(&quot;AR Receipt&quot;, Msg.getElement(m_ctx, &quot;C_Payment_ID&quot;, true), </span>
+<span class="nc" id="L648">	        MDocType.DOCBASETYPE_ARReceipt, null, 0, 0, 0, GL_ARR, false);</span>
+<span class="nc" id="L649">	    createDocType(&quot;AP Payment&quot;, Msg.getElement(m_ctx, &quot;C_Payment_ID&quot;, false), </span>
+<span class="nc" id="L650">	        MDocType.DOCBASETYPE_APPayment, null, 0, 0, 0, GL_APP, false);</span>
+<span class="nc" id="L651">	    createDocType(&quot;Allocation&quot;, &quot;Allocation&quot;, </span>
+<span class="nc" id="L652">	        MDocType.DOCBASETYPE_PaymentAllocation, null, 0, 0, 490000, GL_CASH, false);</span>
+	    
+<span class="nc" id="L654">	    return true;</span>
+	}
+	
+	/**
+	 * Create accounting-related document types
+	 * @return true if created
+	 */
+	private boolean createBankingDocTypes(int GL_CASH)
+	{
+	    // Banking
+<span class="nc" id="L664">	    createDocType(&quot;Bank Statement&quot;, Msg.getElement(m_ctx, &quot;C_BankStatement_ID&quot;, true), </span>
+<span class="nc" id="L665">	        MDocType.DOCBASETYPE_BankStatement, null, 0, 0, 700000, GL_CASH, false);</span>
+<span class="nc" id="L666">	    createDocType(&quot;Cash Journal&quot;, Msg.getElement(m_ctx, &quot;C_Cash_ID&quot;, true),</span>
+<span class="nc" id="L667">	        MDocType.DOCBASETYPE_CashJournal, null, 0, 0, 750000, GL_CASH, false);</span>
+	    
+<span class="nc" id="L669">	    return true;</span>
+	}
+
+	/**
+	 * Create inventory/material management document types
+	 * @return true if created
+	 */
+	private boolean createInventoryDocTypes(int GL_MM)
+	{
+	    // Shipments
+<span class="nc" id="L679">	    createDocType(&quot;MM Shipment&quot;, &quot;Delivery Note&quot;, </span>
+<span class="nc" id="L680">	        MDocType.DOCBASETYPE_MaterialDelivery, null, 0, 0, 500000, GL_MM, false);</span>
+<span class="nc" id="L681">	    createDocType(&quot;MM Shipment Indirect&quot;, &quot;Delivery Note&quot;, </span>
+<span class="nc" id="L682">	        MDocType.DOCBASETYPE_MaterialDelivery, null, 0, 0, 550000, GL_MM, false);</span>
+<span class="nc" id="L683">	    createDocType(&quot;MM Vendor Return&quot;, &quot;Vendor Return&quot;, </span>
+<span class="nc" id="L684">	        MDocType.DOCBASETYPE_MaterialDelivery, null, 0, 0, 590000, GL_MM, true);</span>
+	    
+	    // Receipts
+<span class="nc" id="L687">	    createDocType(&quot;MM Receipt&quot;, &quot;Vendor Delivery&quot;, </span>
+<span class="nc" id="L688">	        MDocType.DOCBASETYPE_MaterialReceipt, null, 0, 0, 0, GL_MM, false);</span>
+<span class="nc" id="L689">	    createDocType(&quot;MM Customer Return&quot;, &quot;Customer Return&quot;, </span>
+<span class="nc" id="L690">	        MDocType.DOCBASETYPE_MaterialReceipt, null, 0, 0, 570000, GL_MM, true);</span>
+	    
+	    // Inventory
+<span class="nc" id="L693">	    createDocType(&quot;Material Movement&quot;, Msg.getElement(m_ctx, &quot;M_Movement_ID&quot;, false),</span>
+<span class="nc" id="L694">	        MDocType.DOCBASETYPE_MaterialMovement, null, 0, 0, 610000, GL_MM, false);</span>
+<span class="nc" id="L695">	    createDocType(&quot;Physical Inventory&quot;, Msg.getElement(m_ctx, &quot;M_Inventory_ID&quot;, false), </span>
+<span class="nc" id="L696">	        MDocType.DOCBASETYPE_MaterialPhysicalInventory, </span>
+<span class="nc" id="L697">	        MDocType.DOCSUBTYPEINV_PhysicalInventory, 0, 0, 620000, GL_MM, false);</span>
+<span class="nc" id="L698">	    createDocType(&quot;Internal Use Inventory&quot;, &quot;Internal Use Inventory&quot;, </span>
+<span class="nc" id="L699">	        MDocType.DOCBASETYPE_MaterialPhysicalInventory, </span>
+<span class="nc" id="L700">	        MDocType.DOCSUBTYPEINV_InternalUseInventory, 0, 0, 650000, GL_MM, false);</span>
+<span class="nc" id="L701">	    createDocType(&quot;Cost Adjustment&quot;, &quot;Cost Adjustment&quot;, </span>
+<span class="nc" id="L702">	        MDocType.DOCBASETYPE_MaterialPhysicalInventory, </span>
+<span class="nc" id="L703">	        MDocType.DOCSUBTYPEINV_CostAdjustment, 0, 0, 660000, GL_MM, false);</span>
+	    
+	    // Production
+<span class="nc" id="L706">	    createDocType(&quot;Material Production&quot;, Msg.getElement(m_ctx, &quot;M_Production_ID&quot;, false), </span>
+<span class="nc" id="L707">	        MDocType.DOCBASETYPE_MaterialProduction, null, 0, 0, 630000, GL_MM, false);</span>
+<span class="nc" id="L708">	    createDocType(&quot;Project Issue&quot;, Msg.getElement(m_ctx, &quot;C_ProjectIssue_ID&quot;, false), </span>
+<span class="nc" id="L709">	        MDocType.DOCBASETYPE_ProjectIssue, null, 0, 0, 640000, GL_MM, false);</span>
+	    
+<span class="nc" id="L711">	    return true;</span>
+	}
+
+	/**
+	 * Create sales-related document types
+	 * @return true if created
+	 */
+	private boolean createSalesDocTypes(int GL_None, int GL_MM, int GL_ARI)
+	{
+	    // Get shipment/invoice doc types for linking
+<span class="nc" id="L721">	    int DT_S  = getDocTypeID(&quot;MM Shipment&quot;);</span>
+<span class="nc" id="L722">	    int DT_SI = getDocTypeID(&quot;MM Shipment Indirect&quot;);</span>
+<span class="nc" id="L723">	    int DT_I  = getDocTypeID(&quot;AR Invoice&quot;);</span>
+<span class="nc" id="L724">	    int DT_II = getDocTypeID(&quot;AR Invoice Indirect&quot;);</span>
+<span class="nc" id="L725">	    int DT_IC = getDocTypeID(&quot;AR Credit Memo&quot;);</span>
+<span class="nc" id="L726">	    int DT_RM = getDocTypeID(&quot;MM Customer Return&quot;);</span>
+<span class="nc" id="L727">	    int DT_VRM = getDocTypeID(&quot;MM Vendor Return&quot;);</span>
+<span class="nc" id="L728">	    int DT_IPC = getDocTypeID(&quot;AP CreditMemo&quot;);</span>
+	    
+	    // Purchase Orders
+<span class="nc" id="L731">	    createDocType(&quot;Purchase Order&quot;, Msg.getElement(m_ctx, &quot;C_Order_ID&quot;, false), </span>
+<span class="nc" id="L732">	        MDocType.DOCBASETYPE_PurchaseOrder, null, 0, 0, 800000, GL_None, false);</span>
+<span class="nc" id="L733">	    createDocType(&quot;Match PO&quot;, Msg.getElement(m_ctx, &quot;M_MatchPO_ID&quot;, false), </span>
+<span class="nc" id="L734">	        MDocType.DOCBASETYPE_MatchPO, null, 0, 0, 890000, GL_None, false);</span>
+<span class="nc" id="L735">	    createDocType(&quot;Purchase Requisition&quot;, Msg.getElement(m_ctx, &quot;M_Requisition_ID&quot;, false), </span>
+<span class="nc" id="L736">	        MDocType.DOCBASETYPE_PurchaseRequisition, null, 0, 0, 900000, GL_None, false);</span>
+<span class="nc" id="L737">	    createDocType(&quot;Vendor Return Material&quot;, &quot;Vendor Return Material Authorization&quot;,</span>
+<span class="nc" id="L738">	        MDocType.DOCBASETYPE_PurchaseOrder, MDocType.DOCSUBTYPESO_ReturnMaterial, </span>
+<span class="nc" id="L739">	        DT_VRM, DT_IPC, 990000, GL_MM, false);</span>
+	    
+	    // Sales Orders
+<span class="nc" id="L742">	    createDocType(&quot;Binding offer&quot;, &quot;Quotation&quot;, </span>
+<span class="nc" id="L743">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_Quotation, </span>
+<span class="nc" id="L744">	        0, 0, 10000, GL_None, false);</span>
+<span class="nc" id="L745">	    createDocType(&quot;Non binding offer&quot;, &quot;Proposal&quot;, </span>
+<span class="nc" id="L746">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_Proposal, </span>
+<span class="nc" id="L747">	        0, 0, 20000, GL_None, false);</span>
+<span class="nc" id="L748">	    createDocType(&quot;Prepay Order&quot;, &quot;Prepay Order&quot;, </span>
+<span class="nc" id="L749">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_PrepayOrder, </span>
+<span class="nc" id="L750">	        DT_S, DT_I, 30000, GL_None, false);</span>
+<span class="nc" id="L751">	    createDocType(&quot;Customer Return Material&quot;, &quot;Customer Return Material Authorization&quot;, </span>
+<span class="nc" id="L752">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_ReturnMaterial, </span>
+<span class="nc" id="L753">	        DT_RM, DT_IC, 30000, GL_None, false);</span>
+<span class="nc" id="L754">	    createDocType(&quot;Standard Order&quot;, &quot;Order Confirmation&quot;, </span>
+<span class="nc" id="L755">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_StandardOrder, </span>
+<span class="nc" id="L756">	        DT_S, DT_I, 50000, GL_None, false);</span>
+<span class="nc" id="L757">	    createDocType(&quot;Credit Order&quot;, &quot;Order Confirmation&quot;, </span>
+<span class="nc" id="L758">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_OnCreditOrder, </span>
+<span class="nc" id="L759">	        DT_SI, DT_I, 60000, GL_None, false);</span>
+<span class="nc" id="L760">	    createDocType(&quot;Warehouse Order&quot;, &quot;Order Confirmation&quot;, </span>
+<span class="nc" id="L761">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_WarehouseOrder, </span>
+<span class="nc" id="L762">	        DT_S, DT_I, 70000, GL_None, false);</span>
+	    
+	    // POS Order
+<span class="nc" id="L765">	    int DT = createDocType(&quot;POS Order&quot;, &quot;Order Confirmation&quot;, </span>
+<span class="nc" id="L766">	        MDocType.DOCBASETYPE_SalesOrder, MDocType.DOCSUBTYPESO_POSOrder, </span>
+<span class="nc" id="L767">	        DT_SI, DT_II, 80000, GL_None, false);</span>
+	    
+	    // Set POS as default for Sales Order window
+<span class="nc" id="L770">	    createPreference(&quot;C_DocTypeTarget_ID&quot;, String.valueOf(DT), 143);</span>
+	    
+<span class="nc" id="L772">	    return true;</span>
+	}
+
+	/**
+	 * Create manufacturing/distribution document types
+	 * @return true if created
+	 */
+	private boolean createManufacturingDocTypes(int GL_Manufacturing, 
+	                                           int GL_Distribution, int GL_Payroll)
+	{
+<span class="nc" id="L782">	    createDocType(&quot;Manufacturing Order&quot;, &quot;Manufacturing Order&quot;, </span>
+<span class="nc" id="L783">	        MDocType.DOCBASETYPE_ManufacturingOrder, null,</span>
+<span class="nc" id="L784">	        0, 0, 80000, GL_Manufacturing, false);</span>
+<span class="nc" id="L785">	    createDocType(&quot;Manufacturing Cost Collector&quot;,&quot;Cost Collector&quot;, </span>
+<span class="nc" id="L786">	        MDocType.DOCBASETYPE_ManufacturingCostCollector, null, </span>
+<span class="nc" id="L787">	        0, 0, 81000, GL_Manufacturing, false);</span>
+<span class="nc" id="L788">	    createDocType(&quot;Maintenance Order&quot;,&quot;Maintenance Order&quot;,</span>
+<span class="nc" id="L789">	        MDocType.DOCBASETYPE_MaintenanceOrder, null,</span>
+<span class="nc" id="L790">	        0, 0, 86000, GL_Manufacturing, false);</span>
+<span class="nc" id="L791">	    createDocType(&quot;Quality Order&quot;,&quot;Quality Order&quot;,</span>
+<span class="nc" id="L792">	        MDocType.DOCBASETYPE_QualityOrder, null,</span>
+<span class="nc" id="L793">	        0, 0, 87000, GL_Manufacturing, false);</span>
+<span class="nc" id="L794">	    createDocType(&quot;Distribution Order&quot;,&quot;Distribution Order&quot;, </span>
+<span class="nc" id="L795">	        MDocType.DOCBASETYPE_DistributionOrder, null,</span>
+<span class="nc" id="L796">	        0, 0, 88000, GL_Distribution, false);</span>
+<span class="nc" id="L797">	    createDocType(&quot;Payroll&quot;,&quot;Payroll&quot;, </span>
+<span class="nc" id="L798">	        MDocType.DOCBASETYPE_Payroll, null,</span>
+<span class="nc" id="L799">	        0, 0, 90000, GL_Payroll, false);</span>
+	    
+<span class="nc" id="L801">	    return true;</span>
+	}
+	
+	/**
+	 * Helper to get doc type ID by name
+	 * @param name doc type name
+	 * @return C_DocType_ID
+	 */
+	private int getDocTypeID(String name)
+	{
+<span class="nc" id="L811">	    String sql = &quot;SELECT C_DocType_ID FROM C_DocType WHERE AD_Client_ID=? AND Name=?&quot;;</span>
+<span class="nc" id="L812">	    return DB.getSQLValueEx(m_trx.getTrxName(), sql, m_client.getAD_Client_ID(), name);</span>
+	}
+	
+	/**
+	 * Validate accounting setup completeness
+	 * @return true if valid
+	 */
+	private boolean validateDocumentTypeSetup()
+	{
+<span class="nc" id="L821">	    ProcessInfo processInfo = new ProcessInfo(&quot;Document Type Verify&quot;, 0);</span>
+<span class="nc" id="L822">	    processInfo.setAD_Client_ID(getAD_Client_ID());</span>
+<span class="nc" id="L823">	    processInfo.setAD_User_ID(getAD_User_ID());</span>
+<span class="nc" id="L824">	    processInfo.setParameter(new ProcessInfoParameter[0]);</span>
+<span class="nc" id="L825">	    processInfo.setClassName(&quot;org.compiere.process.DocumentTypeVerify&quot;);</span>
+	    
+<span class="nc bnc" id="L827" title="All 2 branches missed.">	    if (!ProcessUtil.startJavaProcess(m_ctx, processInfo, m_trx, false)) {</span>
+<span class="nc" id="L828">	        String err = &quot;Document type verification failed. Message=&quot; + processInfo.getSummary();</span>
+<span class="nc" id="L829">	        log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L830">	        m_info.append(err);</span>
+<span class="nc" id="L831">	        m_trx.rollback();</span>
+<span class="nc" id="L832">	        m_trx.close();</span>
+<span class="nc" id="L833">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L836">	    return true;</span>
+	}
+
+	/**
+	 *  Create Document Types with Sequence
+	 *  @param Name name
+	 *  @param PrintName print name
+	 *  @param DocBaseType document base type
+	 *  @param DocSubTypeSO sales order sub type
+	 *  @param C_DocTypeShipment_ID shipment doc
+	 *  @param C_DocTypeInvoice_ID invoice doc
+	 *  @param StartNo start doc no
+	 *  @param GL_Category_ID gl category
+	 *  @param isReturnTrx is return trx
+	 *  @return C_DocType_ID doc type or 0 for error
+	 */
+	private int createDocType (String Name, String PrintName,
+		String DocBaseType, String DocSubTypeSO,
+		int C_DocTypeShipment_ID, int C_DocTypeInvoice_ID,
+		int StartNo, int GL_Category_ID, boolean isReturnTrx)
+	{
+<span class="nc" id="L857">		MSequence sequence = null;</span>
+<span class="nc bnc" id="L858" title="All 2 branches missed.">		if (StartNo != 0)</span>
+		{
+<span class="nc" id="L860">			sequence = new MSequence(m_ctx, getAD_Client_ID(), Name, StartNo, m_trx.getTrxName());</span>
+<span class="nc bnc" id="L861" title="All 2 branches missed.">			if (!sequence.save())</span>
+			{
+<span class="nc" id="L863">				log.log(Level.SEVERE, &quot;Sequence NOT created - &quot; + Name);</span>
+<span class="nc" id="L864">				return 0;</span>
+			}
+		}
+		
+<span class="nc" id="L868">		MDocType dt = new MDocType (m_ctx, DocBaseType, Name, m_trx.getTrxName());</span>
+<span class="nc bnc" id="L869" title="All 4 branches missed.">		if (PrintName != null &amp;&amp; PrintName.length() &gt; 0)</span>
+<span class="nc" id="L870">			dt.setPrintName(PrintName);	//	Defaults to Name</span>
+<span class="nc bnc" id="L871" title="All 2 branches missed.">		if (DocSubTypeSO != null)</span>
+		{
+<span class="nc bnc" id="L873" title="All 2 branches missed.">			if (MDocType.DOCBASETYPE_MaterialPhysicalInventory.equals(DocBaseType))</span>
+			{
+<span class="nc" id="L875">				dt.setDocSubTypeInv(DocSubTypeSO);</span>
+<span class="nc" id="L876">			}</span>
+			else
+			{
+<span class="nc" id="L879">				dt.setDocSubTypeSO(DocSubTypeSO);</span>
+			}
+		}
+<span class="nc bnc" id="L882" title="All 2 branches missed.">		if (C_DocTypeShipment_ID != 0)</span>
+<span class="nc" id="L883">			dt.setC_DocTypeShipment_ID(C_DocTypeShipment_ID);</span>
+<span class="nc bnc" id="L884" title="All 2 branches missed.">		if (C_DocTypeInvoice_ID != 0)</span>
+<span class="nc" id="L885">			dt.setC_DocTypeInvoice_ID(C_DocTypeInvoice_ID);</span>
+<span class="nc bnc" id="L886" title="All 2 branches missed.">		if (GL_Category_ID != 0)</span>
+<span class="nc" id="L887">			dt.setGL_Category_ID(GL_Category_ID);</span>
+<span class="nc bnc" id="L888" title="All 2 branches missed.">		if (sequence == null)</span>
+<span class="nc" id="L889">			dt.setIsDocNoControlled(false);</span>
+		else
+		{
+<span class="nc" id="L892">			dt.setIsDocNoControlled(true);</span>
+<span class="nc" id="L893">			dt.setDocNoSequence_ID(sequence.getAD_Sequence_ID());</span>
+		}
+<span class="nc" id="L895">		dt.setIsSOTrx();</span>
+<span class="nc bnc" id="L896" title="All 2 branches missed.">		if (isReturnTrx)</span>
+<span class="nc bnc" id="L897" title="All 2 branches missed.">			dt.setIsSOTrx(!dt.isSOTrx());</span>
+<span class="nc bnc" id="L898" title="All 2 branches missed.">		if (!dt.save())</span>
+		{
+<span class="nc" id="L900">			log.log(Level.SEVERE, &quot;DocType NOT created - &quot; + Name);</span>
+<span class="nc" id="L901">			return 0;</span>
+		}
+		//
+<span class="nc" id="L904">		return dt.getC_DocType_ID();</span>
+	}   //  createDocType
+	
+	/**
+	 * Create calendar for the client
+	 * @return C_Calendar_ID or -1 if failed
+	 */
+	public int createCalendar() {
+<span class="nc" id="L912">	    m_calendar = new MCalendar(m_client);</span>
+<span class="nc bnc" id="L913" title="All 2 branches missed.">	    if (!m_calendar.save()) {</span>
+<span class="nc" id="L914">	        String err = &quot;Calendar NOT inserted&quot;;</span>
+<span class="nc" id="L915">	        log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L916">	        m_info.append(err);</span>
+<span class="nc" id="L917">	        m_trx.rollback();</span>
+<span class="nc" id="L918">	        m_trx.close();</span>
+<span class="nc" id="L919">	        return -1;</span>
+	    }
+	    
+<span class="nc" id="L922">	    m_info.append(Msg.translate(m_lang, &quot;C_Calendar_ID&quot;))</span>
+<span class="nc" id="L923">	         .append(&quot;=&quot;).append(m_calendar.getName()).append(&quot;\n&quot;);</span>
+	    
+<span class="nc bnc" id="L925" title="All 2 branches missed.">	    if (m_calendar.createYear(m_client.getLocale()) == null) {</span>
+<span class="nc" id="L926">	        log.log(Level.SEVERE, &quot;Year NOT inserted&quot;);</span>
+	    }
+	    
+<span class="nc" id="L929">	    return m_calendar.getC_Calendar_ID();</span>
+	}
+	
+	/**
+	 *  &lt;pre&gt;
+	 *  Create default main entities.
+	 *  - Dimensions, BPGroup and Product Category
+	 *  - Location, Locator, Warehouse
+	 *  - PriceList
+	 *  - Cashbook, PaymentTerm
+	 *  &lt;/pre&gt;
+	 *  @param C_Country_ID country
+	 *  @param City city
+	 *  @param C_Region_ID region
+	 *  @param C_Currency_ID currency
+	 *  @param postal
+	 *  @param address1
+	 *  @return true if created
+	 */
+	public boolean createEntities (int C_Country_ID, String City, int C_Region_ID, int C_Currency_ID, String postal, String address1)
+	{
+<span class="nc bnc" id="L950" title="All 2 branches missed.">	    boolean hasAccounting = (C_AcctSchema_ID &gt; 0);</span>
+<span class="nc bnc" id="L951" title="All 2 branches missed.">	    if (!hasAccounting) {</span>
+<span class="nc bnc" id="L952" title="All 2 branches missed.">	    	if (log.isLoggable(Level.INFO)) log.info(&quot;No accounting schema - entities will be created without accounting links&quot;);</span>
+	    }
+
+<span class="nc bnc" id="L955" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;C_Country_ID=&quot; + C_Country_ID </span>
+<span class="nc" id="L956">			+ &quot;, City=&quot; + City + &quot;, C_Region_ID=&quot; + C_Region_ID);</span>
+<span class="nc" id="L957">		m_info.append(&quot;\n----\n&quot;);</span>
+		
+		try {
+			// 1. Create marketing and sales dimensions
+<span class="nc" id="L961">	        DimensionIDs dimensions = createMarketingDimensions();</span>
+<span class="nc bnc" id="L962" title="All 2 branches missed.">	        if (dimensions == null) {</span>
+<span class="nc" id="L963">	            return false;</span>
+	        }
+	        
+	        // 2. Create business partner master data
+<span class="nc" id="L967">	        MBPartner standardBP = createBusinessPartnerSetup(C_Country_ID, City, C_Region_ID);</span>
+<span class="nc bnc" id="L968" title="All 2 branches missed.">	        if (standardBP == null) {</span>
+<span class="nc" id="L969">	            return false;</span>
+	        }
+	        
+	        // 3. Create product and tax master data
+<span class="nc" id="L973">	        MProduct standardProduct = createProductSetup(C_Country_ID);</span>
+<span class="nc bnc" id="L974" title="All 2 branches missed.">	        if (standardProduct == null) {</span>
+<span class="nc" id="L975">	            return false;</span>
+	        }
+	        
+	        // 4. Create warehouse and location setup
+<span class="nc bnc" id="L979" title="All 2 branches missed.">	        if (!createWarehouseSetup(C_Country_ID, City, C_Region_ID, postal, address1)) {</span>
+<span class="nc" id="L980">	            return false;</span>
+	        }
+	        
+	        // 5. Create pricing and payment setup
+<span class="nc bnc" id="L984" title="All 2 branches missed.">	        if (!createPricingSetup(C_Currency_ID, standardProduct)) {</span>
+<span class="nc" id="L985">	            return false;</span>
+	        }
+	        
+	        // 6. Create project setup
+<span class="nc" id="L989">	        int C_Project_ID = createProjectSetup(C_Currency_ID);</span>
+<span class="nc bnc" id="L990" title="All 2 branches missed.">	        if (C_Project_ID &lt;= 0) {</span>
+<span class="nc" id="L991">	            return false;</span>
+	        }
+	        
+	        // 7. Create finance setup (CashBook)
+<span class="nc bnc" id="L995" title="All 2 branches missed.">	        if (!createFinanceSetup(C_Currency_ID)) {</span>
+<span class="nc" id="L996">	            return false;</span>
+	        }
+	        
+	        // 8. Update client configuration
+<span class="nc bnc" id="L1000" title="All 2 branches missed.">	        if (!updateClientEntities(standardBP, standardProduct)) {</span>
+<span class="nc" id="L1001">	            return false;</span>
+	        }
+	        
+	        // Link to accounting schema if accounting is installed
+<span class="nc bnc" id="L1005" title="All 2 branches missed.">	        if (hasAccounting) {</span>
+<span class="nc bnc" id="L1006" title="All 2 branches missed.">	            if (!linkEntitiesToAccounting(dimensions, standardBP, standardProduct, C_Project_ID)) {</span>
+<span class="nc" id="L1007">	                return false;</span>
+	            }
+	        }
+	        
+	        // Commit if not dry run
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">	        if (m_dryRun) {</span>
+<span class="nc bnc" id="L1013" title="All 2 branches missed.">	            if (log.isLoggable(Level.INFO)) log.info(&quot;Dry run - skipping commit&quot;);</span>
+<span class="nc" id="L1014">	            return true;</span>
+	        }
+	        
+<span class="nc" id="L1017">	        boolean success = m_trx.commit();</span>
+<span class="nc" id="L1018">	        m_trx.close();</span>
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">	        if (log.isLoggable(Level.INFO)) log.info(&quot;Entity setup completed&quot;);</span>
+<span class="nc" id="L1020">	        return success;</span>
+	        
+<span class="nc" id="L1022">		} catch (Exception e) {</span>
+<span class="nc" id="L1023">	        String err = &quot;Entity setup failed: &quot; + e.getMessage();</span>
+<span class="nc" id="L1024">	        log.log(Level.SEVERE, err, e);</span>
+<span class="nc" id="L1025">	        m_info.append(err);</span>
+<span class="nc" id="L1026">	        m_trx.rollback();</span>
+<span class="nc" id="L1027">	        m_trx.close();</span>
+<span class="nc" id="L1028">	        return false;</span>
+	    }
+	}   //  createEntities
+	
+	/**
+	 * Create marketing and sales dimensions:
+	 * - Marketing Channel &amp; Campaign
+	 * - Sales Region
+	 * - Activity
+	 * 
+	 * @return DimensionIDs object with created dimension IDs, or null if failed
+	 */
+	private DimensionIDs createMarketingDimensions()
+	{
+<span class="nc" id="L1042">	    String defaultName = Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+	    // Create Marketing Channel
+<span class="nc" id="L1045">	    int C_Channel_ID = createMarketingChannel(defaultName);</span>
+<span class="nc bnc" id="L1046" title="All 2 branches missed.">	    if (C_Channel_ID == 0) {</span>
+<span class="nc" id="L1047">	        return null;</span>
+	    }
+	    
+	    // Create Marketing Campaign
+<span class="nc" id="L1051">	    int C_Campaign_ID = createMarketingCampaign(defaultName, C_Channel_ID);</span>
+<span class="nc bnc" id="L1052" title="All 2 branches missed.">	    if (C_Campaign_ID == 0) {</span>
+<span class="nc" id="L1053">	        return null;</span>
+	    }
+	    
+	    // Create Sales Region
+<span class="nc" id="L1057">	    int C_SalesRegion_ID = createSalesRegion(defaultName);</span>
+<span class="nc bnc" id="L1058" title="All 2 branches missed.">	    if (C_SalesRegion_ID == 0) {</span>
+<span class="nc" id="L1059">	        return null;</span>
+	    }
+	    
+	    // Create Activity
+<span class="nc" id="L1063">	    int C_Activity_ID = createActivity(defaultName);</span>
+<span class="nc bnc" id="L1064" title="All 2 branches missed.">	    if (C_Activity_ID == 0) {</span>
+<span class="nc" id="L1065">	        return null;</span>
+	    }
+	    
+<span class="nc" id="L1068">	    return new DimensionIDs(C_Campaign_ID, C_SalesRegion_ID, C_Activity_ID);</span>
+	}
+
+	/**
+	 * Create marketing channel
+	 * @param name channel name
+	 * @return C_Channel_ID or 0 if failed
+	 */
+	private int createMarketingChannel(String name)
+	{
+<span class="nc" id="L1078">	    int C_Channel_ID = getNextID(getAD_Client_ID(), &quot;C_Channel&quot;);</span>
+	    
+<span class="nc" id="L1080">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO C_Channel &quot;);</span>
+<span class="nc" id="L1081">	    sql.append(&quot;(C_Channel_ID,Name,&quot;);</span>
+<span class="nc" id="L1082">	    sql.append(m_stdColumns).append(&quot;,C_Channel_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1083">	    sql.append(C_Channel_ID).append(&quot;,'&quot;).append(name).append(&quot;',&quot;);</span>
+<span class="nc" id="L1084">	    sql.append(m_stdValues).append(&quot;,&quot;).append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1086">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1087" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1088">	        log.log(Level.SEVERE, &quot;Channel NOT inserted&quot;);</span>
+<span class="nc" id="L1089">	        return 0;</span>
+	    }
+	    
+<span class="nc" id="L1092">	    return C_Channel_ID;</span>
+	}
+
+	/**
+	 * Create marketing campaign
+	 * @param name campaign name
+	 * @param C_Channel_ID channel
+	 * @return C_Campaign_ID or 0 if failed
+	 */
+	private int createMarketingCampaign(String name, int C_Channel_ID)
+	{
+<span class="nc" id="L1103">	    int C_Campaign_ID = getNextID(getAD_Client_ID(), &quot;C_Campaign&quot;);</span>
+	    
+<span class="nc" id="L1105">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO C_Campaign &quot;);</span>
+<span class="nc" id="L1106">	    sql.append(&quot;(C_Campaign_ID,C_Channel_ID,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1107">	    sql.append(&quot; Value,Name,Costs,C_Campaign_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1108">	    sql.append(C_Campaign_ID).append(&quot;,&quot;).append(C_Channel_ID).append(&quot;,&quot;);</span>
+<span class="nc" id="L1109">	    sql.append(m_stdValues).append(&quot;,&quot;).append(DB.TO_STRING(name)).append(&quot;,&quot;)</span>
+<span class="nc" id="L1110">	    .append(DB.TO_STRING(name)).append(&quot;,&quot;);</span>
+<span class="nc" id="L1111">	    sql.append(&quot;0,&quot;).append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1113">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1114" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1115">	        log.log(Level.SEVERE, &quot;Campaign NOT inserted&quot;);</span>
+<span class="nc" id="L1116">	        return 0;</span>
+	    }
+	    
+<span class="nc" id="L1119">	    m_info.append(Msg.translate(m_lang, &quot;C_Campaign_ID&quot;))</span>
+<span class="nc" id="L1120">	         .append(&quot;=&quot;).append(name).append(&quot;\n&quot;);</span>
+	    
+	    // Create translations
+<span class="nc" id="L1123">	    createTranslations(&quot;C_Campaign&quot;, C_Campaign_ID);</span>
+	    
+<span class="nc" id="L1125">	    return C_Campaign_ID;</span>
+	}
+
+	/**
+	 * Create sales region
+	 * @param name region name
+	 * @return C_SalesRegion_ID or 0 if failed
+	 */
+	private int createSalesRegion(String name)
+	{
+<span class="nc" id="L1135">	    int C_SalesRegion_ID = getNextID(getAD_Client_ID(), &quot;C_SalesRegion&quot;);</span>
+	    
+<span class="nc" id="L1137">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO C_SalesRegion &quot;);</span>
+<span class="nc" id="L1138">	    sql.append(&quot;(C_SalesRegion_ID,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1139">	    sql.append(&quot; Value,Name,IsSummary,C_SalesRegion_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1140">	    sql.append(C_SalesRegion_ID).append(&quot;,&quot;).append(m_stdValues).append(&quot;,&quot;);</span>
+<span class="nc" id="L1141">	    sql.append(DB.TO_STRING(name)).append(&quot;,&quot;).append(DB.TO_STRING(name)).append(&quot;,'N',&quot;);</span>
+<span class="nc" id="L1142">	    sql.append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1144">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1145" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1146">	        log.log(Level.SEVERE, &quot;SalesRegion NOT inserted&quot;);</span>
+<span class="nc" id="L1147">	        return 0;</span>
+	    }
+	    
+<span class="nc" id="L1150">	    m_info.append(Msg.translate(m_lang, &quot;C_SalesRegion_ID&quot;))</span>
+<span class="nc" id="L1151">	         .append(&quot;=&quot;).append(name).append(&quot;\n&quot;);</span>
+	    
+	    // Create translations
+<span class="nc" id="L1154">	    createTranslations(&quot;C_SalesRegion&quot;, C_SalesRegion_ID);</span>
+	    
+<span class="nc" id="L1156">	    return C_SalesRegion_ID;</span>
+	}
+
+	/**
+	 * Create activity
+	 * @param name activity name
+	 * @return C_Activity_ID or 0 if failed
+	 */
+	private int createActivity(String name)
+	{
+<span class="nc" id="L1166">	    int C_Activity_ID = getNextID(getAD_Client_ID(), &quot;C_Activity&quot;);</span>
+	    
+<span class="nc" id="L1168">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO C_Activity &quot;);</span>
+<span class="nc" id="L1169">	    sql.append(&quot;(C_Activity_ID,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1170">	    sql.append(&quot; Value,Name,IsSummary,C_Activity_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1171">	    sql.append(C_Activity_ID).append(&quot;,&quot;).append(m_stdValues).append(&quot;,&quot;);</span>
+<span class="nc" id="L1172">	    sql.append(DB.TO_STRING(name)).append(&quot;,&quot;).append(DB.TO_STRING(name)).append(&quot;,'N',&quot;);</span>
+<span class="nc" id="L1173">	    sql.append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1175">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1176" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1177">	        log.log(Level.SEVERE, &quot;Activity NOT inserted&quot;);</span>
+<span class="nc" id="L1178">	        return 0;</span>
+	    }
+	    
+<span class="nc" id="L1181">	    m_info.append(Msg.translate(m_lang, &quot;C_Activity_ID&quot;))</span>
+<span class="nc" id="L1182">	         .append(&quot;=&quot;).append(name).append(&quot;\n&quot;);</span>
+	    
+	    // Create translations
+<span class="nc" id="L1185">	    createTranslations(&quot;C_Activity&quot;, C_Activity_ID);</span>
+	    
+<span class="nc" id="L1187">	    return C_Activity_ID;</span>
+	}
+
+	/**
+	 * Create translations for an entity
+	 * @param tableName table name (without _Trl)
+	 * @param recordID record ID
+	 */
+	private void createTranslations(String tableName, int recordID)
+	{
+<span class="nc" id="L1197">	    String idColumn = tableName + &quot;_ID&quot;;</span>
+	    
+<span class="nc" id="L1199">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO &quot;).append(tableName).append(&quot;_Trl &quot;);</span>
+<span class="nc" id="L1200">	    sql.append(&quot;(AD_Language,&quot;).append(idColumn).append(&quot;, Description,Name, &quot;);</span>
+<span class="nc" id="L1201">	    sql.append(&quot;IsTranslated,AD_Client_ID,AD_Org_ID,Created,Createdby,Updated,UpdatedBy,&quot;);</span>
+<span class="nc" id="L1202">	    sql.append(tableName).append(&quot;_Trl_UU)&quot;);</span>
+<span class="nc" id="L1203">	    sql.append(&quot; SELECT l.AD_Language,t.&quot;).append(idColumn).append(&quot;, t.Description,t.Name, &quot;);</span>
+<span class="nc" id="L1204">	    sql.append(&quot;'N',t.AD_Client_ID,t.AD_Org_ID,t.Created,t.Createdby,t.Updated,t.UpdatedBy, &quot;);</span>
+<span class="nc" id="L1205">	    sql.append(&quot;generate_uuid() FROM AD_Language l, &quot;).append(tableName).append(&quot; t&quot;);</span>
+<span class="nc" id="L1206">	    sql.append(&quot; WHERE l.IsActive='Y' AND l.IsSystemLanguage='Y' AND l.IsBaseLanguage='N'&quot;);</span>
+<span class="nc" id="L1207">	    sql.append(&quot; AND t.&quot;).append(idColumn).append(&quot;=&quot;).append(recordID);</span>
+<span class="nc" id="L1208">	    sql.append(&quot; AND NOT EXISTS (SELECT * FROM &quot;).append(tableName).append(&quot;_Trl tt &quot;);</span>
+<span class="nc" id="L1209">	    sql.append(&quot;WHERE tt.AD_Language=l.AD_Language AND tt.&quot;).append(idColumn).append(&quot;=t.&quot;).append(idColumn).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1211">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1212" title="All 2 branches missed.">	    if (no &lt; 0) {</span>
+<span class="nc" id="L1213">	        log.log(Level.SEVERE, tableName + &quot; Translation NOT inserted&quot;);</span>
+	    }
+<span class="nc" id="L1215">	}</span>
+	
+	/**
+	 * Create business partner setup:
+	 * - BP Group
+	 * - Standard BPartner
+	 * - BP Location
+	 * - Link to accounting schema
+	 * 
+	 * @param C_Country_ID country
+	 * @param city city
+	 * @param C_Region_ID region
+	 * @return standard BPartner or null if failed
+	 */
+	private MBPartner createBusinessPartnerSetup(int C_Country_ID, String city, int C_Region_ID)
+	{
+<span class="nc" id="L1231">	    String defaultName = Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+	    // Create BP Group
+<span class="nc" id="L1234">	    MBPGroup bpg = new MBPGroup(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1235">	    bpg.setAD_Org_ID(0);</span>
+<span class="nc" id="L1236">	    bpg.setValue(defaultName);</span>
+<span class="nc" id="L1237">	    bpg.setName(defaultName);</span>
+<span class="nc" id="L1238">	    bpg.setIsDefault(true);</span>
+<span class="nc bnc" id="L1239" title="All 2 branches missed.">	    if (!bpg.save()) {</span>
+<span class="nc" id="L1240">	        log.log(Level.SEVERE, &quot;BP Group NOT inserted&quot;);</span>
+<span class="nc" id="L1241">	        return null;</span>
+	    }
+	    
+<span class="nc" id="L1244">	    m_info.append(Msg.translate(m_lang, &quot;C_BP_Group_ID&quot;))</span>
+<span class="nc" id="L1245">	         .append(&quot;=&quot;).append(defaultName).append(&quot;\n&quot;);</span>
+	    
+	    // Create Standard BPartner
+<span class="nc" id="L1248">	    MBPartner bp = new MBPartner(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1249">	    bp.setAD_Org_ID(0);</span>
+<span class="nc" id="L1250">	    bp.setValue(defaultName);</span>
+<span class="nc" id="L1251">	    bp.setName(defaultName);</span>
+<span class="nc" id="L1252">	    bp.setBPGroup(bpg);</span>
+<span class="nc bnc" id="L1253" title="All 2 branches missed.">	    if (!bp.save()) {</span>
+<span class="nc" id="L1254">	        log.log(Level.SEVERE, &quot;BPartner NOT inserted&quot;);</span>
+<span class="nc" id="L1255">	        return null;</span>
+	    }
+	    
+<span class="nc" id="L1258">	    m_info.append(Msg.translate(m_lang, &quot;C_BPartner_ID&quot;))</span>
+<span class="nc" id="L1259">	         .append(&quot;=&quot;).append(defaultName).append(&quot;\n&quot;);</span>
+	    
+	    // Create Location for Standard BP
+<span class="nc" id="L1262">	    MLocation bpLoc = new MLocation(m_ctx, C_Country_ID, C_Region_ID, city, m_trx.getTrxName());</span>
+<span class="nc" id="L1263">	    bpLoc.setAD_Org_ID(0);</span>
+<span class="nc" id="L1264">	    bpLoc.saveEx();</span>
+	    
+<span class="nc" id="L1266">	    MBPartnerLocation bpl = new MBPartnerLocation(bp);</span>
+<span class="nc" id="L1267">	    bpl.setC_Location_ID(bpLoc.getC_Location_ID());</span>
+<span class="nc bnc" id="L1268" title="All 2 branches missed.">	    if (!bpl.save()) {</span>
+<span class="nc" id="L1269">	        log.log(Level.SEVERE, &quot;BP_Location (Standard) NOT inserted&quot;);</span>
+<span class="nc" id="L1270">	        return null;</span>
+	    }
+	    
+	    // Create user preference
+<span class="nc" id="L1274">	    createPreference(&quot;C_BPartner_ID&quot;, String.valueOf(bp.getC_BPartner_ID()), 143);</span>
+	    
+        // 8. Create sales representatives for users
+<span class="nc bnc" id="L1277" title="All 2 branches missed.">        if (!createSalesRepresentatives(C_Country_ID, city, C_Region_ID, bpg)) {</span>
+<span class="nc" id="L1278">            return null;</span>
+        }
+	    
+<span class="nc" id="L1281">	    return bp;</span>
+	}
+	
+	/**
+	 * Create product and tax setup:
+	 * - Product Category
+	 * - Tax Category &amp; Tax
+	 * - Standard Product
+	 * - Link to accounting schema
+	 * 
+	 * @param C_Country_ID country for tax setup
+	 * @return standard Product or null if failed
+	 */
+	private MProduct createProductSetup(int C_Country_ID)
+	{
+<span class="nc" id="L1296">	    String defaultName = Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+	    // Create Product Category
+<span class="nc" id="L1299">	    MProductCategory pc = new MProductCategory(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1300">	    pc.setAD_Org_ID(0);</span>
+<span class="nc" id="L1301">	    pc.setValue(defaultName);</span>
+<span class="nc" id="L1302">	    pc.setName(defaultName);</span>
+<span class="nc" id="L1303">	    pc.setIsDefault(true);</span>
+<span class="nc bnc" id="L1304" title="All 2 branches missed.">	    if (!pc.save()) {</span>
+<span class="nc" id="L1305">	        log.log(Level.SEVERE, &quot;Product Category NOT inserted&quot;);</span>
+<span class="nc" id="L1306">	        return null;</span>
+	    }
+	    
+<span class="nc" id="L1309">	    m_info.append(Msg.translate(m_lang, &quot;M_Product_Category_ID&quot;))</span>
+<span class="nc" id="L1310">	         .append(&quot;=&quot;).append(defaultName).append(&quot;\n&quot;);</span>
+	    
+	    // Create Tax Category
+<span class="nc" id="L1313">	    int C_TaxCategory_ID = createTaxCategory(C_Country_ID);</span>
+<span class="nc bnc" id="L1314" title="All 2 branches missed.">	    if (C_TaxCategory_ID == 0) {</span>
+<span class="nc" id="L1315">	        return null;</span>
+	    }
+	    
+	    // Create Default Tax (Zero Rate)
+<span class="nc" id="L1319">	    MTax tax = createDefaultTax(C_TaxCategory_ID);</span>
+<span class="nc bnc" id="L1320" title="All 2 branches missed.">	    if (tax == null) {</span>
+<span class="nc" id="L1321">	        return null;</span>
+	    }
+	    
+	    // Create Standard Product
+<span class="nc" id="L1325">	    int C_UOM_ID = 100; // EA (Each)</span>
+	    
+<span class="nc" id="L1327">	    MProduct product = new MProduct(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1328">	    product.setAD_Org_ID(0);</span>
+<span class="nc" id="L1329">	    product.setValue(defaultName);</span>
+<span class="nc" id="L1330">	    product.setName(defaultName);</span>
+<span class="nc" id="L1331">	    product.setC_UOM_ID(C_UOM_ID);</span>
+<span class="nc" id="L1332">	    product.setM_Product_Category_ID(pc.getM_Product_Category_ID());</span>
+<span class="nc" id="L1333">	    product.setC_TaxCategory_ID(C_TaxCategory_ID);</span>
+<span class="nc bnc" id="L1334" title="All 2 branches missed.">	    if (!product.save()) {</span>
+<span class="nc" id="L1335">	        log.log(Level.SEVERE, &quot;Product NOT inserted&quot;);</span>
+<span class="nc" id="L1336">	        return null;</span>
+	    }
+	    
+<span class="nc" id="L1339">	    m_info.append(Msg.translate(m_lang, &quot;M_Product_ID&quot;))</span>
+<span class="nc" id="L1340">	         .append(&quot;=&quot;).append(defaultName).append(&quot;\n&quot;);</span>
+	    
+<span class="nc" id="L1342">	    return product;</span>
+	}
+
+	/**
+	 * Create tax category
+	 * @param C_Country_ID country
+	 * @return C_TaxCategory_ID or 0 if failed
+	 */
+	private int createTaxCategory(int C_Country_ID)
+	{
+<span class="nc" id="L1352">	    int C_TaxCategory_ID = getNextID(getAD_Client_ID(), &quot;C_TaxCategory&quot;);</span>
+	    
+<span class="nc bnc" id="L1354" title="All 2 branches missed.">	    String taxName = (C_Country_ID == COUNTRY_US) ? &quot;Sales Tax&quot; : </span>
+<span class="nc" id="L1355">	                     Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+<span class="nc" id="L1357">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO C_TaxCategory &quot;);</span>
+<span class="nc" id="L1358">	    sql.append(&quot;(C_TaxCategory_ID,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1359">	    sql.append(&quot; Name,IsDefault,C_TaxCategory_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1360">	    sql.append(C_TaxCategory_ID).append(&quot;,&quot;).append(m_stdValues).append(&quot;,&quot;);</span>
+<span class="nc" id="L1361">	    sql.append(DB.TO_STRING(taxName)).append(&quot;,'Y',&quot;);</span>
+<span class="nc" id="L1362">	    sql.append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1364">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1365" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1366">	        log.log(Level.SEVERE, &quot;TaxCategory NOT inserted&quot;);</span>
+<span class="nc" id="L1367">	        return 0;</span>
+	    }
+	    
+	    // Create translations
+<span class="nc" id="L1371">	    createTranslations(&quot;C_TaxCategory&quot;, C_TaxCategory_ID);</span>
+	    
+<span class="nc" id="L1373">	    return C_TaxCategory_ID;</span>
+	}
+
+	/**
+	 * Create default tax (zero rate)
+	 * @param C_TaxCategory_ID tax category
+	 * @return tax or null if failed
+	 */
+	private MTax createDefaultTax(int C_TaxCategory_ID)
+	{
+<span class="nc" id="L1383">	    MTax tax = new MTax(m_ctx, &quot;Standard&quot;, Env.ZERO, C_TaxCategory_ID, m_trx.getTrxName());</span>
+<span class="nc" id="L1384">	    tax.setAD_Org_ID(0);</span>
+<span class="nc" id="L1385">	    tax.setIsDefault(true);</span>
+<span class="nc bnc" id="L1386" title="All 2 branches missed.">	    if (!tax.save()) {</span>
+<span class="nc" id="L1387">	        log.log(Level.SEVERE, &quot;Tax NOT inserted&quot;);</span>
+<span class="nc" id="L1388">	        return null;</span>
+	    }
+	    
+<span class="nc" id="L1391">	    m_info.append(Msg.translate(m_lang, &quot;C_Tax_ID&quot;))</span>
+<span class="nc" id="L1392">	         .append(&quot;=&quot;).append(tax.getName()).append(&quot;\n&quot;);</span>
+	    
+<span class="nc" id="L1394">	    return tax;</span>
+	}
+	
+	/**
+	 * Create warehouse and location setup:
+	 * - Organization Location
+	 * - Warehouse
+	 * - Default Locator
+	 * 
+	 * @param C_Country_ID country
+	 * @param city city
+	 * @param C_Region_ID region
+	 * @param postal postal code
+	 * @param address1 address
+	 * @return true if created
+	 */
+	private boolean createWarehouseSetup(int C_Country_ID, String city, int C_Region_ID,
+	                                    String postal, String address1)
+	{
+<span class="nc" id="L1413">	    String defaultName = Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+	    // Create Organization Location
+<span class="nc" id="L1416">	    MLocation orgLoc = new MLocation(m_ctx, C_Country_ID, C_Region_ID, city, m_trx.getTrxName());</span>
+<span class="nc" id="L1417">	    orgLoc.setAddress1(address1);</span>
+<span class="nc" id="L1418">	    orgLoc.setPostal(postal);</span>
+<span class="nc" id="L1419">	    orgLoc.saveEx();</span>
+	    
+	    // Update OrgInfo with location
+<span class="nc" id="L1422">	    StringBuilder sql = new StringBuilder(&quot;UPDATE AD_OrgInfo SET C_Location_ID=&quot;);</span>
+<span class="nc" id="L1423">	    sql.append(orgLoc.getC_Location_ID())</span>
+<span class="nc" id="L1424">	       .append(&quot; WHERE AD_Org_ID=&quot;).append(getAD_Org_ID());</span>
+	    
+<span class="nc" id="L1426">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1427" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1428">	        log.log(Level.SEVERE, &quot;OrgInfo Location NOT updated&quot;);</span>
+<span class="nc" id="L1429">	        return false;</span>
+	    }
+	    
+	    // Create Country preference
+<span class="nc" id="L1433">	    createPreference(&quot;C_Country_ID&quot;, String.valueOf(C_Country_ID), 0);</span>
+	    
+	    // Create Warehouse Location
+<span class="nc" id="L1436">	    MLocation whLoc = new MLocation(m_ctx, C_Country_ID, C_Region_ID, city, m_trx.getTrxName());</span>
+<span class="nc" id="L1437">	    whLoc.setAddress1(address1);</span>
+<span class="nc" id="L1438">	    whLoc.setPostal(postal);</span>
+<span class="nc" id="L1439">	    whLoc.saveEx();</span>
+	    
+	    // Create Warehouse
+<span class="nc" id="L1442">	    MWarehouse wh = new MWarehouse(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1443">	    wh.setValue(defaultName);</span>
+<span class="nc" id="L1444">	    wh.setName(defaultName);</span>
+<span class="nc" id="L1445">	    wh.setC_Location_ID(whLoc.getC_Location_ID());</span>
+<span class="nc bnc" id="L1446" title="All 2 branches missed.">	    if (!wh.save()) {</span>
+<span class="nc" id="L1447">	        log.log(Level.SEVERE, &quot;Warehouse NOT inserted&quot;);</span>
+<span class="nc" id="L1448">	        return false;</span>
+	    }
+	    
+	    // Create Default Locator
+<span class="nc" id="L1452">	    MLocator locator = new MLocator(wh, defaultName);</span>
+<span class="nc" id="L1453">	    locator.setIsDefault(true);</span>
+<span class="nc bnc" id="L1454" title="All 2 branches missed.">	    if (!locator.save()) {</span>
+<span class="nc" id="L1455">	        log.log(Level.SEVERE, &quot;Locator NOT inserted&quot;);</span>
+<span class="nc" id="L1456">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L1459">	    return true;</span>
+	}
+
+	/**
+	 * Create pricing and payment setup:
+	 * - Price List
+	 * - Discount Schema
+	 * - Price List Version
+	 * - Product Price
+	 * - Payment Term
+	 * 
+	 * @param C_Currency_ID currency
+	 * @param product product for pricing
+	 * @return true if created
+	 */
+	private boolean createPricingSetup(int C_Currency_ID, MProduct product)
+	{
+<span class="nc" id="L1476">	    String defaultName = Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+	    // Create Price List
+<span class="nc" id="L1479">	    MPriceList pl = new MPriceList(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1480">	    pl.setAD_Org_ID(0);</span>
+<span class="nc" id="L1481">	    pl.setName(defaultName);</span>
+<span class="nc" id="L1482">	    pl.setC_Currency_ID(C_Currency_ID);</span>
+<span class="nc" id="L1483">	    pl.setIsDefault(true);</span>
+<span class="nc bnc" id="L1484" title="All 2 branches missed.">	    if (!pl.save()) {</span>
+<span class="nc" id="L1485">	        log.log(Level.SEVERE, &quot;PriceList NOT inserted&quot;);</span>
+<span class="nc" id="L1486">	        return false;</span>
+	    }
+	    
+	    // Create Discount Schema
+<span class="nc" id="L1490">	    MDiscountSchema ds = new MDiscountSchema(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1491">	    ds.setAD_Org_ID(0);</span>
+<span class="nc" id="L1492">	    ds.setName(defaultName);</span>
+<span class="nc" id="L1493">	    ds.setDiscountType(MDiscountSchema.DISCOUNTTYPE_Pricelist);</span>
+<span class="nc bnc" id="L1494" title="All 2 branches missed.">	    if (!ds.save()) {</span>
+<span class="nc" id="L1495">	        log.log(Level.SEVERE, &quot;DiscountSchema NOT inserted&quot;);</span>
+<span class="nc" id="L1496">	        return false;</span>
+	    }
+	    
+	    // Create Price List Version
+<span class="nc" id="L1500">	    MPriceListVersion plv = new MPriceListVersion(pl);</span>
+<span class="nc" id="L1501">	    plv.setAD_Org_ID(0);</span>
+<span class="nc" id="L1502">	    plv.setName();</span>
+<span class="nc" id="L1503">	    plv.setM_DiscountSchema_ID(ds.getM_DiscountSchema_ID());</span>
+<span class="nc bnc" id="L1504" title="All 2 branches missed.">	    if (!plv.save()) {</span>
+<span class="nc" id="L1505">	        log.log(Level.SEVERE, &quot;PriceList_Version NOT inserted&quot;);</span>
+<span class="nc" id="L1506">	        return false;</span>
+	    }
+	    
+	    // Create Product Price
+<span class="nc" id="L1510">	    MProductPrice pp = new MProductPrice(plv, product.getM_Product_ID(), </span>
+<span class="nc" id="L1511">	        Env.ONE, Env.ONE, Env.ONE);</span>
+<span class="nc bnc" id="L1512" title="All 2 branches missed.">	    if (!pp.save()) {</span>
+<span class="nc" id="L1513">	        log.log(Level.SEVERE, &quot;ProductPrice NOT inserted&quot;);</span>
+<span class="nc" id="L1514">	        return false;</span>
+	    }
+	    
+	    // Create Payment Term
+<span class="nc bnc" id="L1518" title="All 2 branches missed.">	    if (!createPaymentTerm()) {</span>
+<span class="nc" id="L1519">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L1522">	    return true;</span>
+	}
+
+	/**
+	 * Create default payment term (Immediate)
+	 * @return true if created
+	 */
+	private boolean createPaymentTerm()
+	{
+<span class="nc" id="L1531">	    int C_PaymentTerm_ID = getNextID(getAD_Client_ID(), &quot;C_PaymentTerm&quot;);</span>
+	    
+<span class="nc" id="L1533">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO C_PaymentTerm &quot;);</span>
+<span class="nc" id="L1534">	    sql.append(&quot;(C_PaymentTerm_ID,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1535">	    sql.append(&quot;Value,Name,NetDays,GraceDays,DiscountDays,Discount,&quot;);</span>
+<span class="nc" id="L1536">	    sql.append(&quot;DiscountDays2,Discount2,IsDefault,C_PaymentTerm_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1537">	    sql.append(C_PaymentTerm_ID).append(&quot;,&quot;).append(m_stdValues).append(&quot;,&quot;);</span>
+<span class="nc" id="L1538">	    sql.append(&quot;'Immediate','Immediate',0,0,0,0,0,0,'Y',&quot;);</span>
+<span class="nc" id="L1539">	    sql.append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1541">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1542" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1543">	        log.log(Level.SEVERE, &quot;PaymentTerm NOT inserted&quot;);</span>
+<span class="nc" id="L1544">	        return false;</span>
+	    }
+	    
+	    // Create translations
+<span class="nc" id="L1548">	    createTranslations(&quot;C_PaymentTerm&quot;, C_PaymentTerm_ID);</span>
+	    
+<span class="nc" id="L1550">	    return true;</span>
+	}
+
+	/**
+	 * Create project setup:
+	 * - Project Cycle
+	 * - Default Project
+	 * 
+	 * @param C_Currency_ID currency
+	 * @return C_Project_ID of default project or -1 if failed
+	 */
+	private int createProjectSetup(int C_Currency_ID)
+	{
+<span class="nc" id="L1563">	    String defaultName = Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+	    // Create Project Cycle
+<span class="nc" id="L1566">	    C_Cycle_ID = getNextID(getAD_Client_ID(), &quot;C_Cycle&quot;);</span>
+	    
+<span class="nc" id="L1568">	    StringBuilder sql = new StringBuilder(&quot;INSERT INTO C_Cycle &quot;);</span>
+<span class="nc" id="L1569">	    sql.append(&quot;(C_Cycle_ID,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1570">	    sql.append(&quot; Name,C_Currency_ID,C_Cycle_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1571">	    sql.append(C_Cycle_ID).append(&quot;,&quot;).append(m_stdValues).append(&quot;,&quot;);</span>
+<span class="nc" id="L1572">	    sql.append(DB.TO_STRING(defaultName)).append(&quot;,&quot;).append(C_Currency_ID).append(&quot;,&quot;);</span>
+<span class="nc" id="L1573">	    sql.append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1575">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1576" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1577">	        log.log(Level.SEVERE, &quot;Cycle NOT inserted&quot;);</span>
+<span class="nc" id="L1578">	        return -1;</span>
+	    }
+	    
+	    // Create Default Project
+<span class="nc" id="L1582">	    int C_Project_ID = getNextID(getAD_Client_ID(), &quot;C_Project&quot;);</span>
+	    
+<span class="nc" id="L1584">	    sql = new StringBuilder(&quot;INSERT INTO C_Project &quot;);</span>
+<span class="nc" id="L1585">	    sql.append(&quot;(C_Project_ID,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1586">	    sql.append(&quot; Value,Name,C_Currency_ID,IsSummary,C_Project_UU) VALUES (&quot;);</span>
+<span class="nc" id="L1587">	    sql.append(C_Project_ID).append(&quot;,&quot;).append(m_stdValuesOrg).append(&quot;,&quot;);</span>
+<span class="nc" id="L1588">	    sql.append(DB.TO_STRING(defaultName)).append(&quot;,&quot;)</span>
+<span class="nc" id="L1589">	    .append(DB.TO_STRING(defaultName)).append(&quot;,&quot;);</span>
+<span class="nc" id="L1590">	    sql.append(C_Currency_ID).append(&quot;,'N',&quot;);</span>
+<span class="nc" id="L1591">	    sql.append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;)&quot;);</span>
+	    
+<span class="nc" id="L1593">	    no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1594" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1595">	        log.log(Level.SEVERE, &quot;Project NOT inserted&quot;);</span>
+<span class="nc" id="L1596">	        return -1;</span>
+	    }
+	    
+<span class="nc" id="L1599">	    m_info.append(Msg.translate(m_lang, &quot;C_Project_ID&quot;))</span>
+<span class="nc" id="L1600">	         .append(&quot;=&quot;).append(defaultName).append(&quot;\n&quot;);</span>
+	    
+<span class="nc" id="L1602">	    return C_Project_ID;</span>
+	}
+
+	/**
+	 * Create finance setup:
+	 * - CashBook
+	 * 
+	 * @param C_Currency_ID currency
+	 * @return true if created
+	 */
+	private boolean createFinanceSetup(int C_Currency_ID)
+	{
+<span class="nc" id="L1614">	    String defaultName = Msg.translate(m_lang, &quot;Standard&quot;);</span>
+	    
+	    // Create CashBook
+<span class="nc" id="L1617">	    MCashBook cb = new MCashBook(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1618">	    cb.setName(defaultName);</span>
+<span class="nc" id="L1619">	    cb.setC_Currency_ID(C_Currency_ID);</span>
+<span class="nc bnc" id="L1620" title="All 2 branches missed.">	    if (!cb.save()) {</span>
+<span class="nc" id="L1621">	        log.log(Level.SEVERE, &quot;CashBook NOT inserted&quot;);</span>
+<span class="nc" id="L1622">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L1625">	    m_info.append(Msg.translate(m_lang, &quot;C_CashBook_ID&quot;))</span>
+<span class="nc" id="L1626">	         .append(&quot;=&quot;).append(defaultName).append(&quot;\n&quot;);</span>
+	    
+<span class="nc" id="L1628">	    return true;</span>
+	}
+
+	/**
+	 * Create sales representatives for users:
+	 * - BPartner for Client Admin User
+	 * - BPartner for Client Org User
+	 * 
+	 * @param C_Country_ID country
+	 * @param city city
+	 * @param C_Region_ID region
+	 * @return true if created
+	 */
+	private boolean createSalesRepresentatives(int C_Country_ID, String city, int C_Region_ID, MBPGroup bpg)
+	{
+	    // Create Sales Rep for Client-User 
+<span class="nc" id="L1644">	    if (!createSalesRep(AD_User_ID, AD_User_Name, C_Country_ID, </span>
+<span class="nc bnc" id="L1645" title="All 2 branches missed.">	    		city, C_Region_ID, bpg)) {</span>
+<span class="nc" id="L1646">	        return false;</span>
+	    }
+	    
+	    // Create Sales Rep for Client-Admin
+<span class="nc" id="L1650">	    if (!createSalesRep(AD_User_U_ID, AD_User_U_Name, C_Country_ID, </span>
+<span class="nc bnc" id="L1651" title="All 2 branches missed.">	    		city, C_Region_ID, bpg)) {</span>
+<span class="nc" id="L1652">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L1655">	    return true;</span>
+	}
+
+	/**
+	 * Create sales representative
+	 * @param AD_User_ID user ID
+	 * @param userName user name
+	 * @param C_BP_Group_ID bp group
+	 * @param C_Country_ID country
+	 * @param city city
+	 * @param C_Region_ID region
+	 * @return true if created
+	 */
+	private boolean createSalesRep(int AD_User_ID, String userName, int C_Country_ID,  
+	                              String city, int C_Region_ID, MBPGroup bpg)
+	{
+	    // Create BPartner
+<span class="nc" id="L1672">	    MBPartner bp = new MBPartner(m_ctx, 0, m_trx.getTrxName());</span>
+<span class="nc" id="L1673">	    bp.setAD_Org_ID(0);</span>
+<span class="nc" id="L1674">	    bp.setValue(userName);</span>
+<span class="nc" id="L1675">	    bp.setName(userName);</span>
+<span class="nc" id="L1676">		bp.setBPGroup(bpg);</span>
+<span class="nc" id="L1677">	    bp.setIsEmployee(true);</span>
+<span class="nc" id="L1678">	    bp.setIsSalesRep(true);</span>
+<span class="nc bnc" id="L1679" title="All 2 branches missed.">	    if (!bp.save()) {</span>
+<span class="nc" id="L1680">	        log.log(Level.SEVERE, &quot;SalesRep NOT inserted - &quot; + userName);</span>
+<span class="nc" id="L1681">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L1684">	    m_info.append(Msg.translate(m_lang, &quot;SalesRep_ID&quot;))</span>
+<span class="nc" id="L1685">	         .append(&quot;=&quot;).append(userName).append(&quot;\n&quot;);</span>
+	    
+	    // Create Location
+<span class="nc" id="L1688">	    MLocation loc = new MLocation(m_ctx, C_Country_ID, C_Region_ID, city, m_trx.getTrxName());</span>
+<span class="nc" id="L1689">	    loc.setAD_Org_ID(0);</span>
+<span class="nc" id="L1690">	    loc.saveEx();</span>
+	    
+<span class="nc" id="L1692">	    MBPartnerLocation bpl = new MBPartnerLocation(bp);</span>
+<span class="nc" id="L1693">	    bpl.setC_Location_ID(loc.getC_Location_ID());</span>
+<span class="nc bnc" id="L1694" title="All 2 branches missed.">	    if (!bpl.save()) {</span>
+<span class="nc" id="L1695">	        log.log(Level.SEVERE, &quot;BP_Location NOT inserted - &quot; + userName);</span>
+<span class="nc" id="L1696">	        return false;</span>
+	    }
+	    
+	    // Update User with BPartner link
+<span class="nc" id="L1700">	    StringBuilder sql = new StringBuilder(&quot;UPDATE AD_User SET C_BPartner_ID=&quot;);</span>
+<span class="nc" id="L1701">	    sql.append(bp.getC_BPartner_ID())</span>
+<span class="nc" id="L1702">	       .append(&quot; WHERE AD_User_ID=&quot;).append(AD_User_ID);</span>
+	    
+<span class="nc" id="L1704">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1705" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1706">	        log.log(Level.SEVERE, &quot;User BPartner link NOT updated - &quot; + userName);</span>
+<span class="nc" id="L1707">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L1710">	    return true;</span>
+	}
+
+	/**
+	 * Update client with entity references
+	 * @param standardBP standard business partner
+	 * @param standardProduct standard product
+	 * @return true if updated
+	 */
+	private boolean updateClientEntities(MBPartner standardBP, MProduct standardProduct)
+	{
+<span class="nc" id="L1721">	    StringBuilder sql = new StringBuilder(&quot;UPDATE AD_ClientInfo SET &quot;);</span>
+<span class="nc" id="L1722">	    sql.append(&quot;C_BPartnerCashTrx_ID=&quot;).append(standardBP.getC_BPartner_ID());</span>
+<span class="nc" id="L1723">	    sql.append(&quot;,M_ProductFreight_ID=&quot;).append(standardProduct.getM_Product_ID());</span>
+<span class="nc" id="L1724">	    sql.append(&quot; WHERE AD_Client_ID=&quot;).append(getAD_Client_ID());</span>
+	    
+<span class="nc" id="L1726">	    int no = DB.executeUpdateEx(sql.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1727" title="All 2 branches missed.">	    if (no != 1) {</span>
+<span class="nc" id="L1728">	        String err = &quot;ClientInfo not updated&quot;;</span>
+<span class="nc" id="L1729">	        log.log(Level.SEVERE, err);</span>
+<span class="nc" id="L1730">	        m_info.append(err);</span>
+<span class="nc" id="L1731">	        return false;</span>
+	    }
+	    
+<span class="nc" id="L1734">	    return true;</span>
+	}
+
+	/**
+	 *  Create Preference
+	 *  @param Attribute attribute name
+	 *  @param Value attribute value
+	 *  @param AD_Window_ID window
+	 */
+	private void createPreference (String Attribute, String Value, int AD_Window_ID)
+	{
+<span class="nc" id="L1745">		int AD_Preference_ID = getNextID(getAD_Client_ID(), &quot;AD_Preference&quot;);</span>
+<span class="nc" id="L1746">		StringBuilder sqlCmd = new StringBuilder (&quot;INSERT INTO AD_Preference &quot;);</span>
+<span class="nc" id="L1747">		sqlCmd.append(&quot;(AD_Preference_ID,&quot;).append(&quot;AD_Preference_UU,&quot;).append(m_stdColumns).append(&quot;,&quot;);</span>
+<span class="nc" id="L1748">		sqlCmd.append(&quot;Attribute,Value,AD_Window_ID) VALUES (&quot;);</span>
+<span class="nc" id="L1749">		sqlCmd.append(AD_Preference_ID).append(&quot;,&quot;).append(DB.TO_STRING(Util.generateUUIDv7().toString())).append(&quot;,&quot;).append(m_stdValues).append(&quot;,&quot;);</span>
+<span class="nc" id="L1750">		sqlCmd.append(&quot;'&quot;).append(Attribute).append(&quot;','&quot;).append(Value).append(&quot;',&quot;);</span>
+<span class="nc bnc" id="L1751" title="All 2 branches missed.">		if (AD_Window_ID == 0)</span>
+<span class="nc" id="L1752">			sqlCmd.append(&quot;NULL)&quot;);</span>
+		else
+<span class="nc" id="L1754">			sqlCmd.append(AD_Window_ID).append(&quot;)&quot;);</span>
+<span class="nc" id="L1755">		int no = DB.executeUpdateEx(sqlCmd.toString(), m_trx.getTrxName());</span>
+<span class="nc bnc" id="L1756" title="All 2 branches missed.">		if (no != 1)</span>
+<span class="nc" id="L1757">			log.log(Level.SEVERE, &quot;Preference NOT inserted - &quot; + Attribute);</span>
+<span class="nc" id="L1758">	}   //  createPreference</span>
+	
+	/**
+	 * 	Get Next ID
+	 * 	@param AD_Client_ID client
+	 * 	@param TableName table name
+	 * 	@return id
+	 */
+	private int getNextID (int AD_Client_ID, String TableName)
+	{
+		//	TODO: Exception 
+<span class="nc" id="L1769">		return DB.getNextID (AD_Client_ID, TableName, m_trx.getTrxName());</span>
+	}	//	getNextID
+
+	/**
+	 *  Get Client
+	 *  @return AD_Client_ID
+	 */
+	public int getAD_Client_ID()
+	{
+<span class="nc" id="L1778">		return m_client.getAD_Client_ID();</span>
+	}
+	
+	/**
+	 * 	Get AD_Org_ID
+	 *	@return AD_Org_ID
+	 */
+	public int getAD_Org_ID()
+	{
+<span class="nc" id="L1787">		return m_org.getAD_Org_ID();</span>
+	}
+	
+	/**
+	 * 	Get AD_User_ID
+	 *	@return AD_User_ID
+	 */
+	public int getAD_User_ID()
+	{
+<span class="nc" id="L1796">		return AD_User_ID;</span>
+	}
+	
+	/**
+	 * 	Get Info
+	 *	@return Info
+	 */
+	public String getInfo()
+	{
+<span class="nc" id="L1805">		return m_info.toString();</span>
+	}
+
+	/**
+	 * 	Rollback Internal Transaction
+	 */
+	public void rollback() {
+		try {
+<span class="nc" id="L1813">			m_trx.rollback();</span>
+<span class="nc" id="L1814">			m_trx.close();</span>
+<span class="nc" id="L1815">		} catch (Exception e) {}</span>
+<span class="nc" id="L1816">	}</span>
+
+	/**
+	 * 
+	 * @return trxName
+	 */
+	public String getTrxName() {
+<span class="nc bnc" id="L1823" title="All 2 branches missed.">		return m_trx != null ? m_trx.getTrxName() : null;</span>
+	}
+	
+	/**
+	 * Link created entities to accounting schema (ACCOUNTING-SPECIFIC)
+	 * This method calls the accounting service to link dimensions.
+	 * 
+	 * @param dimensions marketing dimensions
+	 * @param standardBP standard business partner
+	 * @param standardProduct standard product
+	 * @param projects project IDs
+	 * @return true if linked
+	 */
+	private boolean linkEntitiesToAccounting(DimensionIDs dimensions, 
+	                                        MBPartner standardBP,
+	                                        MProduct standardProduct,
+	                                        int C_Project_ID)
+	{
+<span class="nc" id="L1841">		IAccountingSetupService acctService = null;</span>
+<span class="nc bnc" id="L1842" title="All 2 branches missed.">		if (AcctModelServices.isAccountingSetupAvailable()) {</span>
+<span class="nc" id="L1843">			acctService = AcctModelServices.getAccountingSetupService();</span>
+		}
+
+<span class="nc bnc" id="L1846" title="All 2 branches missed.">	    if (acctService == null) {</span>
+<span class="nc" id="L1847">	        log.warning(&quot;Accounting service not available - skipping dimension links&quot;);</span>
+<span class="nc" id="L1848">	        return true; // Not an error, just skip</span>
+	    }
+	    
+	    // Link Campaign
+<span class="nc bnc" id="L1852" title="All 4 branches missed.">	    if (m_hasMCampaign &amp;&amp; dimensions.C_Campaign_ID &gt; 0) {</span>
+<span class="nc" id="L1853">	        if (!acctService.linkDimensionToAcctSchema(C_AcctSchema_ID, &quot;MC&quot;, </span>
+<span class="nc" id="L1854">	                                                  dimensions.C_Campaign_ID, </span>
+<span class="nc bnc" id="L1855" title="All 2 branches missed.">	                                                  m_trx.getTrxName())) {</span>
+<span class="nc" id="L1856">	            log.severe(&quot;Failed to link Campaign to AcctSchema&quot;);</span>
+<span class="nc" id="L1857">	            return false;</span>
+	        }
+	    }
+	    
+	    // Link Sales Region
+<span class="nc bnc" id="L1862" title="All 4 branches missed.">	    if (m_hasSRegion &amp;&amp; dimensions.C_SalesRegion_ID &gt; 0) {</span>
+<span class="nc" id="L1863">	        if (!acctService.linkDimensionToAcctSchema(C_AcctSchema_ID, &quot;SR&quot;,</span>
+<span class="nc" id="L1864">	                                                  dimensions.C_SalesRegion_ID,</span>
+<span class="nc bnc" id="L1865" title="All 2 branches missed.">	                                                  m_trx.getTrxName())) {</span>
+<span class="nc" id="L1866">	            log.severe(&quot;Failed to link Sales Region to AcctSchema&quot;);</span>
+<span class="nc" id="L1867">	            return false;</span>
+	        }
+	    }
+	    
+	    // Link Activity
+<span class="nc bnc" id="L1872" title="All 4 branches missed.">	    if (m_hasActivity &amp;&amp; dimensions.C_Activity_ID &gt; 0) {</span>
+<span class="nc" id="L1873">	        if (!acctService.linkDimensionToAcctSchema(C_AcctSchema_ID, &quot;AY&quot;,</span>
+<span class="nc" id="L1874">	                                                  dimensions.C_Activity_ID,</span>
+<span class="nc bnc" id="L1875" title="All 2 branches missed.">	                                                  m_trx.getTrxName())) {</span>
+<span class="nc" id="L1876">	            log.severe(&quot;Failed to link Activity to AcctSchema&quot;);</span>
+<span class="nc" id="L1877">	            return false;</span>
+	        }
+	    }
+	    
+	    // Link BPartner
+<span class="nc bnc" id="L1882" title="All 2 branches missed.">	    if (standardBP != null) {</span>
+<span class="nc" id="L1883">	        if (!acctService.linkDimensionToAcctSchema(C_AcctSchema_ID, &quot;BP&quot;,</span>
+<span class="nc" id="L1884">	                                                  standardBP.getC_BPartner_ID(),</span>
+<span class="nc bnc" id="L1885" title="All 2 branches missed.">	                                                  m_trx.getTrxName())) {</span>
+<span class="nc" id="L1886">	            log.severe(&quot;Failed to link BPartner to AcctSchema&quot;);</span>
+<span class="nc" id="L1887">	            return false;</span>
+	        }
+	    }
+	    
+	    // Link Product
+<span class="nc bnc" id="L1892" title="All 2 branches missed.">	    if (standardProduct != null) {</span>
+<span class="nc" id="L1893">	        if (!acctService.linkDimensionToAcctSchema(C_AcctSchema_ID, &quot;PR&quot;,</span>
+<span class="nc" id="L1894">	                                                  standardProduct.getM_Product_ID(),</span>
+<span class="nc bnc" id="L1895" title="All 2 branches missed.">	                                                  m_trx.getTrxName())) {</span>
+<span class="nc" id="L1896">	            log.severe(&quot;Failed to link Product to AcctSchema&quot;);</span>
+<span class="nc" id="L1897">	            return false;</span>
+	        }
+	    }
+	    
+	    // Link Project
+<span class="nc bnc" id="L1902" title="All 4 branches missed.">	    if (m_hasProject &amp;&amp; C_Project_ID &gt; 0) {</span>
+<span class="nc" id="L1903">	        if (!acctService.linkDimensionToAcctSchema(C_AcctSchema_ID, &quot;PJ&quot;,</span>
+<span class="nc" id="L1904">	                                                  C_Project_ID,</span>
+<span class="nc bnc" id="L1905" title="All 2 branches missed.">	                                                  m_trx.getTrxName())) {</span>
+<span class="nc" id="L1906">	            log.severe(&quot;Failed to link Project to AcctSchema&quot;);</span>
+<span class="nc" id="L1907">	            return false;</span>
+	        }
+	    }
+	    
+<span class="nc" id="L1911">	    return true;</span>
+	}
+	
+	// Helper classes to return multiple IDs
+	private static class DimensionIDs {
+	    int C_Campaign_ID;
+	    int C_SalesRegion_ID;
+	    int C_Activity_ID;
+	    
+<span class="nc" id="L1920">	    DimensionIDs(int campaign, int salesRegion, int activity) {</span>
+<span class="nc" id="L1921">	        this.C_Campaign_ID = campaign;</span>
+<span class="nc" id="L1922">	        this.C_SalesRegion_ID = salesRegion;</span>
+<span class="nc" id="L1923">	        this.C_Activity_ID = activity;</span>
+<span class="nc" id="L1924">	    }</span>
+	}
+}   //  MSetup
+
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

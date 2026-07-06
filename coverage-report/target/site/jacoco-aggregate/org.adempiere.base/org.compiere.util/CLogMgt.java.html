@@ -1,0 +1,790 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CLogMgt.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">CLogMgt.java</span></div><h1>CLogMgt.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.io.BufferedInputStream;
+import java.io.InputStream;
+import java.io.PrintWriter;
+import java.net.InetAddress;
+import java.sql.DriverManager;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Enumeration;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Filter;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogManager;
+import java.util.logging.Logger;
+
+import org.adempiere.base.Core;
+import org.compiere.Adempiere;
+import org.compiere.db.AdempiereDatabase;
+import org.compiere.db.CConnection;
+import org.compiere.model.MClient;
+import org.idempiere.distributed.IClusterMember;
+import org.idempiere.distributed.IClusterService;
+
+/**
+ *	Contain static methods for iDempiere Log Management.
+ *
+ *  @author Jorg Janke
+ *  @version $Id: CLogMgt.java,v 1.4 2006/07/30 00:54:36 jjanke Exp $
+ */
+public class CLogMgt
+{
+<span class="nc" id="L55">	private static final CLogConsole CONSOLE_HANDLER = new CLogConsole();</span>
+<span class="nc" id="L56">	private static final CLogErrorBuffer ERROR_BUFFER_HANDLER = new CLogErrorBuffer();</span>
+	private static CLogFile fileHandler;
+	
+<span class="nc" id="L59">	private static final Map&lt;String, Level&gt; levelMap = new ConcurrentHashMap&lt;String, Level&gt;();</span>
+<span class="nc" id="L60">	private static final Map&lt;String, Logger&gt; loggerMap = new ConcurrentHashMap&lt;String, Logger&gt;();</span>
+	
+<span class="nc" id="L62">	private final static Runnable configurationListener = new Runnable() {</span>
+		@Override
+		public void run() {
+<span class="nc" id="L65">			reInit();</span>
+<span class="nc" id="L66">		}</span>
+	};
+	
+	/**
+	 * Re-initialize after log configuration change. 
+	 */
+	public static synchronized void reInit() {
+<span class="nc" id="L73">		CLogMgt.initialize(Ini.isClient());</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">		if (!levelMap.isEmpty()) {</span>
+<span class="nc" id="L75">			loggerMap.clear();</span>
+<span class="nc bnc" id="L76" title="All 2 branches missed.">			for(String key : levelMap.keySet()) {</span>
+<span class="nc" id="L77">				setLevel(key, levelMap.get(key));</span>
+			}
+		}
+<span class="nc bnc" id="L80" title="All 2 branches missed.">		if (fileHandler != null) {</span>
+<span class="nc" id="L81">			fileHandler.reopen();</span>
+		}
+<span class="nc" id="L83">	}</span>
+	
+	/**
+	 * Get from level map loaded from idempiere.properties
+	 * @param name class or package name
+	 * @return Level or null
+	 */
+	public static Level getFromLevelMap(String name) {
+<span class="nc" id="L91">		return levelMap.get(name);</span>
+	}
+	
+	/**
+	 * 	Initialize Logging
+	 * 	@param isClient true if running as client
+	 */
+	public static synchronized void initialize(boolean isClient)
+	{
+<span class="nc" id="L100">		LogManager mgr = LogManager.getLogManager();</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">		if (isClient)</span>
+		{			
+			try
+			{	//	Load Logging config from org.compiere.util.*properties
+<span class="nc" id="L105">				String fileName = &quot;logClient.properties&quot;;</span>
+<span class="nc" id="L106">				InputStream in = CLogMgt.class.getResourceAsStream(fileName);</span>
+<span class="nc" id="L107">				BufferedInputStream bin = new BufferedInputStream(in);</span>
+<span class="nc" id="L108">				mgr.readConfiguration(bin);</span>
+<span class="nc" id="L109">				in.close();</span>
+<span class="nc" id="L110">			}</span>
+<span class="nc" id="L111">			catch (Exception e)</span>
+			{
+<span class="nc" id="L113">				e.printStackTrace();</span>
+			}
+		}
+
+		//	Handler List
+<span class="nc" id="L118">		List&lt;String&gt;handlerNames = new ArrayList&lt;String&gt;();</span>
+		try
+		{
+<span class="nc" id="L121">			Logger rootLogger = getRootLogger();</span>
+			
+<span class="nc" id="L123">			Handler[] handlers = rootLogger.getHandlers();</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">			for (int i = 0; i &lt; handlers.length; i ++)</span>
+			{
+<span class="nc" id="L126">				handlerNames.add(handlers[i].getClass().getName());</span>
+			}
+<span class="nc" id="L128">		}</span>
+<span class="nc" id="L129">		catch (Exception e)</span>
+		{
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			if (e instanceof ClassNotFoundException)	//	WebStart</span>
+<span class="nc" id="L132">				;</span>
+			/**
+			Can't load log handler &quot;org.compiere.util.CLogConsole&quot;
+			java.lang.ClassNotFoundException: org.compiere.util.CLogConsole
+			java.lang.ClassNotFoundException: org.compiere.util.CLogConsole
+				at java.net.URLClassLoader$1.run(Unknown Source)
+				at java.security.AccessController.doPrivileged(Native Method)
+				at java.net.URLClassLoader.findClass(Unknown Source)
+				at java.lang.ClassLoader.loadClass(Unknown Source)
+				at sun.misc.Launcher$AppClassLoader.loadClass(Unknown Source)
+				at java.lang.ClassLoader.loadClass(Unknown Source)
+				at java.util.logging.LogManager$7.run(Unknown Source)
+				at java.security.AccessController.doPrivileged(Native Method)
+				at java.util.logging.LogManager.initializeGlobalHandlers(Unknown Source)
+				at java.util.logging.LogManager.access$900(Unknown Source)
+				at java.util.logging.LogManager$RootLogger.getHandlers(Unknown Source)
+				at org.compiere.util.CLogMgt.initialize(CLogMgt.java:67)
+				at org.compiere.Adempiere.startup(Adempiere.java:389)
+				at org.compiere.Adempiere.main(Adempiere.java:500)
+				at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+				at sun.reflect.NativeMethodAccessorImpl.invoke(Unknown Source)
+				at sun.reflect.DelegatingMethodAccessorImpl.invoke(Unknown Source)
+				at java.lang.reflect.Method.invoke(Unknown Source)
+				at com.sun.javaws.Launcher.executeApplication(Unknown Source)
+				at com.sun.javaws.Launcher.executeMainClass(Unknown Source)
+				at com.sun.javaws.Launcher.continueLaunch(Unknown Source)
+				at com.sun.javaws.Launcher.handleApplicationDesc(Unknown Source)
+				at com.sun.javaws.Launcher.handleLaunchFile(Unknown Source)
+				at com.sun.javaws.Launcher.run(Unknown Source)
+				at java.lang.Thread.run(Unknown Source)
+			**/
+			else
+<span class="nc" id="L164">				System.err.println(e.toString());</span>
+		}
+		//	Check Loggers
+<span class="nc bnc" id="L167" title="All 2 branches missed.">		if (!handlerNames.contains(CLogErrorBuffer.class.getName()))</span>
+<span class="nc" id="L168">			addHandler(ERROR_BUFFER_HANDLER);</span>
+<span class="nc bnc" id="L169" title="All 4 branches missed.">		if (isClient &amp;&amp; !handlerNames.contains(CLogConsole.class.getName()))</span>
+<span class="nc" id="L170">			addHandler(CONSOLE_HANDLER);</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if (!handlerNames.contains(CLogFile.class.getName()))</span>
+		{
+<span class="nc bnc" id="L173" title="All 2 branches missed.">			if (fileHandler == null)</span>
+<span class="nc" id="L174">				fileHandler = new CLogFile(null, true, isClient);</span>
+			
+<span class="nc" id="L176">			addHandler(fileHandler);</span>
+		}
+
+<span class="nc" id="L179">		setFormatter(CLogFormatter.get());</span>
+<span class="nc" id="L180">		setFilter(CLogFilter.get());</span>
+	
+<span class="nc" id="L182">		mgr.removeConfigurationListener(configurationListener);</span>
+<span class="nc" id="L183">		mgr.addConfigurationListener(configurationListener);</span>
+		
+		//Set handler level to ALL. This let decision of level stop at the logger layer.
+		//This avoid complication with using parent handler where child logger level &lt; root logger level.
+		try
+		{
+<span class="nc" id="L189">			Logger rootLogger = getRootLogger();</span>
+			
+<span class="nc" id="L191">			Handler[] handlers = rootLogger.getHandlers();</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">			for (int i = 0; i &lt; handlers.length; i ++)</span>
+			{
+<span class="nc" id="L194">				handlers[i].setLevel(Level.ALL);</span>
+			}
+<span class="nc" id="L196">		}</span>
+<span class="nc" id="L197">		catch (Exception e) {}		</span>
+<span class="nc" id="L198">	}	//	initialize</span>
+
+	/** Logger				*/
+<span class="nc" id="L201">	private static Logger		log = Logger.getAnonymousLogger();</span>
+	/** LOG Levels			*/
+<span class="nc" id="L203">	public static final Level[]	LEVELS = new Level[]</span>
+<span class="nc" id="L204">		{Level.OFF, Level.SEVERE, Level.WARNING, Level.INFO,</span>
+<span class="nc" id="L205">		Level.CONFIG, Level.FINE, Level.FINER, Level.FINEST, Level.ALL};</span>
+
+	/** New Line			*/
+<span class="nc" id="L208">	private static final String NL = System.getProperty(&quot;line.separator&quot;);</span>
+
+	/**
+	 * 	Get Log Handlers
+	 *	@return handlers
+	 */
+	protected static Handler[] getHandlers()
+	{
+<span class="nc" id="L216">		Logger rootLogger = getRootLogger();</span>
+<span class="nc" id="L217">		Handler[] handlers = rootLogger.getHandlers();</span>
+<span class="nc" id="L218">		return handlers;</span>
+	}	//	getHandlers
+
+	/**
+	 * 	Add Log Handler (to root logger)
+	 *	@param handler new Handler
+	 */
+	public static void addHandler(Handler handler)
+	{
+<span class="nc bnc" id="L227" title="All 2 branches missed.">		if (handler == null)</span>
+<span class="nc" id="L228">			return;</span>
+<span class="nc" id="L229">		Logger rootLogger = getRootLogger();</span>
+<span class="nc" id="L230">		rootLogger.addHandler(handler);</span>
+		//
+<span class="nc bnc" id="L232" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.log(Level.CONFIG, &quot;Handler=&quot; + handler);</span>
+<span class="nc" id="L233">	}	//	addHandler</span>
+
+	/**
+	 * 	Set Formatter for all log handlers
+	 *	@param formatter formatter
+	 */
+	protected static void setFormatter (java.util.logging.Formatter formatter)
+	{
+<span class="nc" id="L241">		Logger rootLogger = getRootLogger();</span>
+<span class="nc" id="L242">		Handler[] handlers = rootLogger.getHandlers();</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">		for (int i = 0; i &lt; handlers.length; i++)</span>
+		{
+<span class="nc" id="L245">			handlers[i].setFormatter(formatter);</span>
+		}
+<span class="nc bnc" id="L247" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.log(Level.CONFIG, &quot;Formatter=&quot; + formatter);</span>
+<span class="nc" id="L248">	}	//	setFormatter</span>
+
+	/**
+	 * 	Set Filter for all log handlers
+	 *	@param filter filter
+	 */
+	protected static void setFilter (Filter filter)
+	{
+<span class="nc" id="L256">		Logger rootLogger = getRootLogger();</span>
+<span class="nc" id="L257">		Handler[] handlers = rootLogger.getHandlers();</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">		for (int i = 0; i &lt; handlers.length; i++)</span>
+		{
+<span class="nc" id="L260">			handlers[i].setFilter(filter);</span>
+		}
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.log(Level.CONFIG, &quot;Filter=&quot; + filter);</span>
+<span class="nc" id="L263">	}	//	setFilter</span>
+
+	/**
+	 * 	Set Level for loggers
+	 *	@param level log level
+	 *	@param loggerNamePart optional partial class/logger name
+	 */
+	public static void setLoggerLevel (Level level, String loggerNamePart)
+	{
+<span class="nc bnc" id="L272" title="All 2 branches missed.">		if (level == null)</span>
+<span class="nc" id="L273">			return;</span>
+<span class="nc" id="L274">		LogManager mgr = LogManager.getLogManager();</span>
+<span class="nc" id="L275">		Enumeration&lt;?&gt; en = mgr.getLoggerNames();</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">		while (en.hasMoreElements())</span>
+		{
+<span class="nc" id="L278">			String name = en.nextElement().toString();</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">			if (loggerNamePart == null</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">				|| name.indexOf(loggerNamePart) != -1)</span>
+			{
+<span class="nc" id="L282">				Logger lll = Logger.getLogger(name);</span>
+<span class="nc" id="L283">				lll.setLevel(level);</span>
+			}
+		}
+<span class="nc" id="L286">	}	//	setLoggerLevel</span>
+
+	/**
+	 * 	Set Level for all handlers
+	 *	@param level log level
+	 */
+	public static void setLevel (Level level)
+	{
+<span class="nc" id="L294">		setLevel(null, level);</span>
+<span class="nc" id="L295">	}</span>
+	
+	/**
+	 * 	Set Level for log handlers
+	 *  @param loggerName optional partial logger name filter
+	 *	@param level log level
+	 */
+	public static synchronized void setLevel (String loggerName, Level level)
+	{
+<span class="nc bnc" id="L304" title="All 2 branches missed.">		if (level == null)</span>
+<span class="nc" id="L305">			return;</span>
+<span class="nc bnc" id="L306" title="All 4 branches missed.">		Logger logger = loggerName == null || loggerName.trim().length() == 0 ? getRootLogger() : CLogger.getCLogger(loggerName, false);</span>
+<span class="nc" id="L307">		logger.setLevel(level);</span>
+		
+<span class="nc bnc" id="L309" title="All 4 branches missed.">		if (loggerName == null || loggerName.trim().length() == 0)</span>
+		{
+<span class="nc" id="L311">			Handler[] handlers = logger.getHandlers();</span>
+<span class="nc bnc" id="L312" title="All 4 branches missed.">			if (handlers == null || handlers.length == 0)</span>
+			{
+<span class="nc" id="L314">				initialize(true);</span>
+<span class="nc" id="L315">			}</span>
+			else
+			{
+<span class="nc bnc" id="L318" title="All 2 branches missed.">				for (Handler handler : handlers)</span>
+				{
+<span class="nc" id="L320">					handler.setLevel(Level.ALL);</span>
+				}
+			}
+
+			//	JDBC if ALL
+<span class="nc bnc" id="L325" title="All 2 branches missed.">			setJDBCDebug(level.intValue() == Level.ALL.intValue());</span>
+
+			// Set the log level for all the existing loggers
+<span class="nc" id="L328">			LogManager mgr = LogManager.getLogManager();</span>
+<span class="nc" id="L329">			Iterator&lt;String&gt; ln = mgr.getLoggerNames().asIterator();</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">			while (ln.hasNext())</span>
+			{
+<span class="nc" id="L332">				String cl = ln.next();</span>
+<span class="nc" id="L333">				CLogger.getCLogger(cl, false).setLevel(level);</span>
+			}
+<span class="nc" id="L335">			getRootLogger().setLevel(level);</span>
+<span class="nc" id="L336">		}</span>
+		else
+		{
+<span class="nc bnc" id="L339" title="All 2 branches missed.">			if (!logger.getUseParentHandlers()) </span>
+			{
+<span class="nc" id="L341">				logger.setUseParentHandlers(true);</span>
+			}
+		}
+<span class="nc bnc" id="L344" title="All 2 branches missed.">		String key = loggerName == null ? &quot;&quot; : loggerName;</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">		if (!levelMap.containsKey(key)) {</span>
+<span class="nc" id="L346">			levelMap.put(key, level);</span>
+<span class="nc" id="L347">			loggerMap.put(key, logger);</span>
+		}
+<span class="nc" id="L349">	}	//	setHandlerLevel</span>
+
+	/**
+	 * 	Set Level
+	 *	@param intLevel integer value of level
+	 */
+	public static void setLevel (int intLevel)
+	{
+<span class="nc" id="L357">		setLevel(String.valueOf(intLevel));</span>
+<span class="nc" id="L358">	}	//	setLevel</span>
+
+	/**
+	 * 	Set Level
+	 *	@param levelString string representation of level
+	 */
+	public static void setLevel (String levelString)
+	{
+<span class="nc" id="L366">		setLevel(null, levelString);</span>
+<span class="nc" id="L367">	}	//	setLevel</span>
+	
+	/**
+	 * Set level for loggers
+	 * @param loggerName optional partial logger name filter
+	 * @param levelString string representation of level
+	 */
+	public static void setLevel(String loggerName, String levelString)
+	{
+<span class="nc bnc" id="L376" title="All 2 branches missed.">		if (levelString == null)</span>
+<span class="nc" id="L377">			return;</span>
+		//
+<span class="nc bnc" id="L379" title="All 2 branches missed.">		for (int i = 0; i &lt; LEVELS.length; i++)</span>
+		{
+<span class="nc bnc" id="L381" title="All 2 branches missed.">		    if (LEVELS[i].getName().equals(levelString))</span>
+		    {
+<span class="nc" id="L383">		    	setLevel(loggerName, LEVELS[i]);</span>
+<span class="nc" id="L384">		    	return;</span>
+		    }
+		}
+<span class="nc bnc" id="L387" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.log(Level.CONFIG, &quot;Ignored: &quot; + levelString);</span>
+<span class="nc" id="L388">	}</span>
+
+	/**
+	 * 	Set JDBC Debug. Auto enable when log level is set to ALL.
+	 *	@param enable
+	 */
+	public static void setJDBCDebug(boolean enable)
+	{
+<span class="nc bnc" id="L396" title="All 2 branches missed.">		if (enable)</span>
+<span class="nc" id="L397">			DriverManager.setLogWriter(new PrintWriter(System.err));</span>
+		else
+<span class="nc" id="L399">			DriverManager.setLogWriter(null);</span>
+<span class="nc" id="L400">	}	//	setJDBCDebug</span>
+
+	/**
+	 * 	Get logging Level of root logger
+	 *	@return logging level of root logger
+	 */
+	public static Level getLevel()
+	{
+<span class="nc" id="L408">		Logger rootLogger = getRootLogger();</span>
+<span class="nc" id="L409">		return rootLogger.getLevel();</span>
+	}	//	getLevel
+
+	/**
+	 * 	Get logging Level of root logger
+	 *	@return logging level or root logger
+	 */
+	public static int getLevelAsInt()
+	{
+<span class="nc" id="L418">		Logger rootLogger = getRootLogger();</span>
+<span class="nc" id="L419">		return rootLogger.getLevel().intValue();</span>
+	}	//	getLevel
+
+	/**
+	 * 	Is Logging Level logged
+	 *	@param level level
+	 *	@return true if it is logged
+	 */
+	public static boolean isLevel (Level level)
+	{
+<span class="nc bnc" id="L429" title="All 2 branches missed.">		if (level == null)</span>
+<span class="nc" id="L430">			return false;</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">		return level.intValue() &gt;= getLevelAsInt();</span>
+	}	//	isLevel
+
+	/**
+	 * 	Is Logging Level ALL logged
+	 *	@return true if level ALL is logged
+	 */
+	public static boolean isLevelAll ()
+	{
+<span class="nc bnc" id="L440" title="All 2 branches missed.">		return Level.ALL.intValue() == getLevelAsInt();</span>
+	}	//	isLevelFinest
+
+	/**
+	 * 	Is Logging Level FINEST logged
+	 *	@return true if level FINEST is logged
+	 */
+	public static boolean isLevelFinest ()
+	{
+<span class="nc bnc" id="L449" title="All 2 branches missed.">		return Level.FINEST.intValue() &gt;= getLevelAsInt();</span>
+	}	//	isLevelFinest
+
+	/**
+	 * 	Is Logging Level FINER logged
+	 *	@return true if level FINER is logged
+	 */
+	public static boolean isLevelFiner ()
+	{
+<span class="nc bnc" id="L458" title="All 2 branches missed.">		return Level.FINER.intValue() &gt;= getLevelAsInt();</span>
+	}	//	isLevelFiner
+
+	/**
+	 * 	Is Logging Level FINE logged
+	 *	@return true if level FINE is logged
+	 */
+	public static boolean isLevelFine ()
+	{
+<span class="nc bnc" id="L467" title="All 2 branches missed.">		return Level.FINE.intValue() &gt;= getLevelAsInt();</span>
+	}	//	isLevelFine
+
+	/**
+	 * 	Is Logging Level INFO logged
+	 *	@return true if level INFO is logged
+	 */
+	public static boolean isLevelInfo ()
+	{
+<span class="nc bnc" id="L476" title="All 2 branches missed.">		return Level.INFO.intValue() &gt;= getLevelAsInt();</span>
+	}	//	isLevelFine
+
+	/**
+	 * Save the current level when disabling log
+	 */
+<span class="nc" id="L482">	private static Level previousLevel = null;</span>
+	/**
+	 * 	Enable/Disable logging (of handlers)
+	 *	@param enableLogging true if logging enabled
+	 *  @deprecated not recommended to use, problematic method to enable/disable the log globally 
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static void enable (boolean enableLogging)
+	{
+<span class="nc" id="L491">		Logger rootLogger = getRootLogger();</span>
+
+<span class="nc bnc" id="L493" title="All 2 branches missed.">		if (enableLogging)</span>
+		{
+<span class="nc bnc" id="L495" title="All 2 branches missed.">			if (previousLevel != null)</span>
+<span class="nc" id="L496">				setLevel(previousLevel);</span>
+			else
+<span class="nc" id="L498">				setLevel(rootLogger.getLevel());</span>
+<span class="nc" id="L499">			reInit();</span>
+<span class="nc" id="L500">			previousLevel = null;</span>
+<span class="nc" id="L501">		}</span>
+		else
+		{
+<span class="nc" id="L504">			previousLevel = rootLogger.getLevel();</span>
+<span class="nc" id="L505">			setLevel(Level.OFF);</span>
+		}
+<span class="nc" id="L507">	}	//	enable</span>
+
+	/**
+	 * 	Shutdown Logging system
+	 */
+	public static void shutdown ()
+	{
+<span class="nc" id="L514">		LogManager mgr = LogManager.getLogManager();</span>
+<span class="nc" id="L515">		mgr.reset();</span>
+<span class="nc" id="L516">	}	//	shutdown</span>
+
+	/**
+	 *  Print Properties
+	 *
+	 *  @param p Properties to print
+	 *  @param description Description of properties
+	 *  @param logIt if true write to Log (Level.Config), else to System.out
+	 */
+	public static void printProperties (Properties p, String description, boolean logIt)
+	{
+<span class="nc bnc" id="L527" title="All 2 branches missed.">		if (p == null)</span>
+<span class="nc" id="L528">			return;</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">		if (logIt) {</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(description + &quot; - Size=&quot; + p.size()</span>
+<span class="nc" id="L531">				+ &quot;, Hash=&quot; + p.hashCode() + &quot;\n&quot; + getLocalHost());</span>
+<span class="nc" id="L532">		} else {</span>
+<span class="nc" id="L533">			System.out.println(&quot;Log.printProperties = &quot; + description + &quot;, Size=&quot; + p.size());</span>
+		}
+
+<span class="nc" id="L536">		Object[] pp = p.keySet().toArray();</span>
+<span class="nc" id="L537">		Arrays.sort(pp);</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">		for (int i = 0; i &lt; pp.length; i++)</span>
+		{
+<span class="nc" id="L540">			String key = pp[i].toString();</span>
+<span class="nc" id="L541">			String value = p.getProperty(key);</span>
+<span class="nc bnc" id="L542" title="All 2 branches missed.">			if (logIt) {</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">				if (log.isLoggable(Level.CONFIG)) log.config(key + &quot;=&quot; + value);</span>
+<span class="nc" id="L544">			} else {</span>
+<span class="nc" id="L545">				System.out.println(&quot;  &quot; + key + &quot; = &quot; + value);</span>
+			}
+		}
+<span class="nc" id="L548">	}   //  printProperties</span>
+
+	/**
+	 *  Get iDempiere System Info
+	 *  @param sb buffer to append or null
+	 *  @return Info as multiple Line String
+	 */
+	public static StringBuffer getInfo (StringBuffer sb)
+	{
+<span class="nc bnc" id="L557" title="All 2 branches missed.">		if (sb == null)</span>
+<span class="nc" id="L558">			sb = new StringBuffer();</span>
+<span class="nc" id="L559">		final String eq = &quot; = &quot;;</span>
+<span class="nc" id="L560">		sb.append(getMsg(&quot;Host&quot;)).append(eq)        .append(getServerInfo()).append(NL);</span>
+<span class="nc" id="L561">		sb.append(getMsg(&quot;Database&quot;)).append(eq)    .append(getDatabaseInfo()).append(NL);</span>
+<span class="nc" id="L562">		sb.append(getMsg(&quot;Schema&quot;)).append(eq)      .append(CConnection.get().getDbUid()).append(NL);</span>
+		//
+<span class="nc" id="L564">		sb.append(getMsg(&quot;AD_User_ID&quot;)).append(eq)  .append(Env.getContext(Env.getCtx(), Env.AD_USER_NAME)).append(NL);</span>
+<span class="nc" id="L565">		sb.append(getMsg(&quot;AD_Role_ID&quot;)).append(eq)  .append(Env.getContext(Env.getCtx(), Env.AD_ROLE_NAME)).append(NL);</span>
+		//
+<span class="nc" id="L567">		sb.append(getMsg(&quot;AD_Client_ID&quot;)).append(eq).append(Env.getContext(Env.getCtx(), Env.AD_CLIENT_NAME)).append(NL);</span>
+<span class="nc" id="L568">		sb.append(getMsg(&quot;AD_Org_ID&quot;)).append(eq)   .append(Env.getContext(Env.getCtx(), Env.AD_ORG_NAME)).append(NL);</span>
+		//
+<span class="nc" id="L570">		sb.append(getMsg(&quot;Date&quot;)).append(eq)        .append(Env.getContext(Env.getCtx(), Env.DATE)).append(NL);</span>
+<span class="nc" id="L571">		sb.append(getMsg(&quot;Printer&quot;)).append(eq)     .append(Env.getContext(Env.getCtx(), &quot;#Printer&quot;)).append(NL);</span>
+		// Show Implementation Vendor / Version - teo_sarca, [ 1622855 ]
+<span class="nc" id="L573">		sb.append(getMsg(&quot;ImplementationVendor&quot;)).append(eq).append(org.compiere.Adempiere.getImplementationVendor()).append(NL);</span>
+<span class="nc" id="L574">		sb.append(getMsg(&quot;ImplementationVersion&quot;)).append(eq).append(org.compiere.Adempiere.getImplementationVersion()).append(NL);</span>
+		//
+<span class="nc" id="L576">		sb.append(&quot;iDempiereHome = &quot;).append(Adempiere.getAdempiereHome()).append(NL);</span>
+<span class="nc" id="L577">		sb.append(&quot;iDempiereProperties = &quot;).append(Ini.getPropertyFileName()).append(NL);</span>
+<span class="nc" id="L578">		sb.append(Env.getLanguage(Env.getCtx())).append(NL);</span>
+<span class="nc" id="L579">		MClient client = MClient.get(Env.getCtx());</span>
+<span class="nc" id="L580">		sb.append(client).append(NL);</span>
+<span class="nc" id="L581">		sb.append(getMsg(&quot;IsMultiLingualDocument&quot;))</span>
+<span class="nc" id="L582">			.append(eq).append(client.isMultiLingualDocument()).append(NL);</span>
+<span class="nc" id="L583">		sb.append(&quot;BaseLanguage = &quot;).append(Env.isBaseLanguage(Env.getCtx(), &quot;AD_Window&quot;))</span>
+<span class="nc" id="L584">			.append(&quot;/&quot;).append(Env.isBaseLanguage(Env.getCtx(), &quot;C_UOM&quot;)).append(NL);</span>
+<span class="nc" id="L585">		sb.append(Adempiere.getJavaInfo()).append(NL);</span>
+<span class="nc" id="L586">		sb.append(&quot;java.io.tmpdir=&quot;+System.getProperty(&quot;java.io.tmpdir&quot;)).append(NL);</span>
+<span class="nc" id="L587">		sb.append(Adempiere.getOSInfo()).append(NL);</span>
+
+		//report memory info
+<span class="nc" id="L590">		Runtime runtime = Runtime.getRuntime();</span>
+		//max heap size
+<span class="nc" id="L592">		sb.append(&quot;Max Heap = &quot;+formatMemoryInfo(runtime.maxMemory())).append(NL);</span>
+		//allocated heap size
+<span class="nc" id="L594">		sb.append(&quot;Allocated Heap = &quot;+formatMemoryInfo(runtime.totalMemory())).append(NL);</span>
+		//free heap size
+<span class="nc" id="L596">		sb.append(&quot;Free Heap = &quot;+formatMemoryInfo(runtime.freeMemory())).append(NL);</span>
+		//
+		//thread info
+<span class="nc" id="L599">		sb.append(&quot;Active Threads = &quot; + Thread.activeCount()).append(NL);</span>
+		// Key Store info
+<span class="nc" id="L601">		sb.append(&quot;Key Store = &quot;).append(Core.getKeyStore().getClass().getName());</span>
+		//
+		//cluster info
+<span class="nc bnc" id="L604" title="All 2 branches missed.">		if (Env.getAD_Client_ID(Env.getCtx()) == 0) {</span>
+<span class="nc" id="L605">			IClusterService service = Core.getClusterService();</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L607">				IClusterMember local = service.getLocalMember();</span>
+<span class="nc" id="L608">				Collection&lt;IClusterMember&gt; members = service.getMembers();				</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">				if (!members.isEmpty())</span>
+<span class="nc" id="L610">					sb.append(NL).append(&quot;Cluster Nodes:&quot;).append(NL);</span>
+<span class="nc bnc" id="L611" title="All 2 branches missed.">				for(IClusterMember member : members) {					</span>
+<span class="nc" id="L612">					sb.append(member.toString());</span>
+<span class="nc bnc" id="L613" title="All 4 branches missed.">					if (local != null &amp;&amp; member.getId().equals(local.getId())) {</span>
+<span class="nc" id="L614">						sb.append(&quot; *&quot;);</span>
+					}
+<span class="nc" id="L616">					sb.append(NL);					</span>
+				}
+			}
+		}
+		
+<span class="nc" id="L621">		return sb;</span>
+	}   //  getInfo
+
+	/**
+	 * Format amount as M or K texts
+	 * @param amount
+	 * @return formatted text
+	 */
+	private static String formatMemoryInfo(long amount)
+	{
+<span class="nc" id="L631">		String unit = &quot;&quot;;</span>
+<span class="nc" id="L632">		long size = amount / 1024 ;</span>
+<span class="nc bnc" id="L633" title="All 2 branches missed.">		if (size &gt; 1024)</span>
+		{
+<span class="nc" id="L635">			size = size / 1024;</span>
+<span class="nc" id="L636">			unit = &quot;M&quot;;</span>
+<span class="nc" id="L637">		}</span>
+		else
+		{
+<span class="nc" id="L640">			unit = &quot;K&quot;;</span>
+		}
+<span class="nc" id="L642">		return size + unit;</span>
+	}
+
+	/**
+	 *  Create System Info
+	 *  @param sb Optional string buffer
+	 *  @param ctx Environment
+	 *  @return System Info
+	 */
+	public static StringBuffer getInfoDetail (StringBuffer sb, Properties ctx)
+	{
+<span class="nc bnc" id="L653" title="All 2 branches missed.">		if (sb == null)</span>
+<span class="nc" id="L654">			sb = new StringBuffer();</span>
+<span class="nc bnc" id="L655" title="All 2 branches missed.">		if (ctx == null)</span>
+<span class="nc" id="L656">			ctx = Env.getCtx();</span>
+		//  Envoronment
+<span class="nc" id="L658">		CConnection cc = CConnection.get();</span>
+<span class="nc" id="L659">		sb.append(NL).append(NL)</span>
+<span class="nc" id="L660">			.append(&quot;=== Environment === &quot;).append(NL)</span>
+<span class="nc" id="L661">			.append(Adempiere.getCheckSum()).append(NL)</span>
+<span class="nc" id="L662">			.append(Adempiere.getSummaryAscii()).append(NL)</span>
+<span class="nc" id="L663">			.append(getLocalHost()).append(NL)</span>
+<span class="nc" id="L664">			.append(cc.getName() + &quot; &quot; + cc.getDbUid() + &quot;@&quot; + cc.getConnectionURL()).append(NL)</span>
+<span class="nc" id="L665">			.append(cc.getInfo()).append(NL);</span>
+		
+		//connection pool
+<span class="nc" id="L668">		sb.append(NL)</span>
+<span class="nc" id="L669">			.append(&quot;=== DB Connection Pool === &quot;).append(NL)</span>
+<span class="nc" id="L670">			.append(cc.getDatabase().getStatus().replace(&quot; , &quot;, NL)).append(NL);</span>
+		
+		//  Context
+<span class="nc" id="L673">		String[] context = Env.getEntireContext(ctx);</span>
+<span class="nc" id="L674">		sb.append(NL)</span>
+<span class="nc" id="L675">			.append(&quot;=== Context (%s) ===&quot;.formatted(context.length)).append(NL);		</span>
+<span class="nc" id="L676">		Arrays.sort(context);</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">		for (int i = 0; i &lt; context.length; i++)</span>
+<span class="nc" id="L678">			sb.append(context[i]).append(NL);</span>
+		//  System
+<span class="nc" id="L680">		sb.append(NL)</span>
+<span class="nc" id="L681">			.append(&quot;=== System ===&quot;).append(NL);</span>
+<span class="nc" id="L682">		Object[] pp = System.getProperties().keySet().toArray();</span>
+<span class="nc" id="L683">		Arrays.sort(pp);</span>
+<span class="nc bnc" id="L684" title="All 2 branches missed.">		for (int i = 0; i &lt; pp.length; i++)</span>
+		{
+<span class="nc" id="L686">			String key = pp[i].toString();</span>
+<span class="nc" id="L687">			String value = System.getProperty(key);</span>
+<span class="nc" id="L688">			sb.append(key).append(&quot;=&quot;).append(value).append(NL);</span>
+		}
+		
+<span class="nc" id="L691">		return sb;</span>
+	}   //  getInfoDetail
+
+	/**
+	 *  Get translated Message, if DB connection exists
+	 *  @param msg AD_Message
+	 *  @return translated msg if connected
+	 */
+	private static String getMsg (String msg)
+	{
+<span class="nc bnc" id="L701" title="All 2 branches missed.">		if (DB.isConnected())</span>
+<span class="nc" id="L702">			return Msg.translate(Env.getCtx(), msg);</span>
+<span class="nc" id="L703">		return msg;</span>
+	}   //  getMsg
+
+	/**
+	 *  Get Server Info.
+	 *  @return host : port (NotActive) via CMhost : port
+	 */
+	private static String getServerInfo()
+	{
+<span class="nc" id="L712">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L713">		CConnection cc = CConnection.get();</span>
+		//  Host
+<span class="nc" id="L715">		sb.append(cc.getAppsHost());</span>
+		
+		//
+<span class="nc" id="L718">		return sb.toString();</span>
+	}   //  getServerInfo
+
+	/**
+	 *  Get Database Info
+	 *  @return host : port : sid
+	 */
+	private static String getDatabaseInfo()
+	{
+<span class="nc" id="L727">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L728">		sb.append(CConnection.get().getDbHost()).append(&quot;:&quot;)</span>
+<span class="nc" id="L729">			.append(CConnection.get().getDbPort()).append(&quot;/&quot;)</span>
+<span class="nc" id="L730">			.append(CConnection.get().getDbName());</span>
+		
+<span class="nc" id="L732">		AdempiereDatabase db = DB.getDatabase();</span>
+<span class="nc" id="L733">		sb.append(&quot; (&quot;).append(db.getName());</span>
+<span class="nc bnc" id="L734" title="All 2 branches missed.">		if (!DB.isOracle()) </span>
+		{
+<span class="nc bnc" id="L736" title="All 2 branches missed.">			sb.append(&quot;, &quot;).append(db.isNativeMode() ? &quot;Native Dialect&quot; : &quot;Oracle Dialect&quot;);</span>
+		}
+<span class="nc" id="L738">		sb.append(&quot;)&quot;);</span>
+		//  Connection Manager
+<span class="nc bnc" id="L740" title="All 2 branches missed.">		if (CConnection.get().isViaFirewall())</span>
+<span class="nc" id="L741">			sb.append(getMsg(&quot;via&quot;)).append(&quot; &quot;)</span>
+<span class="nc" id="L742">				.append(CConnection.get().getFwHost()).append(&quot; : &quot;)</span>
+<span class="nc" id="L743">				.append(CConnection.get().getFwPort());</span>
+
+<span class="nc" id="L745">		return sb.toString();</span>
+	}   //  getDatabaseInfo
+
+	/**
+	 *  Get Localhost address 
+	 *  @return local host address
+	 */
+	private static String getLocalHost()
+	{
+		try
+		{
+<span class="nc" id="L756">			InetAddress id = InetAddress.getLocalHost();</span>
+<span class="nc" id="L757">			return id.toString();</span>
+		}
+<span class="nc" id="L759">		catch (Exception e)</span>
+		{
+<span class="nc" id="L761">			log.log(Level.SEVERE, &quot;getLocalHost&quot;, e);</span>
+		}
+<span class="nc" id="L763">		return &quot;-no local host info -&quot;;</span>
+	}   //  getLocalHost
+
+	private static Logger getRootLogger()
+	{
+<span class="nc" id="L768">		Logger rootLogger = Logger.getLogger(&quot;&quot;);</span>
+<span class="nc bnc" id="L769" title="All 2 branches missed.">		if (rootLogger.getUseParentHandlers())</span>
+		{
+<span class="nc" id="L771">			rootLogger.setUseParentHandlers(false);</span>
+		}
+		//set default level
+<span class="nc bnc" id="L774" title="All 2 branches missed.">		if (rootLogger.getLevel() == null)</span>
+		{
+<span class="nc" id="L776">			rootLogger.setLevel(Level.WARNING);</span>
+		}
+		
+<span class="nc" id="L779">		return rootLogger;</span>
+	}
+	
+	/**
+	 * 	CLogMgt
+	 */
+<span class="nc" id="L785">	public CLogMgt ()</span>
+	{
+<span class="nc" id="L787">	}</span>
+
+}	//	CLogMgt
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

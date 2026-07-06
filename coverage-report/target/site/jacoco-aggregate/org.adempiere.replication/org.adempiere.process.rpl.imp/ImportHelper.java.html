@@ -1,0 +1,818 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ImportHelper.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.replication</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.process.rpl.imp</a> &gt; <span class="el_source">ImportHelper.java</span></div><h1>ImportHelper.java</h1><pre class="source lang-java linenums">/**********************************************************************
+ * This file is part of Adempiere ERP Bazaar                          * 
+ * http://www.adempiere.org                                           * 
+ *                                                                    * 
+ * Copyright (C) Trifon Trifonov.                                     * 
+ * Copyright (C) Contributors                                         * 
+ *                                                                    * 
+ * This program is free software; you can redistribute it and/or      * 
+ * modify it under the terms of the GNU General Public License        * 
+ * as published by the Free Software Foundation; either version 2     * 
+ * of the License, or (at your option) any later version.             * 
+ *                                                                    * 
+ * This program is distributed in the hope that it will be useful,    * 
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of     * 
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the       * 
+ * GNU General Public License for more details.                       * 
+ *                                                                    * 
+ * You should have received a copy of the GNU General Public License  * 
+ * along with this program; if not, write to the Free Software        * 
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,         * 
+ * MA 02110-1301, USA.                                                * 
+ *                                                                    * 
+ * Contributors:                                                      * 
+ *  - Trifon Trifonov (trifonnt@users.sourceforge.net)                *
+ *                                                                    *
+ * Sponsors:                                                          *
+ *  - E-evolution (http://www.e-evolution.com/)                       *
+ *********************************************************************/
+package org.adempiere.process.rpl.imp;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Collection;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import javax.xml.xpath.XPathExpressionException;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.process.rpl.XMLHelper;
+import org.adempiere.process.rpl.exp.ExportHelper;
+import org.compiere.model.I_AD_Client;
+import org.compiere.model.MClient;
+import org.compiere.model.MColumn;
+import org.compiere.model.MEXPFormat;
+import org.compiere.model.MEXPFormatLine;
+import org.compiere.model.MReplicationStrategy;
+import org.compiere.model.MTable;
+import org.compiere.model.ModelValidator;
+import org.compiere.model.PO;
+import org.compiere.model.Query;
+import org.compiere.model.X_AD_ReplicationDocument;
+import org.compiere.model.X_AD_ReplicationTable;
+import org.compiere.process.DocAction;
+import org.compiere.util.CLogger;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+/**
+ * @author Trifon N. Trifonov
+ * @author Antonio Cañaveral, e-Evolution
+ * 				&lt;li&gt;[ 2195016 ] Implementation delete records messages
+ * 				&lt;li&gt;https://sourceforge.net/p/adempiere/bugs/1556/
+ * @author	victor.perez@e-evolution.com, e-Evolution
+ * 				&lt;li&gt;[ 2195090 ] Stabilization of replication
+ * 				&lt;li&gt;https://sourceforge.net/p/adempiere/bugs/2294/
+ *				&lt;li&gt;BF [2947622] The replication ID (Primary Key) is not working
+ *				&lt;li&gt;https://sourceforge.net/p/adempiere/bugs/2308/
+ *
+ */
+public class ImportHelper {
+
+	/** Logger 			*/
+<span class="nc" id="L83">	private static final CLogger log = CLogger.getCLogger(ImportHelper.class);</span>
+	
+	/** Custom Date Format			*/
+<span class="nc" id="L86">	private SimpleDateFormat	m_customDateFormat = null;</span>
+	/** Set change PO			*/
+<span class="nc" id="L88">	boolean isChanged= false;</span>
+	
+	/** Context						*/
+<span class="nc" id="L91">	private Properties ctx = null;</span>
+	
+<span class="nc" id="L93">	public ImportHelper(Properties ctx) </span>
+	{
+<span class="nc" id="L95">		this.ctx = ctx;</span>
+<span class="nc" id="L96">	}</span>
+	
+	/**
+	 * @param result
+	 * @param documentToBeImported
+	 * @param trxName
+	 * @throws Exception
+	 * @throws SQLException
+	 * @throws XPathExpressionException
+	 */
+	public void importXMLDocument(StringBuffer result, Document documentToBeImported, String trxName) 
+		throws Exception, SQLException,	XPathExpressionException 
+	{
+<span class="nc" id="L109">		Element rootElement = documentToBeImported.getDocumentElement();</span>
+		
+		// Find which Export format to Load...
+<span class="nc" id="L112">		String AD_Client_Value = null;</span>
+
+<span class="nc" id="L114">		AD_Client_Value = rootElement.getAttribute(&quot;AD_Client_Value&quot;);</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;AD_Client_Value = &quot; + AD_Client_Value);</span>
+<span class="nc bnc" id="L116" title="All 4 branches missed.">		if (AD_Client_Value == null || Util.isEmpty(AD_Client_Value)) </span>
+		{
+<span class="nc" id="L118">			throw new Exception(Msg.getMsg(ctx, &quot;XMLClientValueMandatory&quot;));</span>
+		}
+<span class="nc" id="L120">		String version = null;</span>
+<span class="nc" id="L121">		version = rootElement.getAttribute(&quot;Version&quot;);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Version = &quot; + version);</span>
+<span class="nc bnc" id="L123" title="All 4 branches missed.">		if (version == null || Util.isEmpty(version)) </span>
+		{
+<span class="nc" id="L125">			throw new Exception(Msg.getMsg(ctx, &quot;XMLVersionAttributeMandatory&quot;));</span>
+		}
+		///Getting Attributes.
+<span class="nc" id="L128">		int ReplicationMode = Integer.valueOf(rootElement.getAttribute(&quot;ReplicationMode&quot;));</span>
+<span class="nc" id="L129">		String ReplicationType = rootElement.getAttribute(&quot;ReplicationType&quot;);</span>
+<span class="nc" id="L130">		int ReplicationEvent = Integer.valueOf(rootElement.getAttribute(&quot;ReplicationEvent&quot;));</span>
+		
+<span class="nc" id="L132">		MClient client = null;</span>
+<span class="nc" id="L133">		client = getAD_ClientByValue(ctx, AD_Client_Value, trxName);</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		if (client == null) </span>
+		{
+<span class="nc" id="L136">			throw new Exception(Msg.getMsg(ctx, &quot;XMLClientNotFound&quot;));</span>
+		}
+<span class="nc bnc" id="L138" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(client.toString());</span>
+
+<span class="nc" id="L140">		String EXP_Format_Value = null;</span>
+<span class="nc" id="L141">		EXP_Format_Value = rootElement.getNodeName();</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;EXP_Format_Value = &quot; + EXP_Format_Value);</span>
+
+<span class="nc" id="L144">		MEXPFormat expFormat = null;</span>
+<span class="nc" id="L145">		expFormat = MEXPFormat.getFormatByValueAD_Client_IDAndVersion(ctx, EXP_Format_Value, client.getAD_Client_ID(), version, trxName);</span>
+<span class="nc bnc" id="L146" title="All 4 branches missed.">		if (expFormat == null || expFormat.getEXP_Format_ID() == 0) </span>
+		{
+			// Fall back to SYSTEM Client.
+			// Try to search Export format defined for SYSTEM Client!!!
+<span class="nc" id="L150">			MClient systemClient = null;</span>
+<span class="nc" id="L151">			systemClient = MClient.get(ctx, 0);</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">			if (systemClient == null) </span>
+			{
+<span class="nc" id="L154">				throw new Exception(Msg.getMsg(ctx, &quot;XMLClientNotFound&quot;));</span>
+			}
+<span class="nc bnc" id="L156" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(systemClient.toString());</span>
+<span class="nc" id="L157">			expFormat = MEXPFormat.getFormatByValueAD_Client_IDAndVersion(ctx, EXP_Format_Value, systemClient.getAD_Client_ID(), version, trxName);</span>
+		}
+<span class="nc bnc" id="L159" title="All 4 branches missed.">		if (expFormat == null || expFormat.getEXP_Format_ID() == 0) </span>
+		{
+<span class="nc" id="L161">			throw new Exception(Msg.getMsg(ctx, &quot;EXPFormatNotFound&quot;));</span>
+		}
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;expFormat = &quot; + expFormat.toString());</span>
+<span class="nc" id="L164">		isChanged = false;</span>
+<span class="nc" id="L165">		PO po = importElement(ctx, result, rootElement, expFormat, ReplicationType, trxName);</span>
+<span class="nc bnc" id="L166" title="All 4 branches missed.">		if(!po.is_Changed() &amp;&amp; !isChanged)</span>
+		{
+<span class="nc bnc" id="L168" title="All 2 branches missed.">		    if (log.isLoggable(Level.INFO)) log.info(&quot;Object not changed = &quot; + po.toString());</span>
+<span class="nc" id="L169">		    return;</span>
+		}
+		
+<span class="nc bnc" id="L172" title="All 2 branches missed.">		if(po != null)</span>
+		{
+<span class="nc" id="L174">			 Env.setContext(po.getCtx(), Env.AD_CLIENT_ID, po.getAD_Client_ID());</span>
+			 
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		    	if(MReplicationStrategy.REPLICATION_TABLE==ReplicationMode)</span>
+		    	{    
+        			// Here must invoke other method else we get cycle...
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        			if (	ModelValidator.TYPE_BEFORE_DELETE == ReplicationEvent </span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        			||	ModelValidator.TYPE_BEFORE_DELETE_REPLICATION == ReplicationEvent </span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        			||	ModelValidator.TYPE_DELETE == ReplicationEvent)</span>
+        			{
+<span class="nc" id="L183">        				po.deleteEx(true);</span>
+<span class="nc" id="L184">        			}</span>
+        			else
+        			{
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        				if(X_AD_ReplicationTable.REPLICATIONTYPE_Broadcast.equals(ReplicationType))</span>
+        				{
+<span class="nc" id="L189">        					MReplicationStrategy rplStrategy = new MReplicationStrategy(client.getCtx(), client.getAD_ReplicationStrategy_ID(), po.get_TrxName());</span>
+<span class="nc" id="L190">        					ExportHelper expHelper = new ExportHelper(client, rplStrategy);</span>
+<span class="nc" id="L191">        					expHelper.exportRecord(	po, </span>
+<span class="nc" id="L192">        								MReplicationStrategy.REPLICATION_TABLE,</span>
+<span class="nc" id="L193">        								X_AD_ReplicationTable.REPLICATIONTYPE_Merge,</span>
+<span class="nc" id="L194">        								ModelValidator.TYPE_AFTER_CHANGE);</span>
+<span class="nc" id="L195">        					po.saveReplica(true);</span>
+        					
+<span class="nc" id="L197">        				}</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">        				else if(X_AD_ReplicationTable.REPLICATIONTYPE_Merge.equals(ReplicationType)</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">        					||  X_AD_ReplicationTable.REPLICATIONTYPE_Reference.equals(ReplicationType))</span>
+        				{
+
+<span class="nc" id="L202">        						po.saveReplica(true);</span>
+<span class="nc" id="L203">        				}</span>
+        				/*else if (X_AD_ReplicationTable.REPLICATIONTYPE_Reference.equals(ReplicationType))
+        				{
+        					//Do nothing??	
+        				}*/
+<span class="nc bnc" id="L208" title="All 2 branches missed.">        				else if(X_AD_ReplicationTable.REPLICATIONTYPE_Local.equals(ReplicationType))</span>
+        				{
+        					//Do nothing??	
+        				}
+        				else
+        				{
+        					// Replication Type is not one of the possible values...ERROR
+<span class="nc" id="L215">        					throw new Exception(Msg.getMsg(ctx, &quot;EXPReplicationTypeNonValidType&quot;));</span>
+        				}
+        			}	
+		    	}
+<span class="nc bnc" id="L219" title="All 2 branches missed.">		    	else if(MReplicationStrategy.REPLICATION_DOCUMENT == ReplicationMode  </span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">		    	&amp;&amp; X_AD_ReplicationDocument.REPLICATIONTYPE_Merge.equals(ReplicationType)</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">		    	&amp;&amp; po instanceof DocAction)</span>
+		    	{
+<span class="nc" id="L223">				   DocAction document = (DocAction)po;</span>
+<span class="nc" id="L224">				   String action = document.getDocAction();</span>
+<span class="nc" id="L225">				   String status = document.getDocStatus();</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">				   if (log.isLoggable(Level.INFO)) log.info(&quot;Document:&quot;+document.toString() + &quot; DocStauts:&quot; + status + &quot; DocAction:&quot;+action);</span>
+				   
+<span class="nc bnc" id="L228" title="All 2 branches missed.">				   if(ModelValidator.TIMING_AFTER_REVERSECORRECT==ReplicationEvent)</span>
+				   {   
+<span class="nc bnc" id="L230" title="All 4 branches missed.">					   if(status.equals(DocAction.STATUS_Reversed) &amp;&amp; action.equals(DocAction.ACTION_None))</span>
+					   {
+<span class="nc" id="L232">						   po.saveEx();</span>
+<span class="nc" id="L233">						   return;</span>
+					   }
+				   }	 
+				   
+<span class="nc bnc" id="L237" title="All 4 branches missed.">				   if( (action.equals(DocAction.ACTION_Complete) &amp;&amp; status.equals(DocAction.STATUS_InProgress))</span>
+<span class="nc bnc" id="L238" title="All 4 branches missed.">				   ||  (action.equals(DocAction.ACTION_Close) &amp;&amp; status.equals(DocAction.STATUS_Completed)))</span>
+				   {	
+<span class="nc bnc" id="L240" title="All 2 branches missed.">					   if(!document.processIt(action))</span>
+					   {    
+<span class="nc bnc" id="L242" title="All 2 branches missed.">					       if (log.isLoggable(Level.INFO)) log.info(&quot;PO.toString() = can not &quot; + po.get_Value(&quot;DocAction&quot;));</span>
+					   }
+<span class="nc" id="L244">					   po.saveEx();</span>
+<span class="nc" id="L245">				   }</span>
+				   else
+				   {
+<span class="nc" id="L248">						 po.saveEx();</span>
+<span class="nc" id="L249">						   return;</span>
+				   }
+		    }	
+		}	
+<span class="nc" id="L253">		result.append(&quot;Save Successful ;&quot;);		</span>
+<span class="nc" id="L254">	}</span>
+
+	/**
+	 * @param result
+	 * @param rootElement
+	 * @param expFormat
+	 * @throws Exception
+	 * @throws XPathExpressionException
+	 */
+	private PO importElement(Properties ctx, StringBuffer result, Element rootElement,
+			MEXPFormat expFormat, String ReplicationType, String trxName) throws Exception, XPathExpressionException 
+	{
+		//Getting the Object for the replicate
+<span class="nc" id="L267">		PO po = getObjectFromFormat(ctx, expFormat, rootElement, rootElement.getNodeName(), trxName);</span>
+		
+<span class="nc bnc" id="L269" title="All 2 branches missed.">		if(po == null)</span>
+		{
+<span class="nc" id="L271">			throw new Exception(Msg.getMsg(ctx, &quot;Can't Load PO Object&quot;));</span>
+		}
+		
+<span class="nc bnc" id="L274" title="All 2 branches missed.">		if(X_AD_ReplicationTable.REPLICATIONTYPE_Reference.equals(ReplicationType)) //If this is just for push and exists we do nothing</span>
+		{
+<span class="nc bnc" id="L276" title="All 2 branches missed.">			if(po.get_ID() == 0)</span>
+			{
+<span class="nc" id="L278">				return null;</span>
+			}
+		}
+			
+<span class="nc bnc" id="L282" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;PO.toString() = &quot; + po.toString());</span>
+
+<span class="nc bnc" id="L284" title="All 2 branches missed.">		if (po.get_KeyColumns().length &lt; 1) </span>
+		{
+<span class="nc" id="L286">			throw new Exception(Msg.getMsg(ctx, &quot;EDIMultiColumnNotSupported&quot;));</span>
+		}
+				
+<span class="nc" id="L289">		Collection&lt;MEXPFormatLine&gt; formatLines = expFormat.getFormatLinesOrderedBy(MEXPFormatLine.COLUMNNAME_IsMandatory </span>
+		+ &quot; , &quot; + MEXPFormatLine.COLUMNNAME_Position);
+<span class="nc bnc" id="L291" title="All 4 branches missed.">		if (formatLines == null || formatLines.size() &lt; 1) </span>
+		{
+<span class="nc" id="L293">			throw new Exception(Msg.getMsg(ctx, &quot;EXPFormatNoLines&quot;));</span>
+		}
+		// Iterate all Export Format Lines (even this marked as part of unique index)
+		//  and set value of column!
+<span class="nc bnc" id="L297" title="All 2 branches missed.">		for (MEXPFormatLine formatLine : formatLines) </span>
+		{
+<span class="nc" id="L299">			log.info(&quot;=================== Beginning of Format Line ==============================&quot;);</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;formatLine: [&quot; + formatLine.toString() + &quot;]&quot;);			</span>
+			//Get the value
+<span class="nc" id="L302">			Object value = getValueFromFormat(formatLine,po,rootElement,result,ReplicationType);</span>
+<span class="nc bnc" id="L303" title="All 4 branches missed.">			if (value == null || value.toString().equals(&quot;&quot;))</span>
+<span class="nc" id="L304">				continue;	</span>
+			//Set the value
+<span class="nc" id="L306">			setReplicaValues(value, formatLine, po, result);</span>
+		}		
+<span class="nc" id="L308">		return po;</span>
+	}
+
+	/**
+	 * Get the value from format 
+	 * @param line
+	 * @param po
+	 * @param rootElement
+	 * @param result
+	 * @param ReplicationType
+	 * @param trxName
+	 * @return Object with the Value
+	 * @throws Exception
+	 */
+	private Object getValueFromFormat(MEXPFormatLine line,PO po,Element rootElement,
+					StringBuffer result, String ReplicationType) throws Exception
+	{
+<span class="nc" id="L325">		Object value = null;</span>
+		
+<span class="nc bnc" id="L327" title="All 2 branches missed.">		if (MEXPFormatLine.TYPE_XMLElement.equals(line.getType())) </span>
+		{
+			// XML Element
+<span class="nc" id="L330">			value = XMLHelper.getString(line.getValue(), rootElement);</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;value=[&quot; + value + &quot;]&quot;);</span>
+			
+<span class="nc" id="L333">		} </span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">		else if (MEXPFormatLine.TYPE_ReferencedEXPFormat.equals(line.getType())) </span>
+		{
+			// Referenced Export Format
+			//get from cache
+<span class="nc" id="L338">			MEXPFormat referencedExpFormat = MEXPFormat.get(ctx, line.getEXP_EmbeddedFormat_ID(), po.get_TrxName());</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;referencedExpFormat = &quot; + referencedExpFormat);</span>
+
+<span class="nc" id="L341">			int refRecord_ID = 0;</span>
+			// Find Record_ID by ???Value??? In fact by Columns set as Part Of Unique Index in Export Format!
+<span class="nc" id="L343">			String xPath = null;</span>
+<span class="nc" id="L344">			xPath = &quot;&quot; + line.getValue() + &quot;&quot;; </span>
+			
+<span class="nc bnc" id="L346" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;Search for XML Element = &quot; + xPath);</span>
+<span class="nc" id="L347">			Element referencedNode = XMLHelper.getElement(xPath, rootElement);</span>
+			
+<span class="nc bnc" id="L349" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;referencedNode = &quot; + referencedNode);</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">			if(referencedNode!=null)</span>
+			{
+<span class="nc" id="L352">				refRecord_ID = getID(ctx, referencedExpFormat, referencedNode, line.getValue(), po.get_TrxName());</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;refRecord_ID = &quot; + refRecord_ID);</span>
+<span class="nc" id="L354">				value = Integer.valueOf(refRecord_ID);</span>
+<span class="nc" id="L355">			}</span>
+			else
+			{
+<span class="nc bnc" id="L358" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;NULL VALUE FOR &quot; + xPath.toString());</span>
+<span class="nc" id="L359">				value=null;</span>
+			}
+<span class="nc bnc" id="L361" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;value=[&quot; + value + &quot;]&quot;);</span>
+<span class="nc" id="L362">		} </span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">		else if (MEXPFormatLine.TYPE_EmbeddedEXPFormat.equals(line.getType())) </span>
+		{
+
+<span class="nc bnc" id="L366" title="All 2 branches missed.">			if(po.is_Changed())</span>
+			{	
+<span class="nc" id="L368">			   	isChanged = true;</span>
+<span class="nc" id="L369">				po.saveReplica(true);</span>
+<span class="nc" id="L370">			}</span>
+			else
+			{
+<span class="nc" id="L373">				return value;</span>
+			}
+			
+			// Embedded Export Format It is used for Parent-Son records like Order&amp;OrderLine
+			//get from cache
+<span class="nc" id="L378">			MEXPFormat referencedExpFormat = MEXPFormat.get(ctx, line.getEXP_EmbeddedFormat_ID(), po.get_TrxName());</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;embeddedExpFormat = &quot; + referencedExpFormat);</span>
+
+<span class="nc" id="L381">			NodeList nodeList = XMLHelper.getNodeList(&quot;/&quot;+rootElement.getNodeName() + &quot;/&quot; + line.getValue(), rootElement);</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">			for (int j = 0; j &lt; nodeList.getLength(); j++) </span>
+			{
+<span class="nc" id="L384">				Element referencedElement = (Element)nodeList.item(j);</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;EmbeddedEXPFormat - referencedElement.getNodeName = &quot; + referencedElement.getNodeName());</span>
+				
+<span class="nc" id="L387">				PO embeddedPo = null;</span>
+				// Import embedded PO
+<span class="nc" id="L389">				log.info(&quot;=== BEGIN RECURSION CALL ===&quot;);</span>
+<span class="nc" id="L390">				embeddedPo = importElement(ctx, result, referencedElement, referencedExpFormat,ReplicationType, po.get_TrxName());</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;embeddedPo = &quot; + embeddedPo);</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">				if(!embeddedPo.is_Changed())</span>
+				{
+<span class="nc bnc" id="L394" title="All 2 branches missed.">				    if (log.isLoggable(Level.INFO)) log.info(&quot;Object not changed = &quot; + po.toString());</span>
+<span class="nc" id="L395">				    continue;</span>
+				}
+				else
+				{	
+<span class="nc" id="L399">				embeddedPo.saveReplica(true);</span>
+<span class="nc" id="L400">				isChanged = true;</span>
+				}	
+<span class="nc" id="L402">				result.append(&quot; Embedded Save Successful ; &quot;);</span>
+				
+			}
+
+<span class="nc" id="L406">		} </span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">		else if (MEXPFormatLine.TYPE_XMLAttribute.equals(line.getType())) </span>
+		{
+			// XML Attribute
+<span class="nc" id="L410">			value = XMLHelper.getString(&quot;@&quot; + line.getValue(), rootElement);</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;value=[&quot; + value + &quot;]&quot;);</span>
+<span class="nc" id="L412">		} </span>
+		else 
+		{
+			// Export Format Line is not one of the possible values...ERROR
+<span class="nc" id="L416">			throw new Exception(Msg.getMsg(ctx, &quot;EXPFormatLineNonValidType&quot;));</span>
+		}
+		
+<span class="nc" id="L419">		return value;</span>
+	}
+	
+	/**
+	 * 
+	 * @param value
+	 * @param line
+	 * @param po
+	 * @param result
+	 * @throws Exception
+	 */
+	private void setReplicaValues(Object value,MEXPFormatLine line,PO po,StringBuffer result)throws Exception
+	{
+<span class="nc" id="L432">		MColumn column = MColumn.get(ctx, line.getAD_Column_ID());</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;column=[&quot; + column + &quot;]&quot;);</span>
+		
+<span class="nc bnc" id="L435" title="All 2 branches missed.">		if (value !=null)</span>
+		{
+<span class="nc bnc" id="L437" title="All 2 branches missed.">			if (!MEXPFormatLine.TYPE_EmbeddedEXPFormat.equals(line.getType()) ) </span>
+			{
+				
+				// Clazz
+<span class="nc" id="L441">				Class&lt;?&gt; clazz = DisplayType.getClass(column.getAD_Reference_ID(), true);</span>
+				
+				//	Handle Posted
+<span class="nc bnc" id="L444" title="All 2 branches missed.">				if (column.getColumnName().equalsIgnoreCase(&quot;Posted&quot;) </span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">					|| column.getColumnName().equalsIgnoreCase(&quot;Processed&quot;)</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">					|| column.getColumnName().equalsIgnoreCase(&quot;Processing&quot;))</span>
+				{
+<span class="nc" id="L448">					clazz = Boolean.class;</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">				} else if (column.getColumnName().equalsIgnoreCase(&quot;Record_ID&quot;))</span>
+				{
+<span class="nc" id="L451">					clazz = Integer.class;</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">				} else if (column.getColumnName().equalsIgnoreCase(&quot;AD_Language&quot;)</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">					|| column.getColumnName().equalsIgnoreCase(&quot;EntityType&quot;))</span>
+				{
+<span class="nc" id="L455">					clazz = String.class;</span>
+				}	
+<span class="nc bnc" id="L457" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;clazz = &quot; + clazz.getName());</span>
+				
+				// Handle Date and Time
+<span class="nc" id="L460">				value = handleDateTime(value, column, line);</span>
+				
+<span class="nc bnc" id="L462" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;formatLinesType = &quot; + line.getType());</span>
+				
+<span class="nc bnc" id="L464" title="All 2 branches missed.">				if (MEXPFormatLine.TYPE_EmbeddedEXPFormat.equals( line.getType() ) )  </span>
+				{
+					// DO NOTHING
+<span class="nc" id="L467">					throw new Exception(&quot;We can't be here!!!&quot;);</span>
+				} else 
+				{
+<span class="nc bnc" id="L470" title="All 2 branches missed.">					if ( DisplayType.DateTime == column.getAD_Reference_ID() </span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">					  || DisplayType.Date     == column.getAD_Reference_ID()) </span>
+					{
+						// 
+<span class="nc" id="L474">						po.set_ValueOfColumn(line.getAD_Column_ID(), value);</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;Set value of column [&quot;+column.getColumnName()+&quot;]=[&quot;+value+&quot;]&quot;);</span>
+<span class="nc" id="L476">					} </span>
+<span class="nc bnc" id="L477" title="All 2 branches missed.">					else if (  DisplayType.isID(column.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L478" title="All 2 branches missed.">							|| DisplayType.Integer	==	column.getAD_Reference_ID()</span>
+							) 
+					{
+						//
+<span class="nc bnc" id="L482" title="All 2 branches missed.">						if (! Util.isEmpty(value.toString()))</span>
+						{
+<span class="nc" id="L484">							int intValue = Integer.parseInt(value.toString());</span>
+<span class="nc" id="L485">							value = Integer.valueOf( intValue );</span>
+<span class="nc" id="L486">						}else</span>
+						{
+<span class="nc" id="L488">							value=null;</span>
+						}
+						
+<span class="nc bnc" id="L491" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;About to set int value of column [&quot;+column.getColumnName()+&quot;]=[&quot;+value+&quot;]&quot;);</span>
+						
+<span class="nc" id="L493">						po.set_ValueOfColumn(line.getAD_Column_ID(), value);</span>
+						
+<span class="nc bnc" id="L495" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;Set int value of column [&quot;+column.getColumnName()+&quot;]=[&quot;+value+&quot;]&quot;);</span>
+						
+<span class="nc" id="L497">					} </span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">					else if ( DisplayType.isNumeric(column.getAD_Reference_ID())	</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">							&amp;&amp; column.getAD_Reference_ID() != DisplayType.Integer)</span>
+					{
+						//
+<span class="nc bnc" id="L502" title="All 2 branches missed.">						if (!Util.isEmpty(value.toString()))</span>
+						{
+<span class="nc" id="L504">							value = new BigDecimal(value.toString());</span>
+<span class="nc" id="L505">						}</span>
+						else
+						{
+<span class="nc" id="L508">							value=null;</span>
+						}
+						//value = Double.valueOf( doubleValue );
+						
+<span class="nc bnc" id="L512" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;About to set BigDecimal value of column [&quot;+column.getColumnName()+&quot;]=[&quot;+value+&quot;]&quot;);</span>
+						
+<span class="nc" id="L514">						po.set_ValueOfColumn(line.getAD_Column_ID(), value);</span>
+						
+<span class="nc bnc" id="L516" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;Set BigDecimal value of column [&quot;+column.getColumnName()+&quot;]=[&quot;+value+&quot;]&quot;);</span>
+<span class="nc" id="L517">					} </span>
+<span class="nc bnc" id="L518" title="All 2 branches missed.">					else if(DisplayType.YesNo == column.getAD_Reference_ID())</span>
+					{
+<span class="nc bnc" id="L520" title="All 2 branches missed.">						if(clazz == Boolean.class)</span>
+						{						 
+<span class="nc bnc" id="L522" title="All 2 branches missed.">							String v = value.toString().equals(&quot;true&quot;) ? &quot;Y&quot; : &quot;N&quot;;	</span>
+<span class="nc" id="L523">							po.set_ValueOfColumn(line.getAD_Column_ID(), v);</span>
+						}
+<span class="nc" id="L525">					}</span>
+					else 
+					{
+						//
+						try {
+<span class="nc bnc" id="L530" title="All 2 branches missed.">								if (log.isLoggable(Level.INFO)) log.info(&quot;About to set value of column [&quot;+column.getColumnName()+&quot;]=[&quot;+value+&quot;]&quot;);</span>
+								
+<span class="nc bnc" id="L532" title="All 2 branches missed.">								if(clazz == Boolean.class)</span>
+								{
+<span class="nc bnc" id="L534" title="All 2 branches missed.">									String v = value.toString().equals(&quot;true&quot;) ? &quot;Y&quot; : &quot;N&quot;;	</span>
+<span class="nc" id="L535">									po.set_ValueOfColumn(line.getAD_Column_ID(), v);</span>
+<span class="nc" id="L536">								}</span>
+								else
+								{
+<span class="nc" id="L539">									po.set_ValueOfColumn(line.getAD_Column_ID(), clazz.cast(value));</span>
+								}
+								
+<span class="nc bnc" id="L542" title="All 2 branches missed.">								if (log.isLoggable(Level.INFO)) log.info(&quot;Set value of column [&quot;+column.getColumnName()+&quot;]=[&quot;+value+&quot;]&quot;);</span>
+<span class="nc" id="L543">							} </span>
+<span class="nc" id="L544">							catch (ClassCastException ex) </span>
+							{
+<span class="nc" id="L546">								ex.printStackTrace();</span>
+<span class="nc" id="L547">								throw new Exception(ex);</span>
+							}
+						
+					}
+<span class="nc" id="L551">					result.append(column.getColumnName()).append(&quot;=&quot;).append(value).append(&quot;; &quot;);</span>
+				}//end else			
+			}//end if TYPE_EmbeddedEXPFormat			
+		}//end if value !=null
+		
+<span class="nc" id="L556">	}</span>
+		
+	public static MClient getAD_ClientByValue(Properties ctx, String value, String trxName) 
+		throws SQLException 
+	{
+<span class="nc" id="L561">		final String whereClause = I_AD_Client.COLUMNNAME_Value + &quot;= ? &quot;;</span>
+<span class="nc" id="L562">		MClient result = new Query(ctx,I_AD_Client.Table_Name,whereClause,trxName)</span>
+<span class="nc" id="L563">								.setParameters(value)</span>
+<span class="nc" id="L564">								.firstOnly();</span>
+		
+<span class="nc bnc" id="L566" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Client_Value =[&quot; + value + &quot;]&quot;);</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">		if(result != null)</span>
+		{
+<span class="nc bnc" id="L569" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;AD_Client_ID = &quot; + result.getAD_Client_ID());</span>
+		}
+		
+<span class="nc" id="L572">		return result;</span>
+	}
+	
+	/**
+	 * This Method gets the PO record, from the exportFormat
+	 * @param ctx
+	 * @param expFormat
+	 * @param rootElement
+	 * @param rootNodeName
+	 * @param trxName
+	 * @throws Exception
+	 * */
+	private PO getObjectFromFormat(Properties ctx, MEXPFormat expFormat, Element rootElement, String rootNodeName, String trxName) throws Exception
+	{
+<span class="nc" id="L586">		List&lt;PO&gt; values = null;</span>
+		
+<span class="nc bnc" id="L588" title="All 6 branches missed.">		if (expFormat == null || rootElement == null || rootNodeName == null) </span>
+		{
+<span class="nc" id="L590">			throw new IllegalArgumentException(&quot;expFormat, rootNode and RootnodeName can't be null!&quot;);</span>
+		}
+		
+<span class="nc bnc" id="L593" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) {</span>
+<span class="nc" id="L594">			log.info(&quot;expFormat = &quot; + expFormat);</span>
+<span class="nc" id="L595">			log.info(&quot;rootNode.getNodeName() = &quot; + rootElement.getNodeName());</span>
+<span class="nc" id="L596">			log.info(&quot;rootNodeName = &quot; + rootNodeName);</span>
+		}
+
+<span class="nc bnc" id="L599" title="All 2 branches missed.">		if (rootElement.getParentNode() != null) </span>
+		{
+<span class="nc bnc" id="L601" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;rootNode.ParentName = &quot; + rootElement.getParentNode().getNodeName());	</span>
+		}
+		
+		// Get list with all Unique columns!
+<span class="nc" id="L605">		Collection&lt;MEXPFormatLine&gt; uniqueFormatLines = expFormat.getUniqueColumns();</span>
+<span class="nc bnc" id="L606" title="All 4 branches missed.">		if (uniqueFormatLines == null || uniqueFormatLines.size() &lt; 1) </span>
+		{
+<span class="nc" id="L608">			throw new AdempiereException(Msg.getMsg(ctx, &quot;EXPFormatLineNoUniqueColumns&quot;));</span>
+		}
+		
+<span class="nc" id="L611">		int replication_id = 0;</span>
+<span class="nc" id="L612">		Object[] cols 	= new Object[uniqueFormatLines.size()];</span>
+<span class="nc" id="L613">		Object[] params = new Object[uniqueFormatLines.size()];</span>
+<span class="nc" id="L614">		StringBuilder whereClause= new StringBuilder(&quot;&quot;);</span>
+<span class="nc" id="L615">		int col = 0;</span>
+<span class="nc" id="L616">		String formatLines = &quot;&quot;;</span>
+<span class="nc bnc" id="L617" title="All 2 branches missed.">		for (MEXPFormatLine uniqueFormatLine : uniqueFormatLines) </span>
+		{
+<span class="nc" id="L619">			MColumn column = MColumn.get(ctx, uniqueFormatLine.getAD_Column_ID());</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;column = [&quot;+column+&quot;]&quot;);</span>
+<span class="nc" id="L621">			String valuecol=column.getColumnName();</span>
+			
+<span class="nc" id="L623">			formatLines = formatLines + &quot;|&quot;+ valuecol;</span>
+			
+<span class="nc bnc" id="L625" title="All 2 branches missed.">			if (MEXPFormatLine.TYPE_XMLElement.equals(uniqueFormatLine.getType())) </span>
+			{
+				// XML Element
+<span class="nc" id="L628">				String xPath = null;</span>
+<span class="nc" id="L629">				xPath = &quot;&quot;+ uniqueFormatLine.getValue();</span>
+<span class="nc" id="L630">				cols[col] = XMLHelper.getString(xPath, rootElement);</span>
+<span class="nc bnc" id="L631" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;values[&quot; + col + &quot;]=&quot; +  cols[col]);</span>
+				
+<span class="nc" id="L633">			} </span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">			else if (MEXPFormatLine.TYPE_ReferencedEXPFormat.equals(uniqueFormatLine.getType())) </span>
+			{
+				// Referenced Export Format
+<span class="nc bnc" id="L637" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;referencedExpFormat.EXP_EmbeddedFormat_ID = &quot; + uniqueFormatLine.getEXP_EmbeddedFormat_ID());</span>
+				//get from cache
+<span class="nc" id="L639">				MEXPFormat referencedExpFormat = MEXPFormat.get(ctx, uniqueFormatLine.getEXP_EmbeddedFormat_ID(), trxName);</span>
+<span class="nc bnc" id="L640" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;referencedExpFormat = &quot; + referencedExpFormat);</span>
+				
+<span class="nc" id="L642">				int record_ID = 0;</span>
+				// Find Record_ID by ???Value??? In fact by Columns set as Part Of Unique Index in Export Format!
+<span class="nc" id="L644">				Element referencedNode = ((Element) rootElement.getElementsByTagName(uniqueFormatLine.getValue()).item(0));</span>
+<span class="nc bnc" id="L645" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;referencedNode = &quot; + referencedNode);</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">				if (referencedNode == null) </span>
+				{					
+<span class="nc" id="L648">					throw new IllegalArgumentException(&quot;referencedNode can't be found!&quot;);</span>
+				}
+<span class="nc" id="L650">				record_ID = getID(ctx, referencedExpFormat, referencedNode, uniqueFormatLine.getValue(), trxName);</span>
+
+<span class="nc bnc" id="L652" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;record_ID = &quot; + record_ID);</span>
+				
+<span class="nc" id="L654">				cols[col] = Integer.valueOf(record_ID);</span>
+<span class="nc" id="L655">			} </span>
+			else 
+			{
+				// Export Format Line is not one of two possible values...ERROR
+<span class="nc" id="L659">				throw new Exception(Msg.getMsg(ctx, &quot;EXPFormatLineNonValidType&quot;));</span>
+			}
+			
+<span class="nc bnc" id="L662" title="All 2 branches missed.">			if (	DisplayType.DateTime	== column.getAD_Reference_ID() </span>
+<span class="nc bnc" id="L663" title="All 2 branches missed.">				||	DisplayType.Date 		== column.getAD_Reference_ID()) </span>
+			{
+				
+<span class="nc" id="L666">				Timestamp value = (Timestamp)handleDateTime(cols[col], column , uniqueFormatLine);</span>
+<span class="nc" id="L667">				params[col] = value;</span>
+<span class="nc" id="L668">			}</span>
+<span class="nc bnc" id="L669" title="All 2 branches missed.">			else if(column.getAD_Reference_ID() == DisplayType.String)</span>
+			{
+<span class="nc" id="L671">				params[col] = (String)cols[col];</span>
+<span class="nc" id="L672">			}</span>
+<span class="nc bnc" id="L673" title="All 2 branches missed.">			else if (  DisplayType.isID(column.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L674" title="All 2 branches missed.">					|| DisplayType.Integer	==	column.getAD_Reference_ID()) </span>
+			{
+<span class="nc" id="L676">				Object value =  cols[col];</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">				if (!Util.isEmpty(value.toString()))</span>
+				{
+					//double doubleValue = Double.parseDouble(value.toString());
+<span class="nc" id="L680">					value = Integer.valueOf(value.toString());</span>
+<span class="nc bnc" id="L681" title="All 2 branches missed.">					if (DisplayType.ID	==	column.getAD_Reference_ID())</span>
+					{
+<span class="nc" id="L683">						replication_id = (Integer) value;</span>
+					}
+<span class="nc" id="L685">				}</span>
+				else
+				{
+<span class="nc" id="L688">					value=null;</span>
+				}
+				
+<span class="nc" id="L691">				params[col] = value;</span>
+<span class="nc" id="L692">			}	</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">			else if( DisplayType.isNumeric(column.getAD_Reference_ID()))</span>
+			{
+<span class="nc" id="L695">				valuecol=&quot;Round(&quot;+valuecol+&quot;,2)&quot;;</span>
+<span class="nc" id="L696">				params[col] = new BigDecimal((String)cols[col]).setScale(2, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L697">			}</span>
+			else
+			{	
+<span class="nc" id="L700">				params[col] = cols[col];</span>
+			}
+			
+<span class="nc bnc" id="L703" title="All 2 branches missed.">			if (col == 0) {</span>
+<span class="nc" id="L704">				whereClause.append(&quot; &quot;).append(valuecol).append(&quot; = ? &quot;);</span>
+<span class="nc" id="L705">			} else {</span>
+<span class="nc" id="L706">				whereClause.append(&quot; AND &quot;).append(valuecol).append(&quot; = ? &quot;);</span>
+			}
+<span class="nc" id="L708">			col++;</span>
+		}
+		
+<span class="nc" id="L711">		Query query = new Query(ctx,MTable.get(ctx, expFormat.getAD_Table_ID()),whereClause.toString(),trxName)</span>
+<span class="nc" id="L712">						.setParameters(params);</span>
+<span class="nc" id="L713">		values = query.list();</span>
+		
+<span class="nc bnc" id="L715" title="All 2 branches missed.">		if(values.size()&gt;1)//The Return Object must be always one</span>
+		{
+<span class="nc" id="L717">			throw new AdempiereException(Msg.getMsg(ctx, &quot;EXPFormatLineNoUniqueColumns&quot;) + &quot; : &quot; +expFormat.getName() + &quot;(&quot; +formatLines+&quot;)&quot;);</span>
+		}
+		
+<span class="nc bnc" id="L720" title="All 2 branches missed.">		if(values.size()&lt;=0)//Means that is a new record</span>
+		{
+<span class="nc" id="L722">			PO po = MTable.get(ctx, expFormat.getAD_Table_ID()).getPO(0,trxName);</span>
+			
+<span class="nc bnc" id="L724" title="All 2 branches missed.">			if (replication_id &gt; 0 )</span>
+			{
+<span class="nc" id="L726">				po.set_CustomColumn(po.get_KeyColumns()[0], replication_id);</span>
+			}
+
+<span class="nc" id="L729">			return po;</span>
+		}
+		
+<span class="nc" id="L732">		return values.get(0);//Return the first (unique) record.</span>
+	}
+	
+	/**
+	 * This Method gets the ID value of the current referenced element to put in the imported Object
+	 * Exp: AD_Org_ID of the Product.
+	 * Must be allays one result. 
+	 * @param ctx
+	 * @param expFormat
+	 * @param rootElement
+	 * @param rootNodeName
+	 * @param trxName
+	 * @throws Exception
+	 * */
+	private int getID(Properties ctx, MEXPFormat expFormat, Element rootElement, String rootNodeName, String trxName) throws Exception 
+	{
+<span class="nc" id="L748">		int record_id = 0;</span>
+		
+<span class="nc" id="L750">		PO po = getObjectFromFormat(ctx,expFormat,rootElement,rootNodeName,trxName);</span>
+<span class="nc bnc" id="L751" title="All 2 branches missed.">		if (po != null)</span>
+		{
+<span class="nc" id="L753">			record_id = po.get_ID();</span>
+		}
+		
+<span class="nc bnc" id="L756" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;record_id = &quot; + record_id);</span>
+		
+<span class="nc" id="L758">		return record_id;</span>
+	}
+	
+	private Object handleDateTime(Object value, MColumn column, MEXPFormatLine formatLine) throws ParseException 
+	{
+<span class="nc" id="L763">		String valueString = null;</span>
+<span class="nc" id="L764">		valueString = value.toString(); // We are sure that value is not null</span>
+<span class="nc" id="L765">		Object result = value;</span>
+		
+<span class="nc bnc" id="L767" title="All 2 branches missed.">		if (DisplayType.Date == column.getAD_Reference_ID()) </span>
+		{
+<span class="nc bnc" id="L769" title="All 2 branches missed.">			if (valueString != null) </span>
+			{
+<span class="nc bnc" id="L771" title="All 4 branches missed.">				if (formatLine.getDateFormat() != null &amp;&amp; !Util.isEmpty(formatLine.getDateFormat())) </span>
+				{
+<span class="nc" id="L773">					m_customDateFormat = new SimpleDateFormat( formatLine.getDateFormat() ); // &quot;MM/dd/yyyy&quot;; MM/dd/yyyy hh:mm:ss</span>
+<span class="nc" id="L774">					result = new Timestamp(m_customDateFormat.parse(valueString).getTime());</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info(&quot;Custom Date Format; Parsed value = &quot; + result.toString());</span>
+<span class="nc" id="L776">				} </span>
+				else 
+				{
+					//result = new Timestamp(m_dateFormat.parse(valueString).getTime());
+					//log.info(&quot;Custom Date Format; Parsed value = &quot; + result.toString());
+					//NOW Using Standard Japanese Format yyyy-mm-dd hh:mi:ss.mil so don't care about formats....
+<span class="nc bnc" id="L782" title="All 2 branches missed.">					if(		valueString == null</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">						||	valueString.length() &lt;= 0 )</span>
+					{	
+<span class="nc" id="L785">						result=null;</span>
+<span class="nc" id="L786">					}	</span>
+					else
+					{	
+<span class="nc" id="L789">						result = Timestamp.valueOf(valueString);</span>
+					}	
+				}				
+			}
+<span class="nc" id="L793">		} </span>
+<span class="nc bnc" id="L794" title="All 2 branches missed.">		else if (DisplayType.DateTime == column.getAD_Reference_ID()) </span>
+		{
+<span class="nc bnc" id="L796" title="All 2 branches missed.">			if (valueString != null) </span>
+			{
+<span class="nc bnc" id="L798" title="All 4 branches missed.">				if (formatLine.getDateFormat() != null &amp;&amp; !Util.isEmpty(formatLine.getDateFormat())) </span>
+				{
+<span class="nc" id="L800">					m_customDateFormat = new SimpleDateFormat( formatLine.getDateFormat() ); // &quot;MM/dd/yyyy&quot;</span>
+<span class="nc" id="L801">					result = new Timestamp(m_customDateFormat.parse(valueString).getTime());</span>
+<span class="nc bnc" id="L802" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info(&quot;Custom Date Format; Parsed value = &quot; + result.toString());</span>
+<span class="nc" id="L803">				} </span>
+				else 
+				{
+					//result = new Timestamp(m_dateTimeFormat.parse(valueString).getTime());
+					//log.info(&quot;Custom Date Format; Parsed value = &quot; + result.toString());
+					//NOW Using Standard Japanese Format yyyy-mm-dd hh:mi:ss.mil so don't care about formats....
+<span class="nc" id="L809">				    result = Timestamp.valueOf(valueString);</span>
+				}
+				
+			}
+			
+		}
+<span class="nc" id="L815">		return result;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,700 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DPCalendar.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.dashboard</a> &gt; <span class="el_source">DPCalendar.java</span></div><h1>DPCalendar.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2008 Elaine Tan                                              *
+ * Copyright (C) 2008 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.webui.dashboard;
+
+import java.lang.ref.WeakReference;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.event.AbstractEventHandler;
+import org.adempiere.base.event.EventManager;
+import org.adempiere.base.event.IEventTopics;
+import org.adempiere.webui.ClientInfo;
+import org.adempiere.webui.component.Tabpanel;
+import org.adempiere.webui.part.WindowContainer;
+import org.adempiere.webui.session.SessionManager;
+import org.adempiere.webui.theme.ThemeManager;
+import org.adempiere.webui.util.ServerPushTemplate;
+import org.compiere.model.I_R_Request;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.PO;
+import org.compiere.model.X_R_RequestType;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Trx;
+import org.compiere.util.TrxEventListener;
+import org.compiere.util.Util;
+import org.idempiere.distributed.IMessageService;
+import org.idempiere.distributed.ITopic;
+import org.idempiere.distributed.ITopicSubscriber;
+import org.osgi.service.event.EventHandler;
+import org.zkoss.calendar.Calendars;
+import org.zkoss.calendar.api.CalendarItem;
+import org.zkoss.calendar.event.CalendarsEvent;
+import org.zkoss.calendar.impl.SimpleCalendarModel;
+import org.zkoss.zk.ui.Component;
+import org.zkoss.zk.ui.Desktop;
+import org.zkoss.zk.ui.Executions;
+import org.zkoss.zk.ui.Page;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.event.Events;
+import org.zkoss.zk.ui.util.DesktopCleanup;
+import org.zkoss.zul.Label;
+import org.zkoss.zul.impl.LabelImageElement;
+
+/**
+ * Dashboard gadget: Zk Calendar. &lt;br/&gt;
+ * Content created from &quot;zul/calendar/calendar_mini.zul&quot;.
+ * 
+ * @author Elaine
+ * @date November 20, 2008
+ */
+public class DPCalendar extends DashboardPanel implements EventListener&lt;Event&gt;, EventHandler {		
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -224914882522997787L;
+	private static final String ON_MOBILE_SET_SELECTED_TAB_ECHO = &quot;onMobileSetSelectedTabEcho&quot;;
+	private static final String ON_DAY_CLICK_EVENT = &quot;onDayClick&quot;;
+	private static final String ON_ITEM_EDIT_EVENT = CalendarsEvent.ON_ITEM_EDIT;
+	private static final String ON_ITEM_CREATE_EVENT = CalendarsEvent.ON_ITEM_CREATE;
+	private static final String ON_MOVE_DATE_EVENT = &quot;onMoveDate&quot;;
+	private static final String ON_REQUEST_CHANGED_TOPIC = &quot;onRequestChanged&quot;;
+	
+	/** Zk Calendar instance */
+	private Calendars calendars;
+	/** Model for {@link #calendars} */
+	private SimpleCalendarModel scm;
+	/** Button to open Calendar window, to Refresh Calendar */
+	private LabelImageElement btnCal, btnRefresh;	
+
+	private LabelImageElement btnCurrentDate;
+	/** Label for start and end date of current Calendar view */
+	private Label lblDate;
+	/** button to move Calendar to previous or next page */
+	private Component divArrowLeft, divArrowRight;
+	
+	/** Window for event */
+	private EventWindow eventWin;
+	private WeakReference&lt;Desktop&gt; desktop;
+	/** List of Calendar (Request) events */
+	private ArrayList&lt;ADCalendarEvent&gt; events;
+	/** Desktop cleanup listener to call {@link #cleanup()} */
+	private DesktopCleanup listener;
+	/** Event handler for R_Request model */
+	private static RequestEventHandler eventHandler;
+	/** Subscriber to {@link IMessageService} for &quot;onRequestChanged&quot; topic */
+	private static TopicSubscriber subscriber;
+	
+<span class="nc" id="L115">	private static final CLogger log = CLogger.getCLogger(DPCalendar.class);</span>
+	
+	/**
+	 * Default constructor
+	 */
+	public DPCalendar() {
+<span class="nc" id="L121">		super();</span>
+
+<span class="nc" id="L123">		Component component = Executions.createComponents(ThemeManager.getThemeResource(&quot;zul/calendar/calendar_mini.zul&quot;), this, null);</span>
+
+<span class="nc" id="L125">		calendars = (Calendars) component.getFellow(&quot;cal&quot;);</span>
+
+<span class="nc" id="L127">		btnCal = (LabelImageElement) component.getFellow(&quot;btnCal&quot;);</span>
+<span class="nc" id="L128">		btnCal.addEventListener(Events.ON_CLICK, this);</span>
+		
+<span class="nc" id="L130">		btnRefresh = (LabelImageElement) component.getFellow(&quot;btnRefresh&quot;);</span>
+<span class="nc" id="L131">		btnRefresh.addEventListener(Events.ON_CLICK, this);</span>
+		
+<span class="nc" id="L133">		btnCurrentDate = (LabelImageElement) component.getFellow(&quot;btnCurrentDate&quot;);</span>
+<span class="nc" id="L134">		btnCurrentDate.addEventListener(Events.ON_CLICK, this);</span>
+		
+<span class="nc" id="L136">		lblDate = (Label) component.getFellow(&quot;lblDate&quot;);</span>
+<span class="nc" id="L137">		lblDate.addEventListener(Events.ON_CREATE, this);</span>
+		
+<span class="nc" id="L139">		divArrowLeft = component.getFellow(&quot;divArrowLeft&quot;);</span>
+<span class="nc" id="L140">		divArrowLeft.addEventListener(ON_MOVE_DATE_EVENT, this);</span>
+		
+<span class="nc" id="L142">		divArrowRight = component.getFellow(&quot;divArrowRight&quot;);</span>
+<span class="nc" id="L143">		divArrowRight.addEventListener(ON_MOVE_DATE_EVENT, this);</span>
+		
+<span class="nc" id="L145">		this.appendChild(component);</span>
+
+<span class="nc" id="L147">		calendars.addEventListener(ON_ITEM_CREATE_EVENT, this);</span>
+<span class="nc" id="L148">		calendars.addEventListener(ON_ITEM_EDIT_EVENT, this);</span>
+<span class="nc" id="L149">		calendars.addEventListener(ON_DAY_CLICK_EVENT, this);</span>
+				
+<span class="nc" id="L151">		createStaticListeners();</span>
+		
+<span class="nc" id="L153">		listener = new DesktopCleanup() {			</span>
+			@Override
+			public void cleanup(Desktop desktop) throws Exception {
+<span class="nc" id="L156">				DPCalendar.this.cleanup();</span>
+<span class="nc" id="L157">			}</span>
+		};
+		
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		if (ClientInfo.isMobile()) {</span>
+<span class="nc" id="L161">			addCallback(AFTER_PAGE_ATTACHED, t -&gt; afterPageAttached());</span>
+<span class="nc" id="L162">			addEventListener(ON_MOBILE_SET_SELECTED_TAB_ECHO, evt -&gt; calendars.invalidate());</span>
+		}
+<span class="nc" id="L164">	}</span>
+
+	/**
+	 * After page attached callback for mobile client. &lt;br/&gt;
+	 * Setup listener for {@link WindowContainer#ON_MOBILE_SET_SELECTED_TAB} event.
+	 */
+	private void afterPageAttached() {
+<span class="nc" id="L171">		Component p = getParent();</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">		while (p != null) {</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">			if (p instanceof Tabpanel) {</span>
+<span class="nc" id="L174">				p.addEventListener(WindowContainer.ON_MOBILE_SET_SELECTED_TAB, evt -&gt; onMobileSelected());</span>
+<span class="nc" id="L175">				break;</span>
+			}
+<span class="nc" id="L177">			p = p.getParent();</span>
+		}
+<span class="nc" id="L179">	}</span>
+
+	/**
+	 * {@link WindowContainer#ON_MOBILE_SET_SELECTED_TAB} event.&lt;br/&gt;
+	 * Echo {@link #ON_MOBILE_SET_SELECTED_TAB_ECHO} event to redraw {@link #calendars}.
+	 */
+	private void onMobileSelected() {
+<span class="nc" id="L186">		Events.echoEvent(ON_MOBILE_SET_SELECTED_TAB_ECHO, this, null);</span>
+<span class="nc" id="L187">	}</span>
+
+	/**
+	 * Setup {@link #eventHandler} and {@link #subscriber}
+	 */
+	private synchronized void createStaticListeners() {
+<span class="nc bnc" id="L193" title="All 2 branches missed.">		if (eventHandler == null) {</span>
+<span class="nc" id="L194">			eventHandler = new RequestEventHandler();</span>
+<span class="nc" id="L195">			eventHandler.bindEventManager(EventManager.getInstance());</span>
+		}
+		
+<span class="nc bnc" id="L198" title="All 2 branches missed.">		if (subscriber == null) {</span>
+<span class="nc" id="L199">			subscriber = new TopicSubscriber();</span>
+<span class="nc" id="L200">			IMessageService service = Core.getMessageService();			</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L202">				ITopic&lt;Map&lt;String,String&gt;&gt; topic = service.getTopic(&quot;onRequestChanged&quot;);</span>
+<span class="nc" id="L203">				topic.subscribe(subscriber);</span>
+			}
+		}
+<span class="nc" id="L206">	}</span>
+
+	@Override
+	public void onEvent(Event e) throws Exception {
+<span class="nc" id="L210">		String type = e.getName();</span>
+
+<span class="nc bnc" id="L212" title="All 2 branches missed.">		if (type.equals(Events.ON_CLICK)) {</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">			if (e.getTarget() == btnCal)</span>
+<span class="nc" id="L214">				new CalendarWindow(scm);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">			else if (e.getTarget() == btnRefresh)</span>
+<span class="nc" id="L216">				btnRefreshClicked();</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">			else if (e.getTarget() == btnCurrentDate)</span>
+<span class="nc" id="L218">				btnCurrentDateClicked();</span>
+<span class="nc" id="L219">		}</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">		else if (type.equals(Events.ON_CREATE)) {</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">			if (e.getTarget() == lblDate)</span>
+<span class="nc" id="L222">				updateDateLabel();</span>
+<span class="nc" id="L223">		}</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">		else if (type.equals(ON_MOVE_DATE_EVENT)) {</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">			if (e.getTarget() == divArrowLeft)</span>
+<span class="nc" id="L226">				divArrowClicked(false);</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">			else if (e.getTarget() == divArrowRight)</span>
+<span class="nc" id="L228">				divArrowClicked(true);</span>
+<span class="nc" id="L229">		}</span>
+<span class="nc bnc" id="L230" title="All 4 branches missed.">		else if (type.equals(ON_ITEM_CREATE_EVENT) &amp;&amp; ! Env.isReadOnlySession()) {</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">			if (e instanceof CalendarsEvent) {</span>
+<span class="nc" id="L232">				CalendarsEvent calendarsEvent = (CalendarsEvent) e;</span>
+<span class="nc" id="L233">				RequestWindow requestWin = new RequestWindow(calendarsEvent, this);</span>
+<span class="nc" id="L234">				SessionManager.getAppDesktop().showWindow(requestWin);</span>
+			}
+<span class="nc" id="L236">		}	</span>
+<span class="nc bnc" id="L237" title="All 4 branches missed.">		else if (type.equals(ON_DAY_CLICK_EVENT) &amp;&amp; ! Env.isReadOnlySession()) {</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">			if (e.getData() instanceof Date date) {</span>
+<span class="nc" id="L239">				CalendarsEvent calendarsEvent = new CalendarsEvent(ON_ITEM_CREATE_EVENT, e.getTarget(), null, date, date, 0, 0, 0, 0);</span>
+<span class="nc" id="L240">				RequestWindow requestWin = new RequestWindow(calendarsEvent, this);</span>
+<span class="nc" id="L241">				SessionManager.getAppDesktop().showWindow(requestWin);</span>
+			}
+<span class="nc" id="L243">		}</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">		else if (type.equals(ON_ITEM_EDIT_EVENT)) {</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">			if (e instanceof CalendarsEvent) {</span>
+<span class="nc" id="L246">				CalendarsEvent calendarsEvent = (CalendarsEvent) e;</span>
+<span class="nc" id="L247">				CalendarItem calendarEvent = calendarsEvent.getCalendarItem();</span>
+
+<span class="nc bnc" id="L249" title="All 2 branches missed.">				if (calendarEvent instanceof ADCalendarEvent) {</span>
+<span class="nc" id="L250">					ADCalendarEvent ce = (ADCalendarEvent) calendarEvent;</span>
+					
+<span class="nc bnc" id="L252" title="All 2 branches missed.">					if(eventWin == null)</span>
+<span class="nc" id="L253">						eventWin = new EventWindow();</span>
+<span class="nc" id="L254">					eventWin.setData(ce);</span>
+<span class="nc" id="L255">					SessionManager.getAppDesktop().showWindow(eventWin);</span>
+				}
+			}
+		}		
+<span class="nc" id="L259">	}</span>
+	
+	/**
+	 * TODO move this and ADCalendarEvent to org.adempiere.ui and create unit test for it.&lt;br/&gt;
+	 * Retrieve events (request) from DB
+	 * @param RequestTypeID
+	 * @param ctx
+	 * @return ADCalendarEvent list
+	 */
+	public static ArrayList&lt;ADCalendarEvent&gt; getEvents(int RequestTypeID, Properties ctx) {
+<span class="nc" id="L269">		String mode = MSysConfig.getValue(MSysConfig.ZK_DASHBOARD_CALENDAR_REQUEST_DISPLAY_MODE, &quot;CSU&quot;, Env.getAD_Client_ID(ctx));</span>
+		
+<span class="nc" id="L271">		String modeCondition = &quot;&quot;;</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">		if (mode.indexOf('C') &gt;= 0)</span>
+<span class="nc" id="L273">			modeCondition += &quot;r.CreatedBy = ?&quot;;		</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">		if (mode.indexOf('S') &gt;= 0)</span>
+		{
+<span class="nc bnc" id="L276" title="All 2 branches missed.">			if (modeCondition.length() &gt; 0)</span>
+<span class="nc" id="L277">				modeCondition += &quot; OR &quot;;</span>
+<span class="nc" id="L278">			modeCondition += &quot;r.SalesRep_ID = ?&quot;;</span>
+		}		
+<span class="nc bnc" id="L280" title="All 2 branches missed.">		if (mode.indexOf('U') &gt;= 0)</span>
+		{
+<span class="nc bnc" id="L282" title="All 2 branches missed.">			if (modeCondition.length() &gt; 0)</span>
+<span class="nc" id="L283">				modeCondition += &quot; OR &quot;;</span>
+<span class="nc" id="L284">			modeCondition += &quot;r.AD_User_ID = ?&quot;;</span>
+		}
+		
+<span class="nc" id="L287">		ArrayList&lt;ADCalendarEvent&gt; events = new ArrayList&lt;ADCalendarEvent&gt;();</span>
+<span class="nc" id="L288">		String sql = &quot;SELECT DISTINCT r.R_Request_ID, r.DateNextAction, &quot;</span>
+				+ &quot;r.DateStartPlan, r.DateCompletePlan, r.StartTime, r.EndTime, &quot;
+				+ &quot;r.Summary, rt.HeaderColor, rt.ContentColor, rt.R_RequestType_ID &quot;
+				+ &quot;FROM R_Request r, R_RequestType rt &quot;
+				+ &quot;WHERE r.R_RequestType_ID = rt.R_RequestType_ID &quot;
+<span class="nc" id="L293">				+ &quot;AND (&quot; + modeCondition + &quot;) &quot;</span>
+				+ &quot;AND r.AD_Client_ID = ? AND r.IsActive = 'Y' &quot;
+				+ &quot;AND (r.R_Status_ID IS NULL OR r.R_Status_ID IN (SELECT R_Status_ID FROM R_Status WHERE IsClosed='N')) &quot;;
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		if(RequestTypeID &gt; 0)</span>
+<span class="nc" id="L297">			sql += &quot;AND rt.R_RequestType_ID = ? &quot;;</span>
+
+<span class="nc" id="L299">		PreparedStatement ps = null;</span>
+<span class="nc" id="L300">		ResultSet rs = null;</span>
+<span class="nc" id="L301">		int count = 1;</span>
+
+		try {
+<span class="nc" id="L304">			ps = DB.prepareStatement(sql, null);</span>
+
+<span class="nc bnc" id="L306" title="All 2 branches missed.">			if (mode.indexOf('C') &gt;= 0)</span>
+<span class="nc" id="L307">				ps.setInt(count++, Env.getAD_User_ID(ctx));</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			if (mode.indexOf('S') &gt;= 0)</span>
+<span class="nc" id="L309">				ps.setInt(count++, Env.getAD_User_ID(ctx));</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">			if (mode.indexOf('U') &gt;= 0)</span>
+<span class="nc" id="L311">				ps.setInt(count++, Env.getAD_User_ID(ctx));</span>
+			
+<span class="nc" id="L313">			ps.setInt(count++, Env.getAD_Client_ID(ctx));</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">			if(RequestTypeID &gt; 0)</span>
+<span class="nc" id="L315">				ps.setInt(count++, RequestTypeID);</span>
+
+<span class="nc" id="L317">			rs = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L319" title="All 2 branches missed.">			while (rs.next()) {</span>
+<span class="nc" id="L320">				int R_Request_ID = rs.getInt(&quot;R_Request_ID&quot;);</span>
+<span class="nc" id="L321">				Date dateNextAction = rs.getDate(&quot;DateNextAction&quot;);</span>
+<span class="nc" id="L322">				Date dateStartPlan = rs.getDate(&quot;DateStartPlan&quot;);</span>
+<span class="nc" id="L323">				Date dateCompletePlan = rs.getDate(&quot;DateCompletePlan&quot;);</span>
+<span class="nc" id="L324">				Timestamp startTime = rs.getTimestamp(&quot;StartTime&quot;);</span>
+<span class="nc" id="L325">				Timestamp endTime = rs.getTimestamp(&quot;EndTime&quot;);</span>
+<span class="nc" id="L326">				String summary = rs.getString(&quot;Summary&quot;);</span>
+<span class="nc" id="L327">				String headerColor = rs.getString(&quot;HeaderColor&quot;);</span>
+<span class="nc" id="L328">				String contentColor = rs.getString(&quot;ContentColor&quot;);</span>
+<span class="nc" id="L329">				int R_RequestType_ID = rs.getInt(&quot;R_RequestType_ID&quot;);</span>
+
+<span class="nc bnc" id="L331" title="All 2 branches missed.">				if (dateNextAction != null) {</span>
+<span class="nc" id="L332">					Calendar cal = Calendar.getInstance();</span>
+<span class="nc" id="L333">					cal.setTime(dateNextAction);</span>
+
+<span class="nc" id="L335">					ADCalendarEvent event = new ADCalendarEvent();</span>
+<span class="nc" id="L336">					event.setR_Request_ID(R_Request_ID);</span>
+
+<span class="nc" id="L338">					cal.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L339">					cal.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L340">					cal.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L341">					cal.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L342">					event.setBeginDate(cal.getTime());</span>
+					
+<span class="nc" id="L344">					cal.add(Calendar.HOUR_OF_DAY, 24);</span>
+<span class="nc" id="L345">					event.setEndDate(cal.getTime());</span>
+
+<span class="nc" id="L347">					event.setContent(summary);</span>
+<span class="nc" id="L348">					event.setTitle(summary);</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">					if (!Util.isEmpty(headerColor, true))</span>
+<span class="nc" id="L350">						event.setHeaderStyle(&quot;background-color:&quot; + headerColor);</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">					if (!Util.isEmpty(contentColor, true))</span>
+<span class="nc" id="L352">						event.setContentStyle(&quot;background-color:&quot; + contentColor);</span>
+<span class="nc" id="L353">					event.setR_RequestType_ID(R_RequestType_ID);</span>
+<span class="nc" id="L354">					event.setLocked(true);</span>
+<span class="nc" id="L355">					events.add(event);</span>
+				}
+
+<span class="nc bnc" id="L358" title="All 4 branches missed.">				if (dateStartPlan != null &amp;&amp; dateCompletePlan != null) {</span>
+							
+<span class="nc" id="L360">					Calendar calBegin = Calendar.getInstance();</span>
+<span class="nc" id="L361">					calBegin.setTime(dateStartPlan);</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">					if (startTime != null) {</span>
+<span class="nc" id="L363">						Calendar cal1 = Calendar.getInstance();</span>
+<span class="nc" id="L364">						cal1.setTimeInMillis(startTime.getTime());</span>
+<span class="nc" id="L365">						calBegin.set(Calendar.HOUR_OF_DAY, cal1.get(Calendar.HOUR_OF_DAY));</span>
+<span class="nc" id="L366">						calBegin.set(Calendar.MINUTE, cal1.get(Calendar.MINUTE));</span>
+<span class="nc" id="L367">						calBegin.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L368">						calBegin.set(Calendar.MILLISECOND, 0);</span>
+						
+<span class="nc" id="L370">					} else {</span>
+<span class="nc" id="L371">						calBegin.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L372">						calBegin.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L373">						calBegin.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L374">						calBegin.set(Calendar.MILLISECOND, 0);</span>
+					}
+					
+<span class="nc" id="L377">					Calendar calEnd = Calendar.getInstance();</span>
+<span class="nc" id="L378">					calEnd.setTime(dateCompletePlan);</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">					if (endTime != null) {</span>
+<span class="nc" id="L380">						Calendar cal1 = Calendar.getInstance();</span>
+<span class="nc" id="L381">						cal1.setTimeInMillis(endTime.getTime());</span>
+<span class="nc" id="L382">						calEnd.set(Calendar.HOUR_OF_DAY, cal1.get(Calendar.HOUR_OF_DAY));</span>
+<span class="nc" id="L383">						calEnd.set(Calendar.MINUTE, cal1.get(Calendar.MINUTE));</span>
+<span class="nc" id="L384">						calEnd.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L385">						calEnd.set(Calendar.MILLISECOND, 0);</span>
+						
+<span class="nc" id="L387">					} else {</span>
+<span class="nc" id="L388">						calEnd.add(Calendar.HOUR_OF_DAY, 24);</span>
+					}
+										
+<span class="nc" id="L391">					ADCalendarEvent event = new ADCalendarEvent();</span>
+<span class="nc" id="L392">					event.setR_Request_ID(R_Request_ID);</span>
+					
+<span class="nc" id="L394">					event.setBeginDate(calBegin.getTime());</span>
+<span class="nc" id="L395">					event.setEndDate(calEnd.getTime());</span>
+
+<span class="nc bnc" id="L397" title="All 2 branches missed.">					if(event.getBegin().compareTo(event.getEnd()) &gt;= 0)</span>
+<span class="nc" id="L398">						continue;</span>
+
+<span class="nc" id="L400">					event.setContent(summary);</span>
+<span class="nc" id="L401">					event.setTitle(summary);</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">					if (!Util.isEmpty(headerColor, true))</span>
+<span class="nc" id="L403">						event.setHeaderStyle(&quot;background-color:&quot; + headerColor);</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">					if (!Util.isEmpty(contentColor, true))</span>
+<span class="nc" id="L405">						event.setContentStyle(&quot;background-color:&quot; + contentColor);</span>
+<span class="nc" id="L406">					event.setR_RequestType_ID(R_RequestType_ID);</span>
+<span class="nc" id="L407">					event.setLocked(true);</span>
+<span class="nc" id="L408">					events.add(event);</span>
+				}
+			}
+<span class="nc" id="L411">		} catch (Exception e) {</span>
+<span class="nc" id="L412">			e.printStackTrace();</span>
+		} finally {
+<span class="nc" id="L414">			DB.close(rs, ps);</span>
+		}
+
+<span class="nc" id="L417">		return events;</span>
+	}
+
+	/**
+	 * TODO move to MRequestType.&lt;br/&gt;
+	 * Get request types from DB
+	 * @param ctx
+	 * @return X_R_RequestType list
+	 */
+	public static ArrayList&lt;X_R_RequestType&gt; getRequestTypes(Properties ctx) {
+<span class="nc" id="L427">		ArrayList&lt;X_R_RequestType&gt; types = new ArrayList&lt;X_R_RequestType&gt;();</span>
+<span class="nc" id="L428">		String sql = &quot;SELECT * &quot;</span>
+				+ &quot;FROM R_RequestType &quot;
+				+ &quot;WHERE AD_Client_ID = ? AND IsActive = 'Y' &quot;
+				+ &quot;ORDER BY Name&quot;;
+
+<span class="nc" id="L433">		PreparedStatement ps = null;</span>
+<span class="nc" id="L434">		ResultSet rs = null;</span>
+
+		try {
+<span class="nc" id="L437">			ps = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L438">			ps.setInt(1, Env.getAD_Client_ID(ctx));</span>
+
+<span class="nc" id="L440">			rs = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L442" title="All 2 branches missed.">			while (rs.next()) {</span>
+<span class="nc" id="L443">				types.add(new X_R_RequestType(ctx, rs, null));</span>
+			}
+<span class="nc" id="L445">		} catch (Exception e) {</span>
+<span class="nc" id="L446">			e.printStackTrace();</span>
+		} finally {
+<span class="nc" id="L448">			DB.close(rs, ps);</span>
+		}
+		
+<span class="nc" id="L451">		return types;</span>
+	}
+	
+	/**
+	 * Refresh model and UI
+	 */
+	public void onRefresh() {
+<span class="nc" id="L458">		btnRefreshClicked();</span>
+<span class="nc" id="L459">	}</span>
+	
+	@Override
+	public void refresh(ServerPushTemplate template) {
+<span class="nc" id="L463">		refreshModel();</span>
+<span class="nc" id="L464">		template.executeAsync(this);</span>
+<span class="nc bnc" id="L465" title="All 4 branches missed.">		if (desktop != null &amp;&amp; desktop.get() != null) {</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">			if (desktop.get() != getDesktop()) {</span>
+<span class="nc" id="L467">				desktop.get().removeListener(listener);</span>
+<span class="nc" id="L468">				desktop = new WeakReference&lt;Desktop&gt;(getDesktop());</span>
+<span class="nc" id="L469">				desktop.get().addListener(listener);</span>
+			}
+<span class="nc" id="L471">		} else {</span>
+<span class="nc" id="L472">			desktop = new WeakReference&lt;Desktop&gt;(getDesktop());</span>
+<span class="nc bnc" id="L473" title="All 2 branches missed.">			if (desktop.get() != null)</span>
+<span class="nc" id="L474">				desktop.get().addListener(listener);</span>
+		}
+		
+<span class="nc" id="L477">	}</span>
+
+	@Override
+	public void updateUI() {
+<span class="nc bnc" id="L481" title="All 2 branches missed.">		if (scm == null) {</span>
+<span class="nc" id="L482">			scm = new SimpleCalendarModel();</span>
+<span class="nc" id="L483">			calendars.setModel(scm);</span>
+		}
+
+<span class="nc" id="L486">		scm.clear();</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">		for (ADCalendarEvent event : events)</span>
+<span class="nc" id="L488">			scm.add(event);</span>
+
+<span class="nc" id="L490">		calendars.invalidate();</span>
+<span class="nc" id="L491">	}</span>
+
+	/**
+	 * Refresh model and UI
+	 */
+	private void btnRefreshClicked() {
+<span class="nc" id="L497">		refreshModel();</span>
+<span class="nc" id="L498">		updateUI();</span>
+<span class="nc" id="L499">	}</span>
+
+	/**
+	 * Refresh model
+	 */
+	private void refreshModel() {		
+<span class="nc" id="L505">		events = getEvents(0, Env.getCtx());		</span>
+<span class="nc" id="L506">	}</span>
+	
+	/**
+	 * Update {@link #lblDate}
+	 */
+	private void updateDateLabel() {
+<span class="nc" id="L512">		LocalDateTime b = calendars.getBeginDateTime();</span>
+<span class="nc" id="L513">		LocalDateTime e = calendars.getEndDateTime();</span>
+<span class="nc" id="L514">		SimpleDateFormat sdfV = DisplayType.getDateFormat();</span>
+<span class="nc" id="L515">		DateTimeFormatter dtf = DateTimeFormatter.ofPattern(sdfV.toPattern());</span>
+<span class="nc" id="L516">		lblDate.setValue(dtf.format(b) + &quot; - &quot; + dtf.format(e));</span>
+<span class="nc" id="L517">	}</span>
+	
+	/**
+	 * Set {@link #calendars} to current date
+	 */
+	private void btnCurrentDateClicked() {
+<span class="nc" id="L523">		calendars.setCurrentDateTime(LocalDateTime.ofInstant(</span>
+<span class="nc" id="L524">				Calendar.getInstance(calendars.getDefaultTimeZone()).toInstant(),</span>
+<span class="nc" id="L525">				calendars.getDefaultTimeZone().toZoneId()));</span>
+<span class="nc" id="L526">		updateDateLabel();</span>
+<span class="nc" id="L527">		updateUI();</span>
+<span class="nc" id="L528">	}</span>
+
+	/**
+	 * Move {@link #calendars} to next or previous page
+	 * @param isNext true for next page, false for previous page
+	 */
+	private void divArrowClicked(boolean isNext) {
+<span class="nc bnc" id="L535" title="All 2 branches missed.">		if (isNext)</span>
+<span class="nc" id="L536">			calendars.nextPage();</span>
+		else
+<span class="nc" id="L538">			calendars.previousPage();</span>
+<span class="nc" id="L539">		updateDateLabel();</span>
+<span class="nc" id="L540">		updateUI();</span>
+<span class="nc" id="L541">	}</span>
+	
+	@Override
+	public void handleEvent(org.osgi.service.event.Event event) {
+<span class="nc bnc" id="L545" title="All 2 branches missed.">		if (event.getTopic().equals(ON_REQUEST_CHANGED_TOPIC)) {</span>
+<span class="nc" id="L546">			String clientId = (String) event.getProperty(I_R_Request.COLUMNNAME_AD_Client_ID);</span>
+<span class="nc" id="L547">			String salesRepId = (String) event.getProperty(I_R_Request.COLUMNNAME_SalesRep_ID);</span>
+<span class="nc" id="L548">			String userId = (String) event.getProperty(I_R_Request.COLUMNNAME_AD_User_ID);</span>
+<span class="nc" id="L549">			String createdBy = (String) event.getProperty(I_R_Request.COLUMNNAME_CreatedBy);</span>
+			
+<span class="nc" id="L551">			String AD_Client_ID = Integer.toString(Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc" id="L552">			String AD_User_ID = Integer.toString(Env.getAD_User_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L553" title="All 4 branches missed.">			if (clientId.equals(AD_Client_ID) &amp;&amp; !&quot;0&quot;.equals(AD_User_ID)) {</span>
+<span class="nc bnc" id="L554" title="All 6 branches missed.">				if (salesRepId.equals(AD_User_ID) || userId.equals(AD_User_ID) || createdBy.equals(AD_User_ID)) {</span>
+					try {
+<span class="nc bnc" id="L556" title="All 6 branches missed.">						if (desktop != null &amp;&amp; desktop.get() != null &amp;&amp; desktop.get().isAlive()) {</span>
+<span class="nc" id="L557">							ServerPushTemplate template = new ServerPushTemplate(desktop.get());</span>
+<span class="nc" id="L558">							refresh(template);</span>
+<span class="nc" id="L559">						} else {</span>
+<span class="nc" id="L560">							EventManager.getInstance().unregister(this);</span>
+						}
+<span class="nc" id="L562">					} catch (Exception e) {</span>
+<span class="nc" id="L563">						log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+					}
+				}
+			}
+		}
+<span class="nc" id="L568">	}</span>
+	
+	@Override
+	public void onPageAttached(Page newpage, Page oldpage) {
+<span class="nc" id="L572">		super.onPageAttached(newpage, oldpage);</span>
+<span class="nc bnc" id="L573" title="All 2 branches missed.">		if (newpage != null) {</span>
+<span class="nc" id="L574">			EventManager.getInstance().register(ON_REQUEST_CHANGED_TOPIC, this);</span>
+<span class="nc bnc" id="L575" title="All 4 branches missed.">			if (desktop != null &amp;&amp; desktop.get() != null) {</span>
+<span class="nc" id="L576">				desktop.get().removeListener(listener);</span>
+			}
+<span class="nc" id="L578">			desktop = new WeakReference&lt;Desktop&gt;(getDesktop());</span>
+<span class="nc" id="L579">			desktop.get().addListener(listener);</span>
+		}
+<span class="nc" id="L581">	}</span>
+	
+	@Override
+	public void onPageDetached(Page page) {
+<span class="nc" id="L585">		super.onPageDetached(page);</span>
+<span class="nc" id="L586">		cleanup();</span>
+<span class="nc" id="L587">	}</span>
+
+	/**
+	 * Perform clean up
+	 */
+	protected void cleanup() {
+<span class="nc" id="L593">		EventManager.getInstance().unregister(this);</span>
+<span class="nc" id="L594">		desktop = null;</span>
+<span class="nc" id="L595">	}</span>
+	
+	/**
+	 * ITopicSubscriber to post OSGi event from &quot;onRequestChanged&quot; topic
+	 */
+<span class="nc" id="L600">	static class TopicSubscriber implements ITopicSubscriber&lt;Map&lt;String, String&gt;&gt; {		</span>
+
+		@Override
+		public void onMessage(Map&lt;String, String&gt; message) {
+<span class="nc" id="L604">			org.osgi.service.event.Event requestChangedEvent = EventManager.newEvent(ON_REQUEST_CHANGED_TOPIC, message, true);</span>
+<span class="nc" id="L605">			EventManager.getInstance().postEvent(requestChangedEvent);</span>
+<span class="nc" id="L606">		}</span>
+		
+	}
+	
+	/**
+	 * Event handler for R_Request model  
+	 */
+<span class="nc" id="L613">	static class RequestEventHandler extends AbstractEventHandler {</span>
+		@Override
+		protected void doHandleEvent(org.osgi.service.event.Event event) {
+<span class="nc" id="L616">			PO po = getPO(event);</span>
+<span class="nc" id="L617">			I_R_Request request = (I_R_Request)po; </span>
+<span class="nc" id="L618">			Map&lt;String, String&gt; message = new HashMap&lt;String, String&gt;();</span>
+<span class="nc" id="L619">			message.put(I_R_Request.COLUMNNAME_SalesRep_ID, Integer.toString(request.getSalesRep_ID()));</span>
+<span class="nc" id="L620">			message.put(I_R_Request.COLUMNNAME_AD_User_ID, Integer.toString(request.getAD_User_ID()));</span>
+<span class="nc" id="L621">			message.put(I_R_Request.COLUMNNAME_CreatedBy, Integer.toString(request.getCreatedBy()));</span>
+<span class="nc" id="L622">			message.put(I_R_Request.COLUMNNAME_AD_Client_ID, Integer.toString(request.getAD_Client_ID()));</span>
+<span class="nc" id="L623">			RequestRunnable runnable = new RequestRunnable(message);	</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">			Trx trx = po.get_TrxName() != null ? Trx.get(po.get_TrxName(), false) : null;</span>
+<span class="nc bnc" id="L625" title="All 4 branches missed.">			if (trx != null &amp;&amp; trx.isActive()) {</span>
+<span class="nc" id="L626">				trx.addTrxEventListener(new TrxListener(runnable));</span>
+<span class="nc" id="L627">			} else {</span>
+<span class="nc" id="L628">				runnable.run();</span>
+			}
+<span class="nc" id="L630">		}</span>
+
+		@Override
+		protected void initialize() {
+<span class="nc" id="L634">			registerTableEvent(IEventTopics.PO_AFTER_NEW, I_R_Request.Table_Name);</span>
+<span class="nc" id="L635">			registerTableEvent(IEventTopics.PO_AFTER_CHANGE, I_R_Request.Table_Name);</span>
+<span class="nc" id="L636">			registerTableEvent(IEventTopics.PO_AFTER_DELETE, I_R_Request.Table_Name);</span>
+<span class="nc" id="L637">		}		</span>
+	}
+	
+	/**
+	 * Runnable to post &quot;onRequestChanged&quot; message ({@link IMessageService}) or OSGi event (if {@link IMessageService} not available)
+	 */
+	static class RequestRunnable implements Runnable {
+		
+		private Map&lt;String, String&gt; message;
+
+<span class="nc" id="L647">		protected RequestRunnable(Map&lt;String, String&gt; message) {</span>
+<span class="nc" id="L648">			this.message = message;</span>
+<span class="nc" id="L649">		}</span>
+		
+		@Override
+		public void run() {
+<span class="nc" id="L653">			IMessageService service = Core.getMessageService();			</span>
+<span class="nc bnc" id="L654" title="All 2 branches missed.">			if (service != null) {</span>
+<span class="nc" id="L655">				ITopic&lt;Map&lt;String,String&gt;&gt; topic = service.getTopic(ON_REQUEST_CHANGED_TOPIC);				</span>
+<span class="nc" id="L656">				topic.publish(message);</span>
+<span class="nc" id="L657">			} else {</span>
+<span class="nc" id="L658">				org.osgi.service.event.Event requestChangedEvent = EventManager.newEvent(ON_REQUEST_CHANGED_TOPIC, message, true);</span>
+<span class="nc" id="L659">				EventManager.getInstance().postEvent(requestChangedEvent);</span>
+			}
+<span class="nc" id="L661">		}	</span>
+	}
+	
+	/**
+	 * TrxEventListener to call a {@link Runnable} after successful commit of transaction.
+	 */
+	static class TrxListener implements TrxEventListener {
+
+		private Runnable runnable;
+
+		/**
+		 * @param runnable
+		 */
+<span class="nc" id="L674">		protected TrxListener(Runnable runnable) {</span>
+<span class="nc" id="L675">			this.runnable = runnable;</span>
+<span class="nc" id="L676">		}</span>
+		
+		@Override
+		public void afterRollback(Trx trx, boolean success) {
+<span class="nc" id="L680">		}</span>
+		
+		@Override
+		public void afterCommit(Trx trx, boolean success) {
+<span class="nc bnc" id="L684" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L685">				runnable.run();</span>
+			}
+<span class="nc" id="L687">		}</span>
+		
+		@Override
+		public void afterClose(Trx trx) {
+<span class="nc" id="L691">			trx.removeTrxEventListener(this);</span>
+<span class="nc" id="L692">		}		</span>
+	}
+
+	@Override
+	public boolean isLazy() {
+<span class="nc" id="L697">		return true;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

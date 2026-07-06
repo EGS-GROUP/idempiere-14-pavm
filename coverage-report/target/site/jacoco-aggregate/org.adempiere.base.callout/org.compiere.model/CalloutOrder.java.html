@@ -1,0 +1,1436 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CalloutOrder.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.callout</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">CalloutOrder.java</span></div><h1>CalloutOrder.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.IProductPricing;
+import org.adempiere.model.GridTabWrapper;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+
+/**
+ *	Order Callouts.
+ *
+ *  @author Jorg Janke
+ *  @version $Id: CalloutOrder.java,v 1.5 2006/10/08 06:57:33 comdivision Exp $
+ */
+<span class="nc" id="L43">public class CalloutOrder extends CalloutEngine</span>
+{
+	/**	Debug Steps			*/
+<span class="nc" id="L46">	private boolean steps = false;</span>
+
+	/**
+	 *	Order Header Change - DocType.
+	 *		- InvoiceRule/DeliveryRule/PaymentRule
+	 *		- temporary Document
+	 *  Context:
+	 *  	- DocSubTypeSO
+	 *		- HasCharges
+	 *	- (re-sets Business Partner info of required)
+	 *
+	 *  @param ctx      Context
+	 *  @param WindowNo current Window No
+	 *  @param mTab     Model Tab
+	 *  @param mField   Model Field
+	 *  @param value    The new value
+	 *  @return Error message or &quot;&quot;
+	 */
+	public String docType (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L66">		Integer C_DocType_ID = (Integer)value;		//	Actually C_DocTypeTarget_ID</span>
+<span class="nc bnc" id="L67" title="All 4 branches missed.">		if (C_DocType_ID == null || C_DocType_ID.intValue() == 0)</span>
+<span class="nc" id="L68">			return &quot;&quot;;</span>
+
+		//	Re-Create new DocNo, if there is a doc number already
+		//	and the existing source used a different Sequence number
+<span class="nc" id="L72">		String oldDocNo = (String)mTab.getValue(&quot;DocumentNo&quot;);</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">		boolean newDocNo = (oldDocNo == null);</span>
+<span class="nc bnc" id="L74" title="All 6 branches missed.">		if (!newDocNo &amp;&amp; oldDocNo.startsWith(&quot;&lt;&quot;) &amp;&amp; oldDocNo.endsWith(&quot;&gt;&quot;))</span>
+<span class="nc" id="L75">			newDocNo = true;</span>
+<span class="nc" id="L76">		Integer oldC_DocType_ID = (Integer)mTab.getValue(&quot;C_DocType_ID&quot;);</span>
+
+<span class="nc" id="L78">		String sql = &quot;SELECT d.DocSubTypeSO,d.HasCharges,&quot;			//	1..2</span>
+			+ &quot;d.IsDocNoControlled,&quot;     //  3
+			+ &quot;s.AD_Sequence_ID,d.IsSOTrx &quot;                             //	4..5
+			+ &quot;FROM C_DocType d &quot;
+			+ &quot;LEFT OUTER JOIN AD_Sequence s ON (d.DocNoSequence_ID=s.AD_Sequence_ID) &quot;
+			+ &quot;WHERE C_DocType_ID=?&quot;;	//	#1
+<span class="nc" id="L84">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L85">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L88">			int oldAD_Sequence_ID = 0;</span>
+
+			//	Get old AD_SeqNo for comparison
+<span class="nc bnc" id="L91" title="All 6 branches missed.">			if (!newDocNo &amp;&amp; oldC_DocType_ID != null &amp;&amp; oldC_DocType_ID.intValue() != 0)</span>
+			{
+<span class="nc" id="L93">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L94">				pstmt.setInt(1, oldC_DocType_ID.intValue());</span>
+<span class="nc" id="L95">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">				if (rs.next())</span>
+<span class="nc" id="L97">					oldAD_Sequence_ID = rs.getInt(&quot;AD_Sequence_ID&quot;);</span>
+<span class="nc" id="L98">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L99">				rs = null;</span>
+<span class="nc" id="L100">				pstmt = null;</span>
+			}
+			
+<span class="nc" id="L103">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L104">			pstmt.setInt(1, C_DocType_ID.intValue());</span>
+<span class="nc" id="L105">			rs = pstmt.executeQuery();</span>
+<span class="nc" id="L106">			String DocSubTypeSO = &quot;&quot;;</span>
+<span class="nc" id="L107">			boolean IsSOTrx = true;</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">			if (rs.next())		//	we found document type</span>
+			{
+				//	Set Context:	Document Sub Type for Sales Orders
+<span class="nc" id="L111">				DocSubTypeSO = rs.getString(&quot;DocSubTypeSO&quot;);</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">				if (DocSubTypeSO == null)</span>
+<span class="nc" id="L113">					DocSubTypeSO = &quot;--&quot;;</span>
+<span class="nc" id="L114">				Env.setContext(ctx, WindowNo, &quot;OrderType&quot;, DocSubTypeSO);</span>
+				//	No Drop Ship other than Standard
+<span class="nc bnc" id="L116" title="All 2 branches missed.">				if (!DocSubTypeSO.equals(MOrder.DocSubTypeSO_Standard))</span>
+<span class="nc" id="L117">					mTab.setValue (&quot;IsDropShip&quot;, &quot;N&quot;);</span>
+				
+				//	Delivery Rule
+<span class="nc bnc" id="L120" title="All 2 branches missed.">				if (DocSubTypeSO.equals(MOrder.DocSubTypeSO_POS))</span>
+<span class="nc" id="L121">					mTab.setValue (&quot;DeliveryRule&quot;, X_C_Order.DELIVERYRULE_Force);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">				else if (DocSubTypeSO.equals(MOrder.DocSubTypeSO_Prepay))</span>
+<span class="nc" id="L123">					mTab.setValue (&quot;DeliveryRule&quot;, X_C_Order.DELIVERYRULE_AfterPayment);</span>
+				else
+<span class="nc" id="L125">					mTab.setValue (&quot;DeliveryRule&quot;, X_C_Order.DELIVERYRULE_Availability);</span>
+				
+				//	Invoice Rule
+<span class="nc bnc" id="L128" title="All 2 branches missed.">				if (DocSubTypeSO.equals(MOrder.DocSubTypeSO_POS)</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">					|| DocSubTypeSO.equals(MOrder.DocSubTypeSO_Prepay)</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">					|| DocSubTypeSO.equals(MOrder.DocSubTypeSO_OnCredit) )</span>
+<span class="nc" id="L131">					mTab.setValue (&quot;InvoiceRule&quot;, X_C_Order.INVOICERULE_Immediate);</span>
+				else
+<span class="nc" id="L133">					mTab.setValue (&quot;InvoiceRule&quot;, X_C_Order.INVOICERULE_AfterDelivery);</span>
+				
+				//	Payment Rule - POS Order
+<span class="nc bnc" id="L136" title="All 2 branches missed.">				if (DocSubTypeSO.equals(MOrder.DocSubTypeSO_POS))</span>
+<span class="nc" id="L137">					mTab.setValue(&quot;PaymentRule&quot;, X_C_Order.PAYMENTRULE_Cash);</span>
+				else
+<span class="nc" id="L139">					mTab.setValue(&quot;PaymentRule&quot;, X_C_Order.PAYMENTRULE_OnCredit);</span>
+
+				//	IsSOTrx
+<span class="nc bnc" id="L142" title="All 2 branches missed.">				if (&quot;N&quot;.equals(rs.getString(&quot;IsSOTrx&quot;)))</span>
+<span class="nc" id="L143">					IsSOTrx = false;</span>
+
+				//	Set Context:
+<span class="nc" id="L146">				Env.setContext(ctx, WindowNo, &quot;HasCharges&quot;, rs.getString(&quot;HasCharges&quot;));</span>
+
+				//	DocumentNo
+<span class="nc bnc" id="L149" title="All 2 branches missed.">				if (rs.getString(&quot;IsDocNoControlled&quot;).equals(&quot;Y&quot;))			//	IsDocNoControlled</span>
+				{
+<span class="nc bnc" id="L151" title="All 4 branches missed.">					if (!newDocNo &amp;&amp; oldAD_Sequence_ID != rs.getInt(&quot;AD_Sequence_ID&quot;))</span>
+<span class="nc" id="L152">						newDocNo = true;</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">					if (newDocNo) {</span>
+<span class="nc" id="L154">						int AD_Sequence_ID = rs.getInt(&quot;AD_Sequence_ID&quot;);</span>
+<span class="nc" id="L155">						mTab.setValue(&quot;DocumentNo&quot;, MSequence.getPreliminaryNo(mTab, AD_Sequence_ID));</span>
+					}
+				}
+			}
+			
+<span class="nc" id="L160">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L161">			rs = null;</span>
+<span class="nc" id="L162">			pstmt = null;</span>
+			
+			//  When BPartner is changed, the Rules are not set if
+			//  it is a POS or Credit Order (i.e. defaults from Standard BPartner)
+			//  This re-reads the Rules and applies them.
+<span class="nc bnc" id="L167" title="All 2 branches missed.">			if (DocSubTypeSO.equals(MOrder.DocSubTypeSO_POS) </span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">				|| DocSubTypeSO.equals(MOrder.DocSubTypeSO_Prepay))    //  not for POS/PrePay</span>
+<span class="nc" id="L169">				;</span>
+			else
+			{
+<span class="nc" id="L172">				sql = &quot;SELECT PaymentRule,C_PaymentTerm_ID,&quot;            //  1..2</span>
+					+ &quot;InvoiceRule,DeliveryRule,&quot;                       //  3..4
+					+ &quot;FreightCostRule,DeliveryViaRule, &quot;               //  5..6
+					+ &quot;PaymentRulePO,PO_PaymentTerm_ID &quot;
+					+ &quot;FROM C_BPartner &quot;
+					+ &quot;WHERE C_BPartner_ID=?&quot;;		//	#1
+<span class="nc" id="L178">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L179">				int C_BPartner_ID = Env.getContextAsInt(ctx, WindowNo, &quot;C_BPartner_ID&quot;);</span>
+<span class="nc" id="L180">				pstmt.setInt(1, C_BPartner_ID);</span>
+				//
+<span class="nc" id="L182">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">				if (rs.next())</span>
+				{
+					//	PaymentRule
+<span class="nc bnc" id="L186" title="All 2 branches missed.">					String s = rs.getString(IsSOTrx ? &quot;PaymentRule&quot; : &quot;PaymentRulePO&quot;);</span>
+<span class="nc bnc" id="L187" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L188">						mTab.setValue(&quot;PaymentRule&quot;, s);</span>
+					//	Payment Term
+<span class="nc bnc" id="L190" title="All 2 branches missed.">					Integer ii =Integer.valueOf(rs.getInt(IsSOTrx ? &quot;C_PaymentTerm_ID&quot; : &quot;PO_PaymentTerm_ID&quot;));</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">					if (!rs.wasNull())</span>
+<span class="nc" id="L192">						mTab.setValue(&quot;C_PaymentTerm_ID&quot;, ii);</span>
+					//	InvoiceRule
+<span class="nc" id="L194">					s = rs.getString(3);</span>
+<span class="nc bnc" id="L195" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L196">						mTab.setValue(&quot;InvoiceRule&quot;, s);</span>
+					//	DeliveryRule
+<span class="nc" id="L198">					s = rs.getString(4);</span>
+<span class="nc bnc" id="L199" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L200">						mTab.setValue(&quot;DeliveryRule&quot;, s);</span>
+					//	FreightCostRule
+<span class="nc" id="L202">					s = rs.getString(5);</span>
+<span class="nc bnc" id="L203" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L204">						mTab.setValue(&quot;FreightCostRule&quot;, s);</span>
+					//	DeliveryViaRule
+<span class="nc" id="L206">					s = rs.getString(6);</span>
+<span class="nc bnc" id="L207" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L208">						mTab.setValue(&quot;DeliveryViaRule&quot;, s);</span>
+				}
+			} 
+			//  re-read customer rules
+<span class="nc" id="L212">		}</span>
+<span class="nc" id="L213">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L215">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L216">			return e.getLocalizedMessage();</span>
+		}
+		finally
+		{
+<span class="nc" id="L220">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L221">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L223">		return &quot;&quot;;</span>
+	}	//	docType
+
+	/**
+	 *	Order Header - BPartner.
+	 *		- M_PriceList_ID (+ Context)
+	 *		- C_BPartner_Location_ID
+	 *		- Bill_BPartner_ID/Bill_Location_ID
+	 *		- AD_User_ID
+	 *		- POReference
+	 *		- SO_Description
+	 *		- IsDiscountPrinted
+	 *		- InvoiceRule/DeliveryRule/PaymentRule/FreightCost/DeliveryViaRule
+	 *		- C_PaymentTerm_ID
+	 *  @param ctx      Context
+	 *  @param WindowNo current Window No
+	 *  @param mTab     Model Tab
+	 *  @param mField   Model Field
+	 *  @param value    The new value
+	 *  @return Error message or &quot;&quot;
+	 */
+	public String bPartner (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L246">		Integer C_BPartner_ID = (Integer)value;</span>
+<span class="nc bnc" id="L247" title="All 4 branches missed.">		if (C_BPartner_ID == null || C_BPartner_ID.intValue() == 0)</span>
+<span class="nc" id="L248">			return &quot;&quot;;</span>
+<span class="nc" id="L249">		String sql = &quot;SELECT p.AD_Language,p.C_PaymentTerm_ID,&quot;</span>
+			+ &quot; COALESCE(p.M_PriceList_ID,g.M_PriceList_ID) AS M_PriceList_ID, p.PaymentRule,p.POReference,&quot;
+			+ &quot; p.SO_Description,p.IsDiscountPrinted,&quot;
+			+ &quot; p.InvoiceRule,p.DeliveryRule,p.FreightCostRule,DeliveryViaRule,&quot;
+			+ &quot; p.SO_CreditLimit, p.SO_CreditLimit-p.SO_CreditUsed AS CreditAvailable,&quot;
+			+ &quot; (select max(lship.C_BPartner_Location_ID) from C_BPartner_Location lship where p.C_BPartner_ID=lship.C_BPartner_ID AND lship.IsShipTo='Y' AND lship.IsActive='Y') as C_BPartner_Location_ID,&quot;
+			+ &quot; (select max(c.AD_User_ID) from AD_User c where p.C_BPartner_ID=c.C_BPartner_ID AND c.IsActive='Y') as AD_User_ID,&quot;
+			+ &quot; (select max(c.AD_User_ID) from AD_User c where p.C_BPartner_ID=c.C_BPartner_ID AND c.IsActive='Y' AND IsBillTo='Y') as BillTo_User_ID,&quot;
+			+ &quot; (select max(c.AD_User_ID) from AD_User c where p.C_BPartner_ID=c.C_BPartner_ID AND c.IsActive='Y' AND IsShipTo='Y') as ShipTo_User_ID,&quot;
+			+ &quot; COALESCE(p.PO_PriceList_ID,g.PO_PriceList_ID) AS PO_PriceList_ID, p.PaymentRulePO,p.PO_PaymentTerm_ID,&quot;
+			+ &quot; (select max(lbill.C_BPartner_Location_ID) from C_BPartner_Location lbill where p.C_BPartner_ID=lbill.C_BPartner_ID AND lbill.IsBillTo='Y' AND lbill.IsActive='Y') AS Bill_Location_ID, &quot;
+			+ &quot; p.SOCreditStatus, &quot;
+			+ &quot; p.SalesRep_ID &quot;
+			+ &quot;FROM C_BPartner p&quot;
+			+ &quot; INNER JOIN C_BP_Group g ON (p.C_BP_Group_ID=g.C_BP_Group_ID)&quot;
+			+ &quot;WHERE p.C_BPartner_ID=? AND p.IsActive='Y'&quot;;		//	#1
+
+<span class="nc" id="L266">		boolean IsSOTrx = &quot;Y&quot;.equals(Env.getContext(ctx, WindowNo, &quot;IsSOTrx&quot;));</span>
+<span class="nc" id="L267">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L268">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L271">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L272">			pstmt.setInt(1, C_BPartner_ID.intValue());</span>
+<span class="nc" id="L273">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+				// Sales Rep - If BP has a default SalesRep then default it
+<span class="nc" id="L277">				Integer salesRep = rs.getInt(&quot;SalesRep_ID&quot;);</span>
+<span class="nc bnc" id="L278" title="All 4 branches missed.">				if (IsSOTrx &amp;&amp; salesRep != 0 )</span>
+				{
+<span class="nc" id="L280">					mTab.setValue(&quot;SalesRep_ID&quot;, salesRep);</span>
+				}
+
+				//	PriceList (indirect: IsTaxIncluded &amp; Currency)
+<span class="nc bnc" id="L284" title="All 2 branches missed.">				Integer ii = Integer.valueOf(rs.getInt(IsSOTrx ? &quot;M_PriceList_ID&quot; : &quot;PO_PriceList_ID&quot;));</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">				if (!rs.wasNull())</span>
+<span class="nc" id="L286">					mTab.setValue(&quot;M_PriceList_ID&quot;, ii);</span>
+				else
+				{	//	get default PriceList
+<span class="nc" id="L289">					int i = Env.getContextAsInt(ctx, Env.M_PRICELIST_ID);</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">					if (i != 0)</span>
+					{
+<span class="nc" id="L292">						MPriceList pl = new MPriceList(ctx, i, null);</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">						if (IsSOTrx == pl.isSOPriceList())</span>
+<span class="nc" id="L294">							mTab.setValue(&quot;M_PriceList_ID&quot;, Integer.valueOf(i));</span>
+						else
+						{
+<span class="nc" id="L297">							String sql2 = &quot;SELECT M_PriceList_ID FROM M_PriceList WHERE AD_Client_ID=? AND IsSOPriceList=? AND IsActive='Y' ORDER BY IsDefault DESC&quot;;</span>
+<span class="nc" id="L298">							ii = DB.getSQLValue (null, sql2, Env.getAD_Client_ID(ctx), IsSOTrx);</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">							if (ii != 0)</span>
+<span class="nc" id="L300">								mTab.setValue(&quot;M_PriceList_ID&quot;, Integer.valueOf(ii));</span>
+						}
+					}
+				}
+
+				//	Bill-To
+<span class="nc" id="L306">				mTab.setValue(&quot;Bill_BPartner_ID&quot;, C_BPartner_ID);</span>
+
+<span class="nc" id="L308">				int shipTo_ID = 0;</span>
+<span class="nc" id="L309">				int bill_Location_ID =0;</span>
+				//	overwritten by InfoBP selection - works only if InfoWindow
+				//	was used otherwise creates error (uses last value, may belong to different BP)
+<span class="nc bnc" id="L312" title="All 2 branches missed.">				if (C_BPartner_ID.toString().equals(Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;C_BPartner_ID&quot;)))</span>
+				{
+<span class="nc" id="L314">					String loc = Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;C_BPartner_Location_ID&quot;);</span>
+<span class="nc" id="L315">					int locationId = 0;</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">					if (loc.length() &gt; 0)</span>
+<span class="nc" id="L317">						locationId = Integer.parseInt(loc);</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">					if (locationId &gt; 0) {</span>
+<span class="nc" id="L319">						MBPartnerLocation bpLocation = new MBPartnerLocation(ctx, locationId, null);</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">						if (bpLocation.isBillTo())</span>
+<span class="nc" id="L321">							bill_Location_ID = locationId;</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">						if (bpLocation.isShipTo())</span>
+<span class="nc" id="L323">							shipTo_ID = locationId;</span>
+					}
+				}
+<span class="nc bnc" id="L326" title="All 2 branches missed.">				if (bill_Location_ID == 0)</span>
+<span class="nc" id="L327">					bill_Location_ID = rs.getInt(&quot;Bill_Location_ID&quot;);</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">				if (bill_Location_ID == 0)</span>
+<span class="nc" id="L329">					mTab.setValue(&quot;Bill_Location_ID&quot;, null);</span>
+				else
+<span class="nc" id="L331">					mTab.setValue(&quot;Bill_Location_ID&quot;, Integer.valueOf(bill_Location_ID));</span>
+				// Ship-To Location
+<span class="nc bnc" id="L333" title="All 2 branches missed.">				if (shipTo_ID == 0)</span>
+<span class="nc" id="L334">					shipTo_ID = rs.getInt(&quot;C_BPartner_Location_ID&quot;);</span>
+
+<span class="nc bnc" id="L336" title="All 2 branches missed.">				if (shipTo_ID == 0)</span>
+<span class="nc" id="L337">					mTab.setValue(&quot;C_BPartner_Location_ID&quot;, null);</span>
+				else
+<span class="nc" id="L339">					mTab.setValue(&quot;C_BPartner_Location_ID&quot;, Integer.valueOf(shipTo_ID));</span>
+
+				//	Contact - overwritten by InfoBP selection
+<span class="nc" id="L342">				int contID = rs.getInt(&quot;AD_User_ID&quot;);</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">				if (C_BPartner_ID.toString().equals(Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;C_BPartner_ID&quot;)))</span>
+				{
+<span class="nc" id="L345">					String cont = Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;AD_User_ID&quot;);</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">					if (cont.length() &gt; 0)</span>
+<span class="nc" id="L347">						contID = Integer.parseInt(cont);</span>
+				}
+<span class="nc" id="L349">				int BillTo_User_ID = rs.getInt(&quot;BillTo_User_ID&quot;);</span>
+<span class="nc" id="L350">				int ShipTo_User_ID = rs.getInt(&quot;ShipTo_User_ID&quot;);</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">				if (contID == 0) {</span>
+<span class="nc" id="L352">					mTab.setValue(&quot;AD_User_ID&quot;, null);</span>
+<span class="nc" id="L353">					mTab.setValue(&quot;Bill_User_ID&quot;, null);</span>
+<span class="nc" id="L354">				} else</span>
+				{
+<span class="nc bnc" id="L356" title="All 2 branches missed.">					Integer userID = ShipTo_User_ID &gt; 0 ? Integer.valueOf(ShipTo_User_ID) : Integer.valueOf(contID);</span>
+<span class="nc" id="L357">					mTab.setValue(&quot;AD_User_ID&quot;, userID);</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">					userID = BillTo_User_ID &gt; 0 ? Integer.valueOf(BillTo_User_ID) : Integer.valueOf(contID);</span>
+<span class="nc" id="L359">					mTab.setValue(&quot;Bill_User_ID&quot;, userID);</span>
+				}
+
+				//	CreditAvailable
+<span class="nc bnc" id="L363" title="All 2 branches missed.">				if (IsSOTrx)</span>
+				{
+<span class="nc" id="L365">					double CreditLimit = rs.getDouble(&quot;SO_CreditLimit&quot;);</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">					if (CreditLimit != 0)</span>
+					{
+<span class="nc" id="L368">						double CreditAvailable = rs.getDouble(&quot;CreditAvailable&quot;);</span>
+<span class="nc bnc" id="L369" title="All 4 branches missed.">						if (!rs.wasNull() &amp;&amp; CreditAvailable &lt; 0)</span>
+<span class="nc" id="L370">							mTab.fireDataStatusEEvent(&quot;CreditLimitOver&quot;,</span>
+<span class="nc" id="L371">								DisplayType.getNumberFormat(DisplayType.Amount).format(CreditAvailable),</span>
+<span class="nc" id="L372">								false);</span>
+					}
+				}
+
+				//	PO Reference
+<span class="nc" id="L377">				String s = rs.getString(&quot;POReference&quot;);</span>
+<span class="nc bnc" id="L378" title="All 4 branches missed.">				if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L379">					mTab.setValue(&quot;POReference&quot;, s);</span>
+				//	SO Description
+<span class="nc" id="L381">				s = rs.getString(&quot;SO_Description&quot;);</span>
+<span class="nc bnc" id="L382" title="All 4 branches missed.">				if (s != null &amp;&amp; s.trim().length() != 0)</span>
+<span class="nc" id="L383">					mTab.setValue(&quot;Description&quot;, s);</span>
+				//	IsDiscountPrinted
+<span class="nc" id="L385">				s = rs.getString(&quot;IsDiscountPrinted&quot;);</span>
+<span class="nc bnc" id="L386" title="All 4 branches missed.">				if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L387">					mTab.setValue(&quot;IsDiscountPrinted&quot;, s);</span>
+				else
+<span class="nc" id="L389">					mTab.setValue(&quot;IsDiscountPrinted&quot;, &quot;N&quot;);</span>
+
+				//	Defaults, if not Walkin Receipt or Walkin Invoice
+<span class="nc" id="L392">				String OrderType = Env.getContext(ctx, WindowNo, &quot;OrderType&quot;);</span>
+<span class="nc" id="L393">				mTab.setValue(&quot;InvoiceRule&quot;, X_C_Order.INVOICERULE_AfterDelivery);</span>
+<span class="nc" id="L394">				mTab.setValue(&quot;DeliveryRule&quot;, X_C_Order.DELIVERYRULE_Availability);</span>
+<span class="nc" id="L395">				mTab.setValue(&quot;PaymentRule&quot;, X_C_Order.PAYMENTRULE_OnCredit);</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">				if (OrderType.equals(MOrder.DocSubTypeSO_Prepay))</span>
+				{
+<span class="nc" id="L398">					mTab.setValue(&quot;InvoiceRule&quot;, X_C_Order.INVOICERULE_Immediate);</span>
+<span class="nc" id="L399">					mTab.setValue(&quot;DeliveryRule&quot;, X_C_Order.DELIVERYRULE_AfterPayment);</span>
+<span class="nc" id="L400">				}</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">				else if (OrderType.equals(MOrder.DocSubTypeSO_POS))	//  for POS</span>
+<span class="nc" id="L402">					mTab.setValue(&quot;PaymentRule&quot;, X_C_Order.PAYMENTRULE_Cash);</span>
+				else
+				{
+					//	PaymentRule
+<span class="nc bnc" id="L406" title="All 2 branches missed.">					s = rs.getString(IsSOTrx ? &quot;PaymentRule&quot; : &quot;PaymentRulePO&quot;);</span>
+<span class="nc bnc" id="L407" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L408">						mTab.setValue(&quot;PaymentRule&quot;, s);</span>
+					//	Payment Term
+<span class="nc bnc" id="L410" title="All 2 branches missed.">					ii = Integer.valueOf(rs.getInt(IsSOTrx ? &quot;C_PaymentTerm_ID&quot; : &quot;PO_PaymentTerm_ID&quot;));</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">					if (!rs.wasNull())</span>
+<span class="nc" id="L412">						mTab.setValue(&quot;C_PaymentTerm_ID&quot;, ii);</span>
+					//	InvoiceRule
+<span class="nc" id="L414">					s = rs.getString(&quot;InvoiceRule&quot;);</span>
+<span class="nc bnc" id="L415" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L416">						mTab.setValue(&quot;InvoiceRule&quot;, s);</span>
+					//	DeliveryRule
+<span class="nc" id="L418">					s = rs.getString(&quot;DeliveryRule&quot;);</span>
+<span class="nc bnc" id="L419" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L420">						mTab.setValue(&quot;DeliveryRule&quot;, s);</span>
+					//	FreightCostRule
+<span class="nc" id="L422">					s = rs.getString(&quot;FreightCostRule&quot;);</span>
+<span class="nc bnc" id="L423" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L424">						mTab.setValue(&quot;FreightCostRule&quot;, s);</span>
+					//	DeliveryViaRule
+<span class="nc" id="L426">					s = rs.getString(&quot;DeliveryViaRule&quot;);</span>
+<span class="nc bnc" id="L427" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L428">						mTab.setValue(&quot;DeliveryViaRule&quot;, s);</span>
+				}
+			}
+<span class="nc" id="L431">		}</span>
+<span class="nc" id="L432">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L434">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L435">			return e.getLocalizedMessage();</span>
+		}
+		finally
+		{
+<span class="nc" id="L439">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L440">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L442">		return &quot;&quot;;</span>
+	}	//	bPartner
+
+	/**
+	 *	Order Header - Invoice BPartner.
+	 *		- M_PriceList_ID (+ Context)
+	 *		- Bill_Location_ID
+	 *		- Bill_User_ID
+	 *		- POReference
+	 *		- SO_Description
+	 *		- IsDiscountPrinted
+	 *		- InvoiceRule/PaymentRule
+	 *		- C_PaymentTerm_ID
+	 *  @param ctx      Context
+	 *  @param WindowNo current Window No
+	 *  @param mTab     Model Tab
+	 *  @param mField   Model Field
+	 *  @param value    The new value
+	 *  @return Error message or &quot;&quot;
+	 */
+	public String bPartnerBill (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L464">		Integer bill_BPartner_ID = (Integer)value;</span>
+<span class="nc bnc" id="L465" title="All 4 branches missed.">		if (bill_BPartner_ID == null || bill_BPartner_ID.intValue() == 0)</span>
+<span class="nc" id="L466">			return &quot;&quot;;</span>
+
+<span class="nc" id="L468">		String sql = &quot;SELECT p.AD_Language,p.C_PaymentTerm_ID,&quot;</span>
+			+ &quot;p.M_PriceList_ID,p.PaymentRule,p.POReference,&quot;
+			+ &quot;p.SO_Description,p.IsDiscountPrinted,&quot;
+			+ &quot;p.InvoiceRule,p.DeliveryRule,p.FreightCostRule,DeliveryViaRule,&quot;
+			+ &quot;p.SO_CreditLimit, p.SO_CreditLimit-p.SO_CreditUsed AS CreditAvailable,&quot;
+			+ &quot;(select max(c.AD_User_ID) from AD_User c where p.C_BPartner_ID=c.C_BPartner_ID AND c.IsActive='Y') as AD_User_ID,&quot;
+			+ &quot;(select max(c.AD_User_ID) from AD_User c where p.C_BPartner_ID=c.C_BPartner_ID AND c.IsActive='Y' AND IsBillTo='Y') as BillTo_User_ID,&quot;
+			+ &quot;p.PO_PriceList_ID, p.PaymentRulePO, p.PO_PaymentTerm_ID,&quot;
+			+ &quot;(select max(lbill.C_BPartner_Location_ID) from C_BPartner_Location lbill where p.C_BPartner_ID=lbill.C_BPartner_ID AND lbill.IsBillTo='Y' AND lbill.IsActive='Y') AS Bill_Location_ID &quot;
+			+ &quot;FROM C_BPartner p &quot;
+			+ &quot;WHERE p.C_BPartner_ID=? AND p.IsActive='Y'&quot;;		//	#1
+
+<span class="nc" id="L480">		boolean IsSOTrx = &quot;Y&quot;.equals(Env.getContext(ctx, WindowNo, &quot;IsSOTrx&quot;));</span>
+<span class="nc" id="L481">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L482">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L485">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L486">			pstmt.setInt(1, bill_BPartner_ID.intValue());</span>
+<span class="nc" id="L487">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+				//	PriceList (indirect: IsTaxIncluded &amp; Currency)
+<span class="nc bnc" id="L491" title="All 2 branches missed.">				Integer ii = Integer.valueOf(rs.getInt(IsSOTrx ? &quot;M_PriceList_ID&quot; : &quot;PO_PriceList_ID&quot;));</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">				if (!rs.wasNull())</span>
+<span class="nc" id="L493">					mTab.setValue(&quot;M_PriceList_ID&quot;, ii);</span>
+				else
+				{	//	get default PriceList
+<span class="nc" id="L496">					int i = Env.getContextAsInt(ctx, Env.M_PRICELIST_ID);</span>
+<span class="nc bnc" id="L497" title="All 2 branches missed.">					if (i != 0)</span>
+					{
+<span class="nc" id="L499">						MPriceList pl = new MPriceList(ctx, i, null);</span>
+<span class="nc bnc" id="L500" title="All 2 branches missed.">						if (IsSOTrx == pl.isSOPriceList())</span>
+<span class="nc" id="L501">							mTab.setValue(&quot;M_PriceList_ID&quot;, Integer.valueOf(i));</span>
+						else
+						{
+<span class="nc" id="L504">							String sql2 = &quot;SELECT M_PriceList_ID FROM M_PriceList WHERE AD_Client_ID=? AND IsSOPriceList=? AND IsActive='Y' ORDER BY IsDefault DESC&quot;;</span>
+<span class="nc" id="L505">							ii = DB.getSQLValue (null, sql2, Env.getAD_Client_ID(ctx), IsSOTrx);</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">							if (ii != 0)</span>
+<span class="nc" id="L507">								mTab.setValue(&quot;M_PriceList_ID&quot;, Integer.valueOf(ii));</span>
+						}
+					}
+				}
+
+<span class="nc" id="L512">				int bill_Location_ID = rs.getInt(&quot;Bill_Location_ID&quot;);</span>
+				//	overwritten by InfoBP selection - works only if InfoWindow
+				//	was used otherwise creates error (uses last value, may belong to different BP)
+<span class="nc bnc" id="L515" title="All 2 branches missed.">				if (bill_BPartner_ID.toString().equals(Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;C_BPartner_ID&quot;)))</span>
+				{
+<span class="nc" id="L517">					int locationId = 0;</span>
+<span class="nc" id="L518">					String loc = Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;C_BPartner_Location_ID&quot;);</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">					if (loc.length() &gt; 0)</span>
+<span class="nc" id="L520">						locationId = Integer.parseInt(loc);</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">					if (locationId &gt; 0) {</span>
+<span class="nc" id="L522">						MBPartnerLocation bpLocation = new MBPartnerLocation(ctx, locationId, null);</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">						if (bpLocation.isBillTo())</span>
+<span class="nc" id="L524">							bill_Location_ID = locationId;</span>
+					}
+				}
+<span class="nc bnc" id="L527" title="All 2 branches missed.">				if (bill_Location_ID == 0)</span>
+<span class="nc" id="L528">					mTab.setValue(&quot;Bill_Location_ID&quot;, null);</span>
+				else
+<span class="nc" id="L530">					mTab.setValue(&quot;Bill_Location_ID&quot;, Integer.valueOf(bill_Location_ID));</span>
+
+				//	Contact - overwritten by InfoBP selection
+<span class="nc" id="L533">				int BillTo_User_ID = rs.getInt(&quot;BillTo_User_ID&quot;);</span>
+<span class="nc" id="L534">				int contID = rs.getInt(&quot;AD_User_ID&quot;);</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">				if (bill_BPartner_ID.toString().equals(Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;C_BPartner_ID&quot;)))</span>
+				{
+<span class="nc" id="L537">					String cont = Env.getContext(ctx, WindowNo, Env.TAB_INFO, &quot;AD_User_ID&quot;);</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">					if (cont.length() &gt; 0)</span>
+<span class="nc" id="L539">						contID = Integer.parseInt(cont);</span>
+				}
+<span class="nc bnc" id="L541" title="All 2 branches missed.">				if (contID == 0)</span>
+<span class="nc" id="L542">					mTab.setValue(&quot;Bill_User_ID&quot;, null);</span>
+				else {
+<span class="nc bnc" id="L544" title="All 2 branches missed.">					Integer userID = BillTo_User_ID &gt; 0 ? Integer.valueOf(BillTo_User_ID) : Integer.valueOf(contID);</span>
+<span class="nc" id="L545">					mTab.setValue(&quot;Bill_User_ID&quot;, userID);</span>
+				}
+
+				//	CreditAvailable
+<span class="nc bnc" id="L549" title="All 2 branches missed.">				if (IsSOTrx)</span>
+				{
+<span class="nc" id="L551">					double CreditLimit = rs.getDouble(&quot;SO_CreditLimit&quot;);</span>
+<span class="nc bnc" id="L552" title="All 2 branches missed.">					if (CreditLimit != 0)</span>
+					{
+<span class="nc" id="L554">						double CreditAvailable = rs.getDouble(&quot;CreditAvailable&quot;);</span>
+<span class="nc bnc" id="L555" title="All 4 branches missed.">						if (!rs.wasNull() &amp;&amp; CreditAvailable &lt; 0)</span>
+<span class="nc" id="L556">							mTab.fireDataStatusEEvent(&quot;CreditLimitOver&quot;,</span>
+<span class="nc" id="L557">								DisplayType.getNumberFormat(DisplayType.Amount).format(CreditAvailable),</span>
+<span class="nc" id="L558">								false);</span>
+					}
+				}
+
+				//	PO Reference
+<span class="nc" id="L563">				String s = rs.getString(&quot;POReference&quot;);</span>
+<span class="nc bnc" id="L564" title="All 4 branches missed.">				if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L565">					mTab.setValue(&quot;POReference&quot;, s);</span>
+				//	SO Description
+<span class="nc" id="L567">				s = rs.getString(&quot;SO_Description&quot;);</span>
+<span class="nc bnc" id="L568" title="All 4 branches missed.">				if (s != null &amp;&amp; s.trim().length() != 0)</span>
+<span class="nc" id="L569">					mTab.setValue(&quot;Description&quot;, s);</span>
+				//	IsDiscountPrinted
+<span class="nc" id="L571">				s = rs.getString(&quot;IsDiscountPrinted&quot;);</span>
+<span class="nc bnc" id="L572" title="All 4 branches missed.">				if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L573">					mTab.setValue(&quot;IsDiscountPrinted&quot;, s);</span>
+				else
+<span class="nc" id="L575">					mTab.setValue(&quot;IsDiscountPrinted&quot;, &quot;N&quot;);</span>
+
+				//	Defaults, if not Walkin Receipt or Walkin Invoice
+<span class="nc" id="L578">				String OrderType = Env.getContext(ctx, WindowNo, &quot;OrderType&quot;);</span>
+<span class="nc" id="L579">				mTab.setValue(&quot;InvoiceRule&quot;, X_C_Order.INVOICERULE_AfterDelivery);</span>
+<span class="nc" id="L580">				mTab.setValue(&quot;PaymentRule&quot;, X_C_Order.PAYMENTRULE_OnCredit);</span>
+<span class="nc bnc" id="L581" title="All 2 branches missed.">				if (OrderType.equals(MOrder.DocSubTypeSO_Prepay))</span>
+<span class="nc" id="L582">					mTab.setValue(&quot;InvoiceRule&quot;, X_C_Order.INVOICERULE_Immediate);</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">				else if (OrderType.equals(MOrder.DocSubTypeSO_POS))	//  for POS</span>
+<span class="nc" id="L584">					mTab.setValue(&quot;PaymentRule&quot;, X_C_Order.PAYMENTRULE_Cash);</span>
+				else
+				{
+					//	PaymentRule
+<span class="nc bnc" id="L588" title="All 2 branches missed.">					s = rs.getString(IsSOTrx ? &quot;PaymentRule&quot; : &quot;PaymentRulePO&quot;);</span>
+<span class="nc bnc" id="L589" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L590">						mTab.setValue(&quot;PaymentRule&quot;, s);</span>
+					//	Payment Term
+<span class="nc bnc" id="L592" title="All 2 branches missed.">					ii = Integer.valueOf(rs.getInt(IsSOTrx ? &quot;C_PaymentTerm_ID&quot; : &quot;PO_PaymentTerm_ID&quot;));</span>
+<span class="nc bnc" id="L593" title="All 2 branches missed.">					if (!rs.wasNull())</span>
+<span class="nc" id="L594">						mTab.setValue(&quot;C_PaymentTerm_ID&quot;, ii);</span>
+					//	InvoiceRule
+<span class="nc" id="L596">					s = rs.getString(&quot;InvoiceRule&quot;);</span>
+<span class="nc bnc" id="L597" title="All 4 branches missed.">					if (s != null &amp;&amp; s.length() != 0)</span>
+<span class="nc" id="L598">						mTab.setValue(&quot;InvoiceRule&quot;, s);</span>
+				}
+			}
+<span class="nc" id="L601">		}</span>
+<span class="nc" id="L602">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L604">			log.log(Level.SEVERE, &quot;bPartnerBill&quot;, e);</span>
+<span class="nc" id="L605">			return e.getLocalizedMessage();</span>
+		}
+		finally
+		{
+<span class="nc" id="L609">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L610">			rs = null; pstmt = null;</span>
+		}
+<span class="nc" id="L612">		return &quot;&quot;;</span>
+	}	//	bPartnerBill
+
+	/**
+	 *  Set Delivery Rule if Warehouse is changed.
+	 *	@param ctx context
+	 *	@param WindowNo window no
+	 *	@param mTab tab
+	 *	@param mField field
+	 *	@param value value
+	 *	@return null or error message
+	 */
+	public String warehouse (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc bnc" id="L626" title="All 2 branches missed.">		if (isCalloutActive())		//	assuming it is resetting value</span>
+<span class="nc" id="L627">			return &quot;&quot;;</span>
+		
+<span class="nc" id="L629">		Integer M_Warehouse_ID = (Integer)value;</span>
+<span class="nc bnc" id="L630" title="All 4 branches missed.">		if (M_Warehouse_ID == null || M_Warehouse_ID.intValue() == 0)</span>
+<span class="nc" id="L631">			return &quot;&quot;;</span>
+		
+<span class="nc" id="L633">		MWarehouse wh = MWarehouse.get(ctx, M_Warehouse_ID);</span>
+<span class="nc" id="L634">		String DeliveryRule = mTab.get_ValueAsString(&quot;DeliveryRule&quot;);</span>
+<span class="nc bnc" id="L635" title="All 4 branches missed.">		if((wh.isDisallowNegativeInv() &amp;&amp; DeliveryRule.equals(X_C_Order.DELIVERYRULE_Force)) ||</span>
+<span class="nc bnc" id="L636" title="All 4 branches missed.">				(DeliveryRule == null || DeliveryRule.length()==0))</span>
+<span class="nc" id="L637">			mTab.setValue(&quot;DeliveryRule&quot;,X_C_Order.DELIVERYRULE_Availability);</span>
+
+<span class="nc" id="L639">		return &quot;&quot;;</span>
+	}	//	warehouse
+
+	/**
+	 *	Order Header - PriceList.
+	 *	(used also in Invoice)
+	 *		- C_Currency_ID
+	 *		- IsTaxIncluded
+	 *	Window Context:
+	 *		- EnforcePriceLimit
+	 *		- StdPrecision
+	 *		- M_PriceList_Version_ID
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @param readonly Read Only - do not set tab fields, just context
+	 *  @return null or error message
+	 */
+	public String priceListFill (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value, boolean readonly)
+	{
+<span class="nc" id="L661">		Integer M_PriceList_ID = (Integer) mTab.getValue(&quot;M_PriceList_ID&quot;);</span>
+<span class="nc bnc" id="L662" title="All 4 branches missed.">		if (M_PriceList_ID == null || M_PriceList_ID.intValue()== 0)</span>
+<span class="nc" id="L663">			return &quot;&quot;;</span>
+
+<span class="nc" id="L665">		MPriceList pl = MPriceList.get(ctx, M_PriceList_ID, null);</span>
+<span class="nc bnc" id="L666" title="All 4 branches missed.">		if (pl != null &amp;&amp; pl.getM_PriceList_ID() == M_PriceList_ID) {</span>
+<span class="nc bnc" id="L667" title="All 2 branches missed.">			if (!readonly) {</span>
+				//	Tax Included
+<span class="nc" id="L669">				mTab.setValue(&quot;IsTaxIncluded&quot;, pl.isTaxIncluded());</span>
+				//	Currency
+<span class="nc" id="L671">				mTab.setValue(&quot;C_Currency_ID&quot;, pl.getC_Currency_ID());</span>
+			}
+			//	Price Limit Enforce
+<span class="nc" id="L674">			Env.setContext(ctx, WindowNo, &quot;EnforcePriceLimit&quot;, pl.isEnforcePriceLimit());</span>
+
+			//	PriceList Version
+<span class="nc" id="L677">			Timestamp date = null;</span>
+<span class="nc bnc" id="L678" title="All 2 branches missed.">			if (mTab.getAD_Table_ID() == I_C_Order.Table_ID)</span>
+<span class="nc" id="L679">				date = Env.getContextAsDate(ctx, WindowNo, &quot;DateOrdered&quot;);</span>
+<span class="nc bnc" id="L680" title="All 2 branches missed.">			else if (mTab.getAD_Table_ID() == I_C_Invoice.Table_ID)</span>
+<span class="nc" id="L681">				date = Env.getContextAsDate(ctx, WindowNo, &quot;DateInvoiced&quot;);</span>
+<span class="nc" id="L682">			MPriceListVersion plv = pl.getPriceListVersion(date);</span>
+<span class="nc bnc" id="L683" title="All 4 branches missed.">			if (plv != null &amp;&amp; plv.getM_PriceList_Version_ID() &gt; 0) {</span>
+<span class="nc" id="L684">				Env.setContext(ctx, WindowNo, &quot;M_PriceList_Version_ID&quot;, plv.getM_PriceList_Version_ID());</span>
+<span class="nc" id="L685">			} else {</span>
+<span class="nc" id="L686">				Env.setContext(ctx, WindowNo, &quot;M_PriceList_Version_ID&quot;, (String) null);</span>
+			}
+		}
+
+<span class="nc" id="L690">		return &quot;&quot;;</span>
+	}	//	priceListFill
+
+	public String priceList (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L695">		return priceListFill (ctx, WindowNo, mTab, mField, value, false);</span>
+	}	//	priceList
+
+	/* IDEMPIERE-2676 - this is same callout priceList but not setting any variable, just reading and setting context, called on navigate */
+	public String priceListReadOnly (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L701">		return priceListFill (ctx, WindowNo, mTab, mField, value, true);</span>
+	}	//	priceListReadOnly
+	
+	/**
+	 *	Set Payment Term.
+	 *	Payment Term has changed 
+	 *	@param ctx context
+	 *	@param WindowNo window no
+	 *	@param mTab tab
+	 *	@param mField field
+	 *	@param value value
+	 *	@return null or error message
+	 *  @Deprecated - business logic moved to MOrder.beforeSave - must not create/delete external records with callouts
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public String paymentTerm (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L718">		Integer C_PaymentTerm_ID = (Integer)value;</span>
+<span class="nc" id="L719">		int C_Order_ID = Env.getContextAsInt(ctx, WindowNo, &quot;C_Order_ID&quot;);</span>
+<span class="nc bnc" id="L720" title="All 4 branches missed.">		if (C_PaymentTerm_ID == null || C_PaymentTerm_ID.intValue() == 0</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">			|| C_Order_ID == 0)	//	not saved yet</span>
+<span class="nc" id="L722">			return &quot;&quot;;</span>
+		//
+<span class="nc" id="L724">		MPaymentTerm pt = new MPaymentTerm (ctx, C_PaymentTerm_ID.intValue(), null);</span>
+<span class="nc bnc" id="L725" title="All 2 branches missed.">		if (pt.get_ID() == 0)</span>
+<span class="nc" id="L726">			return &quot;PaymentTerm not found&quot;;</span>
+		
+<span class="nc" id="L728">		boolean valid = pt.applyOrder (C_Order_ID);</span>
+<span class="nc bnc" id="L729" title="All 2 branches missed.">		mTab.setValue(&quot;IsPayScheduleValid&quot;, valid ? &quot;Y&quot; : &quot;N&quot;);</span>
+		
+<span class="nc" id="L731">		return &quot;&quot;;</span>
+	}	//	paymentTerm
+	
+
+	/*************************************************************************
+	 *	Order Line - Product.
+	 *		- reset C_Charge_ID / M_AttributeSetInstance_ID
+	 *		- PriceList, PriceStd, PriceLimit, C_Currency_ID, EnforcePriceLimit
+	 *		- UOM
+	 *	Calls Tax
+	 *
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @return null or error message
+	 */
+	public String product (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L751">		Integer M_Product_ID = (Integer)value;</span>
+<span class="nc bnc" id="L752" title="All 4 branches missed.">		if (M_Product_ID == null || M_Product_ID.intValue() == 0)</span>
+<span class="nc" id="L753">			return &quot;&quot;;</span>
+<span class="nc bnc" id="L754" title="All 2 branches missed.">		if (steps) log.warning(&quot;init&quot;);</span>
+		//
+<span class="nc" id="L756">		mTab.setValue(&quot;C_Charge_ID&quot;, null);</span>
+		//	Set Attribute
+<span class="nc bnc" id="L758" title="All 2 branches missed.">		if (Env.getContextAsInt(ctx, WindowNo, Env.TAB_INFO, &quot;M_Product_ID&quot;) == M_Product_ID.intValue()</span>
+<span class="nc bnc" id="L759" title="All 2 branches missed.">			&amp;&amp; Env.getContextAsInt(ctx, WindowNo, Env.TAB_INFO, &quot;M_AttributeSetInstance_ID&quot;) != 0)</span>
+<span class="nc" id="L760">			mTab.setValue(&quot;M_AttributeSetInstance_ID&quot;, Env.getContextAsInt(ctx, WindowNo, Env.TAB_INFO, &quot;M_AttributeSetInstance_ID&quot;));</span>
+		else
+<span class="nc" id="L762">			mTab.setValue(&quot;M_AttributeSetInstance_ID&quot;, 0);</span>
+
+		/*****	Price Calculation see also qty	****/
+<span class="nc" id="L765">		int C_BPartner_ID = Env.getContextAsInt(ctx, WindowNo, &quot;C_BPartner_ID&quot;);</span>
+<span class="nc" id="L766">		BigDecimal Qty = (BigDecimal)mTab.getValue(&quot;QtyOrdered&quot;);</span>
+<span class="nc" id="L767">		boolean IsSOTrx = Env.getContext(ctx, WindowNo, &quot;IsSOTrx&quot;).equals(&quot;Y&quot;);</span>
+<span class="nc" id="L768">		IProductPricing pp = Core.getProductPricing();</span>
+<span class="nc" id="L769">		pp.setInitialValues(M_Product_ID.intValue(), C_BPartner_ID, Qty, IsSOTrx, null);</span>
+<span class="nc" id="L770">		Timestamp orderDate = (Timestamp)mTab.getValue(&quot;DateOrdered&quot;);</span>
+<span class="nc" id="L771">		pp.setPriceDate(orderDate);</span>
+<span class="nc" id="L772">		I_C_OrderLine orderLine = GridTabWrapper.create(mTab, I_C_OrderLine.class);</span>
+<span class="nc" id="L773">		pp.setOrderLine(orderLine, null);</span>
+		//
+<span class="nc" id="L775">		int M_PriceList_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_PriceList_ID&quot;);</span>
+<span class="nc" id="L776">		pp.setM_PriceList_ID(M_PriceList_ID);</span>
+		/** PLV is only accurate if PL selected in header */
+<span class="nc" id="L778">		int M_PriceList_Version_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_PriceList_Version_ID&quot;);</span>
+<span class="nc bnc" id="L779" title="All 4 branches missed.">		if ( M_PriceList_Version_ID == 0 &amp;&amp; M_PriceList_ID &gt; 0)</span>
+		{
+<span class="nc" id="L781">			String sql = &quot;SELECT plv.M_PriceList_Version_ID &quot;</span>
+				+ &quot;FROM M_PriceList_Version plv &quot;
+				+ &quot;WHERE plv.M_PriceList_ID=? &quot;						//	1
+				+ &quot; AND plv.ValidFrom &lt;= ? &quot;
+				+ &quot;ORDER BY plv.ValidFrom DESC&quot;;
+			//	Use newest price list - may not be future
+
+<span class="nc" id="L788">			M_PriceList_Version_ID = DB.getSQLValueEx(null, sql, M_PriceList_ID, orderDate);</span>
+<span class="nc bnc" id="L789" title="All 2 branches missed.">			if ( M_PriceList_Version_ID &gt; 0 )</span>
+<span class="nc" id="L790">				Env.setContext(ctx, WindowNo, &quot;M_PriceList_Version_ID&quot;, M_PriceList_Version_ID );</span>
+		}
+<span class="nc" id="L792">		pp.setM_PriceList_Version_ID(M_PriceList_Version_ID);</span>
+		//
+<span class="nc" id="L794">		mTab.setValue(&quot;PriceList&quot;, pp.getPriceList());</span>
+<span class="nc" id="L795">		mTab.setValue(&quot;PriceLimit&quot;, pp.getPriceLimit());</span>
+<span class="nc" id="L796">		mTab.setValue(&quot;PriceActual&quot;, pp.getPriceStd());</span>
+<span class="nc" id="L797">		mTab.setValue(&quot;PriceEntered&quot;, pp.getPriceStd());</span>
+<span class="nc" id="L798">		mTab.setValue(&quot;C_Currency_ID&quot;, Integer.valueOf(pp.getC_Currency_ID()));</span>
+<span class="nc" id="L799">		mTab.setValue(&quot;Discount&quot;, pp.getDiscount());</span>
+<span class="nc" id="L800">		mTab.setValue(&quot;C_UOM_ID&quot;, Integer.valueOf(pp.getC_UOM_ID()));</span>
+<span class="nc" id="L801">		mTab.setValue(&quot;QtyOrdered&quot;, mTab.getValue(&quot;QtyEntered&quot;));</span>
+<span class="nc bnc" id="L802" title="All 2 branches missed.">		Env.setContext(ctx, WindowNo, &quot;EnforcePriceLimit&quot;, pp.isEnforcePriceLimit() ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc bnc" id="L803" title="All 2 branches missed.">		Env.setContext(ctx, WindowNo, &quot;DiscountSchema&quot;, pp.isDiscountSchema() ? &quot;Y&quot; : &quot;N&quot;);</span>
+
+<span class="nc" id="L805">		int M_Warehouse_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_Warehouse_ID&quot;);</span>
+<span class="nc" id="L806">		MWarehouse warehouse = MWarehouse.get(ctx, M_Warehouse_ID);</span>
+<span class="nc bnc" id="L807" title="All 4 branches missed.">		if (Env.isSOTrx(ctx, WindowNo) &amp;&amp; !warehouse.isDisableInventoryPopup())</span>
+		{
+<span class="nc" id="L809">			MProduct product = MProduct.get (ctx, M_Product_ID.intValue());</span>
+<span class="nc bnc" id="L810" title="All 4 branches missed.">			if (product.isStocked() &amp;&amp; Env.getContext(ctx, WindowNo, &quot;IsDropShip&quot;).equals(&quot;N&quot;)</span>
+<span class="nc bnc" id="L811" title="All 6 branches missed.">				&amp;&amp; !(product.isBOM() &amp;&amp; product.isVerified() &amp;&amp; product.isAutoProduce()))</span>
+			{
+<span class="nc" id="L813">				BigDecimal QtyOrdered = (BigDecimal)mTab.getValue(&quot;QtyOrdered&quot;);</span>
+<span class="nc bnc" id="L814" title="All 2 branches missed.">				if (QtyOrdered == null)</span>
+<span class="nc" id="L815">					QtyOrdered = Env.ZERO;</span>
+
+<span class="nc" id="L817">				int M_AttributeSetInstance_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;M_AttributeSetInstance_ID&quot;);</span>
+<span class="nc" id="L818">				BigDecimal available = MStorageReservation.getQtyAvailable</span>
+<span class="nc" id="L819">					(M_Warehouse_ID, M_Product_ID.intValue(), M_AttributeSetInstance_ID, null);</span>
+<span class="nc bnc" id="L820" title="All 2 branches missed.">				if (available == null)</span>
+<span class="nc" id="L821">					available = Env.ZERO;</span>
+<span class="nc bnc" id="L822" title="All 2 branches missed.">				if (available.signum() == 0)</span>
+<span class="nc" id="L823">					mTab.fireDataStatusEEvent (&quot;NoQtyAvailable&quot;, &quot;0&quot;, false);</span>
+<span class="nc bnc" id="L824" title="All 2 branches missed.">				else if (available.compareTo(QtyOrdered) &lt; 0)</span>
+<span class="nc" id="L825">					mTab.fireDataStatusEEvent (&quot;InsufficientQtyAvailable&quot;, available.toString(), false);</span>
+				else
+				{
+<span class="nc" id="L828">					Integer C_OrderLine_ID = (Integer)mTab.getValue(&quot;C_OrderLine_ID&quot;);</span>
+<span class="nc bnc" id="L829" title="All 2 branches missed.">					if (C_OrderLine_ID == null)</span>
+<span class="nc" id="L830">						C_OrderLine_ID = Integer.valueOf(0);</span>
+<span class="nc" id="L831">					BigDecimal notReserved = MOrderLine.getNotReserved(ctx,</span>
+<span class="nc" id="L832">						M_Warehouse_ID, M_Product_ID, M_AttributeSetInstance_ID,</span>
+<span class="nc" id="L833">						C_OrderLine_ID.intValue());</span>
+<span class="nc bnc" id="L834" title="All 2 branches missed.">					if (notReserved == null)</span>
+<span class="nc" id="L835">						notReserved = Env.ZERO;</span>
+<span class="nc" id="L836">					BigDecimal total = available.subtract(notReserved);</span>
+<span class="nc bnc" id="L837" title="All 2 branches missed.">					if (total.compareTo(QtyOrdered) &lt; 0)</span>
+					{
+<span class="nc" id="L839">						String info = Msg.parseTranslation(ctx, &quot;@QtyAvailable@=&quot; + available</span>
+<span class="nc" id="L840">							+ &quot; - @QtyNotReserved@=&quot; + notReserved + &quot; = &quot; + total);</span>
+<span class="nc" id="L841">						mTab.fireDataStatusEEvent (&quot;InsufficientQtyAvailable&quot;,</span>
+<span class="nc" id="L842">							info, false);</span>
+					}
+				}
+			}
+		}
+		//
+<span class="nc bnc" id="L848" title="All 2 branches missed.">		if (steps) log.warning(&quot;fini&quot;);</span>
+<span class="nc" id="L849">		return tax (ctx, WindowNo, mTab, mField, value);</span>
+	}	//	product
+
+	/**
+	 *	Order Line - Charge.
+	 * 		- updates PriceActual from Charge
+	 * 		- sets PriceLimit, PriceList to zero
+	 * 	Calls tax
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @return null or error message
+	 */
+	public String charge (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L866">		Integer C_Charge_ID = (Integer)value;</span>
+<span class="nc bnc" id="L867" title="All 4 branches missed.">		if (C_Charge_ID == null || C_Charge_ID.intValue() == 0)</span>
+<span class="nc" id="L868">			return &quot;&quot;;</span>
+		//	No Product defined
+<span class="nc bnc" id="L870" title="All 2 branches missed.">		if (mTab.getValue(&quot;M_Product_ID&quot;) != null)</span>
+		{
+<span class="nc" id="L872">			mTab.setValue(&quot;C_Charge_ID&quot;, null);</span>
+<span class="nc" id="L873">			return &quot;ChargeExclusively&quot;;</span>
+		}
+<span class="nc" id="L875">		mTab.setValue(&quot;M_AttributeSetInstance_ID&quot;, null);</span>
+<span class="nc" id="L876">		mTab.setValue(&quot;S_ResourceAssignment_ID&quot;, null);</span>
+<span class="nc" id="L877">		mTab.setValue(&quot;C_UOM_ID&quot;, Integer.valueOf(SystemIDs.C_UOM_EACH));	//	EA</span>
+
+<span class="nc" id="L879">		Env.setContext(ctx, WindowNo, &quot;DiscountSchema&quot;, &quot;N&quot;);</span>
+<span class="nc" id="L880">		String sql = &quot;SELECT ChargeAmt FROM C_Charge WHERE C_Charge_ID=?&quot;;</span>
+<span class="nc" id="L881">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L882">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L885">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L886">			pstmt.setInt(1, C_Charge_ID.intValue());</span>
+<span class="nc" id="L887">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L888" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L890">				mTab.setValue (&quot;PriceEntered&quot;, rs.getBigDecimal (1));</span>
+<span class="nc" id="L891">				mTab.setValue (&quot;PriceActual&quot;, rs.getBigDecimal (1));</span>
+<span class="nc" id="L892">				mTab.setValue (&quot;PriceLimit&quot;, Env.ZERO);</span>
+<span class="nc" id="L893">				mTab.setValue (&quot;PriceList&quot;, Env.ZERO);</span>
+<span class="nc" id="L894">				mTab.setValue (&quot;Discount&quot;, Env.ZERO);</span>
+			}
+<span class="nc" id="L896">		}</span>
+<span class="nc" id="L897">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L899">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L900">			return e.getLocalizedMessage();</span>
+		}
+		finally
+		{
+<span class="nc" id="L904">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L905">			rs = null; pstmt = null;</span>
+		}
+
+		//
+<span class="nc" id="L909">		return tax (ctx, WindowNo, mTab, mField, value);</span>
+	}	//	charge
+
+
+	/**
+	 *	Order Line - Tax.
+	 *		- basis: Product, Charge, BPartner Location
+	 *		- sets C_Tax_ID
+	 *  Calls Amount
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @return null or error message
+	 */
+	public String tax (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc" id="L927">		String column = mField.getColumnName();</span>
+<span class="nc bnc" id="L928" title="All 2 branches missed.">		if (value == null)</span>
+<span class="nc" id="L929">			return &quot;&quot;;</span>
+<span class="nc bnc" id="L930" title="All 2 branches missed.">		if (steps) log.warning(&quot;init&quot;);</span>
+
+		//	Check Product
+<span class="nc" id="L933">		int M_Product_ID = 0;</span>
+<span class="nc bnc" id="L934" title="All 2 branches missed.">		if (column.equals(&quot;M_Product_ID&quot;))</span>
+<span class="nc" id="L935">			M_Product_ID = ((Integer)value).intValue();</span>
+		else
+<span class="nc" id="L937">			M_Product_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;M_Product_ID&quot;);</span>
+<span class="nc" id="L938">		int C_Charge_ID = 0;</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">		if (column.equals(&quot;C_Charge_ID&quot;))</span>
+<span class="nc" id="L940">			C_Charge_ID = ((Integer)value).intValue();</span>
+		else
+<span class="nc" id="L942">			C_Charge_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;C_Charge_ID&quot;);</span>
+<span class="nc bnc" id="L943" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Product=&quot; + M_Product_ID + &quot;, C_Charge_ID=&quot; + C_Charge_ID);</span>
+<span class="nc bnc" id="L944" title="All 4 branches missed.">		if (M_Product_ID == 0 &amp;&amp; C_Charge_ID == 0)</span>
+<span class="nc" id="L945">			return amt(ctx, WindowNo, mTab, mField, value);		//</span>
+
+		//	Check Partner Location
+<span class="nc" id="L948">		int shipC_BPartner_Location_ID = 0;</span>
+<span class="nc bnc" id="L949" title="All 2 branches missed.">		if (column.equals(&quot;C_BPartner_Location_ID&quot;))</span>
+<span class="nc" id="L950">			shipC_BPartner_Location_ID = ((Integer)value).intValue();</span>
+		else
+<span class="nc" id="L952">			shipC_BPartner_Location_ID = Env.getContextAsInt(ctx, WindowNo, &quot;C_BPartner_Location_ID&quot;);</span>
+<span class="nc bnc" id="L953" title="All 2 branches missed.">		if (shipC_BPartner_Location_ID == 0)</span>
+<span class="nc" id="L954">			return amt(ctx, WindowNo, mTab, mField, value);		//</span>
+<span class="nc bnc" id="L955" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Ship BP_Location=&quot; + shipC_BPartner_Location_ID);</span>
+
+		//
+<span class="nc" id="L958">		Timestamp billDate = Env.getContextAsDate(ctx, WindowNo, &quot;DateOrdered&quot;);</span>
+<span class="nc bnc" id="L959" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Bill Date=&quot; + billDate);</span>
+
+<span class="nc" id="L961">		Timestamp shipDate = Env.getContextAsDate(ctx, WindowNo, &quot;DatePromised&quot;);</span>
+<span class="nc bnc" id="L962" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Ship Date=&quot; + shipDate);</span>
+
+<span class="nc" id="L964">		int AD_Org_ID = Env.getContextAsInt(ctx, WindowNo, &quot;AD_Org_ID&quot;);</span>
+<span class="nc bnc" id="L965" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Org=&quot; + AD_Org_ID);</span>
+
+<span class="nc" id="L967">		int M_Warehouse_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_Warehouse_ID&quot;);</span>
+<span class="nc bnc" id="L968" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Warehouse=&quot; + M_Warehouse_ID);</span>
+
+<span class="nc" id="L970">		int billC_BPartner_Location_ID = Env.getContextAsInt(ctx, WindowNo, &quot;Bill_Location_ID&quot;);</span>
+<span class="nc bnc" id="L971" title="All 2 branches missed.">		if (billC_BPartner_Location_ID == 0)</span>
+<span class="nc" id="L972">			billC_BPartner_Location_ID = shipC_BPartner_Location_ID;</span>
+<span class="nc bnc" id="L973" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Bill BP_Location=&quot; + billC_BPartner_Location_ID);</span>
+
+		//
+<span class="nc" id="L976">		String deliveryViaRule = Env.getContext(ctx, WindowNo, I_C_Order.COLUMNNAME_DeliveryViaRule, true);</span>
+<span class="nc" id="L977">		int dropshipLocationId = Env.getContextAsInt(ctx, WindowNo, I_C_Order.COLUMNNAME_DropShip_Location_ID, true);</span>
+<span class="nc" id="L978">		int C_Tax_ID = Core.getTaxLookup().get(ctx, M_Product_ID, C_Charge_ID, billDate, shipDate,</span>
+<span class="nc" id="L979">			AD_Org_ID, M_Warehouse_ID, billC_BPartner_Location_ID, shipC_BPartner_Location_ID, dropshipLocationId,</span>
+<span class="nc" id="L980">			&quot;Y&quot;.equals(Env.getContext(ctx, WindowNo, &quot;IsSOTrx&quot;)), deliveryViaRule, null);</span>
+<span class="nc bnc" id="L981" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Tax ID=&quot; + C_Tax_ID);</span>
+		//
+<span class="nc bnc" id="L983" title="All 2 branches missed.">		if (C_Tax_ID == 0)</span>
+<span class="nc" id="L984">			mTab.fireDataStatusEEvent(CLogger.retrieveError());</span>
+		else
+<span class="nc" id="L986">			mTab.setValue(&quot;C_Tax_ID&quot;, Integer.valueOf(C_Tax_ID));</span>
+		//
+<span class="nc bnc" id="L988" title="All 2 branches missed.">		if (steps) log.warning(&quot;fini&quot;);</span>
+<span class="nc" id="L989">		return amt(ctx, WindowNo, mTab, mField, value);</span>
+	}	//	tax
+
+
+	/**
+	 *	Order Line - Amount.
+	 *		- called from QtyOrdered, Discount and PriceActual
+	 *		- calculates Discount or Actual Amount
+	 *		- calculates LineNetAmt
+	 *		- enforces PriceLimit
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @return null or error message
+	 */
+	public String amt (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc bnc" id="L1008" title="All 4 branches missed.">		if (isCalloutActive() || value == null)</span>
+<span class="nc" id="L1009">			return &quot;&quot;;</span>
+
+<span class="nc bnc" id="L1011" title="All 2 branches missed.">		if (steps) log.warning(&quot;init&quot;);</span>
+<span class="nc" id="L1012">		int C_UOM_To_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;C_UOM_ID&quot;);</span>
+<span class="nc" id="L1013">		int M_Product_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;M_Product_ID&quot;);</span>
+<span class="nc" id="L1014">		int M_PriceList_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;M_PriceList_ID&quot;);</span>
+<span class="nc" id="L1015">		int StdPrecision = MPriceList.getStandardPrecision(ctx, M_PriceList_ID);</span>
+<span class="nc" id="L1016">		MPriceList pl = new MPriceList(ctx, M_PriceList_ID, null);</span>
+<span class="nc" id="L1017">		boolean isEnforcePriceLimit = pl.isEnforcePriceLimit();</span>
+		BigDecimal QtyEntered, QtyOrdered, PriceEntered, PriceActual, PriceLimit, Discount, PriceList;
+		//	get values
+<span class="nc" id="L1020">		QtyEntered = (BigDecimal)mTab.getValue(&quot;QtyEntered&quot;);</span>
+<span class="nc bnc" id="L1021" title="All 2 branches missed.">		if (QtyEntered == null)</span>
+<span class="nc" id="L1022">			QtyEntered = Env.ZERO;</span>
+<span class="nc" id="L1023">		QtyOrdered = (BigDecimal)mTab.getValue(&quot;QtyOrdered&quot;);</span>
+<span class="nc bnc" id="L1024" title="All 2 branches missed.">		if (QtyOrdered == null)</span>
+<span class="nc" id="L1025">			QtyOrdered = Env.ZERO;</span>
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;QtyEntered=&quot; + QtyEntered + &quot;, Ordered=&quot; + QtyOrdered + &quot;, UOM=&quot; + C_UOM_To_ID);</span>
+		//
+<span class="nc" id="L1028">		PriceEntered = (BigDecimal)mTab.getValue(&quot;PriceEntered&quot;);</span>
+<span class="nc" id="L1029">		PriceActual = (BigDecimal)mTab.getValue(&quot;PriceActual&quot;);</span>
+<span class="nc" id="L1030">		Discount = (BigDecimal)mTab.getValue(&quot;Discount&quot;);</span>
+<span class="nc" id="L1031">		PriceLimit = (BigDecimal)mTab.getValue(&quot;PriceLimit&quot;);</span>
+<span class="nc" id="L1032">		PriceList = (BigDecimal)mTab.getValue(&quot;PriceList&quot;);</span>
+<span class="nc bnc" id="L1033" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)){</span>
+<span class="nc" id="L1034">			log.fine(&quot;PriceList=&quot; + PriceList + &quot;, Limit=&quot; + PriceLimit + &quot;, Precision=&quot; + StdPrecision);</span>
+<span class="nc" id="L1035">			log.fine(&quot;PriceEntered=&quot; + PriceEntered + &quot;, Actual=&quot; + PriceActual + &quot;, Discount=&quot; + Discount);</span>
+		}
+
+		//		No Product
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">		if (M_Product_ID == 0)</span>
+		{
+			// if price change sync price actual and entered
+			// else ignore
+<span class="nc bnc" id="L1043" title="All 2 branches missed.">			if (mField.getColumnName().equals(&quot;PriceActual&quot;))</span>
+			{
+<span class="nc" id="L1045">				PriceEntered = (BigDecimal) value;</span>
+<span class="nc" id="L1046">				mTab.setValue(&quot;PriceEntered&quot;, value);</span>
+<span class="nc" id="L1047">			}</span>
+<span class="nc bnc" id="L1048" title="All 2 branches missed.">			else if (mField.getColumnName().equals(&quot;PriceEntered&quot;))</span>
+			{
+<span class="nc" id="L1050">				PriceActual = (BigDecimal) value;</span>
+<span class="nc" id="L1051">				mTab.setValue(&quot;PriceActual&quot;, value);</span>
+			}
+<span class="nc" id="L1053">		}</span>
+		//	Product Qty changed - recalc price
+<span class="nc bnc" id="L1055" title="All 2 branches missed.">		else if ((mField.getColumnName().equals(&quot;QtyOrdered&quot;)</span>
+<span class="nc bnc" id="L1056" title="All 2 branches missed.">			|| mField.getColumnName().equals(&quot;QtyEntered&quot;)</span>
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">			|| mField.getColumnName().equals(&quot;C_UOM_ID&quot;)</span>
+<span class="nc bnc" id="L1058" title="All 2 branches missed.">			|| mField.getColumnName().equals(&quot;M_Product_ID&quot;))</span>
+<span class="nc bnc" id="L1059" title="All 2 branches missed.">			&amp;&amp; !&quot;N&quot;.equals(Env.getContext(ctx, WindowNo, &quot;DiscountSchema&quot;)))</span>
+		{
+<span class="nc" id="L1061">			int C_BPartner_ID = Env.getContextAsInt(ctx, WindowNo, &quot;C_BPartner_ID&quot;);</span>
+<span class="nc bnc" id="L1062" title="All 2 branches missed.">			if (mField.getColumnName().equals(&quot;QtyEntered&quot;))</span>
+<span class="nc" id="L1063">				QtyOrdered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1064">					C_UOM_To_ID, QtyEntered);</span>
+<span class="nc bnc" id="L1065" title="All 2 branches missed.">			if (QtyOrdered == null)</span>
+<span class="nc" id="L1066">				QtyOrdered = QtyEntered;</span>
+<span class="nc" id="L1067">			boolean IsSOTrx = Env.getContext(ctx, WindowNo, &quot;IsSOTrx&quot;).equals(&quot;Y&quot;);</span>
+<span class="nc" id="L1068">			IProductPricing pp = Core.getProductPricing();</span>
+<span class="nc" id="L1069">			pp.setInitialValues(M_Product_ID, C_BPartner_ID, QtyOrdered, IsSOTrx, null);</span>
+<span class="nc" id="L1070">			Timestamp date = (Timestamp)mTab.getValue(&quot;DateOrdered&quot;);</span>
+<span class="nc" id="L1071">			pp.setPriceDate(date);</span>
+<span class="nc" id="L1072">			I_C_OrderLine orderLine = GridTabWrapper.create(mTab, I_C_OrderLine.class);</span>
+<span class="nc" id="L1073">			pp.setOrderLine(orderLine, null);</span>
+<span class="nc" id="L1074">			pp.setM_PriceList_ID(M_PriceList_ID);</span>
+<span class="nc" id="L1075">			int M_PriceList_Version_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_PriceList_Version_ID&quot;);</span>
+<span class="nc" id="L1076">			pp.setM_PriceList_Version_ID(M_PriceList_Version_ID);</span>
+			//
+<span class="nc" id="L1078">			PriceEntered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1079">				C_UOM_To_ID, pp.getPriceStd(), 12);</span>
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">			if (PriceEntered == null)</span>
+<span class="nc" id="L1081">				PriceEntered = pp.getPriceStd();</span>
+			//
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;QtyChanged -&gt; PriceActual=&quot; + pp.getPriceStd()</span>
+<span class="nc" id="L1084">				+ &quot;, PriceEntered=&quot; + PriceEntered + &quot;, Discount=&quot; + pp.getDiscount());</span>
+<span class="nc" id="L1085">			PriceActual = pp.getPriceStd();</span>
+<span class="nc" id="L1086">			Discount = pp.getDiscount();</span>
+<span class="nc" id="L1087">			PriceLimit = pp.getPriceLimit();</span>
+<span class="nc" id="L1088">			PriceList = pp.getPriceList();</span>
+<span class="nc" id="L1089">			mTab.setValue(&quot;PriceList&quot;, pp.getPriceList());</span>
+<span class="nc" id="L1090">			mTab.setValue(&quot;PriceLimit&quot;, pp.getPriceLimit());</span>
+<span class="nc" id="L1091">			mTab.setValue(&quot;PriceActual&quot;, pp.getPriceStd());</span>
+<span class="nc" id="L1092">			mTab.setValue(&quot;Discount&quot;, pp.getDiscount());</span>
+<span class="nc" id="L1093">			mTab.setValue(&quot;PriceEntered&quot;, PriceEntered);</span>
+<span class="nc bnc" id="L1094" title="All 2 branches missed.">			Env.setContext(ctx, WindowNo, &quot;DiscountSchema&quot;, pp.isDiscountSchema() ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc" id="L1095">		}</span>
+<span class="nc bnc" id="L1096" title="All 2 branches missed.">		else if (mField.getColumnName().equals(&quot;PriceActual&quot;))</span>
+		{
+<span class="nc" id="L1098">			PriceActual = (BigDecimal)value;</span>
+<span class="nc" id="L1099">			PriceEntered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1100">				C_UOM_To_ID, PriceActual, 12);</span>
+<span class="nc bnc" id="L1101" title="All 2 branches missed.">			if (PriceEntered == null)</span>
+<span class="nc" id="L1102">				PriceEntered = PriceActual;</span>
+			//
+<span class="nc bnc" id="L1104" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;PriceActual=&quot; + PriceActual</span>
+<span class="nc" id="L1105">				+ &quot; -&gt; PriceEntered=&quot; + PriceEntered);</span>
+<span class="nc" id="L1106">			mTab.setValue(&quot;PriceEntered&quot;, PriceEntered);</span>
+<span class="nc" id="L1107">		}</span>
+<span class="nc bnc" id="L1108" title="All 2 branches missed.">		else if (mField.getColumnName().equals(&quot;PriceEntered&quot;))</span>
+		{
+<span class="nc" id="L1110">			PriceEntered = (BigDecimal)value;</span>
+<span class="nc" id="L1111">			PriceActual = MUOMConversion.convertProductTo (ctx, M_Product_ID,</span>
+<span class="nc" id="L1112">				C_UOM_To_ID, PriceEntered, 12);</span>
+<span class="nc bnc" id="L1113" title="All 2 branches missed.">			if (PriceActual == null)</span>
+<span class="nc" id="L1114">				PriceActual = PriceEntered;</span>
+			//
+<span class="nc bnc" id="L1116" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;PriceEntered=&quot; + PriceEntered</span>
+<span class="nc" id="L1117">				+ &quot; -&gt; PriceActual=&quot; + PriceActual);</span>
+<span class="nc" id="L1118">			mTab.setValue(&quot;PriceActual&quot;, PriceActual);</span>
+		}
+
+		//  Discount entered - Calculate Actual/Entered
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">		if (mField.getColumnName().equals(&quot;Discount&quot;))</span>
+		{
+<span class="nc bnc" id="L1124" title="All 2 branches missed.">			if ( PriceList.doubleValue() != 0 )</span>
+<span class="nc" id="L1125">				PriceActual = BigDecimal.valueOf((100.0 - Discount.doubleValue()) / 100.0 * PriceList.doubleValue());</span>
+<span class="nc bnc" id="L1126" title="All 2 branches missed.">			if (PriceActual.scale() &gt; StdPrecision)</span>
+<span class="nc" id="L1127">				PriceActual = PriceActual.setScale(StdPrecision, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L1128">			PriceEntered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1129">				C_UOM_To_ID, PriceActual, 12);</span>
+<span class="nc bnc" id="L1130" title="All 2 branches missed.">			if (PriceEntered == null)</span>
+<span class="nc" id="L1131">				PriceEntered = PriceActual;</span>
+<span class="nc" id="L1132">			mTab.setValue(&quot;PriceActual&quot;, PriceActual);</span>
+<span class="nc" id="L1133">			mTab.setValue(&quot;PriceEntered&quot;, PriceEntered);</span>
+<span class="nc" id="L1134">		}</span>
+		//	calculate Discount
+		else
+		{
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">			if (PriceList.compareTo(Env.ZERO) == 0)</span>
+<span class="nc" id="L1139">				Discount = Env.ZERO;</span>
+			else
+<span class="nc" id="L1141">				Discount = BigDecimal.valueOf((PriceList.doubleValue() - PriceActual.doubleValue()) / PriceList.doubleValue() * 100.0);</span>
+<span class="nc bnc" id="L1142" title="All 2 branches missed.">			if (Discount.scale() &gt; 2)</span>
+<span class="nc" id="L1143">				Discount = Discount.setScale(2, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L1144">			mTab.setValue(&quot;Discount&quot;, Discount);</span>
+		}
+<span class="nc bnc" id="L1146" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;PriceEntered=&quot; + PriceEntered + &quot;, Actual=&quot; + PriceActual + &quot;, Discount=&quot; + Discount);</span>
+
+		//	Check PriceLimit
+<span class="nc" id="L1149">		String epl = Env.getContext(ctx, WindowNo, &quot;EnforcePriceLimit&quot;);</span>
+<span class="nc bnc" id="L1150" title="All 6 branches missed.">		boolean enforce = Env.isSOTrx(ctx, WindowNo) &amp;&amp; epl != null &amp;&amp; !epl.equals(&quot;&quot;) ? epl.equals(&quot;Y&quot;) : isEnforcePriceLimit;</span>
+<span class="nc bnc" id="L1151" title="All 4 branches missed.">		if (enforce &amp;&amp; MRole.getDefault().isOverwritePriceLimit())</span>
+<span class="nc" id="L1152">			enforce = false;</span>
+		//	Check Price Limit?
+<span class="nc bnc" id="L1154" title="All 4 branches missed.">		if (enforce &amp;&amp; PriceLimit.doubleValue() != 0.0</span>
+<span class="nc bnc" id="L1155" title="All 2 branches missed.">		  &amp;&amp; PriceActual.compareTo(PriceLimit) &lt; 0)</span>
+		{
+<span class="nc" id="L1157">			PriceActual = PriceLimit;</span>
+<span class="nc" id="L1158">			PriceEntered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1159">				C_UOM_To_ID, PriceLimit, 12);</span>
+<span class="nc bnc" id="L1160" title="All 2 branches missed.">			if (PriceEntered == null)</span>
+<span class="nc" id="L1161">				PriceEntered = PriceLimit;</span>
+<span class="nc bnc" id="L1162" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;(under) PriceEntered=&quot; + PriceEntered + &quot;, Actual&quot; + PriceLimit);</span>
+<span class="nc" id="L1163">			mTab.setValue (&quot;PriceActual&quot;, PriceLimit);</span>
+<span class="nc" id="L1164">			mTab.setValue (&quot;PriceEntered&quot;, PriceEntered);</span>
+<span class="nc" id="L1165">			mTab.fireDataStatusEEvent (&quot;UnderLimitPrice&quot;, &quot;&quot;, false);</span>
+			//	Repeat Discount calc
+<span class="nc bnc" id="L1167" title="All 2 branches missed.">			if (PriceList.compareTo(Env.ZERO) != 0)</span>
+			{
+<span class="nc" id="L1169">				Discount = BigDecimal.valueOf((PriceList.doubleValue () - PriceActual.doubleValue ()) / PriceList.doubleValue () * 100.0);</span>
+<span class="nc bnc" id="L1170" title="All 2 branches missed.">				if (Discount.scale () &gt; 2)</span>
+<span class="nc" id="L1171">					Discount = Discount.setScale (2, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L1172">				mTab.setValue (&quot;Discount&quot;, Discount);</span>
+			}
+		}
+
+		//	Line Net Amt
+<span class="nc" id="L1177">		BigDecimal LineNetAmt = QtyEntered.multiply(PriceEntered);</span>
+<span class="nc bnc" id="L1178" title="All 2 branches missed.">		if (LineNetAmt.scale() &gt; StdPrecision)</span>
+<span class="nc" id="L1179">			LineNetAmt = LineNetAmt.setScale(StdPrecision, RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L1180" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;LineNetAmt=&quot; + LineNetAmt);</span>
+<span class="nc" id="L1181">		mTab.setValue(&quot;LineNetAmt&quot;, LineNetAmt);</span>
+		//
+<span class="nc" id="L1183">		return &quot;&quot;;</span>
+	}	//	amt
+
+	/**
+	 *	Order Line - Quantity.
+	 *		- called from C_UOM_ID, QtyEntered, QtyOrdered
+	 *		- enforces qty UOM relationship
+	 *  @param ctx context
+	 *  @param WindowNo current Window No
+	 *  @param mTab Grid Tab
+	 *  @param mField Grid Field
+	 *  @param value New Value
+	 *  @return null or error message
+	 */
+	public String qty (Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value)
+	{
+<span class="nc bnc" id="L1199" title="All 4 branches missed.">		if (isCalloutActive() || value == null)</span>
+<span class="nc" id="L1200">			return &quot;&quot;;</span>
+<span class="nc" id="L1201">		int M_Product_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;M_Product_ID&quot;);</span>
+<span class="nc bnc" id="L1202" title="All 2 branches missed.">		if (steps) log.warning(&quot;init - M_Product_ID=&quot; + M_Product_ID + &quot; - &quot; );</span>
+<span class="nc" id="L1203">		BigDecimal QtyOrdered = Env.ZERO;</span>
+		BigDecimal QtyEntered, PriceActual, PriceEntered;
+
+		//	No Product
+<span class="nc bnc" id="L1207" title="All 2 branches missed.">		if (M_Product_ID == 0)</span>
+		{
+<span class="nc" id="L1209">			QtyEntered = (BigDecimal)mTab.getValue(&quot;QtyEntered&quot;);</span>
+<span class="nc" id="L1210">			QtyOrdered = QtyEntered;</span>
+<span class="nc" id="L1211">			mTab.setValue(&quot;QtyOrdered&quot;, QtyOrdered);</span>
+<span class="nc" id="L1212">		}</span>
+		//	UOM Changed - convert from Entered -&gt; Product
+<span class="nc bnc" id="L1214" title="All 2 branches missed.">		else if (mField.getColumnName().equals(&quot;C_UOM_ID&quot;))</span>
+		{
+<span class="nc" id="L1216">			int C_UOM_To_ID = ((Integer)value).intValue();</span>
+<span class="nc" id="L1217">			QtyEntered = (BigDecimal)mTab.getValue(&quot;QtyEntered&quot;);</span>
+<span class="nc" id="L1218">			BigDecimal QtyEntered1 = QtyEntered.setScale(MUOM.getPrecision(ctx, C_UOM_To_ID), RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L1219" title="All 2 branches missed.">			if (QtyEntered.compareTo(QtyEntered1) != 0)</span>
+			{
+<span class="nc bnc" id="L1221" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Corrected QtyEntered Scale UOM=&quot; + C_UOM_To_ID</span>
+<span class="nc" id="L1222">					+ &quot;; QtyEntered=&quot; + QtyEntered + &quot;-&gt;&quot; + QtyEntered1);</span>
+<span class="nc" id="L1223">				QtyEntered = QtyEntered1;</span>
+<span class="nc" id="L1224">				mTab.setValue(&quot;QtyEntered&quot;, QtyEntered);</span>
+			}
+<span class="nc" id="L1226">			QtyOrdered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1227">				C_UOM_To_ID, QtyEntered);</span>
+<span class="nc bnc" id="L1228" title="All 2 branches missed.">			if (QtyOrdered == null)</span>
+<span class="nc" id="L1229">				QtyOrdered = QtyEntered;</span>
+<span class="nc bnc" id="L1230" title="All 2 branches missed.">			boolean conversion = QtyEntered.compareTo(QtyOrdered) != 0;</span>
+<span class="nc" id="L1231">			PriceActual = (BigDecimal)mTab.getValue(&quot;PriceActual&quot;);</span>
+<span class="nc" id="L1232">			PriceEntered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1233">				C_UOM_To_ID, PriceActual, 12);</span>
+<span class="nc bnc" id="L1234" title="All 2 branches missed.">			if (PriceEntered == null)</span>
+<span class="nc" id="L1235">				PriceEntered = PriceActual;</span>
+<span class="nc bnc" id="L1236" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;UOM=&quot; + C_UOM_To_ID</span>
+<span class="nc" id="L1237">				+ &quot;, QtyEntered/PriceActual=&quot; + QtyEntered + &quot;/&quot; + PriceActual</span>
+<span class="nc" id="L1238">				+ &quot; -&gt; &quot; + conversion</span>
+<span class="nc" id="L1239">				+ &quot; QtyOrdered/PriceEntered=&quot; + QtyOrdered + &quot;/&quot; + PriceEntered);</span>
+<span class="nc bnc" id="L1240" title="All 2 branches missed.">			Env.setContext(ctx, WindowNo, &quot;UOMConversion&quot;, conversion ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc" id="L1241">			mTab.setValue(&quot;QtyOrdered&quot;, QtyOrdered);</span>
+<span class="nc" id="L1242">			mTab.setValue(&quot;PriceEntered&quot;, PriceEntered);</span>
+<span class="nc" id="L1243">		}</span>
+		//	QtyEntered changed - calculate QtyOrdered
+<span class="nc bnc" id="L1245" title="All 2 branches missed.">		else if (mField.getColumnName().equals(&quot;QtyEntered&quot;))</span>
+		{
+<span class="nc" id="L1247">			int C_UOM_To_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;C_UOM_ID&quot;);</span>
+<span class="nc" id="L1248">			QtyEntered = (BigDecimal)value;</span>
+<span class="nc" id="L1249">			BigDecimal QtyEntered1 = QtyEntered.setScale(MUOM.getPrecision(ctx, C_UOM_To_ID), RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L1250" title="All 2 branches missed.">			if (QtyEntered.compareTo(QtyEntered1) != 0)</span>
+			{
+<span class="nc bnc" id="L1252" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Corrected QtyEntered Scale UOM=&quot; + C_UOM_To_ID</span>
+<span class="nc" id="L1253">					+ &quot;; QtyEntered=&quot; + QtyEntered + &quot;-&gt;&quot; + QtyEntered1);</span>
+<span class="nc" id="L1254">				QtyEntered = QtyEntered1;</span>
+<span class="nc" id="L1255">				mTab.setValue(&quot;QtyEntered&quot;, QtyEntered);</span>
+			}
+<span class="nc" id="L1257">			QtyOrdered = MUOMConversion.convertProductFrom (ctx, M_Product_ID,</span>
+<span class="nc" id="L1258">				C_UOM_To_ID, QtyEntered);</span>
+<span class="nc bnc" id="L1259" title="All 2 branches missed.">			if (QtyOrdered == null)</span>
+<span class="nc" id="L1260">				QtyOrdered = QtyEntered;</span>
+<span class="nc bnc" id="L1261" title="All 2 branches missed.">			boolean conversion = QtyEntered.compareTo(QtyOrdered) != 0;</span>
+<span class="nc bnc" id="L1262" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;UOM=&quot; + C_UOM_To_ID</span>
+<span class="nc" id="L1263">				+ &quot;, QtyEntered=&quot; + QtyEntered</span>
+<span class="nc" id="L1264">				+ &quot; -&gt; &quot; + conversion</span>
+<span class="nc" id="L1265">				+ &quot; QtyOrdered=&quot; + QtyOrdered);</span>
+<span class="nc bnc" id="L1266" title="All 2 branches missed.">			Env.setContext(ctx, WindowNo, &quot;UOMConversion&quot;, conversion ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc" id="L1267">			mTab.setValue(&quot;QtyOrdered&quot;, QtyOrdered);</span>
+<span class="nc" id="L1268">		}</span>
+		//	QtyOrdered changed - calculate QtyEntered (should not happen)
+<span class="nc bnc" id="L1270" title="All 2 branches missed.">		else if (mField.getColumnName().equals(&quot;QtyOrdered&quot;))</span>
+		{
+<span class="nc" id="L1272">			int C_UOM_To_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;C_UOM_ID&quot;);</span>
+<span class="nc" id="L1273">			QtyOrdered = (BigDecimal)value;</span>
+<span class="nc" id="L1274">			int precision = MProduct.get(ctx, M_Product_ID).getUOMPrecision();</span>
+<span class="nc" id="L1275">			BigDecimal QtyOrdered1 = QtyOrdered.setScale(precision, RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L1276" title="All 2 branches missed.">			if (QtyOrdered.compareTo(QtyOrdered1) != 0)</span>
+			{
+<span class="nc bnc" id="L1278" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Corrected QtyOrdered Scale &quot;</span>
+<span class="nc" id="L1279">					+ QtyOrdered + &quot;-&gt;&quot; + QtyOrdered1);</span>
+<span class="nc" id="L1280">				QtyOrdered = QtyOrdered1;</span>
+<span class="nc" id="L1281">				mTab.setValue(&quot;QtyOrdered&quot;, QtyOrdered);</span>
+			}
+<span class="nc" id="L1283">			QtyEntered = MUOMConversion.convertProductTo (ctx, M_Product_ID,</span>
+<span class="nc" id="L1284">				C_UOM_To_ID, QtyOrdered);</span>
+<span class="nc bnc" id="L1285" title="All 2 branches missed.">			if (QtyEntered == null)</span>
+<span class="nc" id="L1286">				QtyEntered = QtyOrdered;</span>
+<span class="nc bnc" id="L1287" title="All 2 branches missed.">			boolean conversion = QtyOrdered.compareTo(QtyEntered) != 0;</span>
+<span class="nc bnc" id="L1288" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;UOM=&quot; + C_UOM_To_ID</span>
+<span class="nc" id="L1289">				+ &quot;, QtyOrdered=&quot; + QtyOrdered</span>
+<span class="nc" id="L1290">				+ &quot; -&gt; &quot; + conversion</span>
+<span class="nc" id="L1291">				+ &quot; QtyEntered=&quot; + QtyEntered);</span>
+<span class="nc bnc" id="L1292" title="All 2 branches missed.">			Env.setContext(ctx, WindowNo, &quot;UOMConversion&quot;, conversion ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc" id="L1293">			mTab.setValue(&quot;QtyEntered&quot;, QtyEntered);</span>
+<span class="nc" id="L1294">		}</span>
+		else
+		{
+		//	QtyEntered = (BigDecimal)mTab.getValue(&quot;QtyEntered&quot;);
+<span class="nc" id="L1298">			QtyOrdered = (BigDecimal)mTab.getValue(&quot;QtyOrdered&quot;);</span>
+		}
+
+<span class="nc" id="L1301">		int M_Warehouse_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_Warehouse_ID&quot;);</span>
+<span class="nc" id="L1302">		MWarehouse warehouse = MWarehouse.get(ctx, M_Warehouse_ID);</span>
+		//	Storage
+<span class="nc bnc" id="L1304" title="All 2 branches missed.">		if (M_Product_ID != 0</span>
+<span class="nc bnc" id="L1305" title="All 2 branches missed.">			&amp;&amp; Env.isSOTrx(ctx, WindowNo)</span>
+<span class="nc bnc" id="L1306" title="All 2 branches missed.">			&amp;&amp; QtyOrdered.signum() &gt; 0		//	no negative (returns)</span>
+<span class="nc bnc" id="L1307" title="All 2 branches missed.">			&amp;&amp; !warehouse.isDisableInventoryPopup())</span>
+		{
+<span class="nc" id="L1309">			MProduct product = MProduct.get (ctx, M_Product_ID);</span>
+<span class="nc bnc" id="L1310" title="All 4 branches missed.">			if (product.isStocked() &amp;&amp; Env.getContext(ctx, WindowNo, &quot;IsDropShip&quot;).equals(&quot;N&quot;)</span>
+<span class="nc bnc" id="L1311" title="All 6 branches missed.">				&amp;&amp; !(product.isBOM() &amp;&amp; product.isVerified() &amp;&amp; product.isAutoProduce()))</span>
+			{
+<span class="nc" id="L1313">				int M_AttributeSetInstance_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;M_AttributeSetInstance_ID&quot;);</span>
+<span class="nc" id="L1314">				BigDecimal available = MStorageReservation.getQtyAvailable</span>
+<span class="nc" id="L1315">					(M_Warehouse_ID, M_Product_ID, M_AttributeSetInstance_ID, null);</span>
+<span class="nc bnc" id="L1316" title="All 2 branches missed.">				if (available == null)</span>
+<span class="nc" id="L1317">					available = Env.ZERO;</span>
+<span class="nc bnc" id="L1318" title="All 2 branches missed.">				if (available.signum() == 0)</span>
+<span class="nc" id="L1319">					mTab.fireDataStatusEEvent (&quot;NoQtyAvailable&quot;, &quot;0&quot;, false);</span>
+<span class="nc bnc" id="L1320" title="All 2 branches missed.">				else if (available.compareTo(QtyOrdered) &lt; 0)</span>
+<span class="nc" id="L1321">					mTab.fireDataStatusEEvent (&quot;InsufficientQtyAvailable&quot;, available.toString(), false);</span>
+				else
+				{
+<span class="nc" id="L1324">					Integer C_OrderLine_ID = (Integer)mTab.getValue(&quot;C_OrderLine_ID&quot;);</span>
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">					if (C_OrderLine_ID == null)</span>
+<span class="nc" id="L1326">						C_OrderLine_ID = Integer.valueOf(0);</span>
+<span class="nc" id="L1327">					BigDecimal notReserved = MOrderLine.getNotReserved(ctx,</span>
+<span class="nc" id="L1328">						M_Warehouse_ID, M_Product_ID, M_AttributeSetInstance_ID,</span>
+<span class="nc" id="L1329">						C_OrderLine_ID.intValue());</span>
+<span class="nc bnc" id="L1330" title="All 2 branches missed.">					if (notReserved == null)</span>
+<span class="nc" id="L1331">						notReserved = Env.ZERO;</span>
+<span class="nc" id="L1332">					BigDecimal total = available.subtract(notReserved);</span>
+<span class="nc bnc" id="L1333" title="All 2 branches missed.">					if (total.compareTo(QtyOrdered) &lt; 0)</span>
+					{
+<span class="nc" id="L1335">						StringBuilder msgpts = new StringBuilder(&quot;@QtyAvailable@=&quot;).append(available)</span>
+<span class="nc" id="L1336">								.append(&quot;  -  @QtyNotReserved@=&quot;).append(notReserved).append(&quot;  =  &quot;).append(total);</span>
+<span class="nc" id="L1337">						String info = Msg.parseTranslation(ctx, msgpts.toString());</span>
+<span class="nc" id="L1338">						mTab.fireDataStatusEEvent (&quot;InsufficientQtyAvailable&quot;,</span>
+<span class="nc" id="L1339">							info, false);</span>
+					}
+				}
+			}
+		}
+		//
+<span class="nc" id="L1345">		return &quot;&quot;;</span>
+	}	//	qty
+	
+	public String SalesOrderTenderType (Properties ctx, int WindowNo,
+			GridTab mTab, GridField mField, Object value, Object oldValue)
+	{
+<span class="nc" id="L1351">		log.info(&quot;&quot;);</span>
+		// Called from tender type in Sales Order - POS Payments
+		// to fill IsPostDated and TenderType
+		
+<span class="nc bnc" id="L1355" title="All 2 branches missed.">		if (value == null)</span>
+<span class="nc" id="L1356">			return &quot;&quot;;</span>
+		
+<span class="nc" id="L1358">		int tendertype_id = ((Integer) value).intValue();</span>
+		
+<span class="nc" id="L1360">		X_C_POSTenderType tendertype = new X_C_POSTenderType(ctx, tendertype_id, null);</span>
+<span class="nc" id="L1361">		mTab.setValue(&quot;IsPostDated&quot;, tendertype.isPostDated());</span>
+<span class="nc" id="L1362">		mTab.setValue(&quot;TenderType&quot;, tendertype.getTenderType());</span>
+		
+<span class="nc" id="L1364">		return &quot;&quot;;</span>
+	}	//	SalesOrderTenderType
+
+	/* Called from AD_Org_ID in tables C_Order, M_InOut, M_Inventory, M_Requisition */
+	public String organization(Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value){
+		
+		//Return if Organization field is empty
+<span class="nc bnc" id="L1371" title="All 4 branches missed.">		if(value == null || (Integer)value == 0)</span>
+<span class="nc" id="L1372">			return &quot;&quot;;</span>
+		
+<span class="nc" id="L1374">		log.info(&quot;Set default Warehouse for Organization &quot; + value + &quot; on Window &quot; + WindowNo);</span>
+		
+		//Get the current Warehouse
+<span class="nc" id="L1377">		Integer m_warehouse_id = (Integer) mTab.getValue(&quot;M_Warehouse_ID&quot;);</span>
+		
+		//Only set Warehouse if the field is empty
+<span class="nc bnc" id="L1380" title="All 4 branches missed.">		if(m_warehouse_id == null || m_warehouse_id == 0){</span>
+<span class="nc" id="L1381">			Integer ad_org_id = (Integer) value;</span>
+<span class="nc" id="L1382">			MOrgInfo orginfo = MOrgInfo.get(ctx, ad_org_id.intValue(), null);</span>
+			
+			//only set Warehouse if there is a default Warehouse on OrgInfo
+<span class="nc bnc" id="L1385" title="All 4 branches missed.">			if(orginfo!=null &amp;&amp; orginfo.getM_Warehouse_ID() != 0)</span>
+<span class="nc" id="L1386">				mTab.setValue(&quot;M_Warehouse_ID&quot;, orginfo.getM_Warehouse_ID());</span>
+		}
+<span class="nc" id="L1388">		return &quot;&quot;;</span>
+	}
+
+	public String navigateOrderLine(Properties ctx, int WindowNo, GridTab mTab, GridField mField, Object value) {
+<span class="nc" id="L1392">		Integer M_Product_ID = Env.getContextAsInt(ctx, WindowNo, mTab.getTabNo(), &quot;M_Product_ID&quot;);</span>
+<span class="nc bnc" id="L1393" title="All 4 branches missed.">		if (M_Product_ID == null || M_Product_ID.intValue() == 0) {</span>
+<span class="nc" id="L1394">			Env.setContext(ctx, WindowNo, &quot;DiscountSchema&quot;, &quot;N&quot;);</span>
+<span class="nc" id="L1395">			return &quot;&quot;;</span>
+		}
+
+		/*****	Price Calculation see also qty	****/
+<span class="nc" id="L1399">		int C_BPartner_ID = Env.getContextAsInt(ctx, WindowNo, &quot;C_BPartner_ID&quot;);</span>
+<span class="nc" id="L1400">		BigDecimal Qty = (BigDecimal)mTab.getValue(&quot;QtyOrdered&quot;);</span>
+<span class="nc" id="L1401">		boolean IsSOTrx = Env.getContext(ctx, WindowNo, &quot;IsSOTrx&quot;).equals(&quot;Y&quot;);</span>
+<span class="nc" id="L1402">		IProductPricing pp = Core.getProductPricing();</span>
+<span class="nc" id="L1403">		pp.setInitialValues(M_Product_ID.intValue(), C_BPartner_ID, Qty, IsSOTrx, null);</span>
+<span class="nc" id="L1404">		Timestamp orderDate = (Timestamp)mTab.getValue(&quot;DateOrdered&quot;);</span>
+<span class="nc" id="L1405">		pp.setPriceDate(orderDate);</span>
+<span class="nc" id="L1406">		I_C_OrderLine orderLine = GridTabWrapper.create(mTab, I_C_OrderLine.class);</span>
+<span class="nc" id="L1407">		pp.setOrderLine(orderLine, null);</span>
+		//
+<span class="nc" id="L1409">		int M_PriceList_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_PriceList_ID&quot;);</span>
+<span class="nc" id="L1410">		pp.setM_PriceList_ID(M_PriceList_ID);</span>
+		/** PLV is only accurate if PL selected in header */
+<span class="nc" id="L1412">		int M_PriceList_Version_ID = Env.getContextAsInt(ctx, WindowNo, &quot;M_PriceList_Version_ID&quot;);</span>
+<span class="nc bnc" id="L1413" title="All 4 branches missed.">		if ( M_PriceList_Version_ID == 0 &amp;&amp; M_PriceList_ID &gt; 0)</span>
+		{
+<span class="nc" id="L1415">			String sql = &quot;SELECT plv.M_PriceList_Version_ID &quot;</span>
+				+ &quot;FROM M_PriceList_Version plv &quot;
+				+ &quot;WHERE plv.M_PriceList_ID=? &quot;						//	1
+				+ &quot; AND plv.ValidFrom &lt;= ? &quot;
+				+ &quot;ORDER BY plv.ValidFrom DESC&quot;;
+			//	Use newest price list - may not be future
+
+<span class="nc" id="L1422">			M_PriceList_Version_ID = DB.getSQLValueEx(null, sql, M_PriceList_ID, orderDate);</span>
+<span class="nc bnc" id="L1423" title="All 2 branches missed.">			if ( M_PriceList_Version_ID &gt; 0 )</span>
+<span class="nc" id="L1424">				Env.setContext(ctx, WindowNo, &quot;M_PriceList_Version_ID&quot;, M_PriceList_Version_ID );</span>
+		}
+<span class="nc" id="L1426">		pp.setM_PriceList_Version_ID(M_PriceList_Version_ID);</span>
+		//
+<span class="nc bnc" id="L1428" title="All 2 branches missed.">		Env.setContext(ctx, WindowNo, &quot;EnforcePriceLimit&quot;, pp.isEnforcePriceLimit() ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc bnc" id="L1429" title="All 2 branches missed.">		Env.setContext(ctx, WindowNo, &quot;DiscountSchema&quot;, pp.isDiscountSchema() ? &quot;Y&quot; : &quot;N&quot;);</span>
+
+<span class="nc" id="L1431">		return &quot;&quot;;</span>
+	}
+
+}	//	CalloutOrder
+
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

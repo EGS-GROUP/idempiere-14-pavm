@@ -1,0 +1,1297 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DB_Oracle.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.compiere.db.oracle.provider</a> &gt; <a href="index.source.html" class="el_package">org.compiere.db</a> &gt; <span class="el_source">DB_Oracle.java</span></div><h1>DB_Oracle.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.db;
+
+import java.io.File;
+import java.io.InputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.sql.Connection;
+import java.sql.Driver;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+
+import javax.sql.DataSource;
+
+import org.adempiere.db.oracle.OracleBundleActivator;
+import org.adempiere.db.oracle.partition.TablePartitionService;
+import org.adempiere.exceptions.DBException;
+import org.compiere.db.partition.ITablePartitionService;
+import org.compiere.dbPort.Convert;
+import org.compiere.dbPort.Convert_Oracle;
+import org.compiere.model.MColumn;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.SystemProperties;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Ini;
+import org.compiere.util.Language;
+import org.compiere.util.Trx;
+import org.idempiere.db.util.SQLFragment;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
+
+import oracle.jdbc.OracleDriver;
+
+/**
+ *  Oracle Database Port
+ *
+ *  @author     Jorg Janke
+ *  @version    $Id: DB_Oracle.java,v 1.7 2006/09/22 23:35:19 jjanke Exp $
+ *  ---
+ *  Modifications: Refactoring. Replaced Oracle Cache Manager with C3P0
+ *  connection pooling framework for better and more efficient connection handling
+ *
+ *  @author Ashley Ramdass (Posterita)
+ */
+public class DB_Oracle implements AdempiereDatabase
+{
+
+	private static final String POOL_PROPERTIES = &quot;hikaricp.properties&quot;;
+	
+    /**
+     *  Oracle Database
+     */
+<span class="nc" id="L86">    public DB_Oracle()</span>
+    {
+        /** Causes VPN problems ???
+        try
+        {
+            getDriver();
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, e.getMessage());
+        }
+        **/
+        // teo [ bug 1638208 ]: oracle 10g DATETIME issue
+        // http://www.oracle.com/technology/tech/java/sqlj_jdbc/htdocs/jdbc_faq.htm#08_01
+        try
+        {
+<span class="nc" id="L102">            System.setProperty(&quot;oracle.jdbc.V8Compatible&quot;, &quot;true&quot;);</span>
+<span class="nc" id="L103">        }</span>
+<span class="nc" id="L104">        catch (Exception e)</span>
+        {
+<span class="nc" id="L106">            log.log(Level.SEVERE, e.getMessage());</span>
+        }
+<span class="nc" id="L108">    }   //  DB_Oracle</span>
+
+    /** Static Driver               */
+<span class="nc" id="L111">    private static OracleDriver     s_driver = null;</span>
+    /** Driver Class Name           */
+    public static final String      DRIVER = &quot;oracle.jdbc.OracleDriver&quot;;
+
+    /** Default Port                */
+    public static final int         DEFAULT_PORT = 1521;
+    /** Default Connection Manager Port */
+    public static final int         DEFAULT_CM_PORT = 1630;
+
+    /** Connection String           */
+    private volatile String         m_connectionURL;
+
+    /** Data Source                 */
+	private volatile HikariDataSource m_ds;
+
+    /** Cached User Name            */
+<span class="nc" id="L127">    private String                  m_userName = null;</span>
+
+<span class="nc" id="L129">    private Convert m_convert = new Convert_Oracle();</span>
+
+    /** Logger          */
+<span class="nc" id="L132">    private static final CLogger          log = CLogger.getCLogger (DB_Oracle.class);</span>
+
+    /**
+     *  Get Database Name
+     *  @return database short name
+     */
+    public String getName()
+    {
+<span class="nc" id="L140">        return Database.DB_ORACLE;</span>
+    }   //  getName
+
+    /**
+     *  Get Database Description
+     *  @return database long name and version
+     */
+    public String getDescription()
+    {
+        try
+        {
+<span class="nc bnc" id="L151" title="All 2 branches missed.">            if (s_driver == null)</span>
+<span class="nc" id="L152">                getDriver();</span>
+<span class="nc" id="L153">        }</span>
+<span class="nc" id="L154">        catch (Exception e)</span>
+        {
+        }
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        if (s_driver != null)</span>
+<span class="nc" id="L158">            return s_driver.toString();</span>
+<span class="nc" id="L159">        return &quot;No Driver&quot;;</span>
+    }   //  getDescription
+
+    /**
+     *  Get Standard JDBC Port
+     *  @return standard port
+     */
+    public int getStandardPort()
+    {
+<span class="nc" id="L168">        return DEFAULT_PORT;</span>
+    }   //  getStandardPort
+
+    /**
+     *  Get and register Database Driver
+     *  @return Driver
+     *  @throws SQLException
+     */
+    public synchronized Driver getDriver() throws SQLException
+    {
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        if (s_driver == null)</span>
+        {
+            //  Speed up transfer rate
+<span class="nc" id="L181">            System.setProperty(&quot;oracle.jdbc.TcpNoDelay&quot;, &quot;true&quot;);</span>
+            //  Oracle Multi - Language
+<span class="nc" id="L183">            System.setProperty(&quot;oracle.jdbc.defaultNChar&quot;, &quot;true&quot;);</span>
+            //
+<span class="nc" id="L185">            s_driver = new OracleDriver();</span>
+<span class="nc" id="L186">            DriverManager.registerDriver (s_driver);</span>
+<span class="nc" id="L187">            DriverManager.setLoginTimeout (Database.CONNECTION_TIMEOUT);</span>
+        }
+<span class="nc" id="L189">        return s_driver;</span>
+    }   //  getDriver
+
+    /**
+     *  Get Database Connection String.
+     *  &lt;pre&gt;
+     *  Timing:
+     *  - CM with source_route not in address_list  = 28.5 sec
+     *  - CM with source_route in address_list      = 58.0 sec
+     *  - direct    = 4.3-8 sec  (no real difference if on other box)
+     *  - bequeath  = 3.4-8 sec
+     *  &lt;/pre&gt;
+     *  @param connection Connection Descriptor
+     *  @return connection String
+     */
+    public String getConnectionURL (CConnection connection)
+    {
+<span class="nc" id="L206">        System.setProperty(&quot;oracle.jdbc.v$session.program&quot;, &quot;iDempiere&quot;);</span>
+<span class="nc" id="L207">        StringBuilder sb = null;</span>
+        //  Server Connections (bequeath)
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (connection.isBequeath())</span>
+        {
+<span class="nc" id="L211">            sb = new StringBuilder(&quot;jdbc:oracle:oci8:@&quot;);</span>
+            //  bug: does not work if there is more than one db instance - use Net8
+        //  sb.append(connection.getDbName());
+<span class="nc" id="L214">        }</span>
+        else        //  thin driver
+        {
+<span class="nc" id="L217">            sb = new StringBuilder(&quot;jdbc:oracle:thin:@&quot;);</span>
+            //  direct connection
+<span class="nc bnc" id="L219" title="All 2 branches missed.">            if (connection.isViaFirewall())</span>
+            {
+                //  (description=(address_list=
+                //  ( (source_route=yes)
+                //    (address=(protocol=TCP)(host=cmhost)(port=1630))
+                //    (address=(protocol=TCP)(host=dev)(port=1521))
+                //  (connect_data=(service_name=dev1.adempiere.org)))
+<span class="nc" id="L226">                sb.append(&quot;(DESCRIPTION=(ADDRESS_LIST=&quot;)</span>
+<span class="nc" id="L227">                    .append(&quot;(SOURCE_ROUTE=YES)&quot;)</span>
+<span class="nc" id="L228">                    .append(&quot;(ADDRESS=(PROTOCOL=TCP)(HOST=&quot;).append(connection.getFwHost())</span>
+<span class="nc" id="L229">                        .append(&quot;)(PORT=&quot;).append(connection.getFwPort()).append(&quot;))&quot;)</span>
+<span class="nc" id="L230">                    .append(&quot;(ADDRESS=(PROTOCOL=TCP)(HOST=&quot;).append(connection.getDbHost())</span>
+<span class="nc" id="L231">                        .append(&quot;)(PORT=&quot;).append(connection.getDbPort()).append(&quot;)))&quot;)</span>
+<span class="nc" id="L232">                    .append(&quot;(CONNECT_DATA=(SERVICE_NAME=&quot;).append(connection.getDbName()).append(&quot;)))&quot;);</span>
+<span class="nc" id="L233">            }</span>
+            else
+            {
+                //  old: jdbc:oracle:thin:@dev2:1521:sid
+                //  new: jdbc:oracle:thin:@//dev2:1521/serviceName
+<span class="nc bnc" id="L238" title="All 2 branches missed.">            	if (! connection.getDbHost().contains(&quot;://&quot;))</span>
+<span class="nc" id="L239">            		sb.append(&quot;//&quot;);</span>
+<span class="nc" id="L240">            	sb.append(connection.getDbHost())</span>
+<span class="nc" id="L241">                    .append(&quot;:&quot;).append(connection.getDbPort())</span>
+<span class="nc" id="L242">                    .append(&quot;/&quot;).append(connection.getDbName());</span>
+            }
+        }
+<span class="nc" id="L245">        m_connectionURL = sb.toString();</span>
+    //  log.config(m_connectionURL);
+        //
+<span class="nc" id="L248">        m_userName = connection.getDbUid();</span>
+<span class="nc" id="L249">        return m_connectionURL;</span>
+    }   //  getConnectionURL
+
+    /**
+     *  Get Connection URL.
+     *  http://download-east.oracle.com/docs/cd/B14117_01/java.101/b10979/urls.htm#BEIDBFDF
+     *  @param dbHost db Host
+     *  @param dbPort db Port
+     *  @param dbName db Name
+     *  @param userName user name
+     *  @return connection
+     */
+    public String getConnectionURL (String dbHost, int dbPort, String dbName,
+        String userName)
+    {
+<span class="nc" id="L264">        m_userName = userName;</span>
+<span class="nc" id="L265">        m_connectionURL = &quot;jdbc:oracle:thin:@&quot;</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">        	+ (dbHost.contains(&quot;://&quot;) ? &quot;&quot; : &quot;//&quot;)</span>
+<span class="nc" id="L267">            + dbHost + &quot;:&quot; + dbPort + &quot;/&quot; + dbName;</span>
+<span class="nc" id="L268">        return m_connectionURL;</span>
+    }   //  getConnectionURL
+
+    /**
+     *  Get Database Connection String
+     *  @param connectionURL Connection URL
+     *  @param userName user name
+     *  @return connection String
+     */
+    public String getConnectionURL (String connectionURL, String userName)
+    {
+<span class="nc" id="L279">        m_userName = userName;</span>
+<span class="nc" id="L280">        m_connectionURL = connectionURL;</span>
+<span class="nc" id="L281">        return m_connectionURL;</span>
+    }   //  getConnectionURL
+
+    /**
+     *  Get JDBC Catalog
+     *  @return null - not used
+     */
+    public String getCatalog()
+    {
+<span class="nc" id="L290">        return null;</span>
+    }   //  getCatalog
+
+    /**
+     *  Get JDBC Schema
+     *  @return user name
+     */
+    public String getSchema()
+    {
+<span class="nc bnc" id="L299" title="All 2 branches missed.">        if (m_userName != null)</span>
+<span class="nc" id="L300">            return m_userName.toUpperCase();</span>
+<span class="nc" id="L301">        log.severe(&quot;User Name not set (yet) - call getConnectionURL first&quot;);</span>
+<span class="nc" id="L302">        return null;</span>
+    }   //  getSchema
+
+    /**
+     *  Supports BLOB
+     *  @return true if BLOB is supported
+     */
+    public boolean supportsBLOB()
+    {
+<span class="nc" id="L311">        return true;</span>
+    }   //  supportsBLOB
+
+    /**
+     *  String Representation
+     *  @return info
+     */
+    public String toString()
+    {
+<span class="nc" id="L320">        StringBuilder sb = new StringBuilder(&quot;DB_Oracle[&quot;);</span>
+<span class="nc" id="L321">        sb.append(m_connectionURL);</span>
+        try
+        {        	
+<span class="nc" id="L324">            StringBuilder logBuffer = new StringBuilder();</span>
+<span class="nc" id="L325">            HikariPoolMXBean mxBean = m_ds.getHikariPoolMXBean();            </span>
+
+<span class="nc" id="L327">            logBuffer.append(&quot;# Connections: &quot;).append(mxBean.getTotalConnections());</span>
+<span class="nc" id="L328">            logBuffer.append(&quot; , # Busy Connections: &quot;).append(mxBean.getActiveConnections());</span>
+<span class="nc" id="L329">            logBuffer.append(&quot; , # Idle Connections: &quot;).append(mxBean.getIdleConnections());</span>
+<span class="nc" id="L330">            logBuffer.append(&quot; , # Threads waiting on connection: &quot;).append(mxBean.getThreadsAwaitingConnection());</span>
+<span class="nc" id="L331">        }</span>
+<span class="nc" id="L332">        catch (Exception e)</span>
+        {
+<span class="nc" id="L334">            sb.append(&quot;=&quot;).append(e.getLocalizedMessage());</span>
+        }
+<span class="nc" id="L336">        sb.append(&quot;]&quot;);</span>
+<span class="nc" id="L337">        return sb.toString();</span>
+    }   //  toString
+
+    /**
+	 * 	Get Status
+	 * 	@return status info
+	 */
+	public String getStatus()
+	{
+<span class="nc bnc" id="L346" title="All 2 branches missed.">        if (m_ds == null)</span>
+        {
+<span class="nc" id="L348">            return null;</span>
+        }
+
+<span class="nc" id="L351">        StringBuilder sb = new StringBuilder();</span>
+        try
+        {
+<span class="nc" id="L354">            HikariPoolMXBean mxBean = m_ds.getHikariPoolMXBean();            </span>
+
+<span class="nc" id="L356">            sb.append(&quot;# Connections: &quot;).append(mxBean.getTotalConnections());</span>
+<span class="nc" id="L357">            sb.append(&quot; , # Busy Connections: &quot;).append(mxBean.getActiveConnections());</span>
+<span class="nc" id="L358">            sb.append(&quot; , # Idle Connections: &quot;).append(mxBean.getIdleConnections());</span>
+<span class="nc" id="L359">            sb.append(&quot; , # Threads waiting on connection: &quot;).append(mxBean.getThreadsAwaitingConnection());        	        	</span>
+<span class="nc" id="L360">            sb.append(&quot; , # Min Pool Size: &quot;).append(m_ds.getMinimumIdle());</span>
+<span class="nc" id="L361">            sb.append(&quot; , # Max Pool Size: &quot;).append(m_ds.getMaximumPoolSize());</span>
+<span class="nc" id="L362">            sb.append(&quot; , # Open Transactions: &quot;).append(Trx.getOpenTransactions().length);</span>
+<span class="nc" id="L363">        }</span>
+<span class="nc" id="L364">        catch (Exception e)</span>
+        {}
+<span class="nc" id="L366">        return sb.toString();</span>
+	}	//	getStatus
+
+
+    /**************************************************************************
+     *  Convert an individual Oracle Style statements to target database statement syntax.
+     *  @param oraStatement oracle statement
+     *  @return converted Statement oracle statement
+     */
+    public String convertStatement (String oraStatement)
+    {
+<span class="nc" id="L377">    	Convert.logMigrationScript(oraStatement, null);</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">		if (SystemProperties.isDBDebug()) {</span>
+<span class="nc" id="L379">			String filterOrDebug = SystemProperties.getDBDebugFilter();</span>
+<span class="nc" id="L380">			boolean print = true;</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">			if (filterOrDebug != null)</span>
+<span class="nc" id="L382">				print = oraStatement.matches(filterOrDebug);</span>
+<span class="nc bnc" id="L383" title="All 2 branches missed.">			if (print)</span>
+<span class="nc" id="L384">				log.warning(&quot;Oracle -&gt; &quot; + oraStatement);</span>
+		}
+<span class="nc" id="L386">        return oraStatement;</span>
+    }   //  convertStatement
+
+
+
+    /**
+     *  Check if DBMS support the sql statement
+     *  @sql SQL statement
+     *  @return true: yes
+     */
+    public boolean isSupported(String sql)
+    {
+<span class="nc" id="L398">        return true;</span>
+        //jz temp, modify later
+    }
+
+
+
+    /**
+     *  Get constraint type associated with the index
+     *  @tableName table name
+     *  @IXName Index name
+     *  @return String[0] = 0: do not know, 1: Primary Key  2: Foreign Key
+     *          String[1] - String[n] = Constraint Name
+     */
+    public String getConstraintType(Connection conn, String tableName, String IXName)
+    {
+<span class="nc bnc" id="L413" title="All 4 branches missed.">        if (IXName == null || IXName.length()==0)</span>
+<span class="nc" id="L414">            return &quot;0&quot;;</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">        if (IXName.endsWith(&quot;_KEY&quot;))</span>
+<span class="nc" id="L416">            return &quot;1&quot;+IXName;</span>
+        else
+<span class="nc" id="L418">            return &quot;0&quot;;</span>
+        //jz temp, modify later from user.constraints
+    }
+
+    /**
+     *  Get Name of System User
+     *  @return system
+     */
+    public String getSystemUser()
+    {
+<span class="nc" id="L428">    	String systemUser = SystemProperties.getAdempiereDBSystemUser();</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">    	if (systemUser == null)</span>
+<span class="nc" id="L430">    		systemUser = &quot;system&quot;;</span>
+<span class="nc" id="L431">        return systemUser;</span>
+    }   //  getSystemUser
+
+    /**
+     *  Get Name of System Database
+     *  @param databaseName database Name
+     *  @return e.g. master or database Name
+     */
+    public String getSystemDatabase(String databaseName)
+    {
+<span class="nc" id="L441">        return databaseName;</span>
+    }   //  getSystemDatabase
+
+
+    /**
+     *  Create SQL TO Date String from Timestamp
+     *
+     *  @param  time Date to be converted
+     *  @param  dayOnly true if time set to 00:00:00
+     *
+     *  @return TO_DATE('2001-01-30 18:10:20',''YYYY-MM-DD HH24:MI:SS')
+     *      or  TO_DATE('2001-01-30',''YYYY-MM-DD')
+     */
+    public String TO_DATE (Timestamp time, boolean dayOnly)
+    {
+<span class="nc bnc" id="L456" title="All 2 branches missed.">        if (time == null)</span>
+        {
+<span class="nc bnc" id="L458" title="All 2 branches missed.">            if (dayOnly)</span>
+<span class="nc" id="L459">                return &quot;TRUNC(getDate())&quot;;</span>
+<span class="nc" id="L460">            return &quot;getDate()&quot;;</span>
+        }
+
+<span class="nc" id="L463">        StringBuilder dateString = new StringBuilder(&quot;TO_DATE('&quot;);</span>
+        //  YYYY-MM-DD HH24:MI:SS.mmmm  JDBC Timestamp format
+<span class="nc" id="L465">        String myDate = time.toString();</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">        if (dayOnly)</span>
+        {
+<span class="nc" id="L468">            dateString.append(myDate.substring(0,10));</span>
+<span class="nc" id="L469">            dateString.append(&quot;','YYYY-MM-DD')&quot;);</span>
+<span class="nc" id="L470">        }</span>
+        else
+        {
+<span class="nc" id="L473">            dateString.append(myDate.substring(0, myDate.indexOf('.')));    //  cut off miliseconds</span>
+<span class="nc" id="L474">            dateString.append(&quot;','YYYY-MM-DD HH24:MI:SS')&quot;);</span>
+        }
+<span class="nc" id="L476">        return dateString.toString();</span>
+    }   //  TO_DATE
+
+    /**
+     *  Create SQL for formatted Date, Number
+     *
+     *  @param  columnName  the column name in the SQL
+     *  @param  displayType Display Type
+     *  @param  AD_Language 6 character language setting (from Env.LANG_*)
+     *
+     *  @return TRIM(TO_CHAR(columnName,'999G999G999G990D00','NLS_NUMERIC_CHARACTERS='',.'''))
+     *      or TRIM(TO_CHAR(columnName,'TM9')) depending on DisplayType and Language
+     *  @see org.compiere.util.DisplayType
+     *  @see org.compiere.util.Env
+     *
+     *   */
+    public String TO_CHAR (String columnName, int displayType, String AD_Language)
+    {
+<span class="nc" id="L494">        StringBuilder retValue = new StringBuilder(&quot;TRIM(TO_CHAR(&quot;);</span>
+<span class="nc" id="L495">        retValue.append(columnName);</span>
+
+        //  Numbers
+<span class="nc bnc" id="L498" title="All 2 branches missed.">        if (DisplayType.isNumeric(displayType))</span>
+        {
+<span class="nc bnc" id="L500" title="All 2 branches missed.">            if (displayType == DisplayType.Amount)</span>
+<span class="nc" id="L501">                retValue.append(&quot;,'999G999G999G990D00'&quot;);</span>
+            else
+<span class="nc" id="L503">                retValue.append(&quot;,'TM9'&quot;);</span>
+            //  TO_CHAR(GrandTotal,'999G999G999G990D00','NLS_NUMERIC_CHARACTERS='',.''')
+<span class="nc bnc" id="L505" title="All 2 branches missed.">            if (!Language.isDecimalPoint(AD_Language))      //  reversed</span>
+<span class="nc" id="L506">                retValue.append(&quot;,'NLS_NUMERIC_CHARACTERS='',.'''&quot;);</span>
+<span class="nc" id="L507">        }</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">        else if (DisplayType.isDate(displayType))</span>
+        {
+<span class="nc" id="L510">            retValue.append(&quot;,'&quot;)</span>
+<span class="nc" id="L511">                .append(Language.getLanguage(AD_Language).getDBdatePattern())</span>
+<span class="nc" id="L512">                .append(&quot;'&quot;);</span>
+        }
+<span class="nc" id="L514">        retValue.append(&quot;))&quot;);</span>
+        //
+<span class="nc" id="L516">        return retValue.toString();</span>
+    }   //  TO_CHAR
+
+    /**
+     *  Return number as string for INSERT statements with correct precision
+     *  @param number number
+     *  @param displayType display Type
+     *  @return number as string
+     */
+    public String TO_NUMBER (BigDecimal number, int displayType)
+    {
+<span class="nc bnc" id="L527" title="All 2 branches missed.">        if (number == null)</span>
+<span class="nc" id="L528">            return &quot;NULL&quot;;</span>
+<span class="nc" id="L529">        BigDecimal result = number;</span>
+<span class="nc" id="L530">        int scale = DisplayType.getDefaultPrecision(displayType);</span>
+<span class="nc bnc" id="L531" title="All 2 branches missed.">        if (scale &gt; number.scale())</span>
+        {
+            try
+            {
+<span class="nc" id="L535">                result = number.setScale(scale, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L536">            }</span>
+<span class="nc" id="L537">            catch (Exception e)</span>
+            {
+            //  log.severe(&quot;Number=&quot; + number + &quot;, Scale=&quot; + &quot; - &quot; + e.getMessage());
+            }
+        }
+<span class="nc" id="L542">        return result.toString();</span>
+    }   //  TO_NUMBER
+    
+	/**
+	 *	@return string with right casting for JSON inserts
+	 */
+	public String getJSONCast () {
+<span class="nc" id="L549">		return &quot;?&quot;;</span>
+	}
+
+	/**
+	 * 	Return string as JSON object for INSERT statements
+	 *	@param value
+	 *	@return value as json
+	 */
+	public String TO_JSON (String value)
+	{
+<span class="nc" id="L559">		return value;</span>
+	}
+
+    /**
+     *  Get SQL Commands.
+     *  The following variables are resolved:
+     *  @SystemPassword@, @AdempiereUser@, @AdempierePassword@
+     *  @SystemPassword@, @DatabaseName@, @DatabaseDevice@
+     *  @param cmdType CMD_*
+     *  @return array of commands to be executed
+     */
+    public String[] getCommands (int cmdType)
+    {
+<span class="nc bnc" id="L572" title="All 2 branches missed.">        if (CMD_CREATE_USER == cmdType)</span>
+<span class="nc" id="L573">            return new String[]</span>
+<span class="nc" id="L574">            {</span>
+
+            };
+        //
+<span class="nc bnc" id="L578" title="All 2 branches missed.">        if (CMD_CREATE_DATABASE == cmdType)</span>
+<span class="nc" id="L579">            return new String[]</span>
+<span class="nc" id="L580">            {</span>
+
+            };
+        //
+<span class="nc bnc" id="L584" title="All 2 branches missed.">        if (CMD_DROP_DATABASE == cmdType)</span>
+<span class="nc" id="L585">            return new String[]</span>
+<span class="nc" id="L586">            {</span>
+
+            };
+        //
+<span class="nc" id="L590">        return null;</span>
+    }   //  getCommands
+
+	private String getPoolPropertiesFile ()
+	{
+<span class="nc" id="L595">		String base = Ini.getAdempiereHome();</span>
+		
+<span class="nc bnc" id="L597" title="All 4 branches missed.">		if (base != null &amp;&amp; !base.endsWith(File.separator)) {</span>
+<span class="nc" id="L598">			base += File.separator;</span>
+		}
+		
+		//
+<span class="nc" id="L602">		return base + getName() + File.separator + POOL_PROPERTIES;</span>
+	}	//	getFileName
+    
+	public DataSource getDataSource(CConnection connection)
+	{
+<span class="nc" id="L607">		ensureInitialized(connection);</span>
+			
+<span class="nc" id="L609">		return m_ds;</span>
+	}
+
+	/**
+	 * 	Get Cached Connection
+	 *	@param connection connection
+	 *	@param autoCommit auto commit
+	 *	@param transactionIsolation trx isolation
+	 *	@return Connection
+	 *	@throws Exception
+	 */
+	public Connection getCachedConnection (CConnection connection,
+			boolean autoCommit, int transactionIsolation)
+					throws Exception
+	{
+<span class="nc" id="L624">		Connection conn = null;</span>
+
+<span class="nc bnc" id="L626" title="All 2 branches missed.">		if (m_ds == null)</span>
+<span class="nc" id="L627">			getDataSource(connection);</span>
+
+
+		// If HikariCP has no available free connection this call will block until either
+		// a connection becomes available or the configured 'connectionTimeout' value is
+		// reached (after which a SQLException is thrown).
+<span class="nc" id="L633">		conn = m_ds.getConnection();</span>
+
+<span class="nc bnc" id="L635" title="All 2 branches missed.">		if (conn.getTransactionIsolation() != transactionIsolation)</span>
+		{
+<span class="nc" id="L637">			conn.setTransactionIsolation(transactionIsolation);</span>
+		}
+<span class="nc bnc" id="L639" title="All 2 branches missed.">		if (conn.getAutoCommit() != autoCommit) </span>
+		{
+<span class="nc" id="L641">			conn.setAutoCommit(autoCommit);</span>
+		}
+
+<span class="nc" id="L644">		return conn;</span>
+	}	//	getCachedConnection
+
+    /**
+     *  Get Connection from Driver
+     *  @param connection info
+     *  @return connection or null
+     *  @throws SQLException
+     */
+    public Connection getDriverConnection (CConnection connection) throws SQLException
+    {
+<span class="nc" id="L655">        getDriver();</span>
+<span class="nc" id="L656">        return DriverManager.getConnection (getConnectionURL (connection),</span>
+<span class="nc" id="L657">            connection.getDbUid(), connection.getDbPwd());</span>
+    }   //  getDriverConnection
+
+    /**
+     *  Get Driver Connection
+     *  @param dbUrl URL
+     *  @param dbUid user
+     *  @param dbPwd password
+     *  @return connection
+     *  @throws SQLException
+     */
+    public Connection getDriverConnection (String dbUrl, String dbUid, String dbPwd)
+        throws SQLException
+    {
+<span class="nc" id="L671">        getDriver();</span>
+<span class="nc" id="L672">        return DriverManager.getConnection (dbUrl, dbUid, dbPwd);</span>
+    }   //  getDriverConnection
+
+	private Properties getPoolProperties() {	
+		//check property file from home
+<span class="nc" id="L677">		File userPropertyFile = new File(getPoolPropertiesFile());</span>
+<span class="nc" id="L678">		URL propertyFileURL = null;</span>
+		
+<span class="nc bnc" id="L680" title="All 4 branches missed.">		if (userPropertyFile.exists() &amp;&amp; userPropertyFile.canRead())</span>
+		{			
+			try {
+<span class="nc" id="L683">				propertyFileURL = userPropertyFile.toURI().toURL();</span>
+<span class="nc" id="L684">			} catch (Exception e) {</span>
+<span class="nc" id="L685">				e.printStackTrace();</span>
+			}
+		}
+			
+<span class="nc bnc" id="L689" title="All 2 branches missed.">		if (propertyFileURL == null)</span>
+		{
+<span class="nc" id="L691">			propertyFileURL = OracleBundleActivator.bundleContext.getBundle().getEntry(&quot;META-INF/pool/server.default.properties&quot;);						</span>
+		}
+
+<span class="nc" id="L694">		Properties poolProperties = new Properties();</span>
+<span class="nc" id="L695">		try (InputStream propertyFileInputStream = propertyFileURL.openStream()) {</span>
+<span class="nc" id="L696">			poolProperties.load(propertyFileInputStream);</span>
+<span class="nc" id="L697">		} catch (Exception e) {</span>
+<span class="nc" id="L698">			throw new DBException(e);</span>
+		} 
+
+		//auto create property file at home folder from default config
+<span class="nc bnc" id="L702" title="All 2 branches missed.">		if (!userPropertyFile.exists())			</span>
+		{
+			try {				
+<span class="nc" id="L705">				Path directory = userPropertyFile.toPath().getParent();</span>
+<span class="nc" id="L706">				Files.createDirectories(directory);</span>
+								
+<span class="nc" id="L708">				try (InputStream propertyFileInputStream = propertyFileURL.openStream()) {</span>
+<span class="nc" id="L709">					Files.copy(propertyFileInputStream, userPropertyFile.toPath(), StandardCopyOption.REPLACE_EXISTING);</span>
+				} 
+			
+<span class="nc" id="L712">			} catch (Exception e) {</span>
+<span class="nc" id="L713">				e.printStackTrace();</span>
+			}
+		}
+		
+<span class="nc" id="L717">		return poolProperties;</span>
+	}
+	
+	/** Boolean to indicate the PostgreSQL connection pool is either initializing or initialized.*/
+<span class="nc" id="L721">	private final AtomicBoolean initialized = new AtomicBoolean(false);</span>
+	/** Latch which can be used to wait for initialization completion. */
+<span class="nc" id="L723">	private final CountDownLatch initializedLatch = new CountDownLatch(1); </span>
+    
+	/**
+	 * Allows the connection pool to be lazily initialized. While it might be preferable to do
+	 * this once upon initialization of this class the current design of iDempiere makes this 
+	 * hard.
+	 * 
+	 * Calling this method will block until the pool is configured. This does NOT mean it will
+	 * block until a database connection has been setup.
+	 * 
+	 * @param connection
+	 */
+	private void ensureInitialized(CConnection connection) {
+<span class="nc bnc" id="L736" title="All 2 branches missed.">		if (!initialized.compareAndSet(false, true)) {</span>
+			try {
+<span class="nc" id="L738">				initializedLatch.await();</span>
+<span class="nc" id="L739">			} catch (InterruptedException e) {</span>
+<span class="nc" id="L740">				return;</span>
+			}
+		}
+				
+        try {
+<span class="nc" id="L745">    		Properties poolProperties = getPoolProperties();</span>
+    		// Do not override values which might have been read from the users
+    		// hikaricp.properties file.
+<span class="nc bnc" id="L748" title="All 2 branches missed.">    		if(!poolProperties.containsKey(&quot;jdbcUrl&quot;)) {</span>
+<span class="nc" id="L749">    			poolProperties.put(&quot;jdbcUrl&quot;, getConnectionURL(connection));</span>
+    		}
+<span class="nc bnc" id="L751" title="All 2 branches missed.">    		if (!poolProperties.containsKey(&quot;username&quot;)) {</span>
+<span class="nc" id="L752">    			poolProperties.put(&quot;username&quot;, connection.getDbUid());</span>
+    		}
+<span class="nc bnc" id="L754" title="All 2 branches missed.">    		if (!poolProperties.containsKey(&quot;password&quot;)) {</span>
+<span class="nc" id="L755">    			poolProperties.put(&quot;password&quot;, connection.getDbPwd());</span>
+    		}
+    		
+<span class="nc" id="L758">    		HikariConfig hikariConfig = new HikariConfig(poolProperties);</span>
+<span class="nc" id="L759">    		hikariConfig.setDriverClassName(DRIVER);</span>
+<span class="nc" id="L760">    		m_ds = new HikariDataSource(hikariConfig);</span>
+            
+<span class="nc" id="L762">            m_connectionURL = m_ds.getJdbcUrl();</span>
+            
+<span class="nc" id="L764">            initializedLatch.countDown();</span>
+<span class="nc" id="L765">        }</span>
+<span class="nc" id="L766">        catch (Exception ex) {</span>
+<span class="nc" id="L767">        	throw new IllegalStateException(&quot;Could not initialise Hikari Datasource&quot;, ex);</span>
+        }		
+<span class="nc" id="L769">	}</span>
+    
+	/**
+	 * 	Close
+	 */
+	public void close()
+	{
+<span class="nc bnc" id="L776" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) </span>
+		{ 
+<span class="nc" id="L778">			log.config(toString());</span>
+		}
+
+		try
+		{
+<span class="nc" id="L783">			m_ds.close();</span>
+<span class="nc" id="L784">		}</span>
+<span class="nc" id="L785">		catch (Exception e)</span>
+		{
+<span class="nc" id="L787">			e.printStackTrace();</span>
+		}
+<span class="nc" id="L789">	}	//	close</span>
+
+    /**
+     *  Clean up
+     */
+    public void cleanup()
+    {
+
+<span class="nc" id="L797">    }   //  cleanup</span>
+
+    /**
+     *  Get Data Type
+     *  @param columnName
+     *  @param displayType display type
+     *  @param precision precision
+     *  @param defaultValue if true adds default value
+     *  @return data type
+     *  @deprecated
+     */
+    @Deprecated (since=&quot;13&quot;, forRemoval=true)
+    public String getDataType (String columnName, int displayType, int precision,
+        boolean defaultValue)
+    {
+<span class="nc" id="L812">    	return DisplayType.getSQLDataType(displayType, columnName, precision);</span>
+    }   //  getDataType
+
+
+    /**
+     *  Check and generate an alternative SQL
+     *  @reExNo number of re-execution
+     *  @msg previous execution error message
+     *  @sql previous executed SQL
+     *  @return String, the alternative SQL, null if no alternative
+     */
+    public String getAlternativeSQL(int reExNo, String msg, String sql)
+    {
+        //check reExNo or based on reExNo to do a decision. Currently none
+
+<span class="nc" id="L827">        return null; //do not do re-execution of alternative SQL</span>
+    }
+
+    public Convert getConvert() {
+<span class="nc" id="L831">        return m_convert;</span>
+    }
+
+	public int getNextID(String name) {
+<span class="nc" id="L835">		return getNextID(name, null);</span>
+	}
+
+	public int getNextID(String name, String trxName) {
+<span class="nc" id="L839">		int m_sequence_id = DB.getSQLValueEx(trxName, &quot;SELECT &quot;+name.toUpperCase()+&quot;.nextval FROM DUAL&quot;);</span>
+<span class="nc" id="L840">		return m_sequence_id;</span>
+	}
+
+	public boolean createSequence(String name , int increment , int minvalue , int maxvalue ,int  start , String trxName)
+	{
+		// Check if Sequence exists
+<span class="nc" id="L846">		final int cnt = DB.getSQLValueEx(trxName, &quot;SELECT COUNT(*) FROM USER_SEQUENCES WHERE UPPER(sequence_name)=?&quot;, name.toUpperCase());</span>
+		final int no;
+<span class="nc bnc" id="L848" title="All 2 branches missed.">		if (start &lt; minvalue)</span>
+<span class="nc" id="L849">			start = minvalue;</span>
+		//
+		// New Sequence
+<span class="nc bnc" id="L852" title="All 2 branches missed.">		if (cnt == 0)</span>
+		{
+<span class="nc" id="L854">			no = DB.executeUpdate(&quot;CREATE SEQUENCE &quot;+name.toUpperCase()</span>
+<span class="nc" id="L855">								+ &quot; MINVALUE &quot; + minvalue</span>
+<span class="nc" id="L856">								+ &quot; MAXVALUE &quot; + maxvalue</span>
+<span class="nc" id="L857">								+ &quot; START WITH &quot; + start </span>
+<span class="nc" id="L858">								+ &quot; INCREMENT BY &quot; + increment</span>
+<span class="nc" id="L859">								+ &quot; CACHE 20&quot;, trxName);</span>
+<span class="nc" id="L860">		}</span>
+		//
+		// Already existing sequence =&gt; ALTER
+		else
+		{
+<span class="nc" id="L865">			no = DB.executeUpdate(&quot;ALTER SEQUENCE &quot;+name.toUpperCase()</span>
+<span class="nc" id="L866">					+ &quot; INCREMENT BY &quot; + increment</span>
+					// + &quot; MINVALUE &quot; + minvalue // ORA-04007
+<span class="nc" id="L868">					+ &quot; MAXVALUE &quot; + maxvalue</span>
+<span class="nc" id="L869">					+ &quot; CACHE 20&quot;, trxName);</span>
+<span class="nc bnc" id="L870" title="All 2 branches missed.">			while (DB.getSQLValue(trxName, &quot;SELECT &quot; + name.toUpperCase() + &quot;.NEXTVAL FROM DUAL&quot;) &lt; start) {</span>
+	        	// do nothing - the while is incrementing the sequence
+	        }
+		}
+<span class="nc bnc" id="L874" title="All 2 branches missed.">		if(no == -1 )</span>
+<span class="nc" id="L875">			return false;</span>
+		else
+<span class="nc" id="L877">			return true;</span>
+	}
+
+	public boolean isQueryTimeoutSupported() {
+<span class="nc" id="L881">		return true;</span>
+	}
+
+	/**
+	 * Implemented using the fetch first and offset feature. use 1 base index for start and end parameter
+	 * @param sql
+	 * @param start
+	 * @param end
+	 */
+	public String addPagingSQL(String sql, int start, int end) {
+<span class="nc" id="L891">		StringBuilder newSql = new StringBuilder(sql);</span>
+<span class="nc bnc" id="L892" title="All 2 branches missed.">		if (start &gt; 1) {</span>
+<span class="nc" id="L893">			newSql.append(&quot; OFFSET &quot;)</span>
+<span class="nc" id="L894">				.append((start - 1))</span>
+<span class="nc" id="L895">				.append( &quot; ROWS&quot;);</span>
+		}
+<span class="nc bnc" id="L897" title="All 2 branches missed.">		if (end &gt; 0) {</span>
+<span class="nc" id="L898">			newSql.append(&quot; FETCH FIRST &quot;)</span>
+<span class="nc" id="L899">				.append(( end - start + 1 ))</span>
+<span class="nc" id="L900">				.append(&quot; ROWS ONLY&quot;);</span>
+		}
+<span class="nc" id="L902">		return newSql.toString();</span>
+	}
+
+	public boolean isPagingSupported() {
+<span class="nc" id="L906">		return true;</span>
+	}							
+
+	@Override
+	public boolean forUpdate(PO po, int timeout) {
+    	//only can lock for update if using trx
+<span class="nc bnc" id="L912" title="All 2 branches missed.">    	if (po.get_TrxName() == null)</span>
+<span class="nc" id="L913">    		return false;</span>
+    	
+<span class="nc" id="L915">    	String[] keyColumns = po.get_KeyColumns();</span>
+<span class="nc bnc" id="L916" title="All 6 branches missed.">		if (keyColumns != null &amp;&amp; keyColumns.length &gt; 0 &amp;&amp; !po.is_new()) {</span>
+<span class="nc" id="L917">			StringBuilder sqlBuffer = new StringBuilder(&quot; SELECT &quot;);</span>
+<span class="nc" id="L918">			sqlBuffer.append(keyColumns[0])</span>
+<span class="nc" id="L919">				.append(&quot; FROM &quot;)</span>
+<span class="nc" id="L920">				.append(po.get_TableName())</span>
+<span class="nc" id="L921">				.append(&quot; WHERE &quot;);</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">			for(int i = 0; i &lt; keyColumns.length; i++) {</span>
+<span class="nc bnc" id="L923" title="All 2 branches missed.">				if (i &gt; 0)</span>
+<span class="nc" id="L924">					sqlBuffer.append(&quot; AND &quot;);</span>
+<span class="nc" id="L925">				sqlBuffer.append(keyColumns[i]).append(&quot;=?&quot;);</span>
+			}
+<span class="nc bnc" id="L927" title="All 2 branches missed.">			sqlBuffer.append(&quot; FOR UPDATE WAIT &quot;).append((timeout &gt; 0 ? timeout : LOCK_TIME_OUT));</span>
+
+<span class="nc" id="L929">			Object[] parameters = new Object[keyColumns.length];</span>
+<span class="nc bnc" id="L930" title="All 2 branches missed.">			for(int i = 0; i &lt; keyColumns.length; i++) {</span>
+<span class="nc" id="L931">				Object parameter = po.get_Value(keyColumns[i]);</span>
+<span class="nc bnc" id="L932" title="All 4 branches missed.">				if (parameter != null &amp;&amp; parameter instanceof Boolean) {</span>
+<span class="nc bnc" id="L933" title="All 2 branches missed.">					if ((Boolean) parameter)</span>
+<span class="nc" id="L934">						parameter = &quot;Y&quot;;</span>
+					else
+<span class="nc" id="L936">						parameter = &quot;N&quot;;</span>
+				}
+<span class="nc" id="L938">				parameters[i] = parameter;</span>
+			}
+
+<span class="nc" id="L941">			PreparedStatement stmt = null;</span>
+<span class="nc" id="L942">			ResultSet rs = null;</span>
+			try {
+<span class="nc" id="L944">				stmt = DB.prepareStatement(sqlBuffer.toString(),</span>
+<span class="nc" id="L945">					ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE, po.get_TrxName());</span>
+<span class="nc bnc" id="L946" title="All 2 branches missed.">				for(int i = 0; i &lt; keyColumns.length; i++) {</span>
+<span class="nc" id="L947">					stmt.setObject(i+1, parameters[i]);</span>
+				}
+<span class="nc" id="L949">				rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L950" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L951">					return true;</span>
+				} else {
+<span class="nc" id="L953">					return false;</span>
+				}
+<span class="nc" id="L955">			} catch (Exception e) {</span>
+<span class="nc bnc" id="L956" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO))log.log(Level.INFO, e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L957">				throw new DBException(&quot;Could not lock record for &quot; + po.toString() + &quot; caused by &quot; + e.getLocalizedMessage(), e);</span>
+			} finally {
+<span class="nc" id="L959">				DB.close(rs, stmt);</span>
+			}			
+		}
+<span class="nc" id="L962">		return false;</span>
+	}
+
+	@Override
+	public String getNameOfUniqueConstraintError(Exception e) {
+<span class="nc" id="L967">		String info = e.getMessage();</span>
+<span class="nc" id="L968">		int fromIndex = info.indexOf(&quot;.&quot;);</span>
+<span class="nc bnc" id="L969" title="All 2 branches missed.">		if (fromIndex == -1)</span>
+<span class="nc" id="L970">			return info;</span>
+<span class="nc" id="L971">		int toIndex = info.indexOf(&quot;)&quot;, fromIndex + 1);</span>
+<span class="nc bnc" id="L972" title="All 2 branches missed.">		if (toIndex == -1)</span>
+<span class="nc" id="L973">			return info;</span>
+<span class="nc" id="L974">		return info.substring(fromIndex + 1, toIndex);</span>
+	}
+
+	@Override
+	public String getForeignKeyConstraint(Exception e) {
+		// finding the name of foreign key constraint is the same as unique constraint
+<span class="nc" id="L980">		return getNameOfUniqueConstraintError(e);</span>
+	}
+
+	@Override
+	public String subsetClauseForCSV(String columnName, String csv) {
+<span class="nc" id="L985">		StringBuilder builder = new StringBuilder();</span>
+<span class="nc" id="L986">		builder.append(&quot;toTableOfVarchar2(&quot;)</span>
+<span class="nc" id="L987">			.append(columnName)</span>
+<span class="nc" id="L988">			.append(&quot;)&quot;);</span>
+<span class="nc" id="L989">		builder.append(&quot; submultiset of &quot;)</span>
+<span class="nc" id="L990">			.append(&quot;toTableOfVarchar2(&quot;)</span>
+<span class="nc" id="L991">			.append(DB.TO_STRING(csv))</span>
+<span class="nc" id="L992">			.append(&quot;)&quot;);</span>
+		
+<span class="nc" id="L994">		return builder.toString();</span>
+	}
+	
+	@Override
+	public SQLFragment subsetFilterForCSV(String columnName, String csv) {
+<span class="nc" id="L999">		StringBuilder builder = new StringBuilder();</span>
+<span class="nc" id="L1000">		builder.append(&quot;toTableOfVarchar2(&quot;)</span>
+<span class="nc" id="L1001">			.append(columnName)</span>
+<span class="nc" id="L1002">			.append(&quot;)&quot;);</span>
+<span class="nc" id="L1003">		builder.append(&quot; submultiset of &quot;)</span>
+<span class="nc" id="L1004">			.append(&quot;toTableOfVarchar2(?)&quot;);</span>
+
+<span class="nc" id="L1006">		return new SQLFragment(builder.toString(), List.of(csv));</span>
+	}
+	
+	@Override
+	public String intersectClauseForCSV(String columnName, String csv) {
+<span class="nc" id="L1011">		return intersectClauseForCSV(columnName, csv, false);</span>
+	}
+	
+	@Override
+	public String intersectClauseForCSV(String columnName, String csv, boolean isNotClause) {
+<span class="nc" id="L1016">	    StringBuilder builder = new StringBuilder();</span>
+
+<span class="nc bnc" id="L1018" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L1019">	        builder.append(&quot;(&quot;);</span>
+	    }
+
+<span class="nc" id="L1022">	    builder.append(&quot;toTableOfVarchar2(&quot;)</span>
+<span class="nc" id="L1023">	        .append(columnName)</span>
+<span class="nc" id="L1024">	        .append(&quot;)&quot;);</span>
+<span class="nc" id="L1025">	    builder.append(&quot; MULTISET INTERSECT &quot;)</span>
+<span class="nc" id="L1026">	        .append(&quot;toTableOfVarchar2(&quot;)</span>
+<span class="nc" id="L1027">	        .append(DB.TO_STRING(csv))</span>
+<span class="nc" id="L1028">	        .append(&quot;) IS &quot;);</span>
+
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">	    if (!isNotClause)</span>
+<span class="nc" id="L1031">	        builder.append(&quot;NOT &quot;);</span>
+
+<span class="nc" id="L1033">	    builder.append(&quot;EMPTY&quot;);</span>
+
+<span class="nc bnc" id="L1035" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L1036">	        builder.append(&quot; OR &quot;)</span>
+<span class="nc" id="L1037">	            .append(columnName)</span>
+<span class="nc" id="L1038">	            .append(&quot; IS NULL)&quot;);</span>
+	    }
+
+<span class="nc" id="L1041">	    return builder.toString();</span>
+	}
+
+	@Override
+	public SQLFragment intersectFilterForCSV(String columnName, String csv) {
+<span class="nc" id="L1046">		return intersectFilterForCSV(columnName, csv, false);</span>
+	}
+	
+	@Override
+	public SQLFragment intersectFilterForCSV(String columnName, String csv, boolean isNotClause) {
+<span class="nc" id="L1051">	    StringBuilder builder = new StringBuilder();</span>
+
+<span class="nc bnc" id="L1053" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L1054">	        builder.append(&quot;(&quot;);</span>
+	    }
+
+<span class="nc" id="L1057">	    builder.append(&quot;toTableOfVarchar2(&quot;)</span>
+<span class="nc" id="L1058">	        .append(columnName)</span>
+<span class="nc" id="L1059">	        .append(&quot;)&quot;);</span>
+<span class="nc" id="L1060">	    builder.append(&quot; MULTISET INTERSECT &quot;)</span>
+<span class="nc" id="L1061">	        .append(&quot;toTableOfVarchar2(?) IS &quot;);</span>
+
+<span class="nc bnc" id="L1063" title="All 2 branches missed.">	    if (!isNotClause)</span>
+<span class="nc" id="L1064">	        builder.append(&quot;NOT &quot;);</span>
+
+<span class="nc" id="L1066">	    builder.append(&quot;EMPTY&quot;);</span>
+
+<span class="nc bnc" id="L1068" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L1069">	        builder.append(&quot; OR &quot;)</span>
+<span class="nc" id="L1070">	            .append(columnName)</span>
+<span class="nc" id="L1071">	            .append(&quot; IS NULL)&quot;);</span>
+	    }
+
+<span class="nc" id="L1074">	    return new SQLFragment(builder.toString(), List.of(csv));</span>
+	}
+	
+	@Override
+	public String getNumericDataType() {
+<span class="nc" id="L1079">		return &quot;NUMBER&quot;;</span>
+	}
+
+	@Override
+	public String getCharacterDataType() {
+<span class="nc" id="L1084">		return &quot;CHAR&quot;;</span>
+	}
+
+	@Override
+	public String getVarcharDataType() {
+<span class="nc" id="L1089">		return &quot;VARCHAR2&quot;;</span>
+	}
+
+	/**
+	 * @return variable length character data type suffix
+	 */
+	public String getVarcharLengthSuffix() {
+<span class="nc" id="L1096">		return &quot; CHAR&quot;;</span>
+	};
+
+	@Override
+	public String getBlobDataType() {
+<span class="nc" id="L1101">		return &quot;BLOB&quot;;</span>
+	}
+
+	@Override
+	public String getClobDataType() {
+<span class="nc" id="L1106">		return &quot;CLOB&quot;;</span>
+	}
+	
+	@Override
+	public String getJsonDataType() {
+<span class="nc" id="L1111">		return getClobDataType();</span>
+	}
+
+	@Override
+	public String getTimestampDataType() {
+<span class="nc" id="L1116">		return &quot;DATE&quot;;</span>
+	}
+
+	@Override
+	public String getTimestampWithTimezoneDataType() {
+<span class="nc" id="L1121">		return &quot;TIMESTAMP WITH TIME ZONE&quot;;</span>
+	}
+
+	@Override
+	public String getUUIDDataType() {
+		// The comment /*UUID*/ is necessary for the ConvertMap_PostgreSQL to work
+		// this is still necessary because when generating migration scripts the convert layer is used
+<span class="nc" id="L1128">		return &quot;VARCHAR2/*UUID*/(36)&quot;;</span>
+	}
+
+	@Override
+	public String getSQLDDL(MColumn column) {				
+<span class="nc" id="L1133">		StringBuilder sql = new StringBuilder ().append(column.getColumnName())</span>
+<span class="nc" id="L1134">			.append(&quot; &quot;).append(column.getSQLDataType());</span>
+
+		//	Default
+<span class="nc" id="L1137">		String defaultValue = column.getDefaultValue();</span>
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">		if (defaultValue != null </span>
+<span class="nc bnc" id="L1139" title="All 2 branches missed.">				&amp;&amp; defaultValue.length() &gt; 0</span>
+<span class="nc bnc" id="L1140" title="All 2 branches missed.">				&amp;&amp; defaultValue.indexOf('@') == -1		//	no variables</span>
+<span class="nc bnc" id="L1141" title="All 4 branches missed.">				&amp;&amp; ( ! (DisplayType.isID(column.getAD_Reference_ID()) &amp;&amp; defaultValue.equals(&quot;-1&quot;) ) ) )  // not for ID's with default -1</span>
+		{
+<span class="nc bnc" id="L1143" title="All 2 branches missed.">			if (DisplayType.isText(column.getAD_Reference_ID()) </span>
+<span class="nc bnc" id="L1144" title="All 2 branches missed.">					|| DisplayType.isList(column.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L1145" title="All 2 branches missed.">					|| column.getAD_Reference_ID() == DisplayType.YesNo</span>
+					// Two special columns: Defined as Table but DB Type is String 
+<span class="nc bnc" id="L1147" title="All 4 branches missed.">					|| column.getColumnName().equals(&quot;EntityType&quot;) || column.getColumnName().equals(&quot;AD_Language&quot;)</span>
+<span class="nc bnc" id="L1148" title="All 2 branches missed.">					|| (column.getAD_Reference_ID() == DisplayType.Button &amp;&amp;</span>
+<span class="nc bnc" id="L1149" title="All 2 branches missed.">							!(column.getColumnName().endsWith(&quot;_ID&quot;))))</span>
+			{
+<span class="nc bnc" id="L1151" title="All 4 branches missed.">				if (!defaultValue.startsWith(&quot;'&quot;) &amp;&amp; !defaultValue.endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1152">					defaultValue = DB.TO_STRING(defaultValue);</span>
+			}
+<span class="nc" id="L1154">			sql.append(&quot; DEFAULT &quot;).append(defaultValue);</span>
+<span class="nc" id="L1155">		}</span>
+		else
+		{
+<span class="nc bnc" id="L1158" title="All 2 branches missed.">			if (! column.isMandatory())</span>
+<span class="nc" id="L1159">				sql.append(&quot; DEFAULT NULL &quot;);</span>
+<span class="nc" id="L1160">			defaultValue = null;</span>
+		}
+
+		//	Inline Constraint
+<span class="nc bnc" id="L1164" title="All 2 branches missed.">		if (column.getAD_Reference_ID() == DisplayType.YesNo)</span>
+<span class="nc" id="L1165">			sql.append(&quot; CHECK (&quot;).append(column.getColumnName()).append(&quot; IN ('Y','N'))&quot;);</span>
+<span class="nc bnc" id="L1166" title="All 2 branches missed.">		else if (column.getAD_Reference_ID() == DisplayType.JSON)</span>
+<span class="nc" id="L1167">			sql.append(&quot; CONSTRAINT &quot;).append(column.getAD_Table().getTableName()).append(&quot;_&quot;).append(column.getColumnName()).append(&quot;_isjson CHECK (&quot;).append(column.getColumnName()).append(&quot; IS JSON)&quot;);</span>
+
+		//	Null
+<span class="nc bnc" id="L1170" title="All 2 branches missed.">		if (column.isMandatory())</span>
+<span class="nc" id="L1171">			sql.append(&quot; NOT NULL&quot;);</span>
+<span class="nc" id="L1172">		return sql.toString();</span>
+	
+	}
+	
+	/**
+	 * 	Get SQL Add command
+	 *	@param table table
+	 *	@return sql
+	 */
+	@Override
+	public String getSQLAdd (MTable table, MColumn column)
+	{
+<span class="nc" id="L1184">		StringBuilder sql = new StringBuilder (&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L1185">			.append(table.getTableName())</span>
+<span class="nc" id="L1186">			.append(&quot; ADD &quot;).append(column.getSQLDDL());</span>
+<span class="nc" id="L1187">		String constraint = column.getConstraint(table);</span>
+<span class="nc bnc" id="L1188" title="All 4 branches missed.">		if (constraint != null &amp;&amp; constraint.length() &gt; 0) {</span>
+<span class="nc" id="L1189">			sql.append(DB.SQLSTATEMENT_SEPARATOR).append(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L1190">			.append(table.getTableName())</span>
+<span class="nc" id="L1191">			.append(&quot; ADD &quot;).append(constraint);</span>
+		}
+<span class="nc" id="L1193">		return sql.toString();</span>
+	}	//	getSQLAdd
+	
+	/**
+	 * 	Get SQL Modify command
+	 *	@param table table
+	 *	@param setNullOption generate null / not null statement
+	 *	@return sql separated by ;
+	 */
+	public String getSQLModify (MTable table, MColumn column, boolean setNullOption)
+	{
+<span class="nc" id="L1204">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc" id="L1205">		StringBuilder sqlBase = new StringBuilder (&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L1206">			.append(table.getTableName())</span>
+<span class="nc" id="L1207">			.append(&quot; MODIFY &quot;).append(column.getColumnName());</span>
+		
+		//	Default
+<span class="nc" id="L1210">		StringBuilder sqlDefault = new StringBuilder(sqlBase)</span>
+<span class="nc" id="L1211">			.append(&quot; &quot;).append(column.getSQLDataType());</span>
+<span class="nc" id="L1212">		String defaultValue = column.getDefaultValue();</span>
+<span class="nc" id="L1213">		String originalDefaultValue = defaultValue;</span>
+<span class="nc bnc" id="L1214" title="All 2 branches missed.">		if (defaultValue != null </span>
+<span class="nc bnc" id="L1215" title="All 2 branches missed.">			&amp;&amp; defaultValue.length() &gt; 0</span>
+<span class="nc bnc" id="L1216" title="All 2 branches missed.">			&amp;&amp; defaultValue.indexOf('@') == -1		//	no variables</span>
+<span class="nc bnc" id="L1217" title="All 4 branches missed.">			&amp;&amp; ( ! (DisplayType.isID(column.getAD_Reference_ID()) &amp;&amp; defaultValue.equals(&quot;-1&quot;) ) ) )  // not for ID's with default -1</span>
+		{
+<span class="nc bnc" id="L1219" title="All 2 branches missed.">			if (DisplayType.isText(column.getAD_Reference_ID()) </span>
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">				|| DisplayType.isList(column.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L1221" title="All 2 branches missed.">				|| column.getAD_Reference_ID() == DisplayType.YesNo</span>
+<span class="nc bnc" id="L1222" title="All 2 branches missed.">				|| column.getAD_Reference_ID() == DisplayType.Payment</span>
+				// Two special columns: Defined as Table but DB Type is String 
+<span class="nc bnc" id="L1224" title="All 4 branches missed.">				|| column.getColumnName().equals(&quot;EntityType&quot;) || column.getColumnName().equals(&quot;AD_Language&quot;)</span>
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">				|| (column.getAD_Reference_ID() == DisplayType.Button &amp;&amp;</span>
+<span class="nc bnc" id="L1226" title="All 2 branches missed.">						!(column.getColumnName().endsWith(&quot;_ID&quot;))))</span>
+			{
+<span class="nc bnc" id="L1228" title="All 4 branches missed.">				if (!defaultValue.startsWith(&quot;'&quot;) &amp;&amp; !defaultValue.endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1229">					defaultValue = DB.TO_STRING(defaultValue);</span>
+			}
+<span class="nc" id="L1231">			sqlDefault.append(&quot; DEFAULT &quot;).append(defaultValue);</span>
+<span class="nc" id="L1232">		}</span>
+		else
+		{
+<span class="nc bnc" id="L1235" title="All 2 branches missed.">			if (! column.isMandatory())</span>
+<span class="nc" id="L1236">				sqlDefault.append(&quot; DEFAULT NULL &quot;);</span>
+<span class="nc" id="L1237">			defaultValue = null;</span>
+		}
+<span class="nc" id="L1239">		sql.append(sqlDefault);</span>
+		
+		//	Constraint
+<span class="nc bnc" id="L1242" title="All 2 branches missed.">		if (column.getAD_Reference_ID() == DisplayType.JSON)</span>
+<span class="nc" id="L1243">			sql.append(&quot; CONSTRAINT &quot;).append(column.getAD_Table().getTableName()).append(&quot;_&quot;).append(column.getColumnName()).append(&quot;_isjson CHECK (&quot;).append(column.getColumnName()).append(&quot; IS JSON)&quot;);</span>
+
+		//	Null Values
+<span class="nc bnc" id="L1246" title="All 6 branches missed.">		if (column.isMandatory() &amp;&amp; defaultValue != null &amp;&amp; defaultValue.length() &gt; 0)</span>
+		{
+<span class="nc bnc" id="L1248" title="All 2 branches missed.">			if (!(DisplayType.isText(column.getAD_Reference_ID()) </span>
+<span class="nc bnc" id="L1249" title="All 2 branches missed.">					|| DisplayType.isList(column.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L1250" title="All 2 branches missed.">					|| column.getAD_Reference_ID() == DisplayType.YesNo</span>
+<span class="nc bnc" id="L1251" title="All 2 branches missed.">					|| column.getAD_Reference_ID() == DisplayType.Payment</span>
+					// Two special columns: Defined as Table but DB Type is String 
+<span class="nc bnc" id="L1253" title="All 4 branches missed.">					|| column.getColumnName().equals(&quot;EntityType&quot;) || column.getColumnName().equals(&quot;AD_Language&quot;)</span>
+<span class="nc bnc" id="L1254" title="All 2 branches missed.">					|| (column.getAD_Reference_ID() == DisplayType.Button &amp;&amp;</span>
+<span class="nc bnc" id="L1255" title="All 2 branches missed.">							!(column.getColumnName().endsWith(&quot;_ID&quot;)))))</span>
+			{
+<span class="nc" id="L1257">				defaultValue = originalDefaultValue;</span>
+			}
+<span class="nc" id="L1259">			StringBuilder sqlSet = new StringBuilder(&quot;UPDATE &quot;)</span>
+<span class="nc" id="L1260">				.append(table.getTableName())</span>
+<span class="nc" id="L1261">				.append(&quot; SET &quot;).append(column.getColumnName())</span>
+<span class="nc" id="L1262">				.append(&quot;=&quot;).append(defaultValue)</span>
+<span class="nc" id="L1263">				.append(&quot; WHERE &quot;).append(column.getColumnName()).append(&quot; IS NULL&quot;);</span>
+<span class="nc" id="L1264">			sql.append(DB.SQLSTATEMENT_SEPARATOR).append(sqlSet);</span>
+		}
+		
+		//	Null
+<span class="nc bnc" id="L1268" title="All 2 branches missed.">		if (setNullOption)</span>
+		{
+<span class="nc" id="L1270">			StringBuilder sqlNull = new StringBuilder(sqlBase);</span>
+<span class="nc bnc" id="L1271" title="All 2 branches missed.">			if (column.isMandatory())</span>
+<span class="nc" id="L1272">				sqlNull.append(&quot; NOT NULL&quot;);</span>
+			else
+<span class="nc" id="L1274">				sqlNull.append(&quot; NULL&quot;);</span>
+<span class="nc" id="L1275">			sql.append(DB.SQLSTATEMENT_SEPARATOR).append(sqlNull);</span>
+		}
+		//
+<span class="nc" id="L1278">		return sql.toString();</span>
+	}	//	getSQLModify
+
+	@Override
+	public boolean isQueryTimeout(SQLException ex) {
+		//java.sql.SQLTimeoutException: ORA-01013: user requested cancel of current operation
+<span class="nc bnc" id="L1284" title="All 4 branches missed.">		return &quot;72000&quot;.equals(ex.getSQLState()) &amp;&amp; ex.getErrorCode() == 1013;</span>
+	}
+	
+	@Override
+	public ITablePartitionService getTablePartitionService() {
+<span class="nc" id="L1289">		return new TablePartitionService();</span>
+	}
+
+	@Override
+	public String TO_Blob(byte[] blob) {
+<span class="nc" id="L1294">		return &quot;HEXTORAW('&quot;+HexFormat.of().formatHex(blob)+&quot;')&quot;;</span>
+	}
+}   //  DB_Oracle
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

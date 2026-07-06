@@ -1,0 +1,545 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>M_PriceList_Create.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">M_PriceList_Create.java</span></div><h1>M_PriceList_Create.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ * Contributor(s): Layda Salas (globalqss)                                    *
+ * Contributor(s): Carlos Ruiz (globalqss)                                    *
+ *****************************************************************************/
+
+package org.compiere.process;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Vector;
+import java.util.logging.Level;
+
+import org.compiere.model.MAcctSchema;
+import org.compiere.model.MClientInfo;
+import org.compiere.model.MDiscountSchema;
+import org.compiere.model.MDiscountSchemaLine;
+import org.compiere.model.MPriceList;
+import org.compiere.model.MPriceListVersion;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MProduct;
+import org.compiere.model.MProductPO;
+import org.compiere.model.MProductPrice;
+import org.compiere.model.MSequence;
+import org.compiere.model.ProductCost;
+import org.compiere.model.Query;
+import org.compiere.util.AdempiereSystemError;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.DB;
+
+/**
+ * Create PriceList by copying purchase prices (M_Product_PO) 
+ *		and applying product category discounts (M_CategoryDiscount)
+ * 
+ * @author Layda Salas (globalqss)
+ * @version $Id: M_PriceList_Create,v 1.0 2005/10/09 22:19:00
+ *          globalqss Exp $
+ * @author Carlos Ruiz (globalqss)
+ *         Make T_Selection tables permanent
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L60">public class M_PriceList_Create extends SvrProcess {</span>
+
+	/** Price List Version			*/
+<span class="nc" id="L63">	private int p_PriceList_Version_ID = 0;</span>
+	/** Delete Old Prices			*/
+<span class="nc" id="L65">	private boolean 	p_DeleteOld = false;</span>
+
+<span class="nc" id="L67">	private int m_AD_PInstance_ID = 0; </span>
+
+	/** Price List Version			*/
+<span class="nc" id="L70">	private MPriceListVersion 	m_plv = null;</span>
+
+	/**
+	 * Prepare - e.g., get Parameters.
+	 */
+	protected void prepare() {
+<span class="nc bnc" id="L76" title="All 2 branches missed.">		for (ProcessInfoParameter para : getParameter()) {</span>
+<span class="nc" id="L77">			String name = para.getParameterName();</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">			if (para.getParameter() == null)</span>
+<span class="nc" id="L79">				;</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">			else if (name.equals(&quot;DeleteOld&quot;))</span>
+<span class="nc" id="L81">				p_DeleteOld = para.getParameterAsBoolean();</span>
+			else
+<span class="nc" id="L83">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para);</span>
+		}
+<span class="nc" id="L85">		p_PriceList_Version_ID = getRecord_ID();</span>
+<span class="nc" id="L86">		m_AD_PInstance_ID = getAD_PInstance_ID();</span>
+<span class="nc" id="L87">	} //*prepare*/</span>
+
+	/**
+	 * Process
+	 * 
+	 * @return message
+	 * @throws Exception
+	 */
+	protected String doIt() throws Exception {
+<span class="nc" id="L96">		log.info (&quot;M_PriceList_Version_ID=&quot; + p_PriceList_Version_ID </span>
+<span class="nc" id="L97">				+ &quot;, DeleteOld=&quot; + p_DeleteOld);</span>
+<span class="nc" id="L98">		m_plv = new MPriceListVersion (getCtx(), p_PriceList_Version_ID, get_TrxName());</span>
+<span class="nc bnc" id="L99" title="All 4 branches missed.">		if (m_plv.get_ID() == 0 || m_plv.get_ID() != p_PriceList_Version_ID)</span>
+<span class="nc" id="L100">			throw new AdempiereUserError(&quot;@NotFound@  @M_PriceList_Version_ID@=&quot; + p_PriceList_Version_ID);</span>
+		//	
+<span class="nc" id="L102">		String error = checkPrerequisites();</span>
+<span class="nc bnc" id="L103" title="All 4 branches missed.">		if (error != null &amp;&amp; error.length() &gt; 0)</span>
+<span class="nc" id="L104">			throw new AdempiereUserError(error);</span>
+<span class="nc" id="L105">		return create();</span>
+	}	//	doIt
+
+	/**
+	 * 	Prepare Calculations
+	 *	@return error message
+	 */
+	private String checkPrerequisites() {
+<span class="nc" id="L113">		Object[] clientParam = new Object[] {m_plv.getAD_Client_ID()};</span>
+		//PO Prices must exists
+<span class="nc" id="L115">		DB.executeUpdateEx(</span>
+<span class="nc" id="L116">				&quot;UPDATE M_Product_PO SET PriceList = 0 WHERE PriceList IS NULL AND AD_Client_ID=?&quot;,</span>
+<span class="nc" id="L117">				clientParam, get_TrxName());</span>
+<span class="nc" id="L118">		DB.executeUpdateEx(</span>
+<span class="nc" id="L119">				&quot;UPDATE M_Product_PO SET PriceLastPO = 0 WHERE PriceLastPO IS NULL AND AD_Client_ID=?&quot;,</span>
+<span class="nc" id="L120">				clientParam, get_TrxName());</span>
+<span class="nc" id="L121">		DB.executeUpdateEx(</span>
+<span class="nc" id="L122">				&quot;UPDATE M_Product_PO SET PricePO = PriceLastPO WHERE (PricePO IS NULL OR PricePO = 0) AND PriceLastPO &lt;&gt; 0 AND AD_Client_ID=?&quot;,</span>
+<span class="nc" id="L123">				clientParam, get_TrxName());</span>
+<span class="nc" id="L124">		DB.executeUpdateEx(</span>
+<span class="nc" id="L125">				&quot;UPDATE	M_Product_PO SET PricePO = 0 WHERE PricePO IS NULL AND AD_Client_ID=?&quot;,</span>
+<span class="nc" id="L126">				clientParam, get_TrxName());</span>
+		//  Set default current vendor
+<span class="nc" id="L128">		DB.executeUpdateEx(</span>
+<span class="nc" id="L129">				&quot;UPDATE M_Product_PO p SET IsCurrentVendor = 'Y' &quot;</span>
+						+ &quot;WHERE IsCurrentVendor = 'N'&quot;
+						+ &quot; AND NOT EXISTS &quot;
+						+ &quot;(SELECT pp.M_Product_ID FROM M_Product_PO pp &quot;
+						+ &quot;WHERE pp.M_Product_ID=p.M_Product_ID &quot;
+						+ &quot;GROUP BY pp.M_Product_ID HAVING COUNT(*) &gt; 1) &quot;
+						+ &quot;AND AD_Client_ID=?&quot;,
+<span class="nc" id="L136">						clientParam, get_TrxName());</span>
+
+		/**
+		 *	Make sure that we have only one active product vendor
+		 */
+		/* NOTE iDempiere 7.1 -&gt; anyways the validation on MProductPO.beforeSave doesn't allow this wrong data */ 
+<span class="nc" id="L142">		String whereClause = &quot;IsCurrentVendor='Y' AND IsActive='Y'&quot;</span>
+				+ &quot; AND EXISTS (SELECT M_Product_ID FROM M_Product_PO x &quot;
+				+ &quot;WHERE x.M_Product_ID=M_Product_PO.M_Product_ID&quot;
+				+ &quot; AND IsCurrentVendor='Y' AND IsActive='Y' &quot;
+				+ &quot;GROUP BY M_Product_ID HAVING COUNT(*) &gt; 1)&quot;;
+<span class="nc" id="L147">		String orderByClause = &quot;M_Product_ID, Created&quot;;</span>
+<span class="nc" id="L148">		List&lt;MProductPO&gt; pos = new Query(getCtx(), MProductPO.Table_Name, whereClause, get_TrxName())</span>
+<span class="nc" id="L149">				.setClient_ID()</span>
+<span class="nc" id="L150">				.setOrderBy(orderByClause)</span>
+<span class="nc" id="L151">				.list();</span>
+<span class="nc" id="L152">		int success = 0;</span>
+<span class="nc" id="L153">		int errors = 0;</span>
+<span class="nc" id="L154">		int M_Product_ID = 0;</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">		for (MProductPO po : pos) {</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">			if (M_Product_ID != po.getM_Product_ID()) {</span>
+<span class="nc" id="L157">				M_Product_ID = po.getM_Product_ID();</span>
+<span class="nc" id="L158">				continue;</span>
+			}
+<span class="nc" id="L160">			po.setIsCurrentVendor (false);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">			if (po.save())</span>
+<span class="nc" id="L162">				success++;</span>
+			else {
+<span class="nc" id="L164">				errors++;</span>
+<span class="nc" id="L165">				log.warning(&quot;Not updated &quot; + po);</span>
+			}
+		}
+<span class="nc" id="L168">		log.info (&quot;Current Vendor - Changes=&quot; + success + &quot;, Errors=&quot; + errors);</span>
+<span class="nc" id="L169">		return null;</span>
+
+	}	//	checkPrerequisites
+
+	/**
+	 * 	Create Price List
+	 *	@return info message
+	 */
+	private String create() throws Exception {
+<span class="nc" id="L178">		StringBuffer info = new StringBuffer();</span>
+
+		/**	Delete Old Data	*/
+<span class="nc bnc" id="L181" title="All 2 branches missed.">		if (p_DeleteOld) {</span>
+<span class="nc" id="L182">			int no = DB.executeUpdateEx(&quot;DELETE FROM M_ProductPrice WHERE M_PriceList_Version_ID=?&quot;,</span>
+<span class="nc" id="L183">					new Object[] {p_PriceList_Version_ID}, get_TrxName());</span>
+<span class="nc" id="L184">			log.info(&quot;Deleted=&quot; + no);</span>
+<span class="nc" id="L185">			info.append(&quot;@Deleted@=&quot;).append(no).append(&quot; - &quot;);</span>
+		}
+
+<span class="nc" id="L188">		int M_Pricelist_Version_Base_ID = m_plv.getM_Pricelist_Version_Base_ID();</span>
+<span class="nc" id="L189">		MPriceList pl = m_plv.getPriceList();</span>
+<span class="nc" id="L190">		int curPrecision = pl.getStandardPrecision();</span>
+
+		/**
+		 *	For All Discount Lines in Sequence
+		 */
+<span class="nc" id="L195">		MDiscountSchema ds = new MDiscountSchema(getCtx(), m_plv.getM_DiscountSchema_ID(), get_TrxName());</span>
+<span class="nc" id="L196">		MDiscountSchemaLine[] dsl = ds.getLines(false);</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		for (MDiscountSchemaLine dsLine : dsl) {</span>
+			// ignore inactive discount schema lines
+<span class="nc bnc" id="L199" title="All 2 branches missed.">			if( !dsLine.isActive() )</span>
+<span class="nc" id="L200">				continue;</span>
+
+<span class="nc" id="L202">			String message = &quot;#&quot; + dsLine.getSeqNo();</span>
+<span class="nc" id="L203">			String dd = dsLine.getDescription();</span>
+<span class="nc bnc" id="L204" title="All 4 branches missed.">			if (dd != null &amp;&amp; dd.length() &gt; 0)</span>
+<span class="nc" id="L205">				message += &quot; &quot; + dd;</span>
+
+			//	Clear Temporary Table
+<span class="nc" id="L208">			int noDeleted = DB.executeUpdateEx(&quot;DELETE FROM T_Selection WHERE AD_PInstance_ID=?&quot;,</span>
+<span class="nc" id="L209">					new Object[] {m_AD_PInstance_ID}, get_TrxName());</span>
+
+			//	Create Selection in Temporary Table
+<span class="nc" id="L212">			StringBuilder sqlb = new StringBuilder(&quot;INSERT INTO T_Selection (AD_PInstance_ID, T_Selection_ID) &quot;);</span>
+<span class="nc" id="L213">			int M_DiscountSchemaLine_ID = dsLine.getM_DiscountSchemaLine_ID();</span>
+<span class="nc" id="L214">			int p2 = M_Pricelist_Version_Base_ID;</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">			if (p2 == 0) { //	Create from PO	**</span>
+<span class="nc" id="L216">				p2 = dsLine.getAD_Client_ID();</span>
+<span class="nc" id="L217">				sqlb.append(</span>
+<span class="nc" id="L218">						&quot;SELECT DISTINCT ?, po.M_Product_ID &quot;	//	#1</span>
+						+ &quot;FROM M_Product_PO po &quot;
+						+ &quot; INNER JOIN M_Product p ON (p.M_Product_ID=po.M_Product_ID)&quot;
+						+ &quot; INNER JOIN M_DiscountSchemaLine dl ON (dl.M_DiscountSchemaLine_ID=?) &quot;	//	#2
+						+ &quot;WHERE p.AD_Client_ID IN (?, 0)&quot;		//	#3
+						+ &quot; AND p.IsActive='Y' AND po.IsActive='Y'&quot;
+						//	Optional Restrictions
+						+ &quot; AND (dl.Group1 IS NULL OR p.Group1=dl.Group1)&quot;
+						+ &quot; AND (dl.Group2 IS NULL OR p.Group2=dl.Group2)&quot;
+						+ &quot; AND (dl.C_BPartner_ID IS NULL OR po.C_BPartner_ID=dl.C_BPartner_ID)&quot; 
+						+ &quot; AND (dl.VendorCategory IS NULL OR po.VendorCategory=dl.VendorCategory)&quot;
+						+ &quot; AND (dl.IsIgnoreIsCurrentVendor='Y' OR po.IsCurrentVendor='Y')&quot;
+						+ &quot; AND (dl.M_Product_ID IS NULL OR p.M_Product_ID=dl.M_Product_ID)&quot;);
+<span class="nc bnc" id="L231" title="All 2 branches missed.">				if (dsLine.getM_Product_Category_ID() &gt; 0) {</span>
+<span class="nc" id="L232">					sqlb.append(&quot; AND p.M_Product_Category_ID IN (&quot;)</span>
+<span class="nc" id="L233">						.append(getSubCategoryWhereClause(dsLine.getM_Product_Category_ID()))</span>
+<span class="nc" id="L234">						.append(&quot;)&quot;);</span>
+				}
+<span class="nc" id="L236">			} else { //	Create from Price List **</span>
+<span class="nc" id="L237">				sqlb.append(</span>
+<span class="nc" id="L238">						&quot;SELECT DISTINCT ?, p.M_Product_ID &quot;	//	#1</span>
+						+ &quot;FROM M_ProductPrice pp&quot;
+						+ &quot; INNER JOIN M_Product p ON (p.M_Product_ID=pp.M_Product_ID)&quot;
+						+ &quot; INNER JOIN M_DiscountSchemaLine dl ON (dl.M_DiscountSchemaLine_ID=?) &quot;	//	#2
+						+ &quot;WHERE pp.M_PriceList_Version_ID=?&quot;	//	#3 PriceList_Version_Base_ID
+						+ &quot; AND p.IsActive='Y' AND pp.IsActive='Y'&quot;
+						//	Optional Restrictions
+						+ &quot; AND (dl.Group1 IS NULL OR p.Group1=dl.Group1)&quot;
+						+ &quot; AND (dl.Group2 IS NULL OR p.Group2=dl.Group2)&quot;
+						+ &quot; AND ((dl.C_BPartner_ID IS NULL AND dl.VendorCategory IS NULL) OR EXISTS &quot;
+						+ &quot;(SELECT * FROM M_Product_PO po&quot;
+						+ &quot; WHERE po.M_Product_ID=p.M_Product_ID&quot;
+						+ &quot;   AND (dl.C_BPartner_ID IS NULL OR po.C_BPartner_ID=dl.C_BPartner_ID)&quot;
+						+ &quot;   AND (dl.VendorCategory IS NULL OR po.VendorCategory=dl.VendorCategory)))&quot;
+ 						+ &quot; AND (dl.M_Product_ID IS NULL OR p.M_Product_ID=dl.M_Product_ID)&quot;);
+<span class="nc bnc" id="L253" title="All 2 branches missed.">				if (dsLine.getM_Product_Category_ID() &gt; 0) {</span>
+<span class="nc" id="L254">					sqlb.append(&quot; AND p.M_Product_Category_ID IN (&quot;)</span>
+<span class="nc" id="L255">						.append(getSubCategoryWhereClause(dsLine.getM_Product_Category_ID()))</span>
+<span class="nc" id="L256">						.append(&quot;)&quot;);</span>
+				}
+			}
+<span class="nc" id="L259">			int noSelected = DB.executeUpdateEx(sqlb.toString(),</span>
+<span class="nc" id="L260">					new Object[] {m_AD_PInstance_ID, M_DiscountSchemaLine_ID, p2}, get_TrxName());</span>
+<span class="nc" id="L261">			message += &quot;: @Selected@=&quot; + noSelected;</span>
+
+			String sql;
+			//	Delete Prices in Selection, so that we can insert
+<span class="nc bnc" id="L265" title="All 2 branches missed.">			if (   M_Pricelist_Version_Base_ID == 0</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">				|| M_Pricelist_Version_Base_ID != p_PriceList_Version_ID) {</span>
+<span class="nc" id="L267">				sql = &quot;DELETE FROM M_ProductPrice pp WHERE pp.M_PriceList_Version_ID=?&quot;</span>
+						+ &quot; AND EXISTS (SELECT * FROM T_Selection s WHERE AD_PInstance_ID=? AND pp.M_Product_ID=s.T_Selection_ID)&quot;;
+<span class="nc" id="L269">				noDeleted = DB.executeUpdateEx(sql,  new Object[] {p_PriceList_Version_ID, m_AD_PInstance_ID}, get_TrxName());</span>
+<span class="nc" id="L270">				message += &quot;, @Deleted@=&quot; + noDeleted;</span>
+			}
+
+			//	Copy (Insert) Prices
+<span class="nc" id="L274">			int noInserted = 0;</span>
+<span class="nc" id="L275">			sql = &quot;INSERT INTO M_ProductPrice &quot;</span>
+					+ &quot;(M_PriceList_Version_ID, M_Product_ID,&quot;
+					+ &quot; AD_Client_ID, AD_Org_ID, IsActive, Created, CreatedBy, Updated, UpdatedBy,&quot;
+					+ &quot; PriceList, PriceStd, PriceLimit, M_ProductPrice_ID, M_ProductPrice_UU) &quot;;
+			//
+<span class="nc" id="L280">			int seqproductpriceid = MSequence.get(getCtx(), &quot;M_ProductPrice&quot;).get_ID();</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">			if (M_Pricelist_Version_Base_ID == p_PriceList_Version_ID)</span>
+<span class="nc" id="L282">				sql = null;	//	We have Prices already</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">			else if (M_Pricelist_Version_Base_ID == 0) {</span>
+				/**	Copy and Convert from Product_PO	*/
+<span class="nc" id="L285">				sql	+= &quot;SELECT plv.M_PriceList_Version_ID, po.M_Product_ID,&quot;</span>
+						+ &quot; plv.AD_Client_ID, plv.AD_Org_ID, 'Y', SysDate, plv.UpdatedBy, SysDate, plv.UpdatedBy,&quot;
+						//	Price List
+						+ &quot; COALESCE(currencyConvert(po.PriceList,&quot;
+						+ &quot; po.C_Currency_ID, pl.C_Currency_ID, dl.ConversionDate, dl.C_ConversionType_ID, plv.AD_Client_ID, plv.AD_Org_ID), 0),&quot; 
+						//	Price Std
+						+ &quot; COALESCE(currencyConvert(po.PriceList,&quot;
+						+ &quot;	po.C_Currency_ID, pl.C_Currency_ID, dl.ConversionDate, dl.C_ConversionType_ID, plv.AD_Client_ID, plv.AD_Org_ID), 0),&quot;
+						//	Price Limit
+						+ &quot; COALESCE(currencyConvert(po.PricePO,&quot;
+						+ &quot; po.C_Currency_ID, pl.C_Currency_ID, dl.ConversionDate, dl.C_ConversionType_ID, plv.AD_Client_ID, plv.AD_Org_ID), 0), &quot;
+						//
+						+ &quot; nextidfunc(?,'N'), generate_uuid() &quot;	//	#1
+						+ &quot;FROM M_Product_PO po&quot;
+						+ &quot; INNER JOIN M_PriceList_Version plv ON (plv.M_PriceList_Version_ID=?)&quot;	//	#2
+						+ &quot; INNER JOIN M_PriceList pl ON (pl.M_PriceList_ID=plv.M_PriceList_ID)&quot;
+						+ &quot; INNER JOIN M_DiscountSchemaLine dl ON (dl.M_DiscountSchemaLine_ID=?) &quot;	//	#3
+						//
+						+ &quot;WHERE EXISTS (SELECT * FROM T_Selection s WHERE s.AD_PInstance_ID=? AND po.M_Product_ID=s.T_Selection_ID)&quot;	//	#4
+						+ &quot; AND ((dl.C_BPartner_ID IS NULL AND po.IsCurrentVendor='Y')&quot;
+						+ &quot;      OR (po.C_BPartner_ID=dl.C_BPartner_ID AND (dl.IsIgnoreIsCurrentVendor='Y' OR po.IsCurrentVendor='Y')))&quot;
+						+ &quot; AND po.IsActive='Y'&quot;;
+<span class="nc" id="L307">			} else {</span>
+				/**	Copy and Convert from other PriceList_Version	*/
+<span class="nc" id="L309">				sql += &quot;SELECT plv.M_PriceList_Version_ID, pp.M_Product_ID,&quot;</span>
+						+ &quot; plv.AD_Client_ID, plv.AD_Org_ID, 'Y', SysDate, plv.UpdatedBy, SysDate, plv.UpdatedBy,&quot;
+						//	Price List
+						+ &quot; COALESCE(currencyConvert(pp.PriceList,&quot;
+						+ &quot; bpl.C_Currency_ID, pl.C_Currency_ID, dl.ConversionDate, dl.C_ConversionType_ID, plv.AD_Client_ID, plv.AD_Org_ID), 0),&quot; 
+						//	Price Std
+						+ &quot; COALESCE(currencyConvert(pp.PriceStd,&quot;
+						+ &quot; bpl.C_Currency_ID, pl.C_Currency_ID, dl.ConversionDate, dl.C_ConversionType_ID, plv.AD_Client_ID, plv.AD_Org_ID), 0),&quot; 
+						//	Price Limit
+						+ &quot; COALESCE(currencyConvert(pp.PriceLimit,&quot;
+						+ &quot; bpl.C_Currency_ID, pl.C_Currency_ID, dl.ConversionDate, dl.C_ConversionType_ID, plv.AD_Client_ID, plv.AD_Org_ID), 0), &quot;
+						//
+						+ &quot; nextidfunc(?,'N'), generate_uuid() &quot;	//	#1
+						+ &quot;FROM M_ProductPrice pp&quot;
+						+ &quot; INNER JOIN M_PriceList_Version plv ON (plv.M_PriceList_Version_ID=?)&quot;	//	#2
+						+ &quot; INNER JOIN M_PriceList pl ON (pl.M_PriceList_ID=plv.M_PriceList_ID)&quot;
+						+ &quot; INNER JOIN M_PriceList_Version bplv ON (pp.M_PriceList_Version_ID=bplv.M_PriceList_Version_ID)&quot;
+						+ &quot; INNER JOIN M_PriceList bpl ON (bplv.M_PriceList_ID=bpl.M_PriceList_ID)&quot;
+						+ &quot; INNER JOIN M_DiscountSchemaLine dl ON (dl.M_DiscountSchemaLine_ID=?) &quot;	//	#3
+						//
+						+ &quot;WHERE pp.M_PriceList_Version_ID=?&quot;	//	#4 M_PriceList_Version_Base_ID
+						+ &quot; AND EXISTS (SELECT * FROM T_Selection s WHERE s.AD_PInstance_ID=? AND pp.M_Product_ID=s.T_Selection_ID)&quot;	//	#5
+						+ &quot; AND pp.IsActive='Y'&quot;;
+			}
+<span class="nc bnc" id="L333" title="All 2 branches missed.">			if (sql != null) {</span>
+				Object[] params;
+<span class="nc bnc" id="L335" title="All 2 branches missed.">				if (M_Pricelist_Version_Base_ID == 0) {</span>
+<span class="nc" id="L336">					params = new Object[] {seqproductpriceid, p_PriceList_Version_ID, M_DiscountSchemaLine_ID, m_AD_PInstance_ID};</span>
+<span class="nc" id="L337">				} else {</span>
+<span class="nc" id="L338">					params = new Object[] {seqproductpriceid, p_PriceList_Version_ID, M_DiscountSchemaLine_ID, M_Pricelist_Version_Base_ID, m_AD_PInstance_ID};</span>
+				}
+<span class="nc" id="L340">				noInserted = DB.executeUpdateEx(sql,  params, get_TrxName());</span>
+<span class="nc" id="L341">				message += &quot; @Inserted@=&quot; + noInserted;</span>
+			}
+
+			/** Calculations	**/
+<span class="nc" id="L345">			MProductPrice[] pp = m_plv.getProductPrice(</span>
+<span class="nc" id="L346">					&quot; AND EXISTS (SELECT * FROM T_Selection s &quot;</span>
+<span class="nc" id="L347">							+ &quot;WHERE s.AD_PInstance_ID = &quot; + m_AD_PInstance_ID + &quot; AND s.T_Selection_ID=M_ProductPrice.M_Product_ID)&quot;);</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">			for (MProductPrice price : pp) {</span>
+<span class="nc" id="L349">				BigDecimal priceList = price.getPriceList();</span>
+<span class="nc" id="L350">				BigDecimal priceStd = price.getPriceStd();</span>
+<span class="nc" id="L351">				BigDecimal priceLimit = price.getPriceLimit();</span>
+				//
+<span class="nc" id="L353">				price.setPriceList(calculate (dsLine.getList_Base(),</span>
+<span class="nc" id="L354">						priceList, priceStd, priceLimit, dsLine.getList_Fixed(),</span>
+<span class="nc" id="L355">						dsLine.getList_AddAmt(), dsLine.getList_Discount(),</span>
+<span class="nc" id="L356">						dsLine.getList_Rounding(), curPrecision, price.getM_Product_ID()));</span>
+<span class="nc" id="L357">				price.setPriceStd (calculate (dsLine.getStd_Base(),</span>
+<span class="nc" id="L358">						priceList, priceStd, priceLimit, dsLine.getStd_Fixed(),</span>
+<span class="nc" id="L359">						dsLine.getStd_AddAmt(), dsLine.getStd_Discount(),</span>
+<span class="nc" id="L360">						dsLine.getStd_Rounding(), curPrecision, price.getM_Product_ID()));</span>
+<span class="nc" id="L361">				price.setPriceLimit(calculate (dsLine.getLimit_Base(),</span>
+<span class="nc" id="L362">						priceList, priceStd, priceLimit, dsLine.getLimit_Fixed(),</span>
+<span class="nc" id="L363">						dsLine.getLimit_AddAmt(), dsLine.getLimit_Discount(),</span>
+<span class="nc" id="L364">						dsLine.getLimit_Rounding(), curPrecision, price.getM_Product_ID()));</span>
+<span class="nc" id="L365">				price.saveEx();</span>
+			}	//	for all products
+
+<span class="nc" id="L368">			addLog(message);</span>
+		}	//	for all lines
+
+		//	Clear Temporary Table
+<span class="nc" id="L372">		DB.executeUpdateEx(&quot;DELETE FROM T_Selection WHERE AD_PInstance_ID=?&quot;,</span>
+<span class="nc" id="L373">				new Object[] {m_AD_PInstance_ID}, get_TrxName());</span>
+
+		//
+<span class="nc" id="L376">		MProductPrice[] pp = m_plv.getProductPrice(true);</span>
+<span class="nc" id="L377">		info.append(&quot; - @Records@=&quot;).append(pp.length);</span>
+<span class="nc" id="L378">		return info.toString();</span>
+	}	//	create
+
+	/**
+	 * 	Calculate Price
+	 *	@param base rule
+	 *	@param list price
+	 *	@param std price
+	 *	@param limit price
+	 *	@param fix amount
+	 *	@param add amount
+	 *	@param discount percent
+	 *	@param round rule
+	 *  @param M_Product_ID 
+	 *	@return calculated price
+	 */
+	private BigDecimal calculate (String base, 
+			BigDecimal list, BigDecimal std, BigDecimal limit, BigDecimal fix, 
+			BigDecimal add, BigDecimal discount, String round, int curPrecision, int M_Product_ID) {
+<span class="nc" id="L397">		BigDecimal calc = null;</span>
+<span class="nc" id="L398">		double dd = 0.0;</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">		if (MDiscountSchemaLine.LIST_BASE_ListPrice.equals(base))</span>
+<span class="nc" id="L400">			dd = list.doubleValue();</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_BASE_StandardPrice.equals(base))</span>
+<span class="nc" id="L402">			dd = std.doubleValue();</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_BASE_LimitPOPrice.equals(base))</span>
+<span class="nc" id="L404">			dd = limit.doubleValue();</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_BASE_FixedPrice.equals(base))</span>
+<span class="nc" id="L406">			calc = fix;</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_BASE_ProductCost.equals(base)) {</span>
+<span class="nc" id="L408">			MAcctSchema as = MClientInfo.get(getCtx(), m_plv.getAD_Client_ID()).getMAcctSchema1();</span>
+<span class="nc" id="L409">			ProductCost m_productCost = new ProductCost(getCtx(), M_Product_ID, 0, get_TrxName());</span>
+<span class="nc" id="L410">			m_productCost.setQty(BigDecimal.ONE);</span>
+<span class="nc" id="L411">			BigDecimal costs = m_productCost.getProductCosts(as, m_plv.getAD_Org_ID(), null, 0, false);	</span>
+<span class="nc bnc" id="L412" title="All 4 branches missed.">			if (costs == null || costs.signum() == 0) { //	zero costs OK</span>
+<span class="nc" id="L413">				MProduct product = new MProduct(getCtx(), M_Product_ID, get_TrxName());</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">				if (product.isStocked())</span>
+<span class="nc" id="L415">					log.log(Level.WARNING, &quot;No Costs for &quot; + product.getName());</span>
+			}
+<span class="nc" id="L417">			calc = costs;</span>
+<span class="nc" id="L418">		} else</span>
+<span class="nc" id="L419">			throw new IllegalArgumentException(&quot;Unknown Base=&quot; + base);</span>
+
+<span class="nc bnc" id="L421" title="All 2 branches missed.">		if (calc == null) {</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">			if (add.signum() != 0)</span>
+<span class="nc" id="L423">				dd += add.doubleValue();</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">			if (discount.signum() != 0)</span>
+<span class="nc" id="L425">				dd *= 1 - (discount.doubleValue()/100.0);</span>
+<span class="nc" id="L426">			calc = new BigDecimal(dd);</span>
+		}
+
+		//	Rounding
+<span class="nc bnc" id="L430" title="All 2 branches missed.">		if (MDiscountSchemaLine.LIST_ROUNDING_CurrencyPrecision.equals(round))</span>
+<span class="nc" id="L431">			calc = calc.setScale(curPrecision, RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_Dime102030.equals(round))</span>
+<span class="nc" id="L433">			calc = calc.setScale(1, RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_Hundred.equals(round))</span>
+<span class="nc" id="L435">			calc = calc.setScale(-2, RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_Nickel051015.equals(round)) {</span>
+<span class="nc" id="L437">			BigDecimal mm = new BigDecimal(20);</span>
+<span class="nc" id="L438">			calc = calc.multiply(mm); </span>
+<span class="nc" id="L439">			calc = calc.setScale(0, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L440">			calc = calc.divide(mm, 2, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L441">		}</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_NoRounding.equals(round))</span>
+<span class="nc" id="L443">			;</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_Quarter255075.equals(round)) {</span>
+<span class="nc" id="L445">			BigDecimal mm = new BigDecimal(4);</span>
+<span class="nc" id="L446">			calc = calc.multiply(mm); </span>
+<span class="nc" id="L447">			calc = calc.setScale(0, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L448">			calc = calc.divide(mm, 2, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L449">		}</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_Ten10002000.equals(round))</span>
+<span class="nc" id="L451">			calc = calc.setScale(-1, RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_Thousand.equals(round))</span>
+<span class="nc" id="L453">			calc = calc.setScale(-3, RoundingMode.HALF_UP);</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">		else if (MDiscountSchemaLine.LIST_ROUNDING_WholeNumber00.equals(round))</span>
+<span class="nc" id="L455">			calc = calc.setScale(0, RoundingMode.HALF_UP);</span>
+
+<span class="nc" id="L457">		return calc;</span>
+	}	//	calculate
+
+	/**
+	 * Returns a sql where string with the given category id and all of its subcategory ids.
+	 * It is used as restriction in MQuery.
+	 * @param productCategoryId
+	 * @return
+	 * @throws  
+	 */
+	private String getSubCategoryWhereClause(int productCategoryId) throws SQLException, AdempiereSystemError {
+		//if a node with this id is found later in the search we have a loop in the tree
+<span class="nc" id="L469">		int subTreeRootParentId = 0;</span>
+<span class="nc" id="L470">		StringBuilder retString = new StringBuilder();</span>
+<span class="nc" id="L471">		String sql = &quot; SELECT M_Product_Category_ID, M_Product_Category_Parent_ID FROM M_Product_Category&quot;;</span>
+<span class="nc" id="L472">		final Vector&lt;SimpleTreeNode&gt; categories = new Vector&lt;SimpleTreeNode&gt;(100);</span>
+<span class="nc" id="L473">		Statement stmt = null;</span>
+<span class="nc" id="L474">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L476">			stmt = DB.createStatement();</span>
+<span class="nc" id="L477">			rs = stmt.executeQuery(sql);</span>
+<span class="nc bnc" id="L478" title="All 2 branches missed.">			while (rs.next()) {</span>
+<span class="nc bnc" id="L479" title="All 2 branches missed.">				if(rs.getInt(1)==productCategoryId) {</span>
+<span class="nc" id="L480">					subTreeRootParentId = rs.getInt(2);</span>
+				}
+<span class="nc" id="L482">				categories.add(new SimpleTreeNode(rs.getInt(1), rs.getInt(2)));</span>
+			}
+<span class="nc" id="L484">			retString.append(getSubCategoriesString(productCategoryId, categories, subTreeRootParentId));</span>
+<span class="nc" id="L485">		} catch (SQLException e) {</span>
+<span class="nc" id="L486">			throw e;</span>
+		} finally {
+<span class="nc" id="L488">			DB.close(rs, stmt);</span>
+<span class="nc" id="L489">			rs = null; stmt = null;</span>
+		}
+<span class="nc" id="L491">		return retString.toString();</span>
+	}
+
+	/**
+	 * Recursive search for subcategories with loop detection.
+	 * @param productCategoryId
+	 * @param categories
+	 * @param loopIndicatorId
+	 * @return comma separated list of category ids
+	 * @throws AdempiereSystemError if a loop is detected
+	 */
+	private String getSubCategoriesString(int productCategoryId, Vector&lt;SimpleTreeNode&gt; categories, int loopIndicatorId) throws AdempiereSystemError {
+<span class="nc" id="L503">		StringBuilder ret = new StringBuilder();</span>
+<span class="nc" id="L504">		final Iterator&lt;SimpleTreeNode&gt; iter = categories.iterator();</span>
+<span class="nc bnc" id="L505" title="All 2 branches missed.">		while (iter.hasNext()) {</span>
+<span class="nc" id="L506">			SimpleTreeNode node = iter.next();</span>
+<span class="nc bnc" id="L507" title="All 2 branches missed.">			if (node.getParentId() == productCategoryId) {</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">				if (node.getNodeId() == loopIndicatorId) {</span>
+<span class="nc" id="L509">					throw new AdempiereSystemError(&quot;The product category tree contains a loop on categoryId: &quot; + loopIndicatorId);</span>
+				}
+<span class="nc" id="L511">				ret.append(getSubCategoriesString(node.getNodeId(), categories, loopIndicatorId));</span>
+<span class="nc" id="L512">				ret.append(&quot;,&quot;);</span>
+			}
+		}
+<span class="nc bnc" id="L515" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(ret.toString());</span>
+<span class="nc" id="L516">		return ret.toString() + productCategoryId;</span>
+	}
+
+	/**
+	 * Simple tree node class for product category tree search.
+	 * @author Karsten Thiemann, kthiemann@adempiere.org
+	 *
+	 */
+	private static class SimpleTreeNode {
+
+		private int nodeId;
+
+		private int parentId;
+
+<span class="nc" id="L530">		public SimpleTreeNode(int nodeId, int parentId) {</span>
+<span class="nc" id="L531">			this.nodeId = nodeId;</span>
+<span class="nc" id="L532">			this.parentId = parentId;</span>
+<span class="nc" id="L533">		}</span>
+
+		public int getNodeId() {
+<span class="nc" id="L536">			return nodeId;</span>
+		}
+
+		public int getParentId() {
+<span class="nc" id="L540">			return parentId;</span>
+		}
+	}
+
+} // M_PriceList_Create
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

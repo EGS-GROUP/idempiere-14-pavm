@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AtmosphereServerPush.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">fi.jawsy.jawwa.zk.atmosphere</a> &gt; <span class="el_source">AtmosphereServerPush.java</span></div><h1>AtmosphereServerPush.java</h1><pre class="source lang-java linenums">/**
+ 
+This software is licensed under the Apache 2 license, quoted below.
+
+Copyright 2012 Joonas Javanainen &lt;joonas@jawsy.fi&gt;
+
+Licensed under the Apache License, Version 2.0 (the &quot;License&quot;); you may not
+use this file except in compliance with the License. You may obtain a copy of
+the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an &quot;AS IS&quot; BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations under
+the License.
+
+ */
+package fi.jawsy.jawwa.zk.atmosphere;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+
+import org.atmosphere.cpr.AtmosphereResource;
+import org.compiere.util.CLogger;
+import org.zkoss.lang.Library;
+import org.zkoss.zk.au.out.AuEcho;
+import org.zkoss.zk.au.out.AuScript;
+import org.zkoss.zk.ui.Desktop;
+import org.zkoss.zk.ui.DesktopUnavailableException;
+import org.zkoss.zk.ui.Executions;
+import org.zkoss.zk.ui.UiException;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.impl.ExecutionCarryOver;
+import org.zkoss.zk.ui.sys.DesktopCtrl;
+import org.zkoss.zk.ui.sys.Scheduler;
+import org.zkoss.zk.ui.sys.ServerPush;
+import org.zkoss.zk.ui.util.Clients;
+
+/**
+ * ZK server push implementation based on Atmosphere.
+ * Adapted from https://github.com/Gekkio/jawwa/tree/develop/zk-atmosphere version 0.3.1-SNAPSHOT 
+ */
+public class AtmosphereServerPush implements ServerPush {
+
+    private static final String ATMOSPHERE_SERVER_PUSH_ECHO = &quot;AtmosphereServerPush.Echo&quot;;
+
+	private static final String ON_ACTIVATE_DESKTOP = &quot;onActivateDesktop&quot;;
+
+	/** default timeout of of 2 minutes **/
+	public static final int DEFAULT_TIMEOUT = 1000 * 60 * 2;
+
+<span class="nc" id="L60">    private final AtomicReference&lt;Desktop&gt; desktop = new AtomicReference&lt;Desktop&gt;();</span>
+
+<span class="nc" id="L62">    private final CLogger log = CLogger.getCLogger(getClass());</span>
+    /** asynchronous request reference as AtmosphereResource **/
+<span class="nc" id="L64">    private final AtomicReference&lt;AtmosphereResource&gt; resource = new AtomicReference&lt;AtmosphereResource&gt;();</span>
+    private final int timeout;
+    
+    private ThreadInfo _active;
+    private ExecutionCarryOver _carryOver;
+<span class="nc" id="L69">    private final Object _mutex = new Object();</span>
+<span class="nc" id="L70">    private List&lt;Schedule&lt;Event&gt;&gt; schedules = new ArrayList&lt;&gt;();</span>
+
+    /**
+     * default constructor
+     */
+<span class="nc" id="L75">    public AtmosphereServerPush() {</span>
+<span class="nc" id="L76">        String timeoutString = Library.getProperty(&quot;fi.jawsy.jawwa.zk.atmosphere.timeout&quot;);</span>
+<span class="nc bnc" id="L77" title="All 4 branches missed.">        if (timeoutString == null || timeoutString.trim().length() == 0) {</span>
+<span class="nc" id="L78">            timeout = DEFAULT_TIMEOUT;</span>
+<span class="nc" id="L79">        } else {</span>
+<span class="nc" id="L80">            timeout = Integer.valueOf(timeoutString);</span>
+        }
+<span class="nc" id="L82">    }</span>
+
+    @Override
+    public boolean activate(long timeout) throws InterruptedException, DesktopUnavailableException {
+<span class="nc" id="L86">    	final Thread curr = Thread.currentThread();</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">    	if (_active != null &amp;&amp; _active.thread.equals(curr)) { //re-activate</span>
+<span class="nc" id="L88">			++_active.nActive;</span>
+<span class="nc" id="L89">			return true;</span>
+		}
+    	
+<span class="nc" id="L92">		final ThreadInfo info = new ThreadInfo(curr);</span>
+
+<span class="nc" id="L94">		EventListener&lt;Event&gt; task = new EventListener&lt;Event&gt;() {</span>
+			@Override
+			public void onEvent(Event event) throws Exception {
+<span class="nc bnc" id="L97" title="All 2 branches missed.">				if (event.getName().equals(ON_ACTIVATE_DESKTOP))</span>
+				{
+<span class="nc" id="L99">					synchronized (_mutex) {</span>
+<span class="nc" id="L100">						_carryOver = new ExecutionCarryOver(desktop.get());</span>
+						
+<span class="nc" id="L102">						synchronized (info) {</span>
+<span class="nc" id="L103">							info.nActive = 1; //granted</span>
+<span class="nc" id="L104">							info.notifyAll();</span>
+						}
+						
+						try {
+<span class="nc" id="L108">							_mutex.wait(); //wait until the server push is done</span>
+<span class="nc" id="L109">						} catch (InterruptedException ex) {</span>
+<span class="nc" id="L110">							throw UiException.Aide.wrap(ex);</span>
+						}
+					}
+				}
+<span class="nc" id="L114">			}</span>
+		};
+		
+<span class="nc" id="L117">		synchronized (info) {</span>
+<span class="nc" id="L118">			Executions.schedule(desktop.get(), task, new Event(ON_ACTIVATE_DESKTOP));</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">			if (info.nActive == 0)</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">				info.wait(timeout &lt;= 0 ? 10*60*1000: timeout);</span>
+		}
+    	
+<span class="nc" id="L123">    	_carryOver.carryOver();</span>
+<span class="nc" id="L124">    	_active = info;</span>
+    	
+<span class="nc" id="L126">    	return true;</span>
+    }
+
+    /**
+     * release current AtmosphereResource
+     * @param resource
+     */
+    public void clearResource(AtmosphereResource resource) {
+<span class="nc" id="L134">        this.resource.compareAndSet(resource, null);</span>
+<span class="nc" id="L135">    }</span>
+
+    /**
+     * commit/resume response for current AtmosphereResource 
+     * @return true if resource is available
+     * @throws IOException
+     */
+    private boolean commitResponse() throws IOException {    	
+<span class="nc" id="L143">        AtmosphereResource resource = this.resource.getAndSet(null);</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">        if (resource != null) {</span>
+<span class="nc" id="L145">        	resource.resume();</span>
+<span class="nc" id="L146">        	return true;</span>
+        } 
+<span class="nc" id="L148">        return false;</span>
+    }
+
+    @Override
+    public boolean deactivate(boolean stop) {
+<span class="nc" id="L153">    	boolean stopped = false;</span>
+<span class="nc bnc" id="L154" title="All 4 branches missed.">		if (_active != null &amp;&amp; Thread.currentThread().equals(_active.thread)) {</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">			if (--_active.nActive &lt;= 0) {</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">				if (stop)</span>
+				{
+<span class="nc" id="L158">					stop();</span>
+<span class="nc" id="L159">					stopped = true;</span>
+				}
+
+<span class="nc" id="L162">				_carryOver.cleanup();</span>
+<span class="nc" id="L163">				_carryOver = null;</span>
+<span class="nc" id="L164">				_active.nActive = 0; //just in case</span>
+<span class="nc" id="L165">				_active = null;</span>
+								
+<span class="nc" id="L167">				synchronized (_mutex) {</span>
+<span class="nc" id="L168">					_mutex.notifyAll();</span>
+				}
+			}
+		}
+<span class="nc" id="L172">		return stopped;</span>
+    }
+
+    @Override
+    public boolean isActive() {
+<span class="nc bnc" id="L177" title="All 4 branches missed.">    	return _active != null &amp;&amp; _active.nActive &gt; 0;</span>
+    }
+
+    @SuppressWarnings(&quot;unchecked&quot;)
+	@Override
+    public void onPiggyback() {    	
+<span class="nc bnc" id="L183" title="All 4 branches missed.">    	if (Executions.getCurrent() != null &amp;&amp; Executions.getCurrent().getAttribute(ATMOSPHERE_SERVER_PUSH_ECHO) != null) {</span>
+    		//has pending serverpush echo, wait for next execution piggyback trigger by the pending serverpush echo
+<span class="nc" id="L185">    		return;</span>
+    	}
+    	
+<span class="nc" id="L188">    	Schedule&lt;Event&gt;[] pendings = null;</span>
+<span class="nc" id="L189">    	synchronized (schedules) {</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">    		if (!schedules.isEmpty()) {</span>
+<span class="nc" id="L191">    			pendings = schedules.toArray(new Schedule[0]);</span>
+<span class="nc" id="L192">    			schedules = new ArrayList&lt;&gt;();</span>
+    		}
+    	}
+<span class="nc bnc" id="L195" title="All 4 branches missed.">    	if (pendings != null &amp;&amp; pendings.length &gt; 0) {</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">    		for(Schedule&lt;Event&gt; p : pendings) {</span>
+    			//schedule and execute in desktop's onPiggyBack listener
+<span class="nc" id="L198">    			p.scheduler.schedule(p.task, p.event);</span>
+    		}
+    	}    	
+<span class="nc" id="L201">    }</span>
+
+    private static class EventListenerWrapper&lt;T extends Event&gt; implements EventListener&lt;T&gt; {
+    	private EventListener&lt;T&gt; wrappedListener;
+    	private AtomicBoolean runOnce;
+
+<span class="nc" id="L207">    	private EventListenerWrapper(EventListener&lt;T&gt; wrappedListener) {</span>
+<span class="nc" id="L208">    		this.wrappedListener=wrappedListener;</span>
+<span class="nc" id="L209">    		this.runOnce = new AtomicBoolean(false);</span>
+<span class="nc" id="L210">    	}</span>
+
+    	@Override
+    	public void onEvent(T event) throws Exception {
+    		//if the wrapped event listener throws exception, the scheduled listener is not clean up
+    		//this atomic boolean help prevent repeated call when that happens
+<span class="nc bnc" id="L216" title="All 2 branches missed.">    		if (!runOnce.compareAndSet(false, true))</span>
+<span class="nc" id="L217">    			return;</span>
+
+<span class="nc" id="L219">    		wrappedListener.onEvent(event);</span>
+<span class="nc" id="L220">    	}</span>
+
+    }
+
+    @SuppressWarnings({ &quot;unchecked&quot;, &quot;rawtypes&quot; })
+	@Override
+	public &lt;T extends Event&gt; void schedule(EventListener&lt;T&gt; task, T event,
+			Scheduler&lt;T&gt; scheduler) {    	
+<span class="nc bnc" id="L228" title="All 2 branches missed.">    	if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L229">    		log.fine(event.toString());</span>
+    	
+<span class="nc" id="L231">    	EventListenerWrapper&lt;T&gt; wrapper = new EventListenerWrapper&lt;T&gt;(task);</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">    	if (Executions.getCurrent() == null) {</span>
+    		//schedule and execute in desktop's onPiggyBack listener
+<span class="nc" id="L234">    		scheduler.schedule(wrapper, event);</span>
+	        try {
+<span class="nc" id="L236">	        	commitResponse();</span>
+<span class="nc" id="L237">			} catch (IOException e) {</span>
+<span class="nc" id="L238">				log.log(Level.SEVERE, e.getMessage(), e);</span>
+			}
+<span class="nc" id="L240">    	} else {</span>
+    		// in event listener thread, use echo to execute async
+<span class="nc" id="L242">    		synchronized (schedules) {</span>
+<span class="nc" id="L243">				schedules.add(new Schedule(wrapper, event, scheduler));</span>
+			}
+<span class="nc bnc" id="L245" title="All 2 branches missed.">    		if (Executions.getCurrent().getAttribute(ATMOSPHERE_SERVER_PUSH_ECHO) == null) {</span>
+<span class="nc" id="L246">    			Executions.getCurrent().setAttribute(ATMOSPHERE_SERVER_PUSH_ECHO, Boolean.TRUE);</span>
+<span class="nc" id="L247">    			Clients.response(new AuEcho());</span>
+    		}
+    	}
+    
+<span class="nc" id="L251">    }</span>
+
+	@Override
+    public void start(Desktop desktop) {
+<span class="nc" id="L255">        Desktop oldDesktop = this.desktop.getAndSet(desktop);</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        if (oldDesktop != null) {</span>
+<span class="nc" id="L257">            log.warning(&quot;Server push already started for desktop &quot; + desktop.getId());</span>
+<span class="nc" id="L258">            return;</span>
+        }
+
+<span class="nc bnc" id="L261" title="All 2 branches missed.">        if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L262">        	log.fine(&quot;Starting server push for &quot; + desktop);</span>
+<span class="nc" id="L263">        startClientPush(desktop);</span>
+<span class="nc" id="L264">    }</span>
+
+	/**
+	 * start serverpush request at client side
+	 * @param desktop
+	 */
+	private void startClientPush(Desktop desktop) {
+<span class="nc" id="L271">		Clients.response(&quot;jawwa.atmosphere.serverpush&quot;, new AuScript(null, &quot;jawwa.atmosphere.startServerPush('&quot; + desktop.getId() + &quot;', &quot; + timeout</span>
+                + &quot;);&quot;));
+<span class="nc" id="L273">	}</span>
+
+    @Override
+    public void stop() {
+<span class="nc" id="L277">        Desktop desktop = this.desktop.getAndSet(null);</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        if (desktop == null) {</span>
+<span class="nc" id="L279">            log.warning(&quot;Server push hasn't been started or has already stopped&quot;);</span>
+<span class="nc" id="L280">            return;</span>
+        }
+
+<span class="nc" id="L283">        AtmosphereResource currentResource = this.resource.getAndSet(null);</span>
+<span class="nc" id="L284">        synchronized (schedules) {</span>
+<span class="nc" id="L285">        	schedules.clear();</span>
+		}
+        
+<span class="nc bnc" id="L288" title="All 2 branches missed.">        if (currentResource != null ) {</span>
+        	try {
+<span class="nc" id="L290">				currentResource.close();</span>
+<span class="nc" id="L291">			} catch (IOException e) {</span>
+			}
+        }
+                
+<span class="nc bnc" id="L295" title="All 2 branches missed.">        if (Executions.getCurrent() != null) {</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">	        if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L297">	        	log.fine(&quot;Stopping server push for &quot; + desktop);</span>
+<span class="nc" id="L298">	        Clients.response(&quot;jawwa.atmosphere.serverpush&quot;, new AuScript(null, &quot;jawwa.atmosphere.stopServerPush('&quot; + desktop.getId() + &quot;');&quot;));        </span>
+        }
+<span class="nc" id="L300">    }</span>
+
+    /**
+     * handle asynchronous server push request (long polling request)
+     * @param resource
+     */
+    public void onRequest(AtmosphereResource resource) {
+<span class="nc bnc" id="L307" title="All 2 branches missed.">    	if (log.isLoggable(Level.FINEST)) {</span>
+<span class="nc" id="L308">	  		log.finest(resource.transport().name());</span>
+	  	}
+    	
+<span class="nc" id="L311">    	DesktopCtrl desktopCtrl = (DesktopCtrl) this.desktop.get();</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">        if (desktopCtrl == null) {</span>
+<span class="nc" id="L313">        	log.severe(&quot;No desktop available&quot;);</span>
+<span class="nc" id="L314">            return;</span>
+        }
+
+        //suspend request for server push event
+<span class="nc bnc" id="L318" title="All 2 branches missed.">	  	if (!resource.isSuspended()) {</span>
+	  		//browser default timeout is 2 minutes
+<span class="nc" id="L320">	  		resource.suspend(5, TimeUnit.MINUTES); </span>
+	  	}
+<span class="nc" id="L322">	  	AtmosphereResource oldResource = this.resource.getAndSet(resource);</span>
+<span class="nc bnc" id="L323" title="All 2 branches missed.">	  	if (oldResource != null) {</span>
+	  		try {
+<span class="nc bnc" id="L325" title="All 2 branches missed.">	  			if (!oldResource.isCancelled())</span>
+<span class="nc" id="L326">	  				oldResource.close();</span>
+<span class="nc" id="L327">			} catch (Throwable e) {</span>
+			}
+	  	}
+
+<span class="nc" id="L331">    }</span>
+
+	private static class ThreadInfo {
+		private final Thread thread;
+		/** # of activate() was called. */
+		private int nActive;
+<span class="nc" id="L337">		private ThreadInfo(Thread thread) {</span>
+<span class="nc" id="L338">			this.thread = thread;</span>
+<span class="nc" id="L339">		}</span>
+		public String toString() {
+<span class="nc" id="L341">			return &quot;[&quot; + thread + ',' + nActive + ']';</span>
+		}
+	}
+
+	@Override
+	public void resume() {
+<span class="nc bnc" id="L347" title="All 4 branches missed.">		if (desktop == null || desktop.get() == null) {</span>
+<span class="nc" id="L348">			throw new IllegalStateException(</span>
+<span class="nc" id="L349">					&quot;ServerPush cannot be resumed without desktop, or has been stopped!call #start(desktop)} instead&quot;);</span>
+		}
+<span class="nc" id="L351">		startClientPush(desktop.get());</span>
+<span class="nc" id="L352">	}</span>
+	
+	/**
+	 * 
+	 * @return true if it is holding an atmosphere resource
+	 */
+	public boolean hasAtmosphereResource() {
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		return this.resource.get() != null;</span>
+	}
+	
+	private class Schedule&lt;T extends Event&gt; {
+    	private EventListener&lt;T&gt; task;
+		private T event;
+		private Scheduler&lt;T&gt; scheduler;
+
+<span class="nc" id="L367">		private Schedule(EventListener&lt;T&gt; task, T event, Scheduler&lt;T&gt; scheduler) {</span>
+<span class="nc" id="L368">    		this.task = task;</span>
+<span class="nc" id="L369">    		this.event = event;</span>
+<span class="nc" id="L370">    		this.scheduler = scheduler;</span>
+<span class="nc" id="L371">    	}</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

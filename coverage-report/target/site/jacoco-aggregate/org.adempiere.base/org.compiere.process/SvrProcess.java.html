@@ -1,0 +1,912 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>SvrProcess.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">SvrProcess.java</span></div><h1>SvrProcess.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Type;
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.TreeMap;
+import java.util.logging.Level;
+import java.util.stream.Collectors;
+
+import org.adempiere.base.annotation.Parameter;
+import org.adempiere.base.event.EventManager;
+import org.adempiere.base.event.EventProperty;
+import org.adempiere.base.event.IEventManager;
+import org.adempiere.base.event.IEventTopics;
+import org.adempiere.util.IProcessUI;
+import org.compiere.model.MPInstance;
+import org.compiere.model.PO;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.TrxEventListener;
+import org.osgi.service.event.Event;
+
+/**
+ *  Abstract base class for Server Process.
+ *
+ *  @author     Jorg Janke
+ *  @version    $Id: SvrProcess.java,v 1.4 2006/08/10 01:00:44 jjanke Exp $
+ *  
+ *  @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;FR [ 1646891 ] SvrProcess - post process support
+ * 			&lt;li&gt;BF [ 1877935 ] SvrProcess.process should catch all throwables
+ * 			&lt;li&gt;FR [ 1877937 ] SvrProcess: added commitEx method
+ * 			&lt;li&gt;BF [ 1878743 ] SvrProcess.getAD_User_ID
+ *			&lt;li&gt;BF [ 1935093 ] SvrProcess.unlock() is setting invalid result
+ *			&lt;li&gt;FR [ 2788006 ] SvrProcess: change access to some methods
+ *				https://sourceforge.net/p/adempiere/feature-requests/709/
+ */
+@org.adempiere.base.annotation.Process
+public abstract class SvrProcess implements ProcessCall
+{
+	/** Key to store process info as environment context attribute */
+	public static final String PROCESS_INFO_CTX_KEY = &quot;ProcessInfo&quot;;
+	/** Key to store process UI as environment context attribute */
+	public static final String PROCESS_UI_CTX_KEY = &quot;ProcessUI&quot;;
+	
+	/** buffer log */
+	private List&lt;ProcessInfoLog&gt; listEntryLog;  
+
+	/**
+	 * Add log to buffer, buffer is flush after commit of process transaction
+	 * @param id
+	 * @param date
+	 * @param number
+	 * @param msg
+	 * @param tableId
+	 * @param recordId
+	 */
+	public void addBufferLog(int id, Timestamp date, BigDecimal number, String msg, int tableId ,int recordId) {
+<span class="nc" id="L89">		ProcessInfoLog entryLog = new ProcessInfoLog(id, date, number, msg, tableId, recordId);</span>
+		
+<span class="nc bnc" id="L91" title="All 2 branches missed.">		if (listEntryLog == null)</span>
+<span class="nc" id="L92">			listEntryLog = new ArrayList&lt;ProcessInfoLog&gt;();</span>
+		
+<span class="nc" id="L94">		listEntryLog.add(entryLog);</span>
+<span class="nc" id="L95">	}</span>
+
+	/**
+	 *  Server Process.&lt;br/&gt;
+	 * 	Note that the class is initiated by startProcess.
+	 */
+<span class="nc" id="L101">	public SvrProcess()</span>
+	{
+<span class="nc" id="L103">	}   //  SvrProcess</span>
+
+	private Properties  		m_ctx;
+	private ProcessInfo			m_pi;
+
+	/**	Logger							*/
+<span class="nc" id="L109">	protected CLogger			log = CLogger.getCLogger (getClass());</span>
+
+	/**	Is the Object locked			*/
+<span class="nc" id="L112">	private boolean				m_locked = false;</span>
+	/**	Loacked Object					*/
+<span class="nc" id="L114">	private PO					m_lockedObject = null;</span>
+	/** Process Main transaction 		*/
+	private Trx 				m_trx;
+	protected IProcessUI 	processUI;
+
+	/**	Common Error Message			*/
+<span class="nc" id="L120">	protected static String 	MSG_SaveErrorRowNotFound = &quot;@SaveErrorRowNotFound@&quot;;</span>
+<span class="nc" id="L121">	protected static String		MSG_InvalidArguments = &quot;@InvalidArguments@&quot;;</span>
+
+	/**
+	 *  Start the process.&lt;br/&gt;
+	 *  Calls the method &lt;code&gt;process&lt;/code&gt;.&lt;br/&gt;
+	 *
+	 *  @param ctx      Context
+	 *  @param pi		Process Info
+	 *  @return true if success
+	 * 	@see org.compiere.process.ProcessCall#startProcess(Properties, ProcessInfo, Trx)
+	 */
+	public final boolean startProcess (Properties ctx, ProcessInfo pi, Trx trx)
+	{
+		//  Preparation
+<span class="nc bnc" id="L135" title="All 2 branches missed.">		m_ctx = ctx == null ? Env.getCtx() : ctx;</span>
+<span class="nc" id="L136">		m_pi = pi;</span>
+<span class="nc" id="L137">		m_trx = trx;</span>
+		//***	Trx
+<span class="nc bnc" id="L139" title="All 2 branches missed.">		boolean localTrx = m_trx == null;</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (localTrx)</span>
+		{
+<span class="nc" id="L142">			m_trx = Trx.get(Trx.createTrxName(&quot;SvrProcess&quot;), true);</span>
+<span class="nc" id="L143">			m_trx.setDisplayName(getClass().getName()+&quot;_startProcess&quot;);</span>
+		}
+<span class="nc" id="L145">		m_pi.setTransactionName(m_trx.getTrxName());</span>
+<span class="nc" id="L146">		m_pi.setProcessUI(processUI);</span>
+		//
+<span class="nc" id="L148">		ClassLoader contextLoader = Thread.currentThread().getContextClassLoader();</span>
+<span class="nc" id="L149">		ClassLoader processLoader = getClass().getClassLoader();</span>
+		try {
+<span class="nc bnc" id="L151" title="All 2 branches missed.">			if (processLoader != contextLoader) {</span>
+<span class="nc" id="L152">				Thread.currentThread().setContextClassLoader(processLoader);</span>
+			}
+<span class="nc" id="L154">			lock();</span>
+			
+<span class="nc" id="L156">			boolean success = false;</span>
+					
+			try 
+			{			
+<span class="nc" id="L160">				m_ctx.put(PROCESS_INFO_CTX_KEY, m_pi);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">				if (processUI != null)</span>
+<span class="nc" id="L162">					m_ctx.put(PROCESS_UI_CTX_KEY, processUI);</span>
+<span class="nc" id="L163">				success = process();			</span>
+<span class="nc" id="L164">			}</span>
+			finally
+			{
+<span class="nc" id="L167">				m_ctx.remove(PROCESS_INFO_CTX_KEY);</span>
+<span class="nc" id="L168">				m_ctx.remove(PROCESS_UI_CTX_KEY);</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">				if (localTrx)</span>
+				{
+<span class="nc bnc" id="L171" title="All 2 branches missed.">					if (success)</span>
+					{
+						try 
+						{
+<span class="nc" id="L175">							m_trx.commit(true);</span>
+<span class="nc" id="L176">						} catch (Exception e)</span>
+						{
+<span class="nc" id="L178">							log.log(Level.SEVERE, &quot;Commit failed.&quot;, e);</span>
+<span class="nc" id="L179">							m_pi.addSummary(&quot;Commit Failed.&quot;);</span>
+<span class="nc" id="L180">							m_pi.setError(true);</span>
+						}
+<span class="nc" id="L182">					}</span>
+					else
+<span class="nc" id="L184">						m_trx.rollback();</span>
+<span class="nc" id="L185">					m_trx.close();</span>
+<span class="nc" id="L186">					m_trx = null;</span>
+<span class="nc" id="L187">					m_pi.setTransactionName(null);</span>
+					
+<span class="nc" id="L189">					unlock();</span>
+					
+					// outside transaction processing [ teo_sarca, 1646891 ]
+<span class="nc bnc" id="L192" title="All 2 branches missed.">					postProcess(!m_pi.isError());</span>
+
+					@SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L195">					Event eventPP = sendProcessEvent(IEventTopics.POST_PROCESS);</span>
+
+<span class="nc" id="L197">				}</span>
+				else
+				{
+<span class="nc" id="L200">					m_trx.addTrxEventListener(new TrxEventListener() {</span>
+					
+						@Override
+						public void afterRollback(Trx trx, boolean success) {							
+<span class="nc" id="L204">						}</span>
+						
+						@Override
+						public void afterCommit(Trx trx, boolean success) {
+<span class="nc" id="L208">						}</span>
+						
+						@Override
+						public void afterClose(Trx trx) {
+<span class="nc" id="L212">							unlock();</span>
+							
+							// outside transaction processing [ teo_sarca, 1646891 ]
+<span class="nc" id="L215">							m_trx = null;</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">							postProcess(!m_pi.isError());</span>
+							@SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L218">							Event eventPP = sendProcessEvent(IEventTopics.POST_PROCESS);</span>
+<span class="nc" id="L219">						}</span>
+					});
+				}
+				
+<span class="nc" id="L223">				Thread.currentThread().setContextClassLoader(contextLoader);</span>
+			}
+		} finally {
+<span class="nc bnc" id="L226" title="All 2 branches missed.">			if (processLoader != contextLoader) {</span>
+<span class="nc" id="L227">				Thread.currentThread().setContextClassLoader(contextLoader);</span>
+			}
+		}
+		
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		return !m_pi.isError();</span>
+	}   //  startProcess
+	
+	/**
+	 *  Execute Process
+	 *  @return true if success
+	 */
+	private boolean process()
+	{
+<span class="nc" id="L240">		String msg = null;</span>
+<span class="nc" id="L241">		boolean success = true;</span>
+		try
+		{
+<span class="nc" id="L244">			autoFillParameters();</span>
+<span class="nc" id="L245">			prepare();</span>
+
+			// event before process
+<span class="nc" id="L248">			Event eventBP = sendProcessEvent(IEventTopics.BEFORE_PROCESS);</span>
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L250">			List&lt;String&gt; errorsBP = (List&lt;String&gt;) eventBP.getProperty(IEventManager.EVENT_ERROR_MESSAGES);</span>
+<span class="nc bnc" id="L251" title="All 4 branches missed.">			if (errorsBP != null &amp;&amp; !errorsBP.isEmpty()) {</span>
+<span class="nc" id="L252">				msg = &quot;@Error@&quot; + errorsBP.get(0);</span>
+<span class="nc" id="L253">			} else {</span>
+<span class="nc" id="L254">				msg = doIt();</span>
+<span class="nc bnc" id="L255" title="All 4 branches missed.">				if (msg != null &amp;&amp; ! msg.startsWith(&quot;@Error@&quot;)) {</span>
+<span class="nc" id="L256">					Event eventAP = sendProcessEvent(IEventTopics.AFTER_PROCESS);</span>
+					@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L258">					List&lt;String&gt; errorsAP = (List&lt;String&gt;) eventAP.getProperty(IEventManager.EVENT_ERROR_MESSAGES);</span>
+<span class="nc bnc" id="L259" title="All 4 branches missed.">					if (errorsAP != null &amp;&amp; !errorsAP.isEmpty()) {</span>
+<span class="nc" id="L260">						msg = &quot;@Error@&quot; + errorsAP.get(0);</span>
+					}
+				}
+			}
+<span class="nc" id="L264">		}</span>
+<span class="nc" id="L265">		catch (Throwable e)</span>
+		{
+<span class="nc" id="L267">			msg = e.getLocalizedMessage();</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">			if (msg == null)</span>
+<span class="nc" id="L269">				msg = e.toString();</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">			if (e.getCause() != null)</span>
+<span class="nc" id="L271">				log.log(Level.SEVERE, Msg.parseTranslation(getCtx(), msg), e.getCause());</span>
+			else 
+<span class="nc" id="L273">				log.log(Level.SEVERE, Msg.parseTranslation(getCtx(), msg), e);</span>
+<span class="nc" id="L274">			success = false;</span>
+		//	throw new RuntimeException(e);
+		}
+		
+		//transaction should rollback if there are error in process
+<span class="nc bnc" id="L279" title="All 4 branches missed.">		if(msg != null &amp;&amp; msg.startsWith(&quot;@Error@&quot;))</span>
+<span class="nc" id="L280">			success = false;</span>
+
+<span class="nc bnc" id="L282" title="All 2 branches missed.">		if (success) {</span>
+			// if the connection has not been used, then the buffer log is never flushed
+			//   f.e. when the process uses local transactions like UUIDGenerator
+<span class="nc" id="L285">			m_trx.getConnection();</span>
+<span class="nc" id="L286">			m_trx.addTrxEventListener(new TrxEventListener() {				</span>
+				@Override
+				public void afterRollback(Trx trx, boolean success) {
+<span class="nc" id="L289">				}</span>
+				
+				@Override
+				public void afterCommit(Trx trx, boolean success) {
+<span class="nc bnc" id="L293" title="All 2 branches missed.">					if (success)</span>
+<span class="nc" id="L294">						flushBufferLog();</span>
+<span class="nc" id="L295">				}</span>
+				
+				@Override
+				public void afterClose(Trx trx) {
+<span class="nc" id="L299">				}</span>
+			});
+		}
+
+		//	Parse Variables
+<span class="nc" id="L304">		msg = Msg.parseTranslation(m_ctx, msg);</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">		m_pi.setSummary (msg, !success);</span>
+		
+<span class="nc" id="L307">		return success;</span>
+	}   //  process
+
+	/**
+	 * Send OSGi event
+	 * @param topic
+	 * @return event object
+	 */
+	private Event sendProcessEvent(String topic) {
+<span class="nc" id="L316">		Event event = EventManager.newEvent(topic,</span>
+<span class="nc" id="L317">				new EventProperty(EventManager.EVENT_DATA, m_pi),</span>
+<span class="nc" id="L318">				new EventProperty(EventManager.PROCESS_UID_PROPERTY, m_pi.getAD_Process_UU()),</span>
+<span class="nc" id="L319">				new EventProperty(EventManager.CLASS_NAME_PROPERTY, m_pi.getClassName()),</span>
+<span class="nc" id="L320">				new EventProperty(EventManager.PROCESS_CLASS_NAME_PROPERTY, this.getClass().getName()));</span>
+<span class="nc" id="L321">		EventManager.getInstance().sendEvent(event);</span>
+<span class="nc" id="L322">		return event;</span>
+	}
+
+	/**
+	 *  Prepare process - e.g., get Parameters.
+	 *  &lt;pre&gt;{@code
+		ProcessInfoParameter[] para = getParameter();
+		for (int i = 0; i &lt; para.length; i++)
+		{
+			String name = para[i].getParameterName();
+			if (para[i].getParameter() == null)
+				;
+			else if (name.equals(&quot;A_Asset_Group_ID&quot;))
+				p_A_Asset_Group_ID = para[i].getParameterAsInt();
+			else if (name.equals(&quot;GuaranteeDate&quot;))
+				p_GuaranteeDate = (Timestamp)para[i].getParameter();
+			else if (name.equals(&quot;AttachAsset&quot;))
+				p_AttachAsset = &quot;Y&quot;.equals(para[i].getParameter());
+			else
+				log.log(Level.SEVERE, &quot;Unknown Parameter: &quot; + name);
+		}
+	 *  }&lt;/pre&gt;
+	 *  @see Parameter
+	 */
+	abstract protected void prepare();
+
+	/**
+	 *  Process implementation class will override this method to execution process actions.
+	 *  @return Message (variables are parsed)
+	 *  @throws Exception if not successful e.g.
+	 *  throw new AdempiereUserError (&quot;@FillMandatory@  @C_BankAccount_ID@&quot;);
+	 */
+	abstract protected String doIt() throws Exception;
+
+	/**
+	 * Post process actions (outside trx).&lt;br/&gt;
+	 * Please note that at this point the transaction is committed so
+	 * you can't rollback.&lt;br/&gt;
+	 * This method is useful if you need to do some custom work after 
+	 * the process committed the changes (e.g. open some windows).
+	 *  
+	 * @param success true if the process was success
+	 * @since 3.1.4
+	 */
+	protected void postProcess(boolean success) {
+<span class="nc" id="L367">	}</span>
+	
+	/**
+	 * 	Commit
+	 *  @deprecated suggested to use commitEx instead
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	protected void commit()
+	{
+<span class="nc bnc" id="L376" title="All 2 branches missed.">		if (m_trx != null)</span>
+<span class="nc" id="L377">			m_trx.commit();</span>
+<span class="nc" id="L378">	}	//	commit</span>
+	
+	/**
+	 * Commit and throw exception if error
+	 * @throws SQLException on commit error
+	 */
+	protected void commitEx() throws SQLException
+	{
+<span class="nc bnc" id="L386" title="All 2 branches missed.">		if (m_trx != null)</span>
+<span class="nc" id="L387">			m_trx.commit(true);</span>
+<span class="nc" id="L388">	}</span>
+	
+	/**
+	 * 	Rollback transaction
+	 */
+	protected void rollback()
+	{
+<span class="nc bnc" id="L395" title="All 2 branches missed.">		if (m_trx != null)</span>
+<span class="nc" id="L396">			m_trx.rollback();</span>
+<span class="nc" id="L397">	}	//	rollback</span>
+		
+	/**
+	 * 	Lock PO.&lt;br/&gt;
+	 * 	Needs to be explicitly called. Unlock is automatic.
+	 *	@param po object
+	 *	@return true if locked
+	 */
+	protected boolean lockObject (PO po)
+	{
+		//	Unlock existing
+<span class="nc bnc" id="L408" title="All 4 branches missed.">		if (m_locked || m_lockedObject != null)</span>
+<span class="nc" id="L409">			unlockObject();</span>
+		//	Nothing to lock			
+<span class="nc bnc" id="L411" title="All 2 branches missed.">		if (po == null)</span>
+<span class="nc" id="L412">			return false;</span>
+<span class="nc" id="L413">		m_lockedObject = po;</span>
+<span class="nc" id="L414">		m_locked = m_lockedObject.lock();</span>
+<span class="nc" id="L415">		return m_locked;</span>
+	}	//	lockObject
+
+	/**
+	 * 	Is an object Locked?
+	 *	@return true if object locked
+	 */
+	protected boolean isLocked()
+	{
+<span class="nc" id="L424">		return m_locked;</span>
+	}	//	isLocked
+
+	/**
+	 * 	Unlock PO.&lt;br/&gt;
+	 * 	Is automatically called at the end of process.
+	 *	@return true if unlocked or if there was nothing to unlock
+	 */
+	protected boolean unlockObject()
+	{
+<span class="nc" id="L434">		boolean success = true;</span>
+<span class="nc bnc" id="L435" title="All 4 branches missed.">		if (m_locked || m_lockedObject != null)</span>
+		{
+<span class="nc" id="L437">			success = m_lockedObject.unlock(null);</span>
+		}
+<span class="nc" id="L439">		m_locked = false;</span>
+<span class="nc" id="L440">		m_lockedObject = null;</span>
+<span class="nc" id="L441">		return success;</span>
+	}	//	unlock
+
+	/**
+	 *  Get Process Info
+	 *  @return Process Info
+	 */
+	public ProcessInfo getProcessInfo()
+	{
+<span class="nc" id="L450">		return m_pi;</span>
+	}   //  getProcessInfo
+
+	/**
+	 *  Get Context
+	 *  @return Properties
+	 */
+	public Properties getCtx()
+	{
+<span class="nc" id="L459">		return m_ctx;</span>
+	}   //  getCtx
+
+	/**
+	 *  Get Name/Title
+	 *  @return Name
+	 */
+	protected String getName()
+	{
+<span class="nc" id="L468">		return m_pi.getTitle();</span>
+	}   //  getName
+
+	/**
+	 *  Get Process Instance
+	 *  @return Process Instance
+	 */
+	protected int getAD_PInstance_ID()
+	{
+<span class="nc" id="L477">		return m_pi.getAD_PInstance_ID();</span>
+	}   //  getAD_PInstance_ID
+
+	/**
+	 *  Get AD_Table_ID
+	 *  @return AD_Table_ID
+	 */
+	protected int getTable_ID()
+	{
+<span class="nc" id="L486">		return m_pi.getTable_ID();</span>
+	}   //  getRecord_ID
+
+	/**
+	 *  Get Record_ID
+	 *  @return Record_ID
+	 */
+	protected int getRecord_ID()
+	{
+<span class="nc" id="L495">		return m_pi.getRecord_ID();</span>
+	}   //  getRecord_ID
+
+	/**
+	 * Get Record_IDs
+	 * 
+	 * @return Record_IDs
+	 */
+	protected List&lt;Integer&gt; getRecord_IDs() 
+	{
+<span class="nc" id="L505">		return m_pi.getRecord_IDs();</span>
+	} // getRecord_IDs
+
+	/**
+	 *  Get Record_UU
+	 *  @return Record_UU
+	 */
+	protected String getRecord_UU()
+	{
+<span class="nc" id="L514">		return m_pi.getRecord_UU();</span>
+	}   //  getRecord_UU
+
+	/**
+	 * Get Record_UUs
+	 * 
+	 * @return Record_UUs
+	 */
+	protected List&lt;String&gt; getRecord_UUs() 
+	{
+<span class="nc" id="L524">		return m_pi.getRecord_UUs();</span>
+	} // getRecord_UUs
+
+	/**
+	 *  Get AD_User_ID
+	 *  @return AD_User_ID of Process owner or -1 if not found
+	 */
+	protected int getAD_User_ID()
+	{
+<span class="nc bnc" id="L533" title="All 4 branches missed.">		if (m_pi.getAD_User_ID() == null || m_pi.getAD_Client_ID() == null)</span>
+		{
+<span class="nc" id="L535">			String sql = &quot;SELECT AD_User_ID, AD_Client_ID FROM AD_PInstance WHERE AD_PInstance_ID=?&quot;;</span>
+<span class="nc" id="L536">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L537">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L540">				pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L541">				pstmt.setInt(1, m_pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L542">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">				if (rs.next())</span>
+				{
+<span class="nc" id="L545">					m_pi.setAD_User_ID (rs.getInt (1));</span>
+<span class="nc" id="L546">					m_pi.setAD_Client_ID (rs.getInt(2));</span>
+				}
+<span class="nc" id="L548">			}</span>
+<span class="nc" id="L549">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L551">				log.log(Level.SEVERE, sql, e);</span>
+			}
+			finally {
+<span class="nc" id="L554">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L555">				rs = null; pstmt = null;</span>
+			}
+		}
+<span class="nc bnc" id="L558" title="All 2 branches missed.">		if (m_pi.getAD_User_ID() == null)</span>
+<span class="nc" id="L559">			return -1;</span>
+<span class="nc" id="L560">		return m_pi.getAD_User_ID().intValue();</span>
+	}   //  getAD_User_ID
+
+	/**
+	 *  Get AD_Client_ID of process info
+	 *  @return AD_Client_ID
+	 */
+	protected int getAD_Client_ID()
+	{
+<span class="nc bnc" id="L569" title="All 2 branches missed.">		if (m_pi.getAD_Client_ID() == null)</span>
+		{
+<span class="nc" id="L571">			getAD_User_ID();	//	sets also Client</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">			if (m_pi.getAD_Client_ID() == null)</span>
+<span class="nc" id="L573">				return 0;</span>
+		}
+<span class="nc" id="L575">		return m_pi.getAD_Client_ID().intValue();</span>
+	}	//	getAD_Client_ID
+	
+	/**
+	 * 	Get Parameters
+	 *	@return parameters
+	 */
+	protected ProcessInfoParameter[] getParameter()
+	{
+<span class="nc" id="L584">		ProcessInfoParameter[] retValue = m_pi.getParameter();</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">		if (retValue == null)</span>
+		{
+<span class="nc" id="L587">			ProcessInfoUtil.setParameterFromDB(m_pi);</span>
+<span class="nc" id="L588">			retValue = m_pi.getParameter();</span>
+		}
+<span class="nc" id="L590">		return retValue;</span>
+	}	//	getParameter
+
+	/**
+	 * Add Log Entry with table name
+	 * @param id ID parameter, usually same as record id 
+	 * @param date
+	 * @param number
+	 * @param msg
+	 * @param tableId
+	 * @param recordId
+	 */
+	public void addLog (int id, Timestamp date, BigDecimal number, String msg, int tableId ,int recordId)
+	{
+<span class="nc bnc" id="L604" title="All 2 branches missed.">		if (m_pi != null)</span>
+<span class="nc" id="L605">			m_pi.addLog(id, date, number, msg,tableId,recordId);</span>
+		
+<span class="nc bnc" id="L607" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(id + &quot; - &quot; + date + &quot; - &quot; + number + &quot; - &quot; + msg + &quot; - &quot; + tableId + &quot; - &quot; + recordId);</span>
+<span class="nc" id="L608">	}	//	addLog</span>
+
+	/**
+	 *  Add Log Entry
+	 *  @param id ID parameter, usually same as record id
+	 *  @param date date or null
+	 *  @param number number or null
+	 *  @param msg message or null
+	 */
+	public void addLog (int id, Timestamp date, BigDecimal number, String msg)
+	{
+<span class="nc bnc" id="L619" title="All 2 branches missed.">		if (m_pi != null)</span>
+<span class="nc" id="L620">			m_pi.addLog(id, date, number, msg);</span>
+<span class="nc bnc" id="L621" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(id + &quot; - &quot; + date + &quot; - &quot; + number + &quot; - &quot; + msg);</span>
+<span class="nc" id="L622">	}	//	addLog</span>
+
+	/**
+	 * 	Add Log
+	 *	@param msg message
+	 */
+	public void addLog (String msg)
+	{
+<span class="nc bnc" id="L630" title="All 2 branches missed.">		if (msg != null)</span>
+<span class="nc" id="L631">			addLog (0, null, null, msg);</span>
+<span class="nc" id="L632">	}	//	addLog</span>
+
+	/**
+	 * Flush buffer log to process info
+	 */
+	private void flushBufferLog () {
+<span class="nc bnc" id="L638" title="All 2 branches missed.">		if (listEntryLog == null)</span>
+<span class="nc" id="L639">			return;</span>
+
+<span class="nc bnc" id="L641" title="All 2 branches missed.">		for (ProcessInfoLog entryLog : listEntryLog) {</span>
+<span class="nc bnc" id="L642" title="All 2 branches missed.">			if (m_pi != null)</span>
+<span class="nc" id="L643">				m_pi.addLog(entryLog);</span>
+<span class="nc bnc" id="L644" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(entryLog.getP_ID() + &quot; - &quot; + entryLog.getP_Date() + &quot; - &quot; + entryLog.getP_Number() + &quot; - &quot; + entryLog.getP_Msg() + &quot; - &quot; + entryLog.getAD_Table_ID() + &quot; - &quot; + entryLog.getRecord_ID());</span>
+		}
+<span class="nc" id="L646">		listEntryLog = null; // flushed - to avoid flushing it again in case is called</span>
+<span class="nc" id="L647">	}</span>
+	
+	/**
+	 *  Save Progress Log Entry to DB immediately
+	 *  @param date date or null
+	 *  @param id record id or 0
+	 *  @param number number or null
+	 *  @param msg message or null
+	 *  @return String AD_PInstance_Log_UU
+	 */
+	public String saveProgress (int id, Timestamp date, BigDecimal number, String msg)
+	{
+<span class="nc bnc" id="L659" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(id + &quot; - &quot; + date + &quot; - &quot; + number + &quot; - &quot; + msg);</span>
+<span class="nc bnc" id="L660" title="All 2 branches missed.">		if (m_pi != null)</span>
+<span class="nc" id="L661">			return m_pi.saveProgress(id, date, number, msg);</span>
+<span class="nc" id="L662">		return &quot;&quot;;</span>
+	}	//	saveProgress
+
+	/**
+	 *  Save Status Log Entry to DB immediately
+	 *  @param date date or null
+	 *  @param id record id or 0
+	 *  @param number number or null
+	 *  @param msg message or null
+	 *  @return String AD_PInstance_Log_UU
+	 */
+	public String saveStatus (int id, Timestamp date, BigDecimal number, String msg)
+	{
+<span class="nc bnc" id="L675" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(id + &quot; - &quot; + date + &quot; - &quot; + number + &quot; - &quot; + msg);</span>
+<span class="nc bnc" id="L676" title="All 2 branches missed.">		if (m_pi != null)</span>
+<span class="nc" id="L677">			return m_pi.saveStatus(id, date, number, msg);</span>
+<span class="nc" id="L678">		return &quot;&quot;;</span>
+	}	//	saveStatus
+	
+	/**
+	 *  Update Progress Log Entry with the specified AD_PInstance_Log_UU, update if exists
+	 *  @param pInstanceLogUU AD_PInstance_Log_UU
+	 * 	@param id record id or 0
+	 *	@param date date or null
+	 * 	@param number number or null
+	 * 	@param msg message or null
+	 */
+	public void updateProgress (String pInstanceLogUU, int id, Timestamp date, BigDecimal number, String msg)
+	{
+<span class="nc bnc" id="L691" title="All 2 branches missed.">		if (m_pi != null)</span>
+<span class="nc" id="L692">			m_pi.updateProgress(pInstanceLogUU, id, date, number, msg);</span>
+		
+<span class="nc bnc" id="L694" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(pInstanceLogUU + &quot; - &quot; + id + &quot; - &quot; + date + &quot; - &quot; + number + &quot; - &quot; + msg);</span>
+<span class="nc" id="L695">	}	//	saveLog</span>
+	
+	/**
+	 * 	Call class method using Java reflection
+	 * 	@param className class
+	 * 	@param methodName method
+	 * 	@param args arguments
+	 * 	@return result
+	 */
+	public Object doIt (String className, String methodName, Object args[])
+	{
+		try
+		{
+<span class="nc" id="L708">			Class&lt;?&gt; clazz = Class.forName(className);</span>
+<span class="nc" id="L709">			Object object = clazz.getDeclaredConstructor().newInstance();</span>
+<span class="nc" id="L710">			Method[] methods = clazz.getMethods();</span>
+<span class="nc bnc" id="L711" title="All 2 branches missed.">			for (int i = 0; i &lt; methods.length; i++)</span>
+			{
+<span class="nc bnc" id="L713" title="All 2 branches missed.">				if (methods[i].getName().equals(methodName))</span>
+<span class="nc" id="L714">					return methods[i].invoke(object, args);</span>
+			}
+<span class="nc" id="L716">		}</span>
+<span class="nc" id="L717">		catch (Exception ex)</span>
+		{
+<span class="nc" id="L719">			log.log(Level.SEVERE, &quot;doIt&quot;, ex);</span>
+<span class="nc" id="L720">			throw new RuntimeException(ex);</span>
+		}
+<span class="nc" id="L722">		return null;</span>
+	}	//	doIt
+
+	
+	/**
+	 *  Lock Process Instance
+	 */
+	private void lock()
+	{
+<span class="nc bnc" id="L731" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;AD_PInstance_ID=&quot; + m_pi.getAD_PInstance_ID());</span>
+		try 
+		{
+<span class="nc bnc" id="L734" title="All 2 branches missed.">			if(m_pi.getAD_PInstance_ID() &gt; 0)	// Update only when AD_PInstance_ID &gt; 0 (When we Start Process w/o saving process instance (No Process Audit))</span>
+<span class="nc" id="L735">				DB.executeUpdate(&quot;UPDATE AD_PInstance SET IsProcessing='Y' WHERE AD_PInstance_ID=&quot; </span>
+<span class="nc" id="L736">					+ m_pi.getAD_PInstance_ID(), null);		//	outside trx</span>
+<span class="nc" id="L737">		} catch (Exception e)</span>
+		{
+<span class="nc" id="L739">			log.severe(&quot;lock() - &quot; + e.getLocalizedMessage());</span>
+		}
+<span class="nc" id="L741">	}   //  lock</span>
+
+	/**
+	 *  Unlock Process Instance.&lt;br/&gt;
+	 *  Update Process Instance (AD_PInstance) and write message (ErrorMsg) and state (result).
+	 */
+	private void unlock ()
+	{
+<span class="nc bnc" id="L749" title="All 4 branches missed.">		boolean noContext = Env.getCtx().isEmpty() &amp;&amp; Env.getCtx().getProperty(Env.AD_CLIENT_ID) == null;</span>
+		try 
+		{
+			//save logging info even if context is lost
+<span class="nc bnc" id="L753" title="All 2 branches missed.">			if (noContext)</span>
+<span class="nc" id="L754">				Env.getCtx().put(Env.AD_CLIENT_ID, m_pi.getAD_Client_ID());</span>
+
+			//clear interrupt signal so that we can unlock the ad_pinstance record
+<span class="nc bnc" id="L757" title="All 2 branches missed.">			if (Thread.currentThread().isInterrupted())</span>
+<span class="nc" id="L758">				Thread.interrupted();</span>
+			
+<span class="nc bnc" id="L760" title="All 2 branches missed.">			if(m_pi.getAD_PInstance_ID() &gt; 0) {</span>
+<span class="nc" id="L761">				MPInstance mpi = new MPInstance (getCtx(), m_pi.getAD_PInstance_ID(), null);</span>
+<span class="nc bnc" id="L762" title="All 2 branches missed.">				if (mpi.get_ID() == 0)</span>
+				{
+<span class="nc" id="L764">					log.log(Level.INFO, &quot;Did not find PInstance &quot; + m_pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L765">					return;</span>
+				}
+<span class="nc" id="L767">				mpi.setIsProcessing(false);</span>
+<span class="nc bnc" id="L768" title="All 2 branches missed.">				mpi.setResult(!m_pi.isError());</span>
+<span class="nc" id="L769">				mpi.setErrorMsg(m_pi.getSummary());</span>
+<span class="nc" id="L770">				mpi.setJsonData(m_pi.getJsonData());</span>
+<span class="nc" id="L771">				mpi.saveEx();</span>
+<span class="nc bnc" id="L772" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(mpi.toString());</span>
+				
+<span class="nc" id="L774">				ProcessInfoUtil.saveLogToDB(m_pi);</span>
+			}
+<span class="nc" id="L776">		} </span>
+<span class="nc" id="L777">		catch (Exception e)</span>
+		{
+<span class="nc" id="L779">			log.severe(&quot;unlock() - &quot; + e.getLocalizedMessage());</span>
+		}
+		finally
+		{
+<span class="nc bnc" id="L783" title="All 2 branches missed.">			if (noContext)</span>
+<span class="nc" id="L784">				Env.getCtx().remove(Env.AD_CLIENT_ID);</span>
+		}
+<span class="nc" id="L786">	}   //  unlock</span>
+
+	/**
+	 * Get the main transaction of the current process.
+	 * @return the transaction name
+	 */
+	public String get_TrxName()
+	{
+<span class="nc bnc" id="L794" title="All 2 branches missed.">		if (m_trx != null)</span>
+<span class="nc" id="L795">			return m_trx.getTrxName();</span>
+<span class="nc" id="L796">		return null;</span>
+	}	//	get_TrxName
+
+	@Override
+	public void setProcessUI(IProcessUI monitor)
+	{
+<span class="nc" id="L802">		processUI = monitor;</span>
+<span class="nc" id="L803">	}</span>
+	
+	/**
+	 * Publish status update message to client
+	 * @param message
+	 */
+	protected void statusUpdate(String message)
+	{
+<span class="nc bnc" id="L811" title="All 2 branches missed.">		if (processUI != null)</span>
+		{
+<span class="nc" id="L813">			processUI.statusUpdate(message);</span>
+		}
+<span class="nc" id="L815">	}</span>
+
+	/**
+	 * Attempts to initialize class fields having the {@link Parameter} annotation
+	 * with the values received by this process instance.
+	 */
+	private void autoFillParameters(){
+<span class="nc" id="L822">	    Map&lt;String,Field&gt; map = new TreeMap&lt;&gt;(String.CASE_INSENSITIVE_ORDER);</span>
+
+	    // detects annotated fields in this class and its super classes
+<span class="nc" id="L825">	    Class&lt;?&gt; target = getClass();</span>
+<span class="nc bnc" id="L826" title="All 4 branches missed.">	    while(target != null &amp;&amp; !target.equals(SvrProcess.class)) {</span>
+<span class="nc bnc" id="L827" title="All 2 branches missed.">		    for (Field field: getFieldsWithParameters(target)) {</span>
+<span class="nc" id="L828">		        field.setAccessible(true);</span>
+<span class="nc" id="L829">		        Parameter pa = field.getAnnotation(Parameter.class);</span>
+<span class="nc bnc" id="L830" title="All 2 branches missed.">		        if(map.containsValue(field))</span>
+<span class="nc" id="L831">		        	continue;</span>
+<span class="nc bnc" id="L832" title="All 2 branches missed.">		        String name = pa.name().isEmpty() ? field.getName() : pa.name();</span>
+<span class="nc" id="L833">		        map.put(name.toLowerCase(), field);</span>
+		    }
+<span class="nc" id="L835">	    	target = target.getSuperclass();</span>
+	    }
+
+<span class="nc bnc" id="L838" title="All 2 branches missed.">	    if(map.size()==0)</span>
+<span class="nc" id="L839">	        return;</span>
+
+<span class="nc bnc" id="L841" title="All 2 branches missed.">        for(ProcessInfoParameter parameter : getParameter()){</span>
+<span class="nc" id="L842">            String name = parameter.getParameterName().trim().toLowerCase();</span>
+<span class="nc" id="L843">            Field field = map.get(name);</span>
+<span class="nc bnc" id="L844" title="All 2 branches missed.">            Field toField = map.containsKey(name + &quot;_to&quot;) ? map.get(name + &quot;_to&quot;) : null;</span>
+<span class="nc bnc" id="L845" title="All 2 branches missed.">            Field notField = map.containsKey(name + &quot;_not&quot;) ? map.get(name + &quot;_not&quot;) : null;</span>
+
+            // try to match fields using the &quot;p_&quot; prefix convention
+<span class="nc bnc" id="L848" title="All 2 branches missed.">            if(field==null) {</span>
+<span class="nc" id="L849">            	String candidate = &quot;p_&quot; + name;</span>
+<span class="nc" id="L850">                field = map.get(candidate);</span>
+<span class="nc bnc" id="L851" title="All 2 branches missed.">                toField = map.containsKey(candidate + &quot;_to&quot;) ? map.get(candidate + &quot;_to&quot;) : null;</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">                notField = map.containsKey(candidate + &quot;_not&quot;) ? map.get(candidate + &quot;_not&quot;) : null;</span>
+            }
+
+            // try to match fields with same name as metadata declaration after stripping &quot;_&quot;
+<span class="nc bnc" id="L856" title="All 2 branches missed.">            if(field==null) {</span>
+<span class="nc" id="L857">            	String candidate = name.replace(&quot;_&quot;, &quot;&quot;);</span>
+<span class="nc" id="L858">                field = map.get(candidate);</span>
+<span class="nc bnc" id="L859" title="All 2 branches missed.">                toField = map.containsKey(candidate + &quot;to&quot;) ? map.get(candidate + &quot;to&quot;) : null;</span>
+<span class="nc bnc" id="L860" title="All 2 branches missed.">                notField = map.containsKey(candidate + &quot;not&quot;) ? map.get(candidate + &quot;not&quot;) : null;</span>
+            }
+
+<span class="nc bnc" id="L863" title="All 2 branches missed.">            if(field==null)</span>
+<span class="nc" id="L864">                continue;</span>
+
+<span class="nc" id="L866">            Type type = field.getType();</span>
+            try{
+<span class="nc bnc" id="L868" title="All 4 branches missed.">                if (type.equals(Integer.TYPE) || type.equals(Integer.class)) {</span>
+<span class="nc" id="L869">                    field.set(this, parameter.getParameterAsInt());</span>
+<span class="nc bnc" id="L870" title="All 4 branches missed.">                    if(parameter.getParameter_To()!=null &amp;&amp; toField != null)</span>
+<span class="nc" id="L871">                    	toField.set(this, parameter.getParameter_ToAsInt());</span>
+<span class="nc bnc" id="L872" title="All 2 branches missed.">                } else if (type.equals(String.class)) {</span>
+<span class="nc" id="L873">                    field.set(this, (String) parameter.getParameter());</span>
+<span class="nc bnc" id="L874" title="All 2 branches missed.">                    if(notField != null)</span>
+<span class="nc" id="L875">                    	notField.set(this, (boolean) parameter.isNotClause());</span>
+<span class="nc bnc" id="L876" title="All 2 branches missed.">                } else if (type.equals(java.sql.Timestamp.class)) {</span>
+<span class="nc" id="L877">                    field.set(this, (Timestamp) parameter.getParameter());</span>
+<span class="nc bnc" id="L878" title="All 4 branches missed.">                    if(parameter.getParameter_To()!=null &amp;&amp; toField != null)</span>
+<span class="nc" id="L879">                    	toField.set(this, (Timestamp) parameter.getParameter_To());</span>
+<span class="nc bnc" id="L880" title="All 2 branches missed.">                } else if (type.equals(BigDecimal.class)) {</span>
+<span class="nc" id="L881">                    field.set(this, (BigDecimal) parameter.getParameter());</span>
+<span class="nc bnc" id="L882" title="All 4 branches missed.">                } else if (type.equals(boolean.class) || type.equals(Boolean.class)) {</span>
+<span class="nc" id="L883">                    Object tmp = parameter.getParameter();</span>
+<span class="nc bnc" id="L884" title="All 4 branches missed.">                    if(tmp instanceof String &amp;&amp; tmp != null)</span>
+<span class="nc" id="L885">                        field.set(this, &quot;Y&quot;.equals(tmp));</span>
+                    else
+<span class="nc" id="L887">                    	field.set(this, tmp);</span>
+                } else {
+                	continue;
+                }
+<span class="nc" id="L891">            }catch(Exception e){</span>
+<span class="nc" id="L892">                throw new RuntimeException(e);</span>
+            }
+        }
+<span class="nc" id="L895">	}</span>
+
+	/**
+	 * Tries to find all class fields having the {@link Parameter} annotation.
+	 * @param clazz
+	 * @return a list of annotated fields
+	 */
+	private List&lt;Field&gt; getFieldsWithParameters(Class&lt;?&gt; clazz) {
+<span class="nc bnc" id="L903" title="All 2 branches missed.">		if (clazz != null)</span>
+<span class="nc" id="L904">			return Arrays.stream(clazz.getDeclaredFields())</span>
+<span class="nc bnc" id="L905" title="All 2 branches missed.">				.filter(f -&gt; f.getAnnotation(Parameter.class) != null)</span>
+<span class="nc" id="L906">				.collect(Collectors.toList());</span>
+
+<span class="nc" id="L908">		return Collections.emptyList();</span>
+	}
+
+}   //  SvrProcess
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

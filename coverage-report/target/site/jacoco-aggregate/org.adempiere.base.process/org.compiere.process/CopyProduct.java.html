@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CopyProduct.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">CopyProduct.java</span></div><h1>CopyProduct.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ **********************************************************************/
+
+package org.compiere.process;
+
+import java.util.List;
+import java.util.logging.Level;
+
+import org.compiere.model.MBPartnerProduct;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MProduct;
+import org.compiere.model.MProductDownload;
+import org.compiere.model.MProductPrice;
+import org.compiere.model.MReplenish;
+import org.compiere.model.MUOMConversion;
+import org.compiere.model.PO;
+import org.compiere.model.Query;
+import org.compiere.model.X_M_RelatedProduct;
+import org.compiere.model.X_M_Substitute;
+import org.eevolution.model.MPPProductBOM;
+import org.eevolution.model.MPPProductBOMLine;
+
+/**
+ * Process that copies product information such as BOM, prices, substitutes, related, replenish, downloads, business partner info, UOM conversion
+ * from another product. Accounting configuration, translation and purchase info are not copied.
+ *  
+ * @author Daniel Tamm (usrdno)
+ *
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L50">public class CopyProduct extends SvrProcess {</span>
+
+	private int m_copyFromId;
+
+	@Override
+	protected void prepare() {
+
+<span class="nc" id="L57">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L60">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L61" title="All 2 branches missed.">			if (para[i].getParameter() == null)</span>
+<span class="nc" id="L62">				;</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">			else if (name.equals(&quot;M_Product_ID&quot;))</span>
+<span class="nc" id="L64">				m_copyFromId = para[i].getParameterAsInt();</span>
+			else
+<span class="nc" id="L66">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+
+<span class="nc" id="L69">	}</span>
+
+	@Override
+	protected String doIt() throws Exception {
+
+<span class="nc" id="L74">		int toMProductID = getRecord_ID();</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;From M_Product_ID=&quot; + m_copyFromId + &quot; to &quot; + toMProductID);</span>
+<span class="nc bnc" id="L76" title="All 2 branches missed.">		if (toMProductID == 0)</span>
+<span class="nc" id="L77">			throw new IllegalArgumentException(&quot;Target M_Product_ID == 0&quot;);</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">		if (m_copyFromId == 0)</span>
+<span class="nc" id="L79">			throw new IllegalArgumentException(&quot;Source M_Product_ID == 0&quot;);</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">		if (m_copyFromId == toMProductID)</span>
+<span class="nc" id="L81">			throw new IllegalArgumentException(&quot;Source and target M_Product_ID must be different&quot;);</span>
+
+<span class="nc" id="L83">		int count = 0;</span>
+<span class="nc" id="L84">		MProduct prodDst = new MProduct(getCtx(), toMProductID, get_TrxName());</span>
+		// It checks if the source product is a BOM to copy the records.
+<span class="nc" id="L86">		MProduct prodSrc = new MProduct(getCtx(), m_copyFromId, get_TrxName());</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">		if (prodSrc.isBOM() &amp;&amp; prodDst.isBOM()) {</span>
+
+			// get bom lines from the source product and copy to the target
+<span class="nc" id="L90">			List&lt;MPPProductBOM&gt; boms = MPPProductBOM.getProductBOMs(prodSrc);</span>
+
+<span class="nc bnc" id="L92" title="All 2 branches missed.">			for(MPPProductBOM bomSrc : boms) {</span>
+<span class="nc" id="L93">				MPPProductBOM bomDst = new MPPProductBOM(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L94">				PO.copyValues(bomSrc, bomDst);</span>
+<span class="nc" id="L95">				bomDst.setM_Product_ID(toMProductID);</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">				if (   MPPProductBOM.BOMTYPE_CurrentActive.equals(bomDst.getBOMType())</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">					&amp;&amp; MPPProductBOM.BOMUSE_Master.equals(bomDst.getBOMUse()))</span>
+<span class="nc" id="L98">					bomDst.setValue(prodDst.getValue());</span>
+<span class="nc" id="L99">				bomDst.saveEx();</span>
+
+<span class="nc" id="L101">				MPPProductBOMLine[] bomLines = bomSrc.getLines();</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">				for (MPPProductBOMLine bomLineSrc : bomLines) {</span>
+<span class="nc" id="L103">					MPPProductBOMLine bomLineDst = new MPPProductBOMLine(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L104">					PO.copyValues(bomLineSrc, bomLineDst);</span>
+<span class="nc" id="L105">					bomLineDst.setPP_Product_BOM_ID(bomDst.get_ID());</span>
+<span class="nc" id="L106">					bomLineDst.saveEx();</span>
+				}
+<span class="nc" id="L108">				count += bomLines.length;</span>
+			}
+<span class="nc" id="L110">			count += boms.size();</span>
+		}
+
+		// Copy product prices
+<span class="nc" id="L114">		List&lt;MProductPrice&gt; prices = new Query(getCtx(), MProductPrice.Table_Name, &quot;M_Product_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L115">				.setParameters(new Object[]{m_copyFromId})</span>
+<span class="nc" id="L116">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L117">				.list();</span>
+
+		// Copy prices
+<span class="nc bnc" id="L120" title="All 2 branches missed.">		for (MProductPrice priceSrc : prices) {</span>
+<span class="nc" id="L121">			MProductPrice priceDst = new MProductPrice(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L122">			PO.copyValues(priceSrc, priceDst);</span>
+<span class="nc" id="L123">			priceDst.setM_Product_ID(toMProductID);</span>
+<span class="nc" id="L124">			priceDst.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L126">		count += prices.size();</span>
+
+		// Copy substitutes
+<span class="nc" id="L129">		List&lt;X_M_Substitute&gt; subs = new Query(getCtx(), X_M_Substitute.Table_Name, &quot;M_Product_ID=? AND Substitute_ID!=?&quot;, get_TrxName())</span>
+<span class="nc" id="L130">				.setParameters(new Object[]{m_copyFromId, toMProductID})</span>
+<span class="nc" id="L131">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L132">				.list();</span>
+
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		for (X_M_Substitute subSrc : subs) {</span>
+<span class="nc" id="L135">			X_M_Substitute subDst = new X_M_Substitute(getCtx(), PO.UUID_NEW_RECORD, get_TrxName());</span>
+<span class="nc" id="L136">			PO.copyValues(subSrc, subDst);</span>
+<span class="nc" id="L137">			subDst.setM_Product_ID(toMProductID);</span>
+<span class="nc" id="L138">			subDst.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L140">		count += subs.size();</span>
+
+		// Copy related
+<span class="nc" id="L143">		List&lt;X_M_RelatedProduct&gt; related = new Query(getCtx(), X_M_RelatedProduct.Table_Name, &quot;M_Product_ID=? AND RelatedProduct_ID!=?&quot;, get_TrxName())</span>
+<span class="nc" id="L144">				.setParameters(new Object[]{m_copyFromId, toMProductID})</span>
+<span class="nc" id="L145">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L146">				.list();</span>
+
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		for (X_M_RelatedProduct relatedSrc : related) {</span>
+<span class="nc" id="L149">			X_M_RelatedProduct relatedDst = new X_M_RelatedProduct(getCtx(), PO.UUID_NEW_RECORD, get_TrxName());</span>
+<span class="nc" id="L150">			PO.copyValues(relatedSrc, relatedDst);</span>
+<span class="nc" id="L151">			relatedDst.setM_Product_ID(toMProductID);</span>
+<span class="nc" id="L152">			relatedDst.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L154">		count += related.size();</span>
+
+		// Copy replenish
+<span class="nc" id="L157">		List&lt;MReplenish&gt; replenish = new Query(getCtx(), MReplenish.Table_Name, &quot;M_Product_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L158">				.setParameters(new Object[]{m_copyFromId})</span>
+<span class="nc" id="L159">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L160">				.list();</span>
+
+<span class="nc bnc" id="L162" title="All 2 branches missed.">		for (MReplenish replenishSrc : replenish) {</span>
+<span class="nc" id="L163">			MReplenish replenishDst = new MReplenish(getCtx(), PO.UUID_NEW_RECORD, get_TrxName());</span>
+<span class="nc" id="L164">			PO.copyValues(replenishSrc, replenishDst);</span>
+<span class="nc" id="L165">			replenishDst.setM_Product_ID(toMProductID);</span>
+<span class="nc" id="L166">			replenishDst.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L168">		count += replenish.size();</span>
+
+		// Copy business partner
+<span class="nc" id="L171">		List&lt;MBPartnerProduct&gt; bpList = new Query(getCtx(), MBPartnerProduct.Table_Name, &quot;M_Product_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L172">				.setParameters(new Object[]{m_copyFromId})</span>
+<span class="nc" id="L173">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L174">				.list();</span>
+
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		for (MBPartnerProduct bpSrc : bpList) {</span>
+<span class="nc" id="L177">			MBPartnerProduct bpDst = new MBPartnerProduct(getCtx(), PO.UUID_NEW_RECORD, get_TrxName());</span>
+<span class="nc" id="L178">			PO.copyValues(bpSrc, bpDst);</span>
+<span class="nc" id="L179">			bpDst.setM_Product_ID(toMProductID);</span>
+<span class="nc" id="L180">			bpDst.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L182">		count += bpList.size();</span>
+
+		// Copy download
+<span class="nc" id="L185">		List&lt;MProductDownload&gt; dlList = new Query(getCtx(), MProductDownload.Table_Name, &quot;M_Product_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L186">				.setParameters(new Object[]{m_copyFromId})</span>
+<span class="nc" id="L187">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L188">				.list();</span>
+
+<span class="nc bnc" id="L190" title="All 2 branches missed.">		for (MProductDownload dlSrc : dlList) {</span>
+<span class="nc" id="L191">			MProductDownload dlDst = new MProductDownload(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L192">			PO.copyValues(dlSrc, dlDst);</span>
+<span class="nc" id="L193">			dlDst.setM_Product_ID(toMProductID);</span>
+<span class="nc" id="L194">			dlDst.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L196">		count += dlList.size();</span>
+
+		// Copy UOM Conversion
+<span class="nc" id="L199">		List&lt;MUOMConversion&gt; uomCList = new Query(getCtx(), MUOMConversion.Table_Name, &quot;M_Product_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L200">				.setParameters(new Object[]{m_copyFromId})</span>
+<span class="nc" id="L201">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L202">				.list();</span>
+
+<span class="nc bnc" id="L204" title="All 2 branches missed.">		for (MUOMConversion uomCSrc : uomCList) {</span>
+<span class="nc" id="L205">			MUOMConversion uomCDst = new MUOMConversion(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L206">			PO.copyValues(uomCSrc, uomCDst);</span>
+<span class="nc" id="L207">			uomCDst.setM_Product_ID(toMProductID);</span>
+<span class="nc" id="L208">			uomCDst.saveEx(get_TrxName());</span>
+		}
+<span class="nc" id="L210">		count += uomCList.size();</span>
+
+<span class="nc" id="L212">		return &quot;@Copied@=&quot; + count;</span>
+
+	}
+
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

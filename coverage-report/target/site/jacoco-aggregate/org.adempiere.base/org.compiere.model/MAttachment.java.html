@@ -1,0 +1,1062 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MAttachment.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MAttachment.java</span></div><h1>MAttachment.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.apache.tools.ant.Project;
+import org.apache.tools.ant.Target;
+import org.apache.tools.ant.taskdefs.Zip;
+import org.compiere.print.layout.ImageElement;
+import org.compiere.tools.FileUtil;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+
+/**
+ *	Attachment Model.
+ *	One Attachment can have multiple entries (usually stored as zip files).
+ *	
+ *  @author Jorg Janke
+ *  
+  * @author Silvano Trinchero
+ *      &lt;li&gt;BF [ 2992291] MAttachment.addEntry not closing streams if an exception occur
+ *        https://sourceforge.net/p/adempiere/bugs/2392/
+ *
+ *  @version $Id: MAttachment.java,v 1.4 2006/07/30 00:58:37 jjanke Exp $
+ */
+public class MAttachment extends X_AD_Attachment implements AutoCloseable
+{
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 8842653136722756898L;
+
+	private static final String ATTACHMENT_URL_PREFIX = &quot;attachment:&quot;;
+	
+	/**
+	 * @param ctx
+	 * @param AD_Table_ID
+	 * @param Record_ID
+	 * @return attachment or null
+	 */
+	public static MAttachment get (Properties ctx, int AD_Table_ID, int Record_ID)
+	{
+<span class="nc" id="L77">		return get(ctx, AD_Table_ID, Record_ID, (String)null, (String)null);</span>
+	}
+	
+	/**
+	 * 	Get Attachment (if there are more than one attachment, it gets the first in no specific order)
+	 *	@param ctx context
+	 *	@param AD_Table_ID table
+	 *	@param Record_ID record
+	 *  @param trxName
+	 *	@return attachment or null
+	 */
+	public static MAttachment get (Properties ctx, int AD_Table_ID, int Record_ID, String trxName)
+	{
+<span class="nc" id="L90">		return get(ctx, AD_Table_ID, Record_ID, (String)null, trxName);</span>
+	}	//	get
+	
+	/**
+	 * 	Get Attachment (if there are more than one attachment, it gets the first in no specific order)
+	 *	@param ctx context
+	 *	@param AD_Table_ID table
+	 *	@param Record_ID record
+	 *	@param Record_UU record UUID
+	 *  @param trxName
+	 *	@return attachment or null
+	 */
+	public static MAttachment get (Properties ctx, int AD_Table_ID, int Record_ID, String Record_UU, String trxName)
+	{
+<span class="nc" id="L104">		StringBuilder whereClause = new StringBuilder(&quot;AD_Table_ID=?&quot;);</span>
+<span class="nc" id="L105">		List&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L106">		params.add(AD_Table_ID);</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">		if (Record_ID &gt; 0) {</span>
+<span class="nc" id="L108">			whereClause.append(&quot; AND Record_ID=?&quot;);</span>
+<span class="nc" id="L109">			params.add(Record_ID);</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">		} else if (!Util.isEmpty(Record_UU)) {</span>
+<span class="nc" id="L111">			whereClause.append(&quot; AND Record_UU=?&quot;);</span>
+<span class="nc" id="L112">			params.add(Record_UU);</span>
+		}
+<span class="nc bnc" id="L114" title="All 2 branches missed.">		if (params.size() == 1) {</span>
+<span class="nc" id="L115">			s_log.warning(&quot;Wrong call, no Record_ID neither Record_UU for AD_Table_ID=&quot; + AD_Table_ID + &quot; TrxName=&quot; + trxName);</span>
+<span class="nc" id="L116">			return null;</span>
+		}
+<span class="nc" id="L118">		MAttachment retValue = new Query(ctx, Table_Name, whereClause.toString(), trxName)</span>
+<span class="nc" id="L119">				.setParameters(params)</span>
+<span class="nc" id="L120">				.first();</span>
+<span class="nc" id="L121">		return retValue;</span>
+	}	//	get
+	
+	/**	Static Logger	*/
+<span class="nc" id="L125">	private static CLogger	s_log	= CLogger.getCLogger (MAttachment.class);</span>
+	
+	private MStorageProvider provider;
+	
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param AD_Attachment_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MAttachment(Properties ctx, String AD_Attachment_UU, String trxName) {
+<span class="nc" id="L136">        super(ctx, AD_Attachment_UU, trxName);</span>
+<span class="nc" id="L137">		initAttachmentStoreDetails(ctx, trxName);</span>
+<span class="nc" id="L138">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param AD_Attachment_ID id
+	 *	@param trxName transaction
+	 */
+	public MAttachment(Properties ctx, int AD_Attachment_ID, String trxName)
+	{
+<span class="nc" id="L148">		super (ctx, AD_Attachment_ID, trxName);</span>
+<span class="nc" id="L149">		initAttachmentStoreDetails(ctx, trxName);</span>
+
+<span class="nc" id="L151">	}	//	MAttachment</span>
+
+	/**
+	 *	@param ctx context
+	 *	@param AD_Table_ID table
+	 *	@param Record_ID record
+	 *	@param trxName transaction
+	 *  @deprecated Use {@link MAttachment#MAttachment(Properties, int, int, String, String)} instead
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public MAttachment(Properties ctx, int AD_Table_ID, int Record_ID, String trxName)
+	{
+<span class="nc" id="L163">		this(ctx, AD_Table_ID, Record_ID, null, trxName);</span>
+		// Record_UU will be set in beforeSave
+<span class="nc" id="L165">	}</span>
+
+	/**
+	 *	@param ctx context
+	 *	@param AD_Table_ID table
+	 *	@param Record_ID record
+	 *	@param Record_UU record UUID
+	 *	@param trxName transaction
+	 */
+	public MAttachment(Properties ctx, int AD_Table_ID, int Record_ID, String Record_UU, String trxName)
+	{
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		this (ctx, (MAttachment.getID(AD_Table_ID, Record_ID, Record_UU) &gt; 0 ? MAttachment.getID(AD_Table_ID, Record_ID, Record_UU) : 0), trxName);</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">		if (get_ID() == 0) {</span>
+<span class="nc" id="L178">			setAD_Table_ID (AD_Table_ID);</span>
+<span class="nc" id="L179">			setRecord_ID (Record_ID);</span>
+<span class="nc" id="L180">			setRecord_UU (Record_UU);</span>
+		}
+<span class="nc" id="L182">	}	//	MAttachment</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MAttachment(Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L192">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L193">		initAttachmentStoreDetails(ctx, trxName);</span>
+<span class="nc" id="L194">	}	//	MAttachment</span>
+	
+	/**
+	 * Copy constructor
+	 * @param copy
+	 */
+	public MAttachment(MAttachment copy)
+	{
+<span class="nc" id="L202">		this(Env.getCtx(), 0, (String)null);</span>
+<span class="nc" id="L203">		copyPO(copy);</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">		this.m_items = copy.m_items != null ? copy.m_items.stream().map(MAttachmentEntry::new).collect(Collectors.toCollection(ArrayList::new)) : null;</span>
+<span class="nc" id="L205">	}</span>
+	
+	/** Indicator for no data   */
+	public static final String 	NONE = TITLE_None;
+	/** Indicator for zip data  */
+	public static final String 	ZIP = TITLE_ListInZIPFile;
+	/** Indicator for xml data (store on file system or external provider by plugin) */
+	public static final String 	XML = TITLE_ListInXML;
+	/** Indicator for list of files in AD_AttachmentFile */
+	public static final String 	LIST_IN_ATTACHMENT_FILE = TITLE_ListInAttachmentFile;
+
+<span class="nc" id="L216">	public static final String MIGRATE_STORAGE_DELETING_OLD_PROVIDER = &quot;MIGRATE_STORAGE_DELETING_OLD_PROVIDER&quot;;</span>
+
+	/**	List of Entry Data		*/
+<span class="nc" id="L219">	public ArrayList&lt;MAttachmentEntry&gt; m_items = null;</span>
+
+	/** string replaces the attachment root in stored xml file
+	 * to allow the changing of the attachment root. */
+<span class="nc" id="L223">	public final String ATTACHMENT_FOLDER_PLACEHOLDER = &quot;%ATTACHMENT_FOLDER%&quot;;</span>
+
+	/* Attachment files can be read, but not written/deleted */
+<span class="nc" id="L226">	private Boolean isReadOnly = null;</span>
+
+	/**
+	 * If the related record is on System and the user is operating on Tenant, the attachment is read-only
+	 * @return
+	 */
+	public boolean isReadOnly() {
+<span class="nc" id="L233">		return isReadOnly(false);</span>
+	}
+
+	/**
+	 * If the related record is on System and the user is operating on Tenant, the attachment is read-only
+	 * @param isDelete
+	 * @return
+	 */
+	public boolean isReadOnly(boolean isDelete) {
+<span class="nc bnc" id="L242" title="All 2 branches missed.">		if (isReadOnly == null) {</span>
+<span class="nc" id="L243">			isReadOnly = true;</span>
+<span class="nc" id="L244">			MTable table = MTable.get(getAD_Table_ID());</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">			if (table != null) {</span>
+<span class="nc" id="L246">				PO po = null;</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">				if (! table.isIDKeyTable())</span>
+<span class="nc" id="L248">					po = table.getPOByUU(getRecord_UU(), get_TrxName());</span>
+				else
+<span class="nc" id="L250">					po = table.getPO(getRecord_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L251" title="All 4 branches missed.">				if (isDelete &amp;&amp; po == null) {</span>
+<span class="nc" id="L252">					StringBuilder sqlExists = new StringBuilder(&quot;SELECT 1 FROM &quot;)</span>
+<span class="nc" id="L253">							.append(table.getTableName())</span>
+<span class="nc" id="L254">							.append(&quot; WHERE &quot;);</span>
+<span class="nc" id="L255">					int testExists = -1;</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">					if (table.isUUIDKeyTable()) {</span>
+<span class="nc" id="L257">						sqlExists.append(PO.getUUIDColumnName(table.getTableName())).append(&quot;=?&quot;);</span>
+<span class="nc" id="L258">						testExists = DB.getSQLValueEx(get_TrxName(), sqlExists.toString(), getRecord_UU());</span>
+<span class="nc" id="L259">					} else {</span>
+<span class="nc" id="L260">						sqlExists.append(table.getKeyColumns()[0]).append(&quot;=?&quot;);</span>
+<span class="nc" id="L261">						testExists = DB.getSQLValueEx(get_TrxName(), sqlExists.toString(), getRecord_ID());</span>
+					}
+<span class="nc bnc" id="L263" title="All 2 branches missed.">					if (testExists == -1) // Orphan Record, not read-only as it can be deleted</span>
+<span class="nc" id="L264">						isReadOnly = false;</span>
+				}
+<span class="nc bnc" id="L266" title="All 2 branches missed.">				if (   po != null</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">					&amp;&amp; ! po.is_new()</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">					&amp;&amp; (   po.getAD_Client_ID() == Env.getAD_Client_ID(getCtx())</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">						|| Env.getAD_Client_ID(getCtx()) == 0)) // System is allowed to migrate tenant attachments</span>
+<span class="nc" id="L270">					isReadOnly = false;</span>
+			}
+		}
+<span class="nc" id="L273">		return isReadOnly;</span>
+	}
+
+	/**
+	 * Initialize storage provider
+	 * @param ctx
+	 * @param trxName
+	 */
+	private void initAttachmentStoreDetails(Properties ctx, String trxName)
+	{
+<span class="nc bnc" id="L283" title="All 2 branches missed.">		if (is_new()) {</span>
+<span class="nc" id="L284">			MClientInfo clientInfo = MClientInfo.get(ctx, getAD_Client_ID());</span>
+<span class="nc" id="L285">			setStorageProvider(MStorageProvider.get(ctx, clientInfo.getAD_StorageProvider_ID()));</span>
+<span class="nc" id="L286">		} else {</span>
+<span class="nc" id="L287">			setStorageProvider(MStorageProvider.get(ctx, getAD_StorageProvider_ID()));</span>
+		}
+<span class="nc" id="L289">	}</span>
+	
+	/**
+	 * 	Set Client Org
+	 *	@param AD_Client_ID client
+	 *	@param AD_Org_ID org
+	 */
+	@Override
+	public void setClientOrg(int AD_Client_ID, int AD_Org_ID) 
+	{
+<span class="nc" id="L299">		super.setClientOrg(AD_Client_ID, AD_Org_ID);</span>
+<span class="nc" id="L300">		initAttachmentStoreDetails(getCtx(), get_TrxName());</span>
+<span class="nc" id="L301">	}	//	setClientOrg</span>
+
+	/**
+	 * 	Add to Text Msg
+	 *	@param added text
+	 */
+	public void addTextMsg (String added)
+	{
+<span class="nc" id="L309">		String oldTextMsg = getTextMsg();</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">		if (oldTextMsg == null)</span>
+<span class="nc" id="L311">			setTextMsg (added);</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">		else if (added != null)</span>
+<span class="nc" id="L313">			setTextMsg (oldTextMsg + added);</span>
+<span class="nc" id="L314">	}	//	addTextMsg</span>
+	
+	/**
+	 * 	Get Text Msg
+	 *	@return trimmed message
+	 */
+	@Override
+	public String getTextMsg ()
+	{
+<span class="nc" id="L323">		String msg = super.getTextMsg ();</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">		if (msg == null)</span>
+<span class="nc" id="L325">			return null;</span>
+<span class="nc" id="L326">		return msg.trim();</span>
+	}	//	setTextMsg
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L336">		StringBuilder sb = new StringBuilder(&quot;MAttachment[&quot;);</span>
+<span class="nc" id="L337">		sb.append(getAD_Attachment_ID()).append(&quot;,Title=&quot;).append(getTitle())</span>
+<span class="nc" id="L338">			.append(&quot;,Entries=&quot;).append(getEntryCount());</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">		for (int i = 0; i &lt; getEntryCount(); i++)</span>
+		{
+<span class="nc bnc" id="L341" title="All 2 branches missed.">			if (i == 0)</span>
+<span class="nc" id="L342">				sb.append(&quot;:&quot;);</span>
+			else
+<span class="nc" id="L344">				sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L345">			sb.append(getEntryName(i));</span>
+		}
+<span class="nc" id="L347">		sb.append(&quot;]&quot;);</span>
+<span class="nc" id="L348">		return sb.toString();</span>
+	}	//	toString
+
+	/**
+	 * 	Add new item to attachment
+	 *	@param file file content of new item
+	 *	@return true if added
+	 */
+	public boolean addEntry (File file)
+	{
+		
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (file == null)</span>
+		{
+<span class="nc" id="L361">			log.warning(&quot;No File&quot;);</span>
+<span class="nc" id="L362">			return false;</span>
+		}
+<span class="nc bnc" id="L364" title="All 6 branches missed.">		if (!file.exists() || file.isDirectory() || !file.canRead())</span>
+		{
+<span class="nc" id="L366">			log.warning(&quot;not added - &quot; + file</span>
+<span class="nc" id="L367">				+ &quot;, Exists=&quot; + file.exists() + &quot;, Directory=&quot; + file.isDirectory());</span>
+<span class="nc" id="L368">			return false;</span>
+		}
+<span class="nc bnc" id="L370" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;addEntry - &quot; + file);</span>
+		//
+<span class="nc" id="L372">		String name = file.getName();</span>
+<span class="nc" id="L373">		byte[] data = null;</span>
+		
+		// F3P: BF [2992291] modified to be able to close streams in &quot;finally&quot; block 		
+		
+<span class="nc" id="L377">		FileInputStream fis = null;</span>
+<span class="nc" id="L378">		ByteArrayOutputStream os = null;</span>
+		
+		try
+		{
+<span class="nc" id="L382">			fis = new FileInputStream (file);</span>
+<span class="nc" id="L383">			os = new ByteArrayOutputStream();</span>
+<span class="nc" id="L384">			byte[] buffer = new byte[1024*8];   //  8kB</span>
+<span class="nc" id="L385">			int length = -1;</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">			while ((length = fis.read(buffer)) != -1)</span>
+<span class="nc" id="L387">				os.write(buffer, 0, length);</span>
+			
+<span class="nc" id="L389">			data = os.toByteArray();			</span>
+<span class="nc" id="L390">		}</span>
+<span class="nc" id="L391">		catch (IOException ioe)</span>
+		{
+<span class="nc" id="L393">			log.log(Level.SEVERE, &quot;(file)&quot;, ioe);</span>
+		}
+		finally
+		{
+<span class="nc bnc" id="L397" title="All 2 branches missed.">			if(fis != null)</span>
+			{
+<span class="nc" id="L399">				try { fis.close(); } catch (IOException ex) { log.log(Level.SEVERE, &quot;(file)&quot;, ex); }; </span>
+			}
+							
+<span class="nc bnc" id="L402" title="All 2 branches missed.">			if(os != null)</span>
+			{
+<span class="nc" id="L404">				try { os.close(); } catch (IOException ex) { log.log(Level.SEVERE, &quot;(file)&quot;, ex); };</span>
+			}
+		}
+		
+<span class="nc" id="L408">		return addEntry (name, data);</span>
+	}	//	addEntry
+
+	/**
+	 * 	Add new item to attachment
+	 *	@param name name of new item
+	 *	@param data data content of new item
+	 *	@return true if added
+	 */
+	public boolean addEntry (String name, byte[] data)
+	{
+<span class="nc bnc" id="L419" title="All 4 branches missed.">		if (name == null || data == null)</span>
+<span class="nc" id="L420">			return false;</span>
+<span class="nc" id="L421">		return addEntry (new MAttachmentEntry (name, data));	//	random index</span>
+	}	//	addEntry
+
+    /**
+     * Add attachment entry
+     * @param name
+     * @param file
+     * @return true if success, false otherwise
+     */
+    public boolean addEntry(String name, File file)
+    {
+<span class="nc bnc" id="L432" title="All 4 branches missed.">        if (name == null || file  == null)</span>
+<span class="nc" id="L433">            return false;</span>
+<span class="nc" id="L434">        return addEntry(new MAttachmentEntry(name, file));</span>
+    }
+
+	/**
+	 * 	Add item to attachment
+	 * 	@param item attachment entry
+	 * 	@return true if added
+	 */
+	public boolean addEntry (MAttachmentEntry item)
+	{
+<span class="nc" id="L444">		boolean replaced = false;</span>
+<span class="nc" id="L445">		boolean retValue = false;</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">		if (item == null)</span>
+<span class="nc" id="L447">			return false;</span>
+<span class="nc bnc" id="L448" title="All 2 branches missed.">		if (m_items == null)</span>
+<span class="nc" id="L449">			loadLOBData();</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">		for (int i = 0; i &lt; m_items.size(); i++) {</span>
+<span class="nc" id="L451">			String itemName = m_items.get(i).getName();</span>
+			// Filesystem (and store other plugins can) mark not found files surrounding it with ~
+			// avoid duplicating the file in this case
+<span class="nc bnc" id="L454" title="All 4 branches missed.">			if (itemName.startsWith(&quot;~&quot;) &amp;&amp; itemName.endsWith(&quot;~&quot;))</span>
+<span class="nc" id="L455">				itemName = itemName.substring(1, itemName.length()-1);</span>
+<span class="nc bnc" id="L456" title="All 2 branches missed.">			if (itemName.equals(item.getName()) ) {</span>
+<span class="nc" id="L457">				m_items.set(i, item);</span>
+<span class="nc" id="L458">				replaced = true;</span>
+			}
+		}
+<span class="nc bnc" id="L461" title="All 2 branches missed.">		if (!replaced) {</span>
+<span class="nc" id="L462">			 retValue = m_items.add(item);</span>
+<span class="nc" id="L463">			 item.setIndex(m_items.size());</span>
+		}
+<span class="nc bnc" id="L465" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(item.toStringX());</span>
+<span class="nc bnc" id="L466" title="All 4 branches missed.">		if (getTitle() == null || !getTitle().equals(MAttachment.TITLE_ListInAttachmentFile))</span>
+<span class="nc" id="L467">			setBinaryData(new byte[0]); // ATTENTION! HEAVY HACK HERE... Else it will not save :(</span>
+<span class="nc bnc" id="L468" title="All 4 branches missed.">		return retValue || replaced;</span>
+	}	//	addEntry
+
+	/**
+	 * 	Get Attachment Entry
+	 * 	@param index index of the item (zero base)
+	 * 	@return Entry or null
+	 */
+	public MAttachmentEntry getEntry (int index)
+	{
+<span class="nc bnc" id="L478" title="All 2 branches missed.">		if (m_items == null)</span>
+<span class="nc" id="L479">			loadLOBData();</span>
+<span class="nc bnc" id="L480" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_items.size())</span>
+<span class="nc" id="L481">			return null;</span>
+<span class="nc" id="L482">		return (MAttachmentEntry)m_items.get(index);</span>
+	}	//	getEntry
+	
+	/**
+	 * 	Get Attachment Entries as array
+	 * 	@return array of attachment item or null
+	 */
+	public MAttachmentEntry[] getEntries ()
+	{
+<span class="nc bnc" id="L491" title="All 2 branches missed.">		if (m_items == null)</span>
+<span class="nc" id="L492">			loadLOBData();</span>
+<span class="nc" id="L493">		MAttachmentEntry[] retValue = new MAttachmentEntry[m_items.size()];</span>
+<span class="nc" id="L494">		m_items.toArray (retValue);</span>
+<span class="nc" id="L495">		return retValue;</span>
+	}	//	getEntries
+	
+	/**
+	 * Delete Entry
+	 * 
+	 * @param index
+	 *            index of item to delete
+	 * @return true if deleted
+	 */
+	public boolean deleteEntry(int index) {
+<span class="nc bnc" id="L506" title="All 2 branches missed.">		if (isReadOnly(false))</span>
+<span class="nc" id="L507">			throw new AdempiereException(Msg.getMsg(getCtx(), &quot;R/O&quot;));</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">		if (m_items == null)</span>
+<span class="nc" id="L509">			loadLOBData();</span>
+<span class="nc bnc" id="L510" title="All 4 branches missed.">		if (index &gt;= 0 &amp;&amp; index &lt; m_items.size()) {</span>
+<span class="nc" id="L511">			IAttachmentStore prov = provider.getAttachmentStore();</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">			if (prov != null)</span>
+			{
+<span class="nc bnc" id="L514" title="All 2 branches missed.">				if (prov.deleteEntry(this, provider, index)) {</span>
+<span class="nc bnc" id="L515" title="All 6 branches missed.">					if (!is_new() &amp;&amp; getTitle() != null &amp;&amp; !getTitle().equals(MAttachment.TITLE_ListInAttachmentFile))</span>
+<span class="nc" id="L516">						set_ValueNoCheck(&quot;Updated&quot;, new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L517">					return true;</span>
+				}
+<span class="nc" id="L519">				return false;</span>
+			}
+<span class="nc" id="L521">			return false;</span>
+		}
+<span class="nc" id="L523">		log.warning(&quot;Not deleted Index=&quot; + index + &quot; - Size=&quot; + m_items.size());</span>
+<span class="nc" id="L524">		return false;</span>
+	} // deleteEntry
+	
+	/**
+	 * 	Get Entry Count
+	 *	@return number of entries
+	 */
+	public int getEntryCount()
+	{
+<span class="nc bnc" id="L533" title="All 2 branches missed.">		if (m_items == null)</span>
+<span class="nc" id="L534">			loadLOBData();</span>
+<span class="nc" id="L535">		return m_items.size();</span>
+	}	//	getEntryCount
+		
+	/**
+	 * Get Entry Name
+	 * 
+	 * @param index
+	 *            index of item
+	 * @return name or null
+	 */
+	public String getEntryName(int index) {
+<span class="nc" id="L546">		String method=provider.getMethod();</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">		if(method == null)</span>
+<span class="nc" id="L548">			method=&quot;DB&quot;;</span>
+<span class="nc" id="L549">		MAttachmentEntry item = getEntry(index);</span>
+<span class="nc bnc" id="L550" title="All 2 branches missed.">		if (item != null){</span>
+			//strip path
+<span class="nc" id="L552">			String name = item.getName();</span>
+<span class="nc bnc" id="L553" title="All 4 branches missed.">			if(name!=null &amp;&amp; &quot;FileSystem&quot;.equals(method)){</span>
+<span class="nc" id="L554">				name = name.substring(name.lastIndexOf(File.separator)+1);</span>
+			}
+<span class="nc" id="L556">			return name;</span>
+		}
+<span class="nc" id="L558">		return null;</span>
+	} // getEntryName
+
+	/**
+	 * 	Dump Entry Names to standard out
+	 */
+	public void dumpEntryNames()
+	{
+<span class="nc bnc" id="L566" title="All 2 branches missed.">		if (m_items == null)</span>
+<span class="nc" id="L567">			loadLOBData();</span>
+<span class="nc bnc" id="L568" title="All 4 branches missed.">		if (m_items == null || m_items.size() == 0)</span>
+		{
+<span class="nc" id="L570">			System.out.println(&quot;- no entries -&quot;);</span>
+<span class="nc" id="L571">			return;</span>
+		}
+<span class="nc" id="L573">		StringBuilder msgout = new StringBuilder(&quot;- entries: &quot;).append(m_items.size());</span>
+<span class="nc" id="L574">		System.out.println(msgout.toString());</span>
+<span class="nc bnc" id="L575" title="All 2 branches missed.">		for (int i = 0; i &lt; m_items.size(); i++){</span>
+<span class="nc" id="L576">			msgout = new StringBuilder(&quot;  - &quot;).append(getEntryName(i));</span>
+<span class="nc" id="L577">			System.out.println(msgout.toString());</span>
+		}	
+<span class="nc" id="L579">	}	//	dumpEntryNames</span>
+
+	/**
+	 * 	Get Entry Data
+	 * 	@param index index of item
+	 * 	@return data or null
+	 */
+	public byte[] getEntryData (int index)
+	{
+<span class="nc" id="L588">		MAttachmentEntry item = getEntry(index);</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">		if (item != null)</span>
+<span class="nc" id="L590">			return item.getData();</span>
+<span class="nc" id="L591">		return null;</span>
+	}	//	getEntryData
+	
+	/**
+	 * 	Get Entry File with name
+	 * 	@param index index of item
+	 *	@param fileName optional file name
+	 *	@return file or null
+	 */	
+	public File getEntryFile (int index, String fileName)
+	{
+<span class="nc" id="L602">		MAttachmentEntry item = getEntry(index);</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">		if (item != null)</span>
+<span class="nc" id="L604">			return item.getFile(fileName);</span>
+<span class="nc" id="L605">		return null;</span>
+	}	//	getEntryFile
+
+	/**
+	 * 	Get Entry File with name
+	 * 	@param index index of item
+	 *	@param file file
+	 *	@return file or null
+	 */	
+	public File getEntryFile (int index, File file)
+	{
+<span class="nc" id="L616">		MAttachmentEntry item = getEntry(index);</span>
+<span class="nc bnc" id="L617" title="All 2 branches missed.">		if (item != null)</span>
+<span class="nc" id="L618">			return item.getFile(file);</span>
+<span class="nc" id="L619">		return null;</span>
+	}	//	getEntryFile
+
+	/**
+	 * 	Save attachment content through storage provider
+     *  @param beforeSave true if call from beforeSave, false if call from afterSave
+	 *	@return true if saved
+	 */
+	private boolean saveLOBData(boolean beforeSave)
+	{
+<span class="nc" id="L629">		IAttachmentStore prov = provider.getAttachmentStore();</span>
+<span class="nc bnc" id="L630" title="All 2 branches missed.">		if (prov != null)</span>
+<span class="nc" id="L631">			return prov.save(this,provider,beforeSave);</span>
+<span class="nc" id="L632">		return false;</span>
+	}
+	
+	/**
+	 * 	Ask storage provider to load attachment data into local m_data
+	 *	@return true if success
+	 */
+	private boolean loadLOBData ()
+	{
+<span class="nc" id="L641">		IAttachmentStore prov = provider.getAttachmentStore();</span>
+<span class="nc bnc" id="L642" title="All 2 branches missed.">		if (prov != null)</span>
+<span class="nc" id="L643">			return prov.loadLOBData(this,provider);</span>
+<span class="nc" id="L644">		return false;</span>
+	}
+
+	/**
+	 * Override save to handle LOB data when title is ListInAttachmentFile
+	 * When saving the attachment with title as ZIP or XML, it means the list of files are included in the zip file or in the XML file
+	 *  which is managed in the beforeSave and afterSave methods, so no need to handle here.
+	 * When saving as ListInAttachmentFile, before/after Save are not triggered because the Attachment record is not changed,
+	 *  so we need to override and manage the LOB data saving here.
+	 */
+	@Override
+	public boolean save() {
+<span class="nc" id="L656">		String local_trxName = null;</span>
+<span class="nc" id="L657">		boolean success = false;</span>
+		try {
+<span class="nc bnc" id="L659" title="All 2 branches missed.">			if (get_TrxName() == null) {</span>
+<span class="nc" id="L660">				local_trxName = Trx.createTrxName(&quot;MAttachmentSave&quot;);</span>
+<span class="nc" id="L661">				set_TrxName(local_trxName);</span>
+			}
+<span class="nc bnc" id="L663" title="All 2 branches missed.">			if (   getTitle() != null</span>
+<span class="nc bnc" id="L664" title="All 2 branches missed.">				&amp;&amp; getTitle().equals(MAttachment.TITLE_ListInAttachmentFile)</span>
+<span class="nc bnc" id="L665" title="All 2 branches missed.">				&amp;&amp; !&quot;Y&quot;.equals(get_Attribute(MIGRATE_STORAGE_DELETING_OLD_PROVIDER)))</span>
+<span class="nc bnc" id="L666" title="All 2 branches missed.">				if (!saveLOBData(true))		//	save in BinaryData</span>
+<span class="nc" id="L667">					return false;</span>
+<span class="nc" id="L668">			success = super.save();</span>
+<span class="nc bnc" id="L669" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc bnc" id="L670" title="All 4 branches missed.">	    		if (getTitle() != null &amp;&amp; getTitle().equals(MAttachment.TITLE_ListInAttachmentFile)</span>
+<span class="nc bnc" id="L671" title="All 2 branches missed.">	    				&amp;&amp; !&quot;Y&quot;.equals(get_Attribute(MIGRATE_STORAGE_DELETING_OLD_PROVIDER)))</span>
+<span class="nc" id="L672">	    			success = saveLOBData(false);</span>
+	        }
+<span class="nc" id="L674">		} finally {</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">	        if (local_trxName != null) {</span>
+<span class="nc" id="L676">	        	Trx trx = Trx.get(local_trxName, false);</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">	        	if (success)</span>
+<span class="nc" id="L678">	        		trx.commit();</span>
+	        	else
+<span class="nc" id="L680">	        		trx.rollback();</span>
+<span class="nc" id="L681">	        	trx.close();</span>
+<span class="nc" id="L682">	        	set_TrxName(null);</span>
+	        }
+		}
+<span class="nc" id="L685">       	return success;</span>
+	}
+
+	@Override
+	protected boolean beforeSave (boolean newRecord)
+	{
+<span class="nc bnc" id="L691" title="All 2 branches missed.">		if (isReadOnly(false))</span>
+<span class="nc" id="L692">			throw new AdempiereException(Msg.getMsg(getCtx(), &quot;R/O&quot;));</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">		if (Util.isEmpty(getTitle()))</span>
+<span class="nc" id="L694">			setTitle(NONE);</span>
+		// Set Record_UU from Record_ID
+<span class="nc bnc" id="L696" title="All 6 branches missed.">		if (getRecord_ID() &gt; 0 &amp;&amp; getAD_Table_ID() &gt; 0 &amp;&amp; Util.isEmpty(getRecord_UU())) {</span>
+<span class="nc" id="L697">			MTable table = MTable.get(getAD_Table_ID());</span>
+<span class="nc" id="L698">			PO po = table.getPO(getRecord_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L699" title="All 2 branches missed.">			if (po != null)</span>
+<span class="nc" id="L700">				setRecord_UU(po.get_UUID());</span>
+		}
+<span class="nc bnc" id="L702" title="All 4 branches missed.">		if (getTitle() != null &amp;&amp; getTitle().equals(MAttachment.TITLE_ListInAttachmentFile))</span>
+<span class="nc" id="L703">			return true;</span>
+<span class="nc" id="L704">		return saveLOBData(true);		//	save in BinaryData</span>
+	}	//	beforeSave
+
+    @Override
+    protected boolean afterSave(boolean newRecord, boolean success) {
+<span class="nc bnc" id="L709" title="All 2 branches missed.">        if (success) {</span>
+<span class="nc bnc" id="L710" title="All 4 branches missed.">    		if (getTitle() != null &amp;&amp; getTitle().equals(MAttachment.TITLE_ListInAttachmentFile))</span>
+<span class="nc" id="L711">    			return true;</span>
+<span class="nc" id="L712">            return saveLOBData(false);</span>
+        } else {
+<span class="nc" id="L714">            return false;</span>
+        }
+    }
+
+    @Override
+	protected boolean beforeDelete() {
+<span class="nc bnc" id="L720" title="All 2 branches missed.">		if (isReadOnly(true))</span>
+<span class="nc" id="L721">			throw new AdempiereException(Msg.getMsg(getCtx(), &quot;R/O&quot;));</span>
+<span class="nc" id="L722">		deleteAttachmentFiles();</span>
+<span class="nc" id="L723">		return true;</span>
+	}
+
+	/**
+	 * Delete the associated records in AD_AttachmentFile table
+	 */
+	public void deleteAttachmentFiles() {
+<span class="nc" id="L730">		List&lt;MAttachmentFile&gt; files = new Query(getCtx(), MAttachmentFile.Table_Name, &quot;AD_Attachment_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L731">				.setParameters(getAD_Attachment_ID())</span>
+<span class="nc" id="L732">				.list();</span>
+<span class="nc bnc" id="L733" title="All 2 branches missed.">		for (MAttachmentFile af : files) {</span>
+<span class="nc" id="L734">			af.deleteEx(true);</span>
+		}
+<span class="nc" id="L736">	}</span>
+
+	/**
+	 * 	Ask storage provider to remove attachment content
+	 *	@return true if saved
+	 */
+	@Override
+	protected boolean postDelete()
+	{
+<span class="nc bnc" id="L745" title="All 2 branches missed.">		if (m_items == null)</span>
+<span class="nc" id="L746">			loadLOBData();</span>
+<span class="nc" id="L747">		IAttachmentStore prov = provider.getAttachmentStore();</span>
+<span class="nc bnc" id="L748" title="All 2 branches missed.">		if (prov != null)</span>
+<span class="nc" id="L749">			return prov.delete(this,provider);</span>
+<span class="nc" id="L750">		return true;</span>
+	} 	//	postDelete
+	
+	/**
+	 * Update existing entry
+	 * @param i index of item
+	 * @param file file content of item
+	 * @return true if success, false otherwise
+	 */
+	public boolean updateEntry(int i, File file) 
+	{
+<span class="nc bnc" id="L761" title="All 2 branches missed.">		if (file == null)</span>
+		{
+<span class="nc" id="L763">			log.warning(&quot;No File&quot;);</span>
+<span class="nc" id="L764">			return false;</span>
+		}
+<span class="nc bnc" id="L766" title="All 6 branches missed.">		if (!file.exists() || file.isDirectory() || !file.canRead())</span>
+		{
+<span class="nc" id="L768">			log.warning(&quot;not added - &quot; + file</span>
+<span class="nc" id="L769">				+ &quot;, Exists=&quot; + file.exists() + &quot;, Directory=&quot; + file.isDirectory());</span>
+<span class="nc" id="L770">			return false;</span>
+		}
+<span class="nc bnc" id="L772" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;updateEntry - &quot; + file);</span>
+		//
+<span class="nc" id="L774">        MAttachmentEntry entry = getEntry(i);</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">        if (entry == null) return false;</span>
+<span class="nc" id="L776">        entry.setFile(file);</span>
+<span class="nc" id="L777">        entry.setUpdated(true);</span>
+<span class="nc" id="L778">        return true;</span>
+	}
+	
+	/**
+	 * Update existing entry
+	 * @param i index of item
+	 * @param data byte[] content of item 
+	 * @return true if success, false otherwise
+	 */
+	public boolean updateEntry(int i, byte[] data)
+	{
+<span class="nc" id="L789">		MAttachmentEntry entry = getEntry(i);</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">		if (entry == null) return false;</span>
+<span class="nc" id="L791">		entry.setData(data);</span>
+<span class="nc" id="L792">		entry.setUpdated(true);</span>
+<span class="nc" id="L793">		return true;</span>
+	}
+
+	/**
+	 * IDEMPIERE-530
+	 * Get the attachment ID based on table_id and record_id
+	 * @param Table_ID
+	 * @param Record_ID
+	 * @return AD_Attachment_ID
+ 	 * @deprecated Use {@link MAttachment#getID(int, int, String)} instead
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static int getID(int Table_ID, int Record_ID) {
+<span class="nc" id="L806">		String sql=&quot;SELECT AD_Attachment_ID FROM AD_Attachment WHERE AD_Table_ID=? AND Record_ID=?&quot;;</span>
+<span class="nc" id="L807">		int attachid = DB.getSQLValue(null, sql, Table_ID, Record_ID);</span>
+<span class="nc" id="L808">		return attachid;</span>
+	}
+
+	/**
+	 * IDEMPIERE-530
+	 * Get the attachment ID based on table_id and record_uu
+	 * @param Table_ID
+	 * @param Record_ID
+	 * @param Record_UU record UUID
+	 * @return AD_Attachment_ID 
+	 */
+	public static int getID(int Table_ID, int Record_ID, String Record_UU) {
+<span class="nc bnc" id="L820" title="All 2 branches missed.">		if (Util.isEmpty(Record_UU))</span>
+<span class="nc" id="L821">			return getID(Table_ID, Record_ID);</span>
+<span class="nc" id="L822">		String sql=&quot;SELECT AD_Attachment_ID FROM AD_Attachment WHERE AD_Table_ID=? AND Record_UU=?&quot;;</span>
+<span class="nc" id="L823">		int attachid = DB.getSQLValue(null, sql, Table_ID, Record_UU);</span>
+<span class="nc" id="L824">		return attachid;</span>
+	}
+
+	/**
+	 * Save attachment as zip file
+	 * @return zip file
+	 */
+	public File saveAsZip() {
+<span class="nc bnc" id="L832" title="All 2 branches missed.">		if (getEntryCount() &lt; 1) {</span>
+<span class="nc" id="L833">			return null;</span>
+		}
+
+<span class="nc" id="L836">		String name = MTable.get(Env.getCtx(), getAD_Table_ID()).getTableName() + &quot;_&quot;</span>
+<span class="nc bnc" id="L837" title="All 2 branches missed.">				+ (getRecord_ID() &gt; 0 ? getRecord_ID() : getRecord_UU());</span>
+
+<span class="nc" id="L839">		File tempfolder = null; </span>
+		try {
+<span class="nc" id="L841">			Path tempPath = Files.createTempDirectory(name);</span>
+<span class="nc" id="L842">			tempfolder = tempPath.toFile();</span>
+<span class="nc" id="L843">		} catch (IOException e1) {</span>
+<span class="nc" id="L844">			throw new AdempiereException(&quot;Unable to create temp folder&quot;, e1);</span>
+		}
+
+<span class="nc" id="L847">		File destZipFile = null;</span>
+		try {
+<span class="nc" id="L849">			destZipFile = File.createTempFile(name, &quot;.zip&quot;);</span>
+<span class="nc" id="L850">		} catch (Throwable e) {</span>
+<span class="nc" id="L851">			throw new AdempiereException(&quot;Unable to create temp file&quot;, e);</span>
+		}
+<span class="nc" id="L853">		destZipFile.delete();</span>
+
+<span class="nc" id="L855">		MAttachmentEntry[] entries = getEntries();</span>
+
+<span class="nc bnc" id="L857" title="All 2 branches missed.">        for (MAttachmentEntry entry : entries) {</span>
+<span class="nc" id="L858">            File destinationFile = new File(tempfolder, entry.getName());</span>
+            try {
+<span class="nc" id="L860">                Files.copy(entry.getInputStream(), destinationFile.toPath());</span>
+<span class="nc" id="L861">            } catch (IOException e) {</span>
+<span class="nc" id="L862">                throw new AdempiereException(e);</span>
+            }
+        }
+
+<span class="nc" id="L866">		Zip zipper = new Zip();</span>
+<span class="nc" id="L867">		zipper.setDestFile(destZipFile);</span>
+<span class="nc" id="L868">		zipper.setBasedir(tempfolder);</span>
+<span class="nc" id="L869">		zipper.setUpdate(true);</span>
+<span class="nc" id="L870">		zipper.setCompress(true);</span>
+<span class="nc" id="L871">		zipper.setCaseSensitive(false);</span>
+<span class="nc" id="L872">		zipper.setFilesonly(true);</span>
+<span class="nc" id="L873">		zipper.setTaskName(&quot;zip&quot;);</span>
+<span class="nc" id="L874">		zipper.setTaskType(&quot;zip&quot;);</span>
+<span class="nc" id="L875">		zipper.setProject(new Project());</span>
+<span class="nc" id="L876">		zipper.setOwningTarget(new Target());</span>
+<span class="nc" id="L877">		zipper.execute();</span>
+
+		try {
+<span class="nc" id="L880">			FileUtil.deleteDirectory(tempfolder);</span>
+<span class="nc" id="L881">		} catch (IOException e) {}</span>
+		
+<span class="nc" id="L883">		return destZipFile;</span>
+	}
+
+	/**
+	 * Set Storage Provider.
+	 * Used temporarily by the storage migration process to migrate storage provider.
+	 * @param p Storage provider
+	 */
+	public void setStorageProvider(MStorageProvider p) {
+<span class="nc" id="L892">		provider = p;</span>
+<span class="nc" id="L893">		setAD_StorageProvider_ID(p.getAD_StorageProvider_ID());</span>
+<span class="nc" id="L894">	}</span>
+
+	/**
+	 * Get attachment data from path expression and id
+	 * @param path attachment/tableName/index or filename
+	 * @param id record id or record uuid
+	 * @return data of attachment item
+	 */
+	public static AttachmentData getAttachmentData(String path, Object id) {
+		String[] parts;
+		//record_id or record_uu
+<span class="nc bnc" id="L905" title="All 4 branches missed.">		if ((id instanceof Number) || (id instanceof String)) {</span>
+<span class="nc" id="L906">			parts = path.split(&quot;[/]&quot;);</span>
+			//expression syntax - attachment/table name/index or name
+<span class="nc bnc" id="L908" title="All 2 branches missed.">			if (parts.length == 3) {</span>
+<span class="nc" id="L909">				String tableName = parts[1].trim();</span>
+<span class="nc" id="L910">				MTable table = MTable.get(Env.getCtx(), tableName);</span>
+<span class="nc bnc" id="L911" title="All 2 branches missed.">				if (table != null) {</span>
+<span class="nc bnc" id="L912" title="All 2 branches missed.">					int recordId = (id instanceof Number) ? ((Number)id).intValue() : -1;</span>
+<span class="nc bnc" id="L913" title="All 2 branches missed.">					String recordUU = (id instanceof String) ? (String)id : null;</span>
+					// check security
+<span class="nc bnc" id="L915" title="All 2 branches missed.">					if (!MRole.getDefault().checkAccessSQL(table, recordId, recordUU, false))</span>
+<span class="nc" id="L916">						return null;</span>
+<span class="nc" id="L917">					try (MAttachment attachment = MAttachment.get(Env.getCtx(), table.get_ID(), recordId, recordUU, null);) {</span>
+<span class="nc bnc" id="L918" title="All 4 branches missed.">					if (attachment != null &amp;&amp; attachment.get_ID() &gt; 0) {</span>
+						//first, check whether is via index
+<span class="nc" id="L920">						int index = -1;</span>
+<span class="nc" id="L921">						parts[2] = parts[2].trim();</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">						if (parts[2].matches(&quot;[0-9]+&quot;)) {</span>
+							try {
+<span class="nc" id="L924">								index = Integer.parseInt(parts[2]);</span>
+<span class="nc" id="L925">							} catch (Exception e) {</span>
+							}
+						}
+<span class="nc bnc" id="L928" title="All 4 branches missed.">						if (index &gt;= 0 &amp;&amp; index &lt; attachment.getEntryCount()) {</span>
+<span class="nc" id="L929">							return new AttachmentData(attachment.getEntryName(index), attachment.getEntryData(index));</span>
+						}
+						//try name
+<span class="nc" id="L932">						String toMatch = null;</span>
+<span class="nc bnc" id="L933" title="All 2 branches missed.">						if (parts[2].contains(&quot;*&quot;)) {</span>
+							//wildcard match, for e.g a*.png
+<span class="nc" id="L935">							Pattern regex = Pattern.compile(&quot;[^*]+|(\\*)&quot;);</span>
+<span class="nc" id="L936">							Matcher m = regex.matcher(parts[2]);</span>
+<span class="nc" id="L937">							StringBuffer b= new StringBuffer();</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">							while (m.find()) {</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">							    if(m.group(1) != null) m.appendReplacement(b, &quot;.*&quot;);</span>
+<span class="nc" id="L940">							    else m.appendReplacement(b, &quot;\\\\Q&quot; + m.group(0) + &quot;\\\\E&quot;);</span>
+							}
+<span class="nc" id="L942">							m.appendTail(b);</span>
+<span class="nc" id="L943">							toMatch = b.toString();</span>
+						}
+<span class="nc bnc" id="L945" title="All 2 branches missed.">						for(int i = 0; i &lt; attachment.getEntryCount(); i++) {</span>
+<span class="nc bnc" id="L946" title="All 6 branches missed.">							if (toMatch != null &amp;&amp; attachment.getEntryName(i) != null &amp;&amp; attachment.getEntryName(i).matches(toMatch)) {</span>
+<span class="nc" id="L947">								return new AttachmentData(attachment.getEntryName(i), attachment.getEntryData(i));</span>
+<span class="nc bnc" id="L948" title="All 2 branches missed.">							} else if (parts[2].equals(attachment.getEntryName(i))) {</span>
+<span class="nc" id="L949">								return new AttachmentData(attachment.getEntryName(i), attachment.getEntryData(i));</span>
+							}
+						}								
+					}}
+				}
+			}
+		}
+<span class="nc" id="L956">		return null;</span>
+	}
+	
+	/**
+	 * Get web image attachment url from attachment: expression
+	 * @param contextPath web context path (not needed for zk component, pass null instead)
+	 * @param path attachment:{tableName}/{index or filename pattern},{record id or uuid}
+	 * @return image attachment url
+	 */
+	public static String getImageAttachmentURLFromPath(String contextPath, String path) {
+<span class="nc" id="L966">		String[] part = path.trim().split(&quot;,&quot;);</span>
+<span class="nc bnc" id="L967" title="All 2 branches missed.">		if (part.length == 2)</span>
+		{
+<span class="nc" id="L969">			part[1] = part[1].trim();</span>
+<span class="nc" id="L970">			String expression = part[0].trim();</span>
+			//convert from attachment: url syntax to attachment/ path syntax
+<span class="nc" id="L972">			expression = expression.replaceFirst(&quot;[:]&quot;, &quot;/&quot;);</span>
+<span class="nc bnc" id="L973" title="All 2 branches missed.">			StringBuilder url = new StringBuilder(contextPath != null ? contextPath : &quot;&quot;)</span>
+<span class="nc" id="L974">					.append(&quot;/aimages?path=&quot;)</span>
+<span class="nc" id="L975">					.append(expression)</span>
+<span class="nc" id="L976">					.append(&quot;&amp;recordid=&quot;)</span>
+<span class="nc" id="L977">					.append(part[1]);</span>
+<span class="nc" id="L978">			return url.toString();</span>
+		}
+<span class="nc" id="L980">		return null;</span>
+	}
+	
+	/**
+	 * Get web style sheet attachment url from attachment: expression
+	 * @param contextPath web context path (not needed for zk component, pass null instead)
+	 * @param path attachment:{tableName}/{index or filename pattern},{record id or uuid}
+	 * @return image attachment url
+	 */
+	public static String getStyleSheetAttachmentURLFromPath(String contextPath, String path) {
+<span class="nc" id="L990">		String[] part = path.trim().split(&quot;,&quot;);</span>
+<span class="nc bnc" id="L991" title="All 2 branches missed.">		if (part.length == 2)</span>
+		{
+<span class="nc" id="L993">			part[1] = part[1].trim();</span>
+<span class="nc" id="L994">			String expression = part[0].trim();</span>
+			//convert from attachment: url syntax to attachment/ path syntax
+<span class="nc" id="L996">			expression = expression.replaceFirst(&quot;[:]&quot;, &quot;/&quot;);</span>
+<span class="nc bnc" id="L997" title="All 2 branches missed.">			StringBuilder url = new StringBuilder(contextPath != null ? contextPath : &quot;&quot;)</span>
+<span class="nc" id="L998">					.append(&quot;/astyles?path=&quot;)</span>
+<span class="nc" id="L999">					.append(expression)</span>
+<span class="nc" id="L1000">					.append(&quot;&amp;recordid=&quot;)</span>
+<span class="nc" id="L1001">					.append(part[1]);</span>
+<span class="nc" id="L1002">			return url.toString();</span>
+		}
+<span class="nc" id="L1004">		return null;</span>
+	}
+	
+	/**
+	 * Is attachment URL path 
+	 * @param path attachment:table/{index or file name pattern},{record id or uuid}
+	 * @return true if path is attachment path
+	 */
+	public static boolean isAttachmentURLPath(String path) {		
+<span class="nc bnc" id="L1013" title="All 6 branches missed.">		return path != null &amp;&amp; path.startsWith(ATTACHMENT_URL_PREFIX) &amp;&amp; path.indexOf(&quot;,&quot;) &gt; 0;</span>
+	}
+	
+	/**
+	 * Get attachment data from attachment URL path
+	 * @param path attachment:table/{index or file name pattern},{record id or uuid}
+	 * @return attachment data or null
+	 */
+	public static AttachmentData getDataFromAttachmentURLPath(String path) {
+<span class="nc" id="L1022">		String[] part = path.trim().split(&quot;,&quot;);</span>
+<span class="nc bnc" id="L1023" title="All 2 branches missed.">		if (part.length == 2)</span>
+		{
+<span class="nc" id="L1025">			part[1] = part[1].trim();</span>
+			try {
+<span class="nc" id="L1027">				String expression = part[0].trim();</span>
+				//convert from attachment: url syntax to attachment/ path syntax
+<span class="nc" id="L1029">				expression = expression.replaceFirst(&quot;[:]&quot;, &quot;/&quot;);</span>
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">				Object key = part[1].length() == 36 ? part[1] : Integer.parseInt(part[1]);</span>
+<span class="nc" id="L1031">				AttachmentData imageData = MAttachment.getAttachmentData(expression, key);</span>
+<span class="nc" id="L1032">				return imageData;</span>
+<span class="nc" id="L1033">			} catch (Exception e) {</span>
+<span class="nc" id="L1034">				CLogger.getCLogger(ImageElement.class).log(Level.WARNING, e.getLocalizedMessage(), e);</span>
+			}
+		}
+<span class="nc" id="L1037">		return null;</span>
+	}
+
+    @Override
+    public void close() {
+<span class="nc bnc" id="L1042" title="All 4 branches missed.">        if (m_items != null &amp;&amp; !m_items.isEmpty()) {</span>
+<span class="nc bnc" id="L1043" title="All 2 branches missed.">            for(MAttachmentEntry entry : m_items) {</span>
+<span class="nc" id="L1044">                entry.cleanUp();</span>
+            }
+        }
+<span class="nc" id="L1047">    }</span>
+
+	/**
+	 * Get the list of attachment files from AD_AttachmentFile table
+	 * @return
+	 */
+	public List&lt;MAttachmentFile&gt; getAttachmentFiles() {
+<span class="nc" id="L1054">		return new Query(getCtx(), MAttachmentFile.Table_Name, &quot;AD_Attachment_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L1055">				.setParameters(getAD_Attachment_ID())</span>
+<span class="nc" id="L1056">				.setOrderBy(MAttachmentFile.COLUMNNAME_SeqNo)</span>
+<span class="nc" id="L1057">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L1058">				.list();</span>
+	}
+
+}	//	MAttachment
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

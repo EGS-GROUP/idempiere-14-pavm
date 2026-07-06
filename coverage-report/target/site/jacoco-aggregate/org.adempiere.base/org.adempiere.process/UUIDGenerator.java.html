@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>UUIDGenerator.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.process</a> &gt; <span class="el_source">UUIDGenerator.java</span></div><h1>UUIDGenerator.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2010 Heng Sin Low                							  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.process;
+
+import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.DBException;
+import org.compiere.model.MColumn;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MTable;
+import org.compiere.model.M_Element;
+import org.compiere.model.PO;
+import org.compiere.process.ProcessInfoParameter;
+import org.compiere.process.SvrProcess;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+
+/**
+ * Add UUID column (tableName_UU) to table and update existing records with new UUID.&lt;br/&gt;
+ * Warning: this process is only safe to run if it have exclusive access to database.
+ * @author hengsin
+ *
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L52">public class UUIDGenerator extends SvrProcess {</span>
+
+	private String tableName;
+
+<span class="nc" id="L56">	private boolean isFillUUID = false;</span>
+
+<span class="nc" id="L58">	private boolean isClearUUID = false;</span>
+
+	/**	Logger							*/
+<span class="nc" id="L61">	private static final CLogger s_log = CLogger.getCLogger(UUIDGenerator.class);</span>
+
+	/**
+	 * @see org.compiere.process.SvrProcess#prepare()
+	 */
+	@Override
+	protected void prepare() {
+<span class="nc bnc" id="L68" title="All 2 branches missed.">		for(ProcessInfoParameter param : getParameter()) {</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">			if (param.getParameter() == null)</span>
+<span class="nc" id="L70">				;</span>
+<span class="nc bnc" id="L71" title="All 2 branches missed.">			else if (param.getParameterName().equals(&quot;TableName&quot;))</span>
+<span class="nc" id="L72">				tableName = param.getParameter().toString();</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">			else if (param.getParameterName().equals(&quot;IsFillUUID&quot;))</span>
+<span class="nc" id="L74">				isFillUUID = param.getParameterAsBoolean();</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">			else if (param.getParameterName().equals(&quot;IsClearUUID&quot;))</span>
+<span class="nc" id="L76">				isClearUUID = param.getParameterAsBoolean();</span>
+			else
+<span class="nc" id="L78">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), param);</span>
+		}
+<span class="nc" id="L80">	}</span>
+
+	/**
+	 * @see org.compiere.process.SvrProcess#doIt()
+	 */
+	@Override
+	protected String doIt() throws Exception {
+<span class="nc bnc" id="L87" title="All 4 branches missed.">		if (tableName == null || tableName.trim().length() == 0)</span>
+<span class="nc" id="L88">			tableName = &quot;%&quot;;</span>
+		else
+<span class="nc" id="L90">			tableName = tableName.trim();</span>
+<span class="nc" id="L91">		String sql = &quot;SELECT AD_Table_ID, TableName FROM AD_Table WHERE TableName LIKE ? AND IsView = 'N' AND IsActive='Y' ORDER BY TableName&quot;;</span>
+<span class="nc" id="L92">		PreparedStatement stmt = null;</span>
+<span class="nc" id="L93">		ResultSet rs = null;</span>
+<span class="nc" id="L94">		int count = 0;</span>
+		try  {
+<span class="nc" id="L96">			stmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L97">			stmt.setString(1, tableName);</span>
+<span class="nc" id="L98">			rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">			while(rs.next()) {</span>
+<span class="nc" id="L100">				int AD_Table_ID = rs.getInt(1);</span>
+<span class="nc" id="L101">				String cTableName = rs.getString(2);</span>
+<span class="nc" id="L102">				statusUpdate(Msg.getMsg(getCtx(), &quot;Processing&quot;) + &quot; &quot; + cTableName);</span>
+
+<span class="nc" id="L104">				String columnName = PO.getUUIDColumnName(cTableName);</span>
+<span class="nc" id="L105">				int AD_Column_ID = DB.getSQLValue(null, &quot;SELECT AD_Column_ID FROM AD_Column Where AD_Table_ID = ? AND ColumnName = ?&quot;, AD_Table_ID, columnName);</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">				if (AD_Column_ID &lt;= 0) {</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info(&quot;Adding UUID to &quot; + cTableName);</span>
+<span class="nc" id="L108">					count++;</span>
+					//create column
+<span class="nc" id="L110">					MColumn mColumn = new MColumn(getCtx(), 0, null);</span>
+<span class="nc" id="L111">					mColumn.setAD_Table_ID(AD_Table_ID);</span>
+<span class="nc" id="L112">					int AD_Element_ID = DB.getSQLValue(null, &quot;SELECT AD_Element_ID FROM AD_Element WHERE ColumnName=?&quot;,columnName);</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">					if (AD_Element_ID &lt;= 0) {</span>
+<span class="nc" id="L114">						M_Element adElement = new M_Element(getCtx(), 0, null);</span>
+<span class="nc" id="L115">						adElement.setColumnName(columnName);</span>
+<span class="nc" id="L116">						adElement.setName(columnName);</span>
+<span class="nc" id="L117">						adElement.setPrintName(columnName);</span>
+<span class="nc" id="L118">						adElement.setEntityType(&quot;U&quot;);</span>
+<span class="nc" id="L119">						adElement.saveEx();</span>
+<span class="nc" id="L120">						AD_Element_ID = adElement.getAD_Element_ID();</span>
+					}
+<span class="nc" id="L122">					mColumn.setAD_Element_ID(AD_Element_ID);</span>
+<span class="nc" id="L123">					mColumn.setColumnName(columnName);</span>
+<span class="nc" id="L124">					mColumn.setAD_Reference_ID(DisplayType.UUID);</span>
+<span class="nc" id="L125">					mColumn.setEntityType(&quot;U&quot;);</span>
+<span class="nc" id="L126">					mColumn.setFieldLength(36);</span>
+<span class="nc" id="L127">					mColumn.setName(columnName);</span>
+<span class="nc" id="L128">					mColumn.setVersion(Env.ONE);</span>
+<span class="nc" id="L129">					mColumn.saveEx();</span>
+<span class="nc" id="L130">					AD_Column_ID = mColumn.getAD_Column_ID();</span>
+
+<span class="nc" id="L132">					syncColumn(mColumn);</span>
+
+					//update db
+<span class="nc bnc" id="L135" title="All 2 branches missed.">					if (isFillUUID) {</span>
+<span class="nc" id="L136">						String msg = updateUUID(mColumn, null);</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">						if (! Util.isEmpty(msg)) {</span>
+<span class="nc" id="L138">							addBufferLog(0, null, null, msg, 0, 0);</span>
+						}
+					}
+<span class="nc" id="L141">				} else {</span>
+<span class="nc" id="L142">					MColumn column = MColumn.get(AD_Column_ID);</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">					if (column.isActive()) {</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">						if (isFillUUID) {</span>
+<span class="nc" id="L145">							MColumn mColumn = MColumn.get(getCtx(), AD_Column_ID);</span>
+<span class="nc" id="L146">							String msg = updateUUID(mColumn, null);</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">							if (! Util.isEmpty(msg)) {</span>
+<span class="nc" id="L148">								addBufferLog(0, null, null, msg, 0, 0);</span>
+							}
+						}
+<span class="nc" id="L151">					} else {</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">						if (isClearUUID) {</span>
+<span class="nc" id="L153">							StringBuilder sqlclear = new StringBuilder(&quot;UPDATE &quot;)</span>
+<span class="nc" id="L154">									.append(cTableName)</span>
+<span class="nc" id="L155">									.append(&quot; SET &quot;)</span>
+<span class="nc" id="L156">									.append(columnName)</span>
+<span class="nc" id="L157">									.append(&quot;=NULL WHERE &quot;)</span>
+<span class="nc" id="L158">									.append(columnName)</span>
+<span class="nc" id="L159">									.append(&quot; IS NOT NULL&quot;);</span>
+<span class="nc" id="L160">							int cnt = DB.executeUpdateEx(sqlclear.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">							if (cnt &gt; 0) {</span>
+<span class="nc" id="L162">								String msg = cnt + &quot; UUID cleared from table &quot; + cTableName;</span>
+<span class="nc" id="L163">								addBufferLog(0, null, null, msg, 0, 0);</span>
+							}
+						}
+					}
+				}
+			}
+<span class="nc" id="L169">		} finally {</span>
+<span class="nc" id="L170">			DB.close(rs,stmt);</span>
+		}
+<span class="nc" id="L172">		StringBuilder msgreturn = new StringBuilder().append(count).append(&quot; table altered&quot;);</span>
+<span class="nc" id="L173">		return msgreturn.toString();</span>
+	}
+
+	/**
+	 * Fill column with new uuid value (if it is null)
+	 * @param column
+	 * @param trxName
+	 * @return message
+	 */
+	public static String updateUUID(MColumn column, String trxName) {
+<span class="nc" id="L183">		MTable table = (MTable) column.getAD_Table();</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">		if (table.getTableName().startsWith(&quot;T_&quot;)) {</span>
+			// don't update UUID for temporary tables
+<span class="nc" id="L186">			return &quot;&quot;;</span>
+		}
+<span class="nc" id="L188">		int AD_Column_ID = 0;</span>
+<span class="nc" id="L189">		StringBuilder sql = new StringBuilder(&quot;SELECT &quot;);</span>
+<span class="nc" id="L190">		String keyColumn = null;</span>
+<span class="nc" id="L191">		String[] compositeKeys = table.getKeyColumns();</span>
+<span class="nc bnc" id="L192" title="All 4 branches missed.">		if (compositeKeys == null || compositeKeys.length == 1) {</span>
+<span class="nc" id="L193">			keyColumn = compositeKeys[0];</span>
+<span class="nc" id="L194">			AD_Column_ID = table.getColumn(keyColumn).getAD_Column_ID();</span>
+<span class="nc" id="L195">			compositeKeys = null;</span>
+		}
+<span class="nc bnc" id="L197" title="All 6 branches missed.">		if ((compositeKeys == null || compositeKeys.length == 0) &amp;&amp; keyColumn == null) {</span>
+			// TODO: Update using rowid for oracle or ctid for postgresql
+<span class="nc" id="L199">			s_log.warning(&quot;Cannot update orphan table &quot; + table.getTableName() + &quot; (not ID neither parents)&quot;);</span>
+<span class="nc" id="L200">			return &quot;&quot;;</span>
+		}
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (compositeKeys == null) {</span>
+<span class="nc" id="L203">			sql.append(keyColumn);</span>
+<span class="nc" id="L204">		} else {</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">			for(String s : compositeKeys) {</span>
+<span class="nc" id="L206">				sql.append(s).append(&quot;,&quot;);</span>
+			}
+<span class="nc" id="L208">			sql.deleteCharAt(sql.length()-1);</span>
+		}
+<span class="nc" id="L210">		sql.append(&quot; FROM &quot;).append(table.getTableName());</span>
+<span class="nc" id="L211">		sql.append(&quot; WHERE &quot;).append(column.getColumnName()).append(&quot; IS NULL &quot;);</span>
+<span class="nc" id="L212">		StringBuilder updateSQL = new StringBuilder(&quot;UPDATE &quot;);</span>
+<span class="nc" id="L213">		updateSQL.append(table.getTableName());</span>
+<span class="nc" id="L214">		updateSQL.append(&quot; SET &quot;);</span>
+<span class="nc" id="L215">		updateSQL.append(column.getColumnName());</span>
+<span class="nc" id="L216">		updateSQL.append(&quot;=? WHERE &quot;);</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		if (AD_Column_ID &gt; 0) {</span>
+<span class="nc" id="L218">			updateSQL.append(keyColumn).append(&quot;=?&quot;);</span>
+<span class="nc" id="L219">		} else {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">			for(String s : compositeKeys) {</span>
+<span class="nc" id="L221">				updateSQL.append(s).append(&quot;=? AND &quot;); </span>
+			}
+<span class="nc" id="L223">			int length = updateSQL.length();</span>
+<span class="nc" id="L224">			updateSQL.delete(length-5, length); // delete last AND</span>
+		}
+		
+<span class="nc" id="L227">		boolean localTrx = false;</span>
+<span class="nc" id="L228">		PreparedStatement stmt = null;</span>
+<span class="nc" id="L229">		ResultSet rs = null;</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">		Trx trx = trxName != null ? Trx.get(trxName, false) : null;</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		if (trx == null) {</span>
+<span class="nc" id="L232">			trx = Trx.get(Trx.createTrxName(), true);</span>
+<span class="nc" id="L233">			trx.setDisplayName(UUIDGenerator.class.getName()+&quot;_updateUUID&quot;);</span>
+<span class="nc" id="L234">			localTrx = true;</span>
+		}
+<span class="nc" id="L236">		String msg = &quot;&quot;;</span>
+		try {				
+<span class="nc bnc" id="L238" title="All 2 branches missed.">			if (localTrx)</span>
+<span class="nc" id="L239">				trx.start();</span>
+<span class="nc" id="L240">			stmt = DB.prepareStatement(sql.toString(), trx.getTrxName());</span>
+<span class="nc" id="L241">			stmt.setFetchSize(100);</span>
+<span class="nc" id="L242">			rs = stmt.executeQuery();</span>
+<span class="nc" id="L243">			int no = 0;</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">			while (rs.next()) {</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">				if (AD_Column_ID &gt; 0) {</span>
+<span class="nc" id="L246">					int recordId = rs.getInt(1);</span>
+					// this line is to avoid users generating official UUIDs - comment it to do official migration script work
+<span class="nc bnc" id="L248" title="All 2 branches missed.">					if (recordId &gt; MTable.MAX_OFFICIAL_ID) {</span>
+<span class="nc" id="L249">						UUID uuid = Util.generateUUIDv7();</span>
+<span class="nc" id="L250">						no += DB.executeUpdateEx(updateSQL.toString(),new Object[]{uuid.toString(), recordId}, trx.getTrxName());</span>
+					}
+<span class="nc" id="L252">				} else {</span>
+<span class="nc" id="L253">					UUID uuid = Util.generateUUIDv7();</span>
+<span class="nc" id="L254">					List&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L255">					params.add(uuid.toString());</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">					for (String s : compositeKeys) {</span>
+<span class="nc" id="L257">						params.add(rs.getObject(s));</span>
+					}
+<span class="nc" id="L259">					no += DB.executeUpdateEx(updateSQL.toString(),params.toArray(),trx.getTrxName());</span>
+				}
+			}
+<span class="nc bnc" id="L262" title="All 2 branches missed.">			if (no &gt; 0) {</span>
+<span class="nc" id="L263">				msg = no + &quot; UUID assigned for table &quot; + table.getTableName();</span>
+			}
+<span class="nc bnc" id="L265" title="All 2 branches missed.">			if (localTrx) {</span>
+<span class="nc" id="L266">				trx.commit(true);</span>
+			}
+<span class="nc" id="L268">		} catch (SQLException e) {</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">			if (localTrx) {</span>
+<span class="nc" id="L270">				trx.rollback();</span>
+			}
+<span class="nc" id="L272">			throw new DBException(e);</span>
+		} finally {
+<span class="nc" id="L274">			DB.close(rs, stmt);</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">			if (localTrx) {</span>
+<span class="nc" id="L276">				trx.close();</span>
+			}
+		}
+<span class="nc" id="L279">		return msg;</span>
+	}
+
+	/**
+	 * sync column with DB
+	 * @param column
+	 */
+	private void syncColumn(MColumn column) {
+		//	Find Column in Database
+<span class="nc" id="L288">		Connection conn = null;</span>
+		try {
+<span class="nc" id="L290">			conn = DB.getConnection();</span>
+<span class="nc" id="L291">			DatabaseMetaData md = conn.getMetaData();</span>
+<span class="nc" id="L292">			String catalog = DB.getDatabase().getCatalog();</span>
+<span class="nc" id="L293">			String schema = DB.getDatabase().getSchema();</span>
+<span class="nc" id="L294">			MTable table = (MTable) column.getAD_Table();</span>
+<span class="nc" id="L295">			String tableName = table.getTableName();</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">			if (md.storesUpperCaseIdentifiers())</span>
+			{
+<span class="nc" id="L298">				tableName = tableName.toUpperCase();</span>
+<span class="nc" id="L299">			}</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">			else if (md.storesLowerCaseIdentifiers())</span>
+			{
+<span class="nc" id="L302">				tableName = tableName.toLowerCase();</span>
+			}
+<span class="nc" id="L304">			int noColumns = 0;</span>
+<span class="nc" id="L305">			StringBuilder sql = null;</span>
+			//
+<span class="nc" id="L307">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L310">				rs = md.getColumns(catalog, schema, tableName, null);</span>
+<span class="nc bnc" id="L311" title="All 2 branches missed.">				while (rs.next())</span>
+				{
+<span class="nc" id="L313">					noColumns++;</span>
+<span class="nc" id="L314">					StringBuilder columnName = new StringBuilder().append(rs.getString (&quot;COLUMN_NAME&quot;));</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">					if (!columnName.toString().equalsIgnoreCase(column.getColumnName()))</span>
+<span class="nc" id="L316">						continue;</span>
+
+					//	update existing column
+<span class="nc bnc" id="L319" title="All 2 branches missed.">					boolean notNull = DatabaseMetaData.columnNoNulls == rs.getInt(&quot;NULLABLE&quot;);</span>
+<span class="nc" id="L320">					sql = new StringBuilder().append(column.getSQLModify(table, column.isMandatory() != notNull));</span>
+<span class="nc" id="L321">					break;</span>
+				}
+<span class="nc" id="L323">			}</span>
+			finally
+			{
+<span class="nc" id="L326">				DB.close(rs);</span>
+			}
+
+			//	No Table
+<span class="nc bnc" id="L330" title="All 2 branches missed.">			if (noColumns == 0)</span>
+<span class="nc" id="L331">				sql = new StringBuilder(table.getSQLCreate ());</span>
+			//	No existing column
+<span class="nc bnc" id="L333" title="All 2 branches missed.">			else if (sql == null)</span>
+<span class="nc" id="L334">				sql = new StringBuilder(column.getSQLAdd(table));</span>
+
+<span class="nc" id="L336">			int no = 0;			</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">			if (sql.indexOf(DB.SQLSTATEMENT_SEPARATOR) == -1)</span>
+			{
+<span class="nc" id="L339">				no = DB.executeUpdate(sql.toString(), false, null);</span>
+<span class="nc" id="L340">				addLog (0, null, new BigDecimal(no), sql.toString());</span>
+<span class="nc" id="L341">			}</span>
+			else
+			{
+<span class="nc" id="L344">				String statements[] = sql.toString().split(DB.SQLSTATEMENT_SEPARATOR);</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">				for (int i = 0; i &lt; statements.length; i++)</span>
+				{
+<span class="nc" id="L347">					int count = DB.executeUpdate(statements[i], false, null);</span>
+<span class="nc" id="L348">					addLog (0, null, new BigDecimal(count), statements[i]);</span>
+<span class="nc" id="L349">					no += count;</span>
+				}
+			}
+
+<span class="nc bnc" id="L353" title="All 2 branches missed.">			if (no == -1)</span>
+			{
+<span class="nc" id="L355">				StringBuilder msg = new StringBuilder(&quot;@Error@ &quot;);</span>
+<span class="nc" id="L356">				ValueNamePair pp = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">				if (pp != null)</span>
+<span class="nc" id="L358">					msg = new StringBuilder(pp.getName()).append(&quot; - &quot;);</span>
+<span class="nc" id="L359">				msg.append(sql);</span>
+<span class="nc" id="L360">				throw new AdempiereUserError (msg.toString());</span>
+			}
+<span class="nc" id="L362">		} catch (SQLException e) {</span>
+<span class="nc" id="L363">			throw new DBException(e);</span>
+		} finally {
+<span class="nc bnc" id="L365" title="All 2 branches missed.">			if (conn != null) {</span>
+				try {
+<span class="nc" id="L367">					conn.close();</span>
+<span class="nc" id="L368">				} catch (Exception e) {}</span>
+			}
+		}
+<span class="nc" id="L371">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

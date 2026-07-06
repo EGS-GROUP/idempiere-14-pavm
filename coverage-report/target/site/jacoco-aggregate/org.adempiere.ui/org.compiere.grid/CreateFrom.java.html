@@ -1,0 +1,365 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CreateFrom.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.grid</a> &gt; <span class="el_source">CreateFrom.java</span></div><h1>CreateFrom.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2009 Low Heng Sin                                            *
+ * Copyright (C) 2009 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.grid;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Vector;
+import java.util.logging.Level;
+
+import org.compiere.apps.IStatusBar;
+import org.compiere.minigrid.IMiniTable;
+import org.compiere.model.GridField;
+import org.compiere.model.GridTab;
+import org.compiere.model.MOrder;
+import org.compiere.model.MRMA;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+
+/**
+ * Base class for Create From form (Create invoice lines from PO, Create shipment lines from PO, etc).&lt;br/&gt;
+ * This have been replaced by Info Window based implementation in Core.
+ * @author hengsin
+ *
+ */
+public abstract class CreateFrom implements ICreateFrom
+{
+	/**	Logger			*/
+<span class="nc" id="L45">	protected transient CLogger log = CLogger.getCLogger(getClass());</span>
+
+	/** Loaded Order            */
+<span class="nc" id="L48">	protected MOrder p_order = null;</span>
+
+	/**  Loaded RMA             */
+<span class="nc" id="L51">	protected MRMA m_rma = null;</span>
+
+	private GridTab gridTab;
+
+	private String title;
+
+<span class="nc" id="L57">	private boolean initOK = false;</span>
+	
+<span class="nc" id="L59">	protected boolean isSOTrx = false;</span>
+
+	/** optional db trx name **/
+	private String m_trxName;
+	
+	/**
+	 * 
+	 * @param gridTab
+	 */
+<span class="nc" id="L68">	public CreateFrom(GridTab gridTab) {</span>
+<span class="nc" id="L69">		this.gridTab = gridTab;</span>
+		
+<span class="nc" id="L71">		GridField field = gridTab.getField(&quot;IsSOTrx&quot;); </span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">		if (field != null) </span>
+<span class="nc" id="L73">			isSOTrx = (Boolean) field.getValue(); </span>
+		else 
+<span class="nc" id="L75">			isSOTrx = &quot;Y&quot;.equals(Env.getContext(Env.getCtx(), gridTab.getWindowNo(), &quot;IsSOTrx&quot;));</span>
+<span class="nc" id="L76">	}</span>
+
+	/**
+	 * dynamic initialization, usually for loading of data
+	 * @return true if initialization success
+	 * @throws Exception
+	 */
+	protected abstract boolean dynInit() throws Exception;
+
+	/**
+	 * update status bar with info from miniTable
+	 * @param miniTable
+	 * @param statusBar
+	 */
+	public abstract void info(IMiniTable miniTable, IStatusBar statusBar);
+
+	/**
+	 * save changes
+	 * @param miniTable
+	 * @param trxName
+	 * @return true if save successfully
+	 */
+	public abstract boolean save(IMiniTable miniTable, String trxName);
+
+	@Override
+	public boolean isInitOK()
+	{
+<span class="nc" id="L103">		return initOK;</span>
+	}
+
+	/**
+	 * 
+	 * @param initOK
+	 */
+	public void setInitOK(boolean initOK)
+	{
+<span class="nc" id="L112">		this.initOK = initOK;</span>
+<span class="nc" id="L113">	}</span>
+
+	/**
+	 *  Load BPartner related Orders.
+	 *  @param C_BPartner_ID BPartner
+	 *  @param forInvoice for invoice
+	 *  @param sameWarehouseOnly
+	 *  @return list of order records
+	 */
+	protected ArrayList&lt;KeyNamePair&gt; loadOrderData (int C_BPartner_ID, boolean forInvoice, boolean sameWarehouseOnly)
+	{
+<span class="nc" id="L124">		return loadOrderData(C_BPartner_ID, forInvoice, sameWarehouseOnly, false);</span>
+	}
+	
+	/**
+	 * load order records
+	 * @param C_BPartner_ID
+	 * @param forInvoice
+	 * @param sameWarehouseOnly
+	 * @param forCreditMemo
+	 * @return list of order records
+	 */
+	protected ArrayList&lt;KeyNamePair&gt; loadOrderData (int C_BPartner_ID, boolean forInvoice, boolean sameWarehouseOnly, boolean forCreditMemo)
+	{
+<span class="nc" id="L137">		ArrayList&lt;KeyNamePair&gt; list = new ArrayList&lt;KeyNamePair&gt;();</span>
+
+<span class="nc bnc" id="L139" title="All 2 branches missed.">		String isSOTrxParam = isSOTrx ? &quot;Y&quot;:&quot;N&quot;;</span>
+		//	Display
+<span class="nc" id="L141">		StringBuilder display = new StringBuilder(&quot;o.DocumentNo||' - ' ||&quot;)</span>
+<span class="nc" id="L142">			.append(DB.TO_CHAR(&quot;o.DateOrdered&quot;, DisplayType.Date, Env.getAD_Language(Env.getCtx())))</span>
+<span class="nc" id="L143">			.append(&quot;||' - '||&quot;)</span>
+<span class="nc" id="L144">			.append(DB.TO_CHAR(&quot;o.GrandTotal&quot;, DisplayType.Amount, Env.getAD_Language(Env.getCtx())));</span>
+		//
+<span class="nc" id="L146">		String column = &quot;ol.QtyDelivered&quot;;</span>
+<span class="nc" id="L147">		String colBP = &quot;o.C_BPartner_ID&quot;;</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		if (forInvoice)</span>
+		{
+<span class="nc" id="L150">			column = &quot;ol.QtyInvoiced&quot;;</span>
+<span class="nc" id="L151">			colBP = &quot;o.Bill_BPartner_ID&quot;;</span>
+		}
+<span class="nc" id="L153">		StringBuilder sql = new StringBuilder(&quot;SELECT o.C_Order_ID,&quot;)</span>
+<span class="nc" id="L154">			.append(display)</span>
+<span class="nc" id="L155">			.append(&quot; FROM C_Order o WHERE &quot;)</span>
+<span class="nc" id="L156">			.append(colBP)</span>
+<span class="nc" id="L157">			.append(&quot;=? AND o.IsSOTrx=? AND o.DocStatus IN ('CL','CO') AND o.C_Order_ID IN (SELECT ol.C_Order_ID FROM C_OrderLine ol WHERE &quot;);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		if (forCreditMemo)</span>
+<span class="nc" id="L159">			sql.append(column).append(&quot;&gt;0 AND (CASE WHEN ol.QtyDelivered&gt;=ol.QtyOrdered THEN ol.QtyDelivered-ol.QtyInvoiced!=0 ELSE 1=1 END)) &quot;);</span>
+		else
+<span class="nc" id="L161">			sql.append(&quot;ol.QtyOrdered-&quot;).append(column).append(&quot;!=0) &quot;);</span>
+					
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if(sameWarehouseOnly)</span>
+		{
+<span class="nc" id="L165">			sql = sql.append(&quot; AND o.M_Warehouse_ID=? &quot;);</span>
+		}
+<span class="nc bnc" id="L167" title="All 2 branches missed.">		if (forCreditMemo)</span>
+<span class="nc" id="L168">			sql = sql.append(&quot; ORDER BY o.DateOrdered DESC,o.DocumentNo DESC&quot;);</span>
+		else
+<span class="nc" id="L170">			sql = sql.append(&quot; ORDER BY o.DateOrdered,o.DocumentNo&quot;);</span>
+		//
+<span class="nc" id="L172">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L173">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L176">			pstmt = DB.prepareStatement(sql.toString(), m_trxName);</span>
+<span class="nc" id="L177">			pstmt.setInt(1, C_BPartner_ID);</span>
+<span class="nc" id="L178">			pstmt.setString(2, isSOTrxParam);</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">			if(sameWarehouseOnly)</span>
+			{
+				//only active for material receipts
+<span class="nc" id="L182">				pstmt.setInt(3, getM_Warehouse_ID());</span>
+			}
+<span class="nc" id="L184">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L187">				list.add(new KeyNamePair(rs.getInt(1), rs.getString(2)));</span>
+			}
+<span class="nc" id="L189">		}</span>
+<span class="nc" id="L190">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L192">			log.log(Level.SEVERE, sql.toString(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L196">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L197">			rs = null; pstmt = null;</span>
+		}
+
+<span class="nc" id="L200">		return list;</span>
+	}   //  initBPartnerOIS
+
+	/**
+	 *  Load Order Line records
+	 *  @param C_Order_ID Order
+	 *  @param forInvoice true if for invoice vs. delivery qty
+	 *  @return list of order line records
+	 */
+	protected Vector&lt;Vector&lt;Object&gt;&gt; getOrderData (int C_Order_ID, boolean forInvoice)
+	{
+<span class="nc" id="L211">		return getOrderData (C_Order_ID, forInvoice, false);</span>
+	}
+	
+	/**
+	 * Get order line records
+	 * @param C_Order_ID
+	 * @param forInvoice
+	 * @param forCreditMemo
+	 * @return list of order line records
+	 */
+	protected Vector&lt;Vector&lt;Object&gt;&gt; getOrderData (int C_Order_ID, boolean forInvoice, boolean forCreditMemo)
+	{
+		/**
+		 *  Selected        - 0
+		 *  Qty             - 1
+		 *  C_UOM_ID        - 2
+		 *  M_Product_ID    - 3
+		 *  VendorProductNo - 4
+		 *  OrderLine       - 5
+		 *  ShipmentLine    - 6
+		 *  InvoiceLine     - 7
+		 */
+<span class="nc bnc" id="L233" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;C_Order_ID=&quot; + C_Order_ID);</span>
+<span class="nc" id="L234">		p_order = new MOrder (Env.getCtx(), C_Order_ID, getTrxName());</span>
+
+<span class="nc" id="L236">		Vector&lt;Vector&lt;Object&gt;&gt; data = new Vector&lt;Vector&lt;Object&gt;&gt;();</span>
+<span class="nc" id="L237">		StringBuilder sql = new StringBuilder(&quot;SELECT &quot;);</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">		sql.append(forCreditMemo ? &quot;SUM(COALESCE(m.Qty,0)),&quot; : &quot;l.QtyOrdered-SUM(COALESCE(m.Qty,0)),&quot;);	//	1</span>
+<span class="nc" id="L239">		sql.append(&quot;CASE WHEN l.QtyOrdered=0 THEN 0 ELSE l.QtyEntered/l.QtyOrdered END,&quot;	//	2</span>
+			+ &quot; l.C_UOM_ID,COALESCE(uom.UOMSymbol,uom.Name),&quot;			//	3..4
+			+ &quot; COALESCE(l.M_Product_ID,0),COALESCE(p.Name,c.Name),po.VendorProductNo,&quot;	//	5..7
+			+ &quot; l.C_OrderLine_ID,l.Line &quot;								//	8..9
+			+ &quot;FROM C_OrderLine l&quot;
+			+ &quot; LEFT OUTER JOIN M_Product_PO po ON (l.M_Product_ID = po.M_Product_ID AND l.C_BPartner_ID = po.C_BPartner_ID) &quot;
+			+ &quot; LEFT OUTER JOIN M_MatchPO m ON (l.C_OrderLine_ID=m.C_OrderLine_ID AND &quot;);
+<span class="nc bnc" id="L246" title="All 2 branches missed.">		sql.append(forInvoice ? &quot;m.C_InvoiceLine_ID&quot; : &quot;m.M_InOutLine_ID&quot;);</span>
+<span class="nc" id="L247">		sql.append(&quot; IS NOT NULL AND COALESCE(m.Reversal_ID,0)=0)&quot;)</span>
+<span class="nc" id="L248">			.append(&quot; LEFT OUTER JOIN M_Product p ON (l.M_Product_ID=p.M_Product_ID)&quot;</span>
+			+ &quot; LEFT OUTER JOIN C_Charge c ON (l.C_Charge_ID=c.C_Charge_ID)&quot;);
+<span class="nc bnc" id="L250" title="All 2 branches missed.">		if (Env.isBaseLanguage(Env.getCtx(), &quot;C_UOM&quot;))</span>
+<span class="nc" id="L251">			sql.append(&quot; LEFT OUTER JOIN C_UOM uom ON (l.C_UOM_ID=uom.C_UOM_ID)&quot;);</span>
+		else
+<span class="nc" id="L253">			sql.append(&quot; LEFT OUTER JOIN C_UOM_Trl uom ON (l.C_UOM_ID=uom.C_UOM_ID AND uom.AD_Language='&quot;)</span>
+<span class="nc" id="L254">				.append(Env.getAD_Language(Env.getCtx())).append(&quot;')&quot;);</span>
+		//
+<span class="nc" id="L256">		sql.append(&quot; WHERE l.C_Order_ID=? &quot;			//	#1</span>
+			+ &quot;GROUP BY l.QtyOrdered,CASE WHEN l.QtyOrdered=0 THEN 0 ELSE l.QtyEntered/l.QtyOrdered END, &quot;
+			+ &quot;l.C_UOM_ID,COALESCE(uom.UOMSymbol,uom.Name),po.VendorProductNo, &quot;
+				+ &quot;l.M_Product_ID,COALESCE(p.Name,c.Name), l.Line,l.C_OrderLine_ID &quot;
+			+ &quot;ORDER BY l.Line&quot;);
+		//
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		if (log.isLoggable(Level.FINER)) log.finer(sql.toString());</span>
+<span class="nc" id="L263">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L264">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L267">			pstmt = DB.prepareStatement(sql.toString(), getTrxName());</span>
+<span class="nc" id="L268">			pstmt.setInt(1, C_Order_ID);</span>
+<span class="nc" id="L269">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L272">				Vector&lt;Object&gt; line = new Vector&lt;Object&gt;();</span>
+<span class="nc" id="L273">				line.add(Boolean.FALSE);           //  0-Selection</span>
+<span class="nc" id="L274">				BigDecimal qtyOrdered = rs.getBigDecimal(1);</span>
+<span class="nc" id="L275">				BigDecimal multiplier = rs.getBigDecimal(2);</span>
+<span class="nc" id="L276">				BigDecimal qtyEntered = qtyOrdered.multiply(multiplier);</span>
+<span class="nc" id="L277">				line.add(qtyEntered);                   //  1-Qty</span>
+<span class="nc" id="L278">				KeyNamePair pp = new KeyNamePair(rs.getInt(3), rs.getString(4).trim());</span>
+<span class="nc" id="L279">				line.add(pp);                           //  2-UOM</span>
+<span class="nc" id="L280">				pp = new KeyNamePair(rs.getInt(5), rs.getString(6));</span>
+<span class="nc" id="L281">				line.add(pp);                           //  3-Product</span>
+<span class="nc" id="L282">				line.add(rs.getString(7));				//  4-VendorProductNo</span>
+<span class="nc" id="L283">				pp = new KeyNamePair(rs.getInt(8), rs.getString(9));</span>
+<span class="nc" id="L284">				line.add(pp);                           //  5-OrderLine</span>
+<span class="nc" id="L285">				line.add(null);                         //  6-Ship</span>
+<span class="nc" id="L286">				line.add(null);                         //  7-Invoice</span>
+<span class="nc" id="L287">				data.add(line);</span>
+			}
+<span class="nc" id="L289">		}</span>
+<span class="nc" id="L290">		catch (Exception e)</span>
+		{
+<span class="nc" id="L292">			log.log(Level.SEVERE, sql.toString(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L296">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L297">			rs = null; pstmt = null;</span>
+		}
+
+<span class="nc" id="L300">		return data;</span>
+	}   //  LoadOrder
+
+	@Override
+	public void showWindow()
+	{
+
+<span class="nc" id="L307">	}</span>
+
+	@Override
+	public void closeWindow()
+	{
+
+<span class="nc" id="L313">	}</span>
+
+	/**
+	 * 
+	 * @return {@link GridTab}
+	 */
+	public GridTab getGridTab()
+	{
+<span class="nc" id="L321">		return gridTab;</span>
+	}
+
+	/**
+	 * Get Warehouse from window's context
+	 * @return warehouse id
+	 */
+	public int getM_Warehouse_ID()
+	{
+<span class="nc" id="L330">		return Env.getContextAsInt(Env.getCtx(), gridTab.getWindowNo(), &quot;M_Warehouse_ID&quot;);</span>
+	}
+
+	/**
+	 * 
+	 * @return title
+	 */
+	public String getTitle() {
+<span class="nc" id="L338">		return title;</span>
+	}
+
+	/**
+	 * 
+	 * @param title
+	 */
+	public void setTitle(String title) {
+<span class="nc" id="L346">		this.title = title;</span>
+<span class="nc" id="L347">	}</span>
+	
+	/**
+	 * 
+	 * @return trx name
+	 */
+	public String getTrxName() {
+<span class="nc" id="L354">		return m_trxName;</span>
+	}
+	
+	/**
+	 * set optional trx name
+	 * @param trxName
+	 */
+	public void setTrxName(String trxName) {
+<span class="nc" id="L362">		m_trxName = trxName;</span>
+<span class="nc" id="L363">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,847 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AbstractXLSXExporter.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.impexp</a> &gt; <span class="el_source">AbstractXLSXExporter.java</span></div><h1>AbstractXLSXExporter.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2018 Logilite Technologies LLP								  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.impexp;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.sql.Date;
+import java.sql.Timestamp;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.text.SimpleDateFormat;
+import java.util.HashMap;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.apache.commons.compress.archivers.zip.Zip64Mode;
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.DataFormat;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.Footer;
+import org.apache.poi.ss.usermodel.Header;
+import org.apache.poi.ss.usermodel.PrintSetup;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.streaming.SXSSFSheet;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
+import org.apache.poi.xssf.usermodel.XSSFRichTextString;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.compiere.model.MSysConfig;
+import org.compiere.util.CLogger;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Ini;
+import org.compiere.util.Language;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+/**
+ * Abstract MS Excel Format (xlsx) Exporter
+ * 
+ * @author Deepak Pansheriya
+ */
+public abstract class AbstractXLSXExporter
+{
+	/**
+	 * Is the current Row a Function Row
+	 * 
+	 * @return true if function row
+	 */
+	public abstract boolean isFunctionRow();
+
+	/**
+	 * Get Columns Count
+	 * 
+	 * @return number of columns
+	 */
+	public abstract int getColumnCount();
+
+	/**
+	 * Get Rows Count
+	 * 
+	 * @return number of rows
+	 */
+	public abstract int getRowCount();
+
+	/**
+	 * Set current row
+	 * 
+	 * @param row row index
+	 */
+	protected abstract void setCurrentRow(int row);
+
+	/**
+	 * @return current row index
+	 */
+	protected abstract int getCurrentRow();
+
+	/**
+	 * Check if column is printed (displayed)
+	 * 
+	 * @param col column index
+	 * @return true if is visible
+	 */
+	public abstract boolean isColumnPrinted(int col);
+
+	/**
+	 * Get column header name
+	 * 
+	 * @param col column index
+	 * @return header name
+	 */
+	public abstract String getHeaderName(int col);
+
+	/**
+	 * Get cell display type (see {@link DisplayType})
+	 * 
+	 * @param row row index
+	 * @param col column index
+	 * @return display type
+	 */
+	public abstract int getDisplayType(int row, int col);
+
+	/**
+	 * Get cell value
+	 * 
+	 * @param row row index
+	 * @param col column index
+	 * @return cell value
+	 */
+	public abstract Object getValueAt(int row, int col);
+
+	/**
+	 * Check if there is a page break on given cell
+	 * 
+	 * @param row row index
+	 * @param col column index
+	 * @return true if there is a page break
+	 */
+	public abstract boolean isPageBreak(int row, int col);
+	
+	/**
+	 * Check if there is a display logic
+	 * 
+	 * @param row row index
+	 * @param col column index
+	 * @return true if there is no logic or evaluate logic specified in print item
+	 */
+	public abstract boolean isDisplayed(int row, int col);
+	
+	/** Logger */
+<span class="nc" id="L146">	protected final CLogger					log				= CLogger.getCLogger(getClass());</span>
+	//
+	protected Workbook					m_workbook;
+	private boolean						m_isUseSXSSF;
+	private DataFormat					m_dataFormat;
+<span class="nc" id="L151">	private Font						m_fontHeader	= null;</span>
+<span class="nc" id="L152">	private Font						m_fontDefault	= null;</span>
+<span class="nc" id="L153">	protected Language						m_lang			= null;</span>
+<span class="nc" id="L154">	private int								m_sheetCount	= 0;</span>
+	//
+<span class="nc" id="L156">	private int								m_colSplit		= 1;</span>
+<span class="nc" id="L157">	private int								m_rowSplit		= 1;</span>
+<span class="nc" id="L158">	private boolean							currentRowOnly	= false;</span>
+	/** Styles cache */
+<span class="nc" id="L160">	private HashMap&lt;String, CellStyle&gt;	m_styles		= new HashMap&lt;String, CellStyle&gt;();</span>
+
+	protected Boolean[]						colSuppressRepeats;
+<span class="nc" id="L163">	private int noOfParameter = 0;</span>
+
+	/**
+	 * Default constructor
+	 */
+<span class="nc" id="L168">	public AbstractXLSXExporter()</span>
+	{
+<span class="nc" id="L170">		m_isUseSXSSF = MSysConfig.getBooleanValue(MSysConfig.XLSX_EXPORT_USE_FAST_METHOD, true, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if (m_isUseSXSSF) {</span>
+<span class="nc" id="L172">			m_workbook = new SXSSFWorkbook(null, SXSSFWorkbook.DEFAULT_WINDOW_SIZE, true, true);</span>
+<span class="nc" id="L173">			((SXSSFWorkbook)m_workbook).getXSSFWorkbook().getProperties().getCoreProperties().setCreator(&quot;iDempiere&quot;);</span>
+<span class="nc" id="L174">			((SXSSFWorkbook)m_workbook).setZip64Mode(Zip64Mode.Never);</span>
+<span class="nc" id="L175">		} else {</span>
+<span class="nc" id="L176">			m_workbook = new XSSFWorkbook();</span>
+		}
+<span class="nc" id="L178">		m_dataFormat = m_workbook.createDataFormat();</span>
+<span class="nc" id="L179">	}</span>
+
+	protected Properties getCtx()
+	{
+<span class="nc" id="L183">		return Env.getCtx();</span>
+	}
+
+	/**
+	 * @param colSplit column index to freeze
+	 * @param rowSplit row index to freeze
+	 */
+	protected void setFreezePane(int colSplit, int rowSplit)
+	{
+<span class="nc" id="L192">		m_colSplit = colSplit;</span>
+<span class="nc" id="L193">		m_rowSplit = rowSplit;</span>
+<span class="nc" id="L194">	}</span>
+
+	/**
+	 * @return Language
+	 */
+	protected Language getLanguage()
+	{
+<span class="nc bnc" id="L201" title="All 2 branches missed.">		if (m_lang == null)</span>
+<span class="nc" id="L202">			m_lang = Env.getLanguage(getCtx());</span>
+<span class="nc" id="L203">		return m_lang;</span>
+	}
+
+	/**
+	 * @param isHeader
+	 * @return XSSFFont
+	 */
+	private Font getFont(boolean isHeader)
+	{
+<span class="nc" id="L212">		Font font = null;</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">		if (isHeader)</span>
+		{
+<span class="nc bnc" id="L215" title="All 2 branches missed.">			if (m_fontHeader == null)</span>
+			{
+<span class="nc" id="L217">				m_fontHeader = m_workbook.createFont();</span>
+<span class="nc" id="L218">				m_fontHeader.setBold(true);</span>
+			}
+<span class="nc" id="L220">			font = m_fontHeader;</span>
+<span class="nc" id="L221">		}</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">		else if (isFunctionRow())</span>
+		{
+<span class="nc" id="L224">			font = m_workbook.createFont();</span>
+<span class="nc" id="L225">			font.setBold(true);</span>
+<span class="nc" id="L226">			font.setItalic(true);</span>
+<span class="nc" id="L227">		}</span>
+		else
+		{
+<span class="nc bnc" id="L230" title="All 2 branches missed.">			if (m_fontDefault == null)</span>
+			{
+<span class="nc" id="L232">				m_fontDefault = m_workbook.createFont();</span>
+			}
+<span class="nc" id="L234">			font = m_fontDefault;</span>
+		}
+<span class="nc" id="L236">		return font;</span>
+	}
+
+	/**
+	 * Get Excel number format string by given {@link NumberFormat}
+	 * 
+	 * @param df number format
+	 * @param isHighlightNegativeNumbers highlight negative numbers using RED
+	 *            color
+	 * @return excel format pattern
+	 */
+	private String getFormatString(NumberFormat df, boolean isHighlightNegativeNumbers)
+	{
+<span class="nc" id="L249">		StringBuilder format = new StringBuilder();</span>
+<span class="nc" id="L250">		int integerDigitsMin = df.getMinimumIntegerDigits();</span>
+<span class="nc" id="L251">		int integerDigitsMax = df.getMaximumIntegerDigits();</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">		for (int i = 0; i &lt; integerDigitsMax; i++)</span>
+		{
+<span class="nc bnc" id="L254" title="All 2 branches missed.">			if (i &lt; integerDigitsMin)</span>
+<span class="nc" id="L255">				format.insert(0, &quot;0&quot;);</span>
+			else
+<span class="nc" id="L257">				format.insert(0, &quot;#&quot;);</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">			if (i == 2)</span>
+			{
+<span class="nc" id="L260">				format.insert(0, &quot;,&quot;);</span>
+			}
+		}
+<span class="nc" id="L263">		int fractionDigitsMin = df.getMinimumFractionDigits();</span>
+<span class="nc" id="L264">		int fractionDigitsMax = df.getMaximumFractionDigits();</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">		for (int i = 0; i &lt; fractionDigitsMax; i++)</span>
+		{
+<span class="nc bnc" id="L267" title="All 2 branches missed.">			if (i == 0)</span>
+<span class="nc" id="L268">				format.append(&quot;.&quot;);</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">			if (i &lt; fractionDigitsMin)</span>
+<span class="nc" id="L270">				format.append(&quot;0&quot;);</span>
+			else
+<span class="nc" id="L272">				format.append(&quot;#&quot;);</span>
+		}
+<span class="nc bnc" id="L274" title="All 2 branches missed.">		if (isHighlightNegativeNumbers)</span>
+		{
+<span class="nc" id="L276">			String f = format.toString();</span>
+<span class="nc" id="L277">			format = new StringBuilder(f).append(&quot;;[RED]-&quot;).append(f);</span>
+		}
+		//
+<span class="nc bnc" id="L280" title="All 2 branches missed.">		if (log.isLoggable(Level.FINEST))</span>
+<span class="nc" id="L281">			log.finest(&quot;NumberFormat: &quot; + format);</span>
+<span class="nc" id="L282">		return format.toString();</span>
+
+	}
+
+	/**
+	 * @param row
+	 * @param col
+	 * @return CellStyle
+	 */
+	private CellStyle getStyle(int row, int col)
+	{
+<span class="nc" id="L293">		int displayType = getDisplayType(row, col);</span>
+<span class="nc" id="L294">		String key = &quot;cell-&quot; + col + &quot;-&quot; + displayType;</span>
+<span class="nc" id="L295">		CellStyle cs = m_styles.get(key);</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		if (cs == null)</span>
+		{
+<span class="nc" id="L298">			cs = m_workbook.createCellStyle();</span>
+<span class="nc" id="L299">			Font font = getFont(false);</span>
+<span class="nc" id="L300">			cs.setFont(font);</span>
+			// Border
+<span class="nc" id="L302">			cs.setBorderLeft(BorderStyle.THIN);</span>
+<span class="nc" id="L303">			cs.setBorderTop(BorderStyle.THIN);</span>
+<span class="nc" id="L304">			cs.setBorderRight(BorderStyle.THIN);</span>
+<span class="nc" id="L305">			cs.setBorderBottom(BorderStyle.THIN);</span>
+			//
+<span class="nc" id="L307">			String cellFormat = getCellFormat(row, col);</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			if (cellFormat != null)</span>
+<span class="nc" id="L309">				cs.setDataFormat(m_dataFormat.getFormat(cellFormat));</span>
+<span class="nc" id="L310">			m_styles.put(key, cs);</span>
+		}
+<span class="nc" id="L312">		return cs;</span>
+	}
+
+	/**
+	 * @param row
+	 * @param col
+	 * @return Excel format pattern for cell
+	 */
+	protected String getCellFormat(int row, int col) {
+<span class="nc" id="L321">		boolean isHighlightNegativeNumbers = true;</span>
+<span class="nc" id="L322">		int displayType = getDisplayType(row, col);</span>
+<span class="nc" id="L323">		String cellFormat = null;</span>
+		
+<span class="nc bnc" id="L325" title="All 2 branches missed.">		if (DisplayType.isDate(displayType)) {</span>
+<span class="nc" id="L326">			cellFormat = DisplayType.getDateFormat(getLanguage()).toPattern();</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">		} else if (DisplayType.isNumeric(displayType)) {</span>
+<span class="nc" id="L328">			DecimalFormat df = DisplayType.getNumberFormat(displayType, getLanguage());</span>
+<span class="nc" id="L329">			cellFormat = getFormatString(df, isHighlightNegativeNumbers);</span>
+		}
+		
+<span class="nc" id="L332">		return cellFormat;</span>
+	}
+	
+	/**
+	 * @param col
+	 * @return XSSFCellStyle for column
+	 */
+	private CellStyle getHeaderStyle(int col)
+	{
+<span class="nc" id="L341">		String key = &quot;header-&quot; + col;</span>
+<span class="nc" id="L342">		CellStyle cs_header = m_styles.get(key);</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">		if (cs_header == null)</span>
+		{
+<span class="nc" id="L345">			Font font_header = getFont(true);</span>
+<span class="nc" id="L346">			cs_header = m_workbook.createCellStyle();</span>
+<span class="nc" id="L347">			cs_header.setFont(font_header);</span>
+<span class="nc" id="L348">			cs_header.setBorderLeft(BorderStyle.MEDIUM);</span>
+<span class="nc" id="L349">			cs_header.setBorderTop(BorderStyle.MEDIUM);</span>
+<span class="nc" id="L350">			cs_header.setBorderRight(BorderStyle.MEDIUM);</span>
+<span class="nc" id="L351">			cs_header.setBorderBottom(BorderStyle.MEDIUM);</span>
+<span class="nc" id="L352">			cs_header.setDataFormat(m_workbook.createDataFormat().getFormat(&quot;text&quot;));</span>
+<span class="nc" id="L353">			cs_header.setWrapText(true);</span>
+<span class="nc" id="L354">			m_styles.put(key, cs_header);</span>
+		}
+<span class="nc" id="L356">		return cs_header;</span>
+	}
+
+	/**
+	 * auto size column
+	 * @param sheet
+	 * @param lastColumnIndex
+	 */
+	private void fixColumnWidth(Sheet sheet, int colCount)
+	{
+<span class="nc bnc" id="L366" title="All 2 branches missed.">		if (m_isUseSXSSF) {</span>
+			// using streaming SXSSFWorkbook, the autoSizeColumn is not available
+			// so, we need to figure a default size depending on the display type
+			//  default here to:
+			//     10 characters for date fields
+			//     12 for numeric
+			//      5 for boolean
+			//     20 for all others
+<span class="nc" id="L374">			int colnum = 0;</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">			for (int col = 0; col &lt; getColumnCount(); col++) {				</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">				if (isColumnPrinted(col)) {</span>
+<span class="nc" id="L377">					int dt = getDisplayType(0, col);</span>
+<span class="nc" id="L378">					int width = 20*256;</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">					if (DisplayType.isDate(dt))</span>
+<span class="nc" id="L380">						width = 10*256;</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">					else if (DisplayType.isNumeric(dt))</span>
+<span class="nc" id="L382">						width = 12*256;</span>
+<span class="nc bnc" id="L383" title="All 2 branches missed.">					else if (dt == DisplayType.YesNo)</span>
+<span class="nc" id="L384">						width = 5*256;</span>
+<span class="nc" id="L385">					sheet.setColumnWidth(colnum, width);</span>
+<span class="nc" id="L386">					colnum++;</span>
+				}
+			}
+<span class="nc" id="L389">		} else {</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">			for (short colnum = 0; colnum &lt; colCount; colnum++)</span>
+			{
+<span class="nc" id="L392">				sheet.autoSizeColumn(colnum);</span>
+			}
+		}
+
+<span class="nc" id="L396">	}</span>
+
+	/**
+	 * Update sheet setting prior to closing it
+	 * @param prevSheet
+	 * @param prevSheetName
+	 * @param colCount
+	 */
+	private void closeTableSheet(Sheet prevSheet, String prevSheetName, int colCount)
+	{
+<span class="nc bnc" id="L406" title="All 2 branches missed.">		if (prevSheet == null)</span>
+<span class="nc" id="L407">			return;</span>
+		//
+<span class="nc" id="L409">		fixColumnWidth(prevSheet, colCount);</span>
+<span class="nc bnc" id="L410" title="All 6 branches missed.">		if ((m_colSplit &gt;= 0 || m_rowSplit &gt;= 0) &amp;&amp; !isForm())</span>
+<span class="nc bnc" id="L411" title="All 4 branches missed.">			prevSheet.createFreezePane(m_colSplit &gt;= 0 ? m_colSplit : 0, m_rowSplit &gt;= 0 ? m_rowSplit : 0);</span>
+<span class="nc bnc" id="L412" title="All 4 branches missed.">		if (!Util.isEmpty(prevSheetName, true) &amp;&amp; m_sheetCount &gt; 0)</span>
+		{
+<span class="nc" id="L414">			int prevSheetIndex = m_sheetCount - 1;</span>
+			try
+			{
+<span class="nc" id="L417">				m_workbook.setSheetName(prevSheetIndex, prevSheetName);</span>
+<span class="nc" id="L418">			}</span>
+<span class="nc" id="L419">			catch (Exception e)</span>
+			{
+<span class="nc" id="L421">				log.log(Level.WARNING, &quot;Error setting sheet &quot; + prevSheetIndex + &quot; name to &quot; + prevSheetName, e);</span>
+			}
+		}
+<span class="nc" id="L424">	}</span>
+
+	/**
+	 * Create new sheet
+	 * @return Sheet
+	 */
+	private Sheet createTableSheet()
+	{
+<span class="nc" id="L432">		Sheet sheet = m_workbook.createSheet();</span>
+<span class="nc" id="L433">		formatPage(sheet);</span>
+<span class="nc" id="L434">		createHeaderFooter(sheet);</span>
+<span class="nc" id="L435">		createParameter(sheet);</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">		if (!isForm())</span>
+		{
+<span class="nc" id="L438">			createTableHeader(sheet);</span>
+		}
+<span class="nc" id="L440">		m_sheetCount++;</span>
+		//
+<span class="nc" id="L442">		return sheet;</span>
+	}
+
+	/**
+	 * @param sheet
+	 */
+	private void createTableHeader(Sheet sheet)
+	{
+<span class="nc" id="L450">		createTableHeader(sheet, Math.max(noOfParameter, 0));</span>
+<span class="nc" id="L451">	}</span>
+	
+	/**
+	 * @param sheet
+	 * @param headerRowNum
+	 */
+	private void createTableHeader(Sheet sheet, int headerRowNum)
+	{
+<span class="nc" id="L459">		int colnumMax = 0;</span>
+
+<span class="nc" id="L461">		Row row = sheet.createRow(headerRowNum);</span>
+		// for all columns
+<span class="nc" id="L463">		int colnum = 0;</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">		for (int col = 0; col &lt; getColumnCount(); col++)</span>
+		{
+<span class="nc bnc" id="L466" title="All 2 branches missed.">			if (colnum &gt; colnumMax)</span>
+<span class="nc" id="L467">				colnumMax = colnum;</span>
+			//
+<span class="nc bnc" id="L469" title="All 2 branches missed.">			if (isColumnPrinted(col))</span>
+			{
+<span class="nc" id="L471">				Cell cell = row.createCell(colnum);</span>
+				// header row
+<span class="nc" id="L473">				CellStyle style = getHeaderStyle(col);</span>
+<span class="nc" id="L474">				cell.setCellStyle(style);</span>
+<span class="nc" id="L475">				String str = getHeaderName(col);</span>
+<span class="nc" id="L476">				cell.setCellValue(new XSSFRichTextString(str));</span>
+<span class="nc" id="L477">				colnum++;</span>
+			} // printed
+		} // for all columns
+<span class="nc" id="L480">	}</span>
+
+	protected void createHeaderFooter(Sheet sheet)
+	{
+		// Sheet Header
+<span class="nc" id="L485">		Header header = sheet.getHeader();</span>
+		//&amp;P == current page number
+	    //&amp;N == page numbers
+<span class="nc" id="L488">		header.setRight(&quot;&amp;P / &amp;N&quot;);</span>
+		// Sheet Footer
+<span class="nc" id="L490">		Footer footer = sheet.getFooter();</span>
+<span class="nc" id="L491">		footer.setLeft(Env.getStandardReportFooterTrademarkText());</span>
+<span class="nc" id="L492">		String s = MSysConfig.getValue(MSysConfig.ZK_FOOTER_SERVER_MSG, &quot;&quot;, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L493" title="All 2 branches missed.">		if (Util.isEmpty(s, true))</span>
+<span class="nc" id="L494">			footer.setCenter(Env.getHeader(getCtx(), 0));	</span>
+		else
+<span class="nc" id="L496">			footer.setCenter(Msg.parseTranslation(Env.getCtx(), s));</span>
+<span class="nc" id="L497">		Timestamp now = new Timestamp(System.currentTimeMillis());</span>
+<span class="nc" id="L498">		s = MSysConfig.getValue(MSysConfig.ZK_FOOTER_SERVER_DATETIME_FORMAT, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">		if (!Util.isEmpty(s, true))</span>
+<span class="nc" id="L500">			footer.setRight(new SimpleDateFormat(s).format(System.currentTimeMillis()));</span>
+		else
+<span class="nc" id="L502">			footer.setRight(DisplayType.getDateFormat(DisplayType.DateTime, getLanguage()).format(now));</span>
+<span class="nc" id="L503">	}</span>
+
+	/**
+	 * Format sheet
+	 * @param sheet
+	 */
+	protected void formatPage(Sheet sheet)
+	{
+<span class="nc" id="L511">		sheet.setFitToPage(true);</span>
+		// Print Setup
+		PrintSetup ps;
+<span class="nc bnc" id="L514" title="All 2 branches missed.">		if (m_isUseSXSSF)</span>
+<span class="nc" id="L515">			ps = ((SXSSFSheet)sheet).getPrintSetup();</span>
+		else
+<span class="nc" id="L517">			ps = ((XSSFSheet)sheet).getPrintSetup();</span>
+<span class="nc" id="L518">		ps.setFitWidth((short) 1);</span>
+<span class="nc" id="L519">		ps.setNoColor(true);</span>
+<span class="nc" id="L520">		ps.setPaperSize(PrintSetup.A4_PAPERSIZE);</span>
+<span class="nc" id="L521">		ps.setLandscape(false);</span>
+<span class="nc" id="L522">	}</span>
+
+	/**
+	 * @return true if export current record only
+	 */
+	protected boolean isCurrentRowOnly()
+	{
+<span class="nc" id="L529">		return currentRowOnly;</span>
+	}
+
+	/**
+	 * @param b
+	 */
+	protected void setCurrentRowOnly(boolean b)
+	{
+<span class="nc" id="L537">		currentRowOnly = b;</span>
+<span class="nc" id="L538">	}</span>
+
+	/**
+	 * Export to given stream
+	 * 
+	 * @param out
+	 * @throws Exception
+	 */
+	protected void export(OutputStream out) throws Exception
+	{
+<span class="nc" id="L548">		Sheet sheet = null;</span>
+<span class="nc bnc" id="L549" title="All 2 branches missed.">		if (out != null) </span>
+		{
+<span class="nc" id="L551">			sheet = createTableSheet();</span>
+<span class="nc" id="L552">		}</span>
+		else  
+		{
+<span class="nc" id="L555">			m_dataFormat = m_workbook.createDataFormat();</span>
+<span class="nc" id="L556">			sheet = m_workbook.getSheetAt(0);</span>
+<span class="nc" id="L557">			createTableHeader(sheet, sheet.getLastRowNum()+2);</span>
+		}
+<span class="nc" id="L559">		String sheetName = null;</span>
+		//
+<span class="nc" id="L561">		int colnumMax = 0;</span>
+<span class="nc bnc" id="L562" title="All 2 branches missed.">		int rownum = isCurrentRowOnly() ? getCurrentRow() : 0;</span>
+<span class="nc bnc" id="L563" title="All 2 branches missed.">		int lastRowNum = isCurrentRowOnly() ? getCurrentRow() + 1 : getRowCount();</span>
+<span class="nc" id="L564">		Object[] preValues = null;</span>
+<span class="nc" id="L565">		int printColIndex = -1;</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">		if (colSuppressRepeats != null)</span>
+		{
+<span class="nc" id="L568">			preValues = new Object[colSuppressRepeats.length];</span>
+		}
+
+<span class="nc" id="L571">		int initxls_rownum = 0;</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">		if (out != null)</span>
+<span class="nc" id="L573">			initxls_rownum = Math.max(noOfParameter+1, 1);</span>
+		else 
+<span class="nc" id="L575">			initxls_rownum = Math.max(noOfParameter+1, sheet.getLastRowNum()+1);</span>
+		
+<span class="nc bnc" id="L577" title="All 2 branches missed.">		for (int xls_rownum = initxls_rownum; rownum &lt; lastRowNum; rownum++, xls_rownum++)</span>
+		{
+<span class="nc bnc" id="L579" title="All 2 branches missed.">			if (!isCurrentRowOnly())</span>
+<span class="nc" id="L580">				setCurrentRow(rownum);</span>
+
+<span class="nc" id="L582">			boolean isPageBreak = false;</span>
+<span class="nc" id="L583">			Row row = sheet.createRow(xls_rownum);</span>
+<span class="nc" id="L584">			printColIndex = -1;</span>
+			// for all columns
+<span class="nc" id="L586">			int colnum = 0;</span>
+<span class="nc bnc" id="L587" title="All 2 branches missed.">			for (int col = 0; col &lt; getColumnCount(); col++)</span>
+			{				
+				//
+<span class="nc bnc" id="L590" title="All 2 branches missed.">				if (isColumnPrinted(col))</span>
+				{
+<span class="nc" id="L592">					printColIndex++;</span>
+<span class="nc" id="L593">					Cell cell = null;</span>
+					// line row
+<span class="nc" id="L595">					Object obj = getValueAt(rownum, col);</span>
+<span class="nc bnc" id="L596" title="All 2 branches missed.">					if (isForm())</span>
+					{
+<span class="nc bnc" id="L598" title="All 8 branches missed.">						if (isVisible(rownum, col) &amp;&amp; (!isSuppressNull(col) || (obj != null &amp;&amp; !Util.isEmpty(obj.toString(), true))))</span>
+						{
+<span class="nc" id="L600">							row = getFormRow(sheet, col);</span>
+<span class="nc" id="L601">							cell = getFormCell(row, col);</span>
+<span class="nc" id="L602">							String label = getHeaderName(col);</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">							if (!Util.isEmpty(label, true))</span>
+							{
+<span class="nc" id="L605">								cell.setCellValue(new XSSFRichTextString(label));</span>
+<span class="nc" id="L606">								int index = cell.getColumnIndex()+1;</span>
+<span class="nc" id="L607">								cell = row.getCell(index);</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">								if (cell == null)</span>
+<span class="nc" id="L609">									cell = row.createCell(index);</span>
+							}
+<span class="nc" id="L611">						}</span>
+<span class="nc bnc" id="L612" title="All 2 branches missed.">						else if (isSetFormRowPosition(col))</span>
+						{
+<span class="nc" id="L614">							row = getFormRow(sheet, col);</span>
+						}
+<span class="nc" id="L616">					}</span>
+					else
+					{
+<span class="nc" id="L619">						cell = row.createCell(colnum);</span>
+					}
+					
+<span class="nc" id="L622">					int displayType = getDisplayType(rownum, col);</span>
+<span class="nc bnc" id="L623" title="All 4 branches missed.">					if (obj == null || !isDisplayed(rownum, col))</span>
+					{
+<span class="nc bnc" id="L625" title="All 4 branches missed.">						if (colSuppressRepeats != null &amp;&amp; colSuppressRepeats[printColIndex])</span>
+						{
+<span class="nc" id="L627">							preValues[printColIndex] = null;</span>
+						}
+<span class="nc" id="L629">					}</span>
+<span class="nc bnc" id="L630" title="All 4 branches missed.">					else if (colSuppressRepeats != null &amp;&amp; colSuppressRepeats[printColIndex]</span>
+<span class="nc bnc" id="L631" title="All 2 branches missed.">							&amp;&amp; obj.equals(preValues[printColIndex]))</span>
+					{
+						// suppress
+					}
+<span class="nc bnc" id="L635" title="All 2 branches missed.">					else if (!isVisible(rownum, col)) </span>
+					{
+						;
+<span class="nc" id="L638">					}</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">					else if (DisplayType.isDate(displayType))</span>
+					{
+<span class="nc" id="L641">						Timestamp value = null;</span>
+<span class="nc bnc" id="L642" title="All 2 branches missed.">						if (obj instanceof Date)</span>
+<span class="nc" id="L643">							value = new Timestamp(((Date)obj).getTime());</span>
+						else
+<span class="nc" id="L645">							value = (Timestamp)obj;</span>
+<span class="nc" id="L646">						cell.setCellValue(value);</span>
+<span class="nc" id="L647">					}</span>
+<span class="nc bnc" id="L648" title="All 2 branches missed.">					else if (DisplayType.isNumeric(displayType))</span>
+					{
+<span class="nc" id="L650">						double value = 0;</span>
+<span class="nc bnc" id="L651" title="All 2 branches missed.">						if (obj instanceof Number)</span>
+						{
+<span class="nc" id="L653">							value = ((Number) obj).doubleValue();</span>
+						}
+<span class="nc" id="L655">						cell.setCellValue(value);</span>
+<span class="nc" id="L656">					}</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">					else if (DisplayType.YesNo == displayType)</span>
+					{
+<span class="nc" id="L659">						boolean value = false;</span>
+<span class="nc bnc" id="L660" title="All 2 branches missed.">						if (obj instanceof Boolean)</span>
+<span class="nc" id="L661">							value = (Boolean) obj;</span>
+						else
+<span class="nc" id="L663">							value = &quot;Y&quot;.equals(obj);</span>
+<span class="nc bnc" id="L664" title="All 2 branches missed.">						cell.setCellValue(new XSSFRichTextString(Msg.getMsg(getLanguage(), value == true ? &quot;Y&quot; : &quot;N&quot;)));</span>
+<span class="nc" id="L665">					}</span>
+					else
+					{
+<span class="nc" id="L668">						String value = obj.toString(); // formatted</span>
+<span class="nc" id="L669">						cell.setCellValue(new XSSFRichTextString(value));</span>
+					}
+					//
+<span class="nc bnc" id="L672" title="All 2 branches missed.">					if (cell != null) </span>
+					{
+<span class="nc" id="L674">						CellStyle style = getStyle(rownum, col);</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">						if (isForm())</span>
+<span class="nc" id="L676">							style.setWrapText(true);</span>
+<span class="nc" id="L677">						cell.setCellStyle(style);</span>
+					}
+					// Page break
+<span class="nc bnc" id="L680" title="All 2 branches missed.">					if (isPageBreak(rownum, col))</span>
+					{
+<span class="nc" id="L682">						isPageBreak = true;</span>
+<span class="nc" id="L683">						sheetName = cell.getRichStringCellValue().getString();</span>
+					}
+					//
+<span class="nc" id="L686">					colnum++;</span>
+<span class="nc bnc" id="L687" title="All 2 branches missed.">					if (colnum &gt; colnumMax)</span>
+<span class="nc" id="L688">						colnumMax = colnum;</span>
+<span class="nc bnc" id="L689" title="All 2 branches missed.">					if (colSuppressRepeats != null)</span>
+<span class="nc" id="L690">						preValues[printColIndex] = obj;</span>
+				} // printed
+			} // for all columns
+				//
+				// Page Break
+<span class="nc bnc" id="L695" title="All 2 branches missed.">			if (isPageBreak)</span>
+			{
+<span class="nc" id="L697">				closeTableSheet(sheet, sheetName, colnumMax);</span>
+<span class="nc" id="L698">				sheet = createTableSheet();</span>
+<span class="nc" id="L699">				xls_rownum = 0;</span>
+<span class="nc" id="L700">				isPageBreak = false;</span>
+			}
+		} // for all rows
+<span class="nc bnc" id="L703" title="All 2 branches missed.">		if (out == null)</span>
+<span class="nc" id="L704">			fixColumnWidth(sheet, colnumMax);</span>
+		else
+<span class="nc" id="L706">			closeTableSheet(sheet, sheetName, colnumMax);</span>
+		//
+
+<span class="nc bnc" id="L709" title="All 2 branches missed.">		if (out != null)</span>
+		{
+<span class="nc" id="L711">			m_workbook.write(out);</span>
+<span class="nc" id="L712">			out.close();</span>
+		}
+
+		//
+		// Workbook Info
+<span class="nc bnc" id="L717" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE))</span>
+		{
+<span class="nc" id="L719">			log.fine(&quot;Sheets #&quot; + m_sheetCount);</span>
+<span class="nc" id="L720">			log.fine(&quot;Styles used #&quot; + m_styles.size());</span>
+		}
+<span class="nc" id="L722">	}</span>
+
+	/**
+	 * Export to file
+	 * 
+	 * @param file
+	 * @param language reporting language
+	 * @throws Exception
+	 */
+	public void export(File file, Language language) throws Exception
+	{
+<span class="nc" id="L733">		export(file, language, true);</span>
+<span class="nc" id="L734">	}</span>
+
+	/**
+	 * Export to file
+	 * 
+	 * @param file
+	 * @param language reporting language
+	 * @param autoOpen auto open file after generated
+	 * @throws Exception
+	 */
+	public void export(File file, Language language, boolean autoOpen) throws Exception
+	{
+<span class="nc" id="L746">		m_lang = language;</span>
+<span class="nc bnc" id="L747" title="All 2 branches missed.">		if (file == null)</span>
+<span class="nc" id="L748">			file = File.createTempFile(&quot;Report_&quot;, &quot;.xlsx&quot;);</span>
+<span class="nc" id="L749">		FileOutputStream out = new FileOutputStream(file);</span>
+<span class="nc" id="L750">		export(out);</span>
+<span class="nc bnc" id="L751" title="All 4 branches missed.">		if (autoOpen &amp;&amp; Ini.isClient())</span>
+<span class="nc" id="L752">			Env.startBrowser(file.toURI().toString());</span>
+<span class="nc" id="L753">	}</span>
+
+	/**
+	 * Export to workbook
+	 * @param workbook
+	 * @param language
+	 * @throws Exception
+	 */
+	public void exportToWorkbook(Workbook workbook, Language language) throws Exception
+	{
+<span class="nc" id="L763">		m_lang = language;</span>
+<span class="nc" id="L764">		m_workbook = workbook;</span>
+<span class="nc" id="L765">		export(null);</span>
+<span class="nc" id="L766">	}</span>
+	
+	/**
+	 * @return true if it is form layout
+	 */
+	protected boolean isForm()
+	{
+<span class="nc" id="L773">		return false;</span>
+	}
+	
+	/**
+	 * @return number of parameter
+	 */
+	protected int getNoOfParameter()
+	{
+<span class="nc" id="L781">		return noOfParameter;</span>
+	}
+
+	/**
+	 * @param noOfParameter
+	 */
+	protected void setNoOfParameter(int noOfParameter)
+	{
+<span class="nc" id="L789">		this.noOfParameter = noOfParameter;</span>
+<span class="nc" id="L790">	}</span>
+		
+	/**
+	 * Create parameter
+	 * @param sheet
+	 */
+	protected void createParameter(Sheet sheet)
+	{
+		
+<span class="nc" id="L799">	}</span>
+	
+	/**
+	 * @param row
+	 * @param col
+	 * @return true if cell is visible
+	 */
+	protected boolean isVisible(int row, int col)
+	{
+<span class="nc" id="L808">		return true;</span>
+	}
+	
+	/**
+	 * @param col
+	 * @return true if column should be hidden when it is null
+	 */
+	protected boolean isSuppressNull(int col) {
+<span class="nc" id="L816">		return false;</span>
+	}
+	
+	/**
+	 * @param col
+	 * @return true if column is use to set new row position
+	 */
+	protected boolean isSetFormRowPosition(int col) {
+<span class="nc" id="L824">		return false;</span>
+	}
+	
+	/**
+	 * get cell for column. use for form layout
+	 * @param row
+	 * @param colnum
+	 * @return cell for column
+	 */
+	protected Cell getFormCell(Row row, int colnum) {
+<span class="nc" id="L834">		return null;</span>
+	}
+
+	/**
+	 * get row for column. use for form layout
+	 * @param sheet
+	 * @param colnum
+	 * @return row for column
+	 */
+	protected Row getFormRow(Sheet sheet, int colnum) {
+<span class="nc" id="L844">		return null;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

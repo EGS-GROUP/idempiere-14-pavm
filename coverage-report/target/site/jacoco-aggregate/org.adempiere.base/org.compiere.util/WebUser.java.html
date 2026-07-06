@@ -1,0 +1,1172 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>WebUser.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">WebUser.java</span></div><h1>WebUser.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
+
+import org.compiere.model.MBPBankAccount;
+import org.compiere.model.MBPartner;
+import org.compiere.model.MBPartnerLocation;
+import org.compiere.model.MLocation;
+import org.compiere.model.MRefList;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MTable;
+import org.compiere.model.MUser;
+
+/**
+ *  Web User Info.
+ *	Assumes that Email is a direct match.
+ *  UPDATE AD_User SET EMail=TRIM(EMail) WHERE Email&amp;lt;&amp;gt;TRIM(EMail)
+ *  @author Jorg Janke
+ *  @version $Id$
+ *  @deprecated
+ */
+@Deprecated (since=&quot;13&quot;, forRemoval=true)
+public class WebUser
+{
+	/**
+	 * 	Get from request
+	 *	@param request request
+	 *	@return web user if exists
+	 */
+	public static WebUser get (HttpServletRequest request)
+	{
+<span class="nc" id="L55">		HttpSession session = request.getSession(false);</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">		if (session == null)</span>
+<span class="nc" id="L57">			return null;</span>
+<span class="nc" id="L58">		return (WebUser)session.getAttribute(WebUser.NAME);</span>
+	}	//	get
+	
+	
+	/**
+	 * 	Get user unconditional from cache
+	 * 	@param ctx context
+	 *	@param email email
+	 * 	@return web user
+	 */
+	public static WebUser get (Properties ctx, String email)
+	{
+<span class="nc" id="L70">		return get (ctx, email, null, true);</span>
+	}	//	get
+
+	/**
+	 * 	Get user
+	 * 	@param ctx context
+	 *	@param email email
+	 * 	@param password optional password
+	 * 	@param useCache use cache
+	 * 	@return web user
+	 */
+	public static WebUser get (Properties ctx, String email, String password, boolean useCache)
+	{
+<span class="nc bnc" id="L83" title="All 2 branches missed.">		if (!useCache)</span>
+<span class="nc" id="L84">			s_cache = null;</span>
+<span class="nc bnc" id="L85" title="All 6 branches missed.">		if (s_cache != null &amp;&amp; email != null &amp;&amp; email.equals(s_cache.getEmail()))</span>
+		{
+			//	if password is null, don't check it
+<span class="nc bnc" id="L88" title="All 4 branches missed.">			if (password == null || password.equals(s_cache.getPassword()))</span>
+<span class="nc" id="L89">				return s_cache;</span>
+<span class="nc" id="L90">			s_cache.setPasswordOK(false, null);</span>
+<span class="nc" id="L91">			return s_cache;</span>
+		}
+<span class="nc" id="L93">		s_cache = new WebUser (ctx, email, password);</span>
+<span class="nc" id="L94">		return s_cache;</span>
+	}	//	get
+
+	/**
+	 * 	Get user unconditional (from cache)
+	 * 	@param ctx context
+	 *	@param AD_User_ID BP Contact
+	 * 	@return web user
+	 */
+	public static WebUser get (Properties ctx, int AD_User_ID)
+	{
+<span class="nc bnc" id="L105" title="All 4 branches missed.">		if (s_cache != null &amp;&amp; s_cache.getAD_User_ID() == AD_User_ID)</span>
+<span class="nc" id="L106">			return s_cache;</span>
+<span class="nc" id="L107">		s_cache = new WebUser (ctx, AD_User_ID, null);</span>
+<span class="nc" id="L108">		return s_cache;</span>
+	}	//	get
+
+	/** Short term Cache for immediate re-query/post (hit rate 20%)	*/
+<span class="nc" id="L112">	private volatile static WebUser	s_cache = null;</span>
+
+	/*************************************************************************/
+
+	/**	Attribute Name - also in JSPs		*/
+<span class="nc" id="L117">	public static final String		NAME = &quot;webUser&quot;;</span>
+	/**	Logging						*/
+<span class="nc" id="L119">	private CLogger					log = CLogger.getCLogger(getClass());</span>
+
+	/**
+	 *	Load User with password
+	 *	@param ctx context
+	 *	@param email email
+	 *	@param password password
+	 */
+<span class="nc" id="L127">	private WebUser (Properties ctx, String email, String password)</span>
+	{
+<span class="nc" id="L129">		m_ctx = ctx;</span>
+<span class="nc" id="L130">		m_AD_Client_ID = Env.getAD_Client_ID(ctx);</span>
+<span class="nc" id="L131">		load (email, password);</span>
+<span class="nc" id="L132">	}	//	WebUser</span>
+
+	/**
+	 *	Load User with password
+	 *	@param ctx context
+	 *	@param AD_User_ID BP Contact
+	 * 	@param trxName transaction
+	 */
+<span class="nc" id="L140">	private WebUser (Properties ctx, int AD_User_ID, String trxName)</span>
+	{
+<span class="nc" id="L142">		m_ctx = ctx;</span>
+<span class="nc" id="L143">		m_AD_Client_ID = Env.getAD_Client_ID(ctx);</span>
+<span class="nc" id="L144">		load (AD_User_ID);</span>
+<span class="nc" id="L145">	}	//	WebUser</span>
+
+	private Properties			m_ctx;
+	//
+	private MBPartner		 	m_bp;
+	private MUser			 	m_bpc;
+	private MBPartnerLocation 	m_bpl;
+	private MLocation 			m_loc;
+	//
+<span class="nc" id="L154">	private boolean				m_passwordOK = false;</span>
+	private String				m_passwordMessage;
+	private String				m_saveErrorMessage;
+	//
+<span class="nc" id="L158">	private int 				m_AD_Client_ID = 0;</span>
+<span class="nc" id="L159">	private boolean				m_loggedIn = false;</span>
+
+
+	/**
+	 * 	Load Contact
+	 * 	@param email email
+	 *	@param password optional password
+	 */
+	private void load (String email, String password)
+	{
+<span class="nc bnc" id="L169" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(email + &quot; - AD_Client_ID=&quot; + m_AD_Client_ID);</span>
+<span class="nc" id="L170">		String sql = &quot;SELECT * &quot;</span>
+			+ &quot;FROM AD_User &quot;
+			+ &quot;WHERE AD_Client_ID=?&quot;
+			+ &quot; AND TRIM(EMail)=?&quot;;
+<span class="nc bnc" id="L174" title="All 2 branches missed.">		if (email == null)</span>
+<span class="nc" id="L175">			email = &quot;&quot;;</span>
+
+<span class="nc" id="L177">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L178">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L181">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L182">			pstmt.setInt(1, m_AD_Client_ID);</span>
+<span class="nc" id="L183">			pstmt.setString(2, email.trim());</span>
+<span class="nc" id="L184">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L187">				m_bpc = new MUser (m_ctx, rs, null);</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Found BPC=&quot; + m_bpc);</span>
+			}
+<span class="nc" id="L190">		}</span>
+<span class="nc" id="L191">		catch (Exception e)</span>
+		{
+<span class="nc" id="L193">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L197">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L198">			rs = null; pstmt = null;</span>
+		}
+
+		//	Check Password
+<span class="nc" id="L202">		m_passwordOK = false;</span>
+		/**	User has no password
+		if (m_bpc != null &amp;&amp; m_bpc.getPassword() == null)
+		{
+			if (password != null)
+				m_bpc.setPassword(password);
+			m_passwordOK = true;
+		}	**/
+		//	We have a password
+<span class="nc bnc" id="L211" title="All 6 branches missed.">		if (m_bpc != null &amp;&amp; password != null &amp;&amp; password.equals(m_bpc.getPassword()))</span>
+<span class="nc" id="L212">			m_passwordOK = true;</span>
+<span class="nc bnc" id="L213" title="All 4 branches missed.">		if (m_passwordOK || m_bpc == null)</span>
+<span class="nc" id="L214">			m_passwordMessage = null;</span>
+		else
+<span class="nc" id="L216">			setPasswordOK (false, password);</span>
+
+		//	Load BPartner
+<span class="nc bnc" id="L219" title="All 2 branches missed.">		if (m_bpc != null)</span>
+		{
+<span class="nc" id="L221">			m_bp = new MBPartner (m_ctx, m_bpc.getC_BPartner_ID (), null);</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Found BP=&quot; + m_bp);</span>
+<span class="nc" id="L223">		}</span>
+		else
+<span class="nc" id="L225">			m_bp = null;</span>
+		//	Load Loacation
+<span class="nc bnc" id="L227" title="All 2 branches missed.">		if (m_bpc != null)</span>
+		{
+<span class="nc bnc" id="L229" title="All 2 branches missed.">			if (m_bpc.getC_BPartner_Location_ID() != 0)</span>
+			{
+<span class="nc" id="L231">				m_bpl = new MBPartnerLocation (m_ctx, m_bpc.getC_BPartner_Location_ID (), null);</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Found BPL=&quot; + m_bpl);</span>
+<span class="nc" id="L233">			}</span>
+			else
+			{
+<span class="nc" id="L236">				MBPartnerLocation[] bpls = m_bp.getLocations(false);</span>
+<span class="nc bnc" id="L237" title="All 4 branches missed.">				if (bpls != null &amp;&amp; bpls.length &gt; 0)</span>
+				{
+<span class="nc" id="L239">					m_bpl = bpls[0];</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;Found BPL=&quot; + m_bpl);</span>
+				}
+			}
+<span class="nc bnc" id="L243" title="All 2 branches missed.">			if (m_bpl != null)</span>
+			{
+<span class="nc" id="L245">				m_loc = MLocation.getCopy (m_ctx, m_bpl.getC_Location_ID(), null);</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Found LOC=&quot; + m_loc);</span>
+<span class="nc" id="L247">			}</span>
+			else
+<span class="nc" id="L249">				m_loc = null;</span>
+<span class="nc" id="L250">		}</span>
+		else
+		{
+<span class="nc" id="L253">			m_bpl = null;</span>
+<span class="nc" id="L254">			m_loc = null;</span>
+		}
+
+		//	Make sure that all entities exist
+<span class="nc bnc" id="L258" title="All 2 branches missed.">		if (m_bpc == null)</span>
+		{
+<span class="nc" id="L260">			m_bpc = new MUser (m_ctx, 0, null);</span>
+<span class="nc" id="L261">			m_bpc.setEMail(email);</span>
+<span class="nc" id="L262">			m_bpc.setPassword(password);</span>
+		}
+<span class="nc bnc" id="L264" title="All 2 branches missed.">		if (m_bp == null)</span>
+		{
+<span class="nc" id="L266">			m_bp = new MBPartner (m_ctx); //	template</span>
+<span class="nc" id="L267">			m_bp.setIsCustomer(true);</span>
+		}
+<span class="nc bnc" id="L269" title="All 2 branches missed.">		if (m_bpl == null)</span>
+<span class="nc" id="L270">			m_bpl = new MBPartnerLocation (m_bp);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">		if (m_loc == null)</span>
+<span class="nc" id="L272">			m_loc = new MLocation (m_ctx, 0, null);</span>
+		//
+<span class="nc bnc" id="L274" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(m_bp + &quot; - &quot; + m_bpc);</span>
+<span class="nc" id="L275">	}	//	load</span>
+
+	/**
+	 * 	Load Contact
+	 * 	@param AD_User_ID BP Contact
+	 */
+	private void load (int AD_User_ID)
+	{
+<span class="nc bnc" id="L283" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;ID=&quot; + AD_User_ID + &quot;, AD_Client_ID=&quot; + m_AD_Client_ID);</span>
+<span class="nc" id="L284">		String sql = &quot;SELECT * &quot;</span>
+			+ &quot;FROM AD_User &quot;
+			+ &quot;WHERE AD_Client_ID=?&quot;
+			+ &quot; AND AD_User_ID=?&quot;;
+
+<span class="nc" id="L289">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L290">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L293">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L294">			pstmt.setInt(1, m_AD_Client_ID);</span>
+<span class="nc" id="L295">			pstmt.setInt(2, AD_User_ID);</span>
+<span class="nc" id="L296">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L299">				m_bpc = new MUser (m_ctx, rs, null);</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;= found BPC=&quot; + m_bpc);</span>
+			}
+<span class="nc" id="L302">		}</span>
+<span class="nc" id="L303">		catch (Exception e)</span>
+		{
+<span class="nc" id="L305">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L309">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L310">			rs = null; pstmt = null;</span>
+		}
+
+		//	Password not entered
+<span class="nc" id="L314">		m_passwordOK = false;</span>
+<span class="nc" id="L315">		m_loggedIn = false;</span>
+
+		//	Load BPartner
+<span class="nc bnc" id="L318" title="All 2 branches missed.">		if (m_bpc != null)</span>
+		{
+<span class="nc" id="L320">			m_bp = new MBPartner (m_ctx, m_bpc.getC_BPartner_ID (), null);</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;= Found BP=&quot; + m_bp);</span>
+<span class="nc" id="L322">		}</span>
+		else
+<span class="nc" id="L324">			m_bp = null;</span>
+		//	Load Loacation
+<span class="nc bnc" id="L326" title="All 2 branches missed.">		if (m_bpc != null)</span>
+		{
+<span class="nc bnc" id="L328" title="All 2 branches missed.">			if (m_bpc.getC_BPartner_Location_ID() != 0)</span>
+			{
+<span class="nc" id="L330">				m_bpl = new MBPartnerLocation (m_ctx, m_bpc.getC_BPartner_Location_ID (), null);</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;= Found BPL=&quot; + m_bpl);</span>
+<span class="nc" id="L332">			}</span>
+			else
+			{
+<span class="nc" id="L335">				MBPartnerLocation[] bpls = m_bp.getLocations(false);</span>
+<span class="nc bnc" id="L336" title="All 4 branches missed.">				if (bpls != null &amp;&amp; bpls.length &gt; 0)</span>
+				{
+<span class="nc" id="L338">					m_bpl = bpls[0];</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;= Found BPL=&quot; + m_bpl);</span>
+				}
+			}
+<span class="nc bnc" id="L342" title="All 2 branches missed.">			if (m_bpl != null)</span>
+			{
+<span class="nc" id="L344">				m_loc = MLocation.get (m_ctx, m_bpl.getC_Location_ID(), null);</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;= Found LOC=&quot; + m_loc);</span>
+<span class="nc" id="L346">			}</span>
+			else
+<span class="nc" id="L348">				m_loc = null;</span>
+<span class="nc" id="L349">		}</span>
+		else
+		{
+<span class="nc" id="L352">			m_bpl = null;</span>
+<span class="nc" id="L353">			m_loc = null;</span>
+		}
+
+		//	Make sure that all entities exist
+<span class="nc bnc" id="L357" title="All 2 branches missed.">		if (m_bpc == null)</span>
+		{
+<span class="nc" id="L359">			m_bpc = new MUser (m_ctx, 0, null);</span>
+<span class="nc" id="L360">			m_bpc.setEMail(&quot;?&quot;);</span>
+<span class="nc" id="L361">			m_bpc.setPassword(&quot;?&quot;);</span>
+		}
+<span class="nc bnc" id="L363" title="All 2 branches missed.">		if (m_bp == null)</span>
+		{
+<span class="nc" id="L365">			m_bp = new MBPartner (m_ctx); //	template</span>
+<span class="nc" id="L366">			m_bp.setIsCustomer(true);</span>
+		}
+<span class="nc bnc" id="L368" title="All 2 branches missed.">		if (m_bpl == null)</span>
+<span class="nc" id="L369">			m_bpl = new MBPartnerLocation (m_bp);</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">		if (m_loc == null)</span>
+<span class="nc" id="L371">			m_loc = new MLocation (m_ctx, 0, null);</span>
+		//
+<span class="nc bnc" id="L373" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;= &quot; + m_bp + &quot; - &quot; + m_bpc);</span>
+		
+<span class="nc" id="L375">	}	//	load</span>
+
+	/**
+	 * 	Return Valid.
+	 * 	@return return true if found
+	 */
+	public boolean isValid()
+	{
+<span class="nc bnc" id="L383" title="All 2 branches missed.">		if (m_bpc == null)</span>
+<span class="nc" id="L384">			return false;</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		boolean ok = m_bpc.getAD_User_ID() != 0;</span>
+<span class="nc" id="L386">		return ok;</span>
+	}	//	isValid
+
+	/**
+	 * 	Return Email Validation.
+	 * 	@return return true if email is valid
+	 */
+	public boolean isEMailValid()
+	{
+<span class="nc bnc" id="L395" title="All 4 branches missed.">		if (m_bpc == null || !WebUtil.exists(getEmail()))</span>
+		{
+<span class="nc bnc" id="L397" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(getEmail() + &quot;, bpc=&quot; + m_bpc);</span>
+<span class="nc" id="L398">			return false;</span>
+		}
+		//
+<span class="nc bnc" id="L401" title="All 2 branches missed.">		boolean ok = m_bpc.getAD_User_ID() != 0</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">			&amp;&amp; m_bpc.isEMailValid();</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">		if (!ok)</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(getEmail()</span>
+<span class="nc" id="L405">				+ &quot;, ID=&quot; + m_bpc.getAD_User_ID()</span>
+<span class="nc" id="L406">				+ &quot;, Online=&quot; + m_bpc.isOnline()</span>
+<span class="nc" id="L407">				+ &quot;, EMailValid=&quot; + m_bpc.isEMailValid());</span>
+<span class="nc" id="L408">		return ok;</span>
+	}	//	isEMailValid
+
+	/**
+	 * 	Return Email Verification (reply).
+	 * 	@return return true if reply received
+	 */
+	public boolean isEMailVerified()
+	{
+<span class="nc bnc" id="L417" title="All 2 branches missed.">		return m_bpc != null</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">			&amp;&amp; m_bpc.isEMailVerified();</span>
+	}	//	isEMailVerified
+	
+	
+	/**
+	 * 	Info
+	 * 	@return info
+	 */
+	public String toString ()
+	{
+<span class="nc" id="L428">		StringBuilder sb = new StringBuilder(&quot;WebUser[&quot;);</span>
+<span class="nc" id="L429">		sb.append(getEmail())</span>
+<span class="nc" id="L430">			.append(&quot;,LoggedIn=&quot;).append(m_loggedIn)</span>
+<span class="nc" id="L431">			.append(&quot;,&quot;).append(m_bpc)</span>
+<span class="nc" id="L432">			.append(&quot;,PasswordOK=&quot;).append(m_passwordOK)</span>
+<span class="nc" id="L433">			.append(&quot;,Valid=&quot;).append(isValid())</span>
+<span class="nc" id="L434">			.append(&quot; - &quot;).append(m_bp).append(&quot;Customer=&quot;).append(isCustomer())</span>
+<span class="nc" id="L435">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L436">		return sb.toString();</span>
+	}	//	toString
+
+	
+	/**************************************************************************
+	 * 	Save BPartner Objects
+	 * 	@return true if saved
+	 */
+	public boolean save()
+	{
+<span class="nc" id="L446">		m_saveErrorMessage = null;</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;BP.Value=&quot; + m_bp.getValue() + &quot;, Name=&quot; + m_bp.getName());</span>
+		try
+		{
+			//	check if BPartner exists	***********************************
+<span class="nc bnc" id="L451" title="All 2 branches missed.">			if (m_bp.getC_BPartner_ID() == 0)</span>
+			{
+<span class="nc" id="L453">				String sql = &quot;SELECT * FROM C_BPartner WHERE AD_Client_ID=? AND Value=?&quot;;</span>
+<span class="nc" id="L454">				PreparedStatement pstmt = null;</span>
+<span class="nc" id="L455">				ResultSet rs = null;</span>
+				try
+				{
+<span class="nc" id="L458">					pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L459">					pstmt.setInt (1, m_AD_Client_ID);</span>
+<span class="nc" id="L460">					pstmt.setString (2, m_bp.getValue());</span>
+<span class="nc" id="L461">					rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">					if (rs.next())</span>
+					{
+<span class="nc" id="L464">						m_bp = new MBPartner (m_ctx, m_bpc.getC_BPartner_ID (), null);</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;BP loaded =&quot; + m_bp);</span>
+					}
+<span class="nc" id="L467">  			}</span>
+<span class="nc" id="L468">				catch (Exception e)</span>
+				{
+<span class="nc" id="L470">					log.log(Level.SEVERE, &quot;save-check&quot;, e);</span>
+				}
+				finally
+				{
+<span class="nc" id="L474">					DB.close(rs, pstmt);</span>
+<span class="nc" id="L475">					rs = null; pstmt = null;</span>
+				}
+			}
+
+			//	save BPartner			***************************************
+<span class="nc bnc" id="L480" title="All 4 branches missed.">			if (m_bp.getName () == null || m_bp.getName().length() == 0)</span>
+<span class="nc" id="L481">				m_bp.setName (m_bpc.getName());</span>
+<span class="nc bnc" id="L482" title="All 4 branches missed.">			if (m_bp.getValue() == null || m_bp.getValue().length() == 0)</span>
+<span class="nc" id="L483">				m_bp.setValue(m_bpc.getEMail());</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;BP=&quot; + m_bp);</span>
+<span class="nc bnc" id="L485" title="All 2 branches missed.">			if (!m_bp.save ())</span>
+			{
+<span class="nc" id="L487">				m_saveErrorMessage = &quot;Could not save Business Partner&quot;;</span>
+<span class="nc" id="L488">				return false;</span>
+			}
+
+			//	save Location			***************************************
+<span class="nc bnc" id="L492" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;LOC=&quot; + m_loc);</span>
+<span class="nc" id="L493">			m_loc.saveEx();</span>
+
+			//	save BP Location		***************************************
+<span class="nc bnc" id="L496" title="All 2 branches missed.">			if (m_bpl.getC_BPartner_ID () != m_bp.getC_BPartner_ID())</span>
+<span class="nc" id="L497">				m_bpl.setC_BPartner_ID (m_bp.getC_BPartner_ID());</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">			if (m_bpl.getC_Location_ID () != m_loc.getC_Location_ID())</span>
+<span class="nc" id="L499">				m_bpl.setC_Location_ID (m_loc.getC_Location_ID());</span>
+<span class="nc bnc" id="L500" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;BPL=&quot; + m_bpl);</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">			if (!m_bpl.save ())</span>
+			{
+<span class="nc" id="L503">				m_saveErrorMessage = &quot;Could not save Location&quot;;</span>
+<span class="nc" id="L504">				return false;</span>
+			}
+
+			//	save Contact			***************************************
+<span class="nc bnc" id="L508" title="All 2 branches missed.">			if (m_bpc.getC_BPartner_ID () != m_bp.getC_BPartner_ID())</span>
+<span class="nc" id="L509">				m_bpc.setC_BPartner_ID (m_bp.getC_BPartner_ID());</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">			if (m_bpc.getC_BPartner_Location_ID () != m_bpl.getC_BPartner_Location_ID ())</span>
+<span class="nc" id="L511">				m_bpc.setC_BPartner_Location_ID (m_bpl.getC_BPartner_Location_ID ());</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;BPC=&quot; + m_bpc);</span>
+<span class="nc bnc" id="L513" title="All 2 branches missed.">			if (!m_bpc.save ())</span>
+			{
+<span class="nc" id="L515">				m_saveErrorMessage = &quot;Could not save Contact&quot;;</span>
+<span class="nc" id="L516">				return false;</span>
+			}
+		}
+<span class="nc" id="L519">		catch (Exception ex)</span>
+		{
+<span class="nc" id="L521">			log.log(Level.SEVERE, &quot;save&quot;, ex);</span>
+<span class="nc" id="L522">			m_saveErrorMessage = ex.toString();</span>
+<span class="nc" id="L523">			return false;</span>
+		}
+		//
+<span class="nc" id="L526">		return true;</span>
+	}	//	save
+
+	/**
+	 * 	Set Save Error Message
+	 *	@param msg message
+	 */
+	public void setSaveErrorMessage(String msg)
+	{
+<span class="nc" id="L535">		m_saveErrorMessage = msg;</span>
+<span class="nc" id="L536">	}</span>
+	/**
+	 * 	Get Save Error Message
+	 *	@return message
+	 */
+	public String getSaveErrorMessage()
+	{
+<span class="nc" id="L543">		return m_saveErrorMessage;</span>
+	}
+
+	/**************************************************************************
+	 * 	Get EMail address.
+	 * 	used as jsp parameter
+	 * 	@return email address of contact
+	 */
+	public String getEmail ()
+	{
+<span class="nc" id="L553">		return m_bpc.getEMail();</span>
+	}
+
+	public void setEmail (String email)
+	{
+<span class="nc" id="L558">		m_bpc.setEMail(email);</span>
+<span class="nc" id="L559">	}</span>
+
+	public String getName ()
+	{
+<span class="nc" id="L563">		return m_bpc.getName();</span>
+	}
+
+	public void setName (String name)
+	{
+<span class="nc" id="L568">		m_bpc.setName(name);</span>
+<span class="nc" id="L569">	}</span>
+
+	public void setValue (String value)
+	{
+<span class="nc" id="L573">		m_bp.setValue (value);</span>
+<span class="nc" id="L574">	}</span>
+
+	public String getTitle ()
+	{
+<span class="nc" id="L578">		return m_bpc.getTitle();</span>
+	}
+
+	public void setTitle (String title)
+	{
+<span class="nc" id="L583">		m_bpc.setTitle(title);</span>
+<span class="nc" id="L584">	}</span>
+
+	/**
+	 * 	Get Password
+	 * 	@return password
+	 */
+	public String getPassword ()
+	{
+<span class="nc" id="L592">		String pwd = m_bpc.getPassword();</span>
+<span class="nc bnc" id="L593" title="All 4 branches missed.">		if (pwd == null || pwd.length() == 0)	//	if no password use time</span>
+<span class="nc" id="L594">			pwd = String.valueOf(System.currentTimeMillis());</span>
+<span class="nc" id="L595">		return pwd;</span>
+	}	//	getPassword
+
+	/**
+	 * 	Check and Save Password
+	 */
+	public void setPassword ()
+	{
+<span class="nc" id="L603">		String pwd = m_bpc.getPassword();</span>
+<span class="nc bnc" id="L604" title="All 4 branches missed.">		if ((pwd == null || pwd.length() == 0)	//	no password set</span>
+<span class="nc bnc" id="L605" title="All 4 branches missed.">			&amp;&amp; m_bpc.getC_BPartner_ID() != 0 &amp;&amp; m_bpc.getAD_User_ID() != 0 )	//	existing BPartner</span>
+		{
+<span class="nc" id="L607">			pwd = String.valueOf (System.currentTimeMillis ());</span>
+<span class="nc" id="L608">			m_bpc.setPassword (pwd);</span>
+<span class="nc" id="L609">			m_bpc.saveEx();</span>
+		}
+<span class="nc" id="L611">	}	//	setPassword</span>
+
+	/**
+	 * 	Set Password
+	 * 	@param password new password
+	 */
+	public void setPassword (String password)
+	{
+<span class="nc bnc" id="L619" title="All 4 branches missed.">		if (password == null || password.length() == 0)</span>
+<span class="nc" id="L620">			m_passwordMessage = &quot;Enter Password&quot;;</span>
+<span class="nc" id="L621">		m_bpc.setPassword (password);</span>
+<span class="nc" id="L622">	}	//	setPassword</span>
+
+	/**
+	 * 	Set Password OK
+	 * 	@param ok password valid
+	 * 	@param password password
+	 */
+	private void setPasswordOK (boolean ok, String password)
+	{
+<span class="nc" id="L631">		m_passwordOK = ok;</span>
+<span class="nc bnc" id="L632" title="All 2 branches missed.">		if (ok)</span>
+<span class="nc" id="L633">			m_passwordMessage = null;</span>
+<span class="nc bnc" id="L634" title="All 4 branches missed.">		else if (password == null || password.length() == 0)</span>
+<span class="nc" id="L635">			m_passwordMessage = &quot;Enter Password&quot;;</span>
+		else
+<span class="nc" id="L637">			m_passwordMessage = &quot;Invalid Password&quot;;</span>
+<span class="nc" id="L638">	}	//	setPasswordOK</span>
+
+	/**
+	 * 	Is Password OK
+	 * 	@return true if OK
+	 */
+	public boolean isPasswordOK()
+	{
+<span class="nc bnc" id="L646" title="All 4 branches missed.">		if (m_bpc == null || !WebUtil.exists(m_bpc.getPassword()))</span>
+<span class="nc" id="L647">			return false;</span>
+<span class="nc" id="L648">		return m_passwordOK;</span>
+	}	//	isPasswordOK
+
+	/**
+	 * 	Set Password Message
+	 * 	@return error message or null
+	 */
+	public String getPasswordMessage ()
+	{
+<span class="nc" id="L657">		return m_passwordMessage;</span>
+	}	//	getPasswordMessage
+
+	/**
+	 *	Set Password Message
+	 * 	@param passwordMessage message
+	 */
+	public void setPasswordMessage (String passwordMessage)
+	{
+<span class="nc" id="L666">		m_passwordMessage = passwordMessage;</span>
+<span class="nc" id="L667">	}	//	setPasswordMessage</span>
+
+	/**
+	 * 	Log in with password
+	 * 	@param password password
+	 *	@return true if the user is logged in
+	 */
+	public boolean login (String password)
+	{
+<span class="nc bnc" id="L676" title="All 2 branches missed.">		m_loggedIn = isValid () 			//	we have a contact</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">			 &amp;&amp; WebUtil.exists (password); 	//	we have a password</span>
+			 //&amp;&amp; password.equals (getPassword ());
+<span class="nc" id="L679">		boolean retValue = false;</span>
+<span class="nc bnc" id="L680" title="All 2 branches missed.">		if(m_loggedIn)</span>
+		{
+<span class="nc" id="L682">			boolean hash_password=MSysConfig.getBooleanValue(MSysConfig.USER_PASSWORD_HASH, false);		    </span>
+<span class="nc bnc" id="L683" title="All 2 branches missed.">	    	if(!hash_password)</span>
+		    {
+<span class="nc" id="L685">		      String sql = &quot;SELECT * FROM AD_User &quot;</span>
+			   + &quot;WHERE COALESCE(LDAPUser, Name)=? &quot;  // #1
+			   + &quot; AND IsActive='Y' &quot; // #4
+		     ;
+<span class="nc" id="L689">		     PreparedStatement pstmt = null;</span>
+<span class="nc" id="L690">		     ResultSet rs = null;</span>
+		     try
+		     {
+<span class="nc" id="L693">		    	 pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L694">		    	 pstmt.setString (1, m_bpc.getName());</span>
+<span class="nc" id="L695">			     rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L696" title="All 2 branches missed.">			     if (rs.next ())</span>
+			     {
+			    	do 
+			    	{
+<span class="nc" id="L700">			    		MUser user = new MUser(Env.getCtx(), rs, null);</span>
+<span class="nc bnc" id="L701" title="All 4 branches missed.">			    		if (user.getPassword() != null &amp;&amp; user.getPassword().equals(password)) {</span>
+<span class="nc" id="L702">			    			retValue = true;</span>
+<span class="nc" id="L703">			    			break;</span>
+			    		}
+<span class="nc bnc" id="L705" title="All 2 branches missed.">			    	} while (rs.next());			    	</span>
+<span class="nc" id="L706">			     }</span>
+			    else
+<span class="nc" id="L708">				     log.fine(&quot;No record&quot;);</span>
+<span class="nc" id="L709"> 		         }</span>
+<span class="nc" id="L710">		     catch (Exception e)</span>
+		     {
+<span class="nc" id="L712">			    log.log(Level.SEVERE, sql, e);</span>
+		      }
+		     finally
+		     {
+<span class="nc" id="L716">			     DB.close(rs, pstmt);</span>
+<span class="nc" id="L717">			     rs = null; pstmt = null;</span>
+		      }
+		   }
+		   else{
+<span class="nc" id="L721">			  String where = &quot; COALESCE(LDAPUser,Name) = ? AND&quot; +</span>
+					&quot; EXISTS (SELECT * FROM AD_User_Roles ur&quot; +
+					&quot;         INNER JOIN AD_Role r ON (ur.AD_Role_ID=r.AD_Role_ID)&quot; +
+					&quot;         WHERE ur.AD_User_ID=AD_User.AD_User_ID AND ur.IsActive='Y' AND r.IsActive='Y') AND &quot; +
+					&quot; EXISTS (SELECT * FROM AD_Client c&quot; +
+					&quot;         WHERE c.AD_Client_ID=AD_User.AD_Client_ID&quot; +
+					&quot;         AND c.IsActive='Y') AND &quot; +
+					&quot; AD_User.IsActive='Y'&quot;;
+			
+<span class="nc" id="L730">			   MUser user = MTable.get(m_ctx, MUser.Table_ID).createQuery( where, null).setParameters(m_bpc.getName()).firstOnly();   // throws error if username collision occurs</span>
+			
+<span class="nc" id="L732">			   String hash = null;</span>
+<span class="nc" id="L733">			   String salt = null;</span>
+			
+<span class="nc bnc" id="L735" title="All 2 branches missed.">		       if (user != null )</span>
+			   {
+<span class="nc" id="L737">		 		  hash = user.getPassword();</span>
+<span class="nc" id="L738">		 		  salt = user.getSalt();</span>
+		       }
+			
+		    	 // always do calculation to confuse timing based attacks
+<span class="nc bnc" id="L742" title="All 2 branches missed.">			    if ( user == null )</span>
+<span class="nc" id="L743">				    user = MUser.get(null, 0);</span>
+<span class="nc bnc" id="L744" title="All 2 branches missed.">			    if ( hash == null )</span>
+<span class="nc" id="L745">			        hash = &quot;0000000000000000&quot;;</span>
+<span class="nc bnc" id="L746" title="All 2 branches missed.">			    if ( salt == null )</span>
+<span class="nc" id="L747">				   salt = &quot;0000000000000000&quot;;</span>
+			 
+<span class="nc bnc" id="L749" title="All 2 branches missed.">			   if ( user.authenticateHash(password) )</span>
+			   {
+<span class="nc" id="L751">				   retValue=true;</span>
+			   }
+		 }
+		}
+<span class="nc bnc" id="L755" title="All 4 branches missed.">		m_loggedIn=m_loggedIn &amp;&amp; retValue;</span>
+<span class="nc" id="L756">		setPasswordOK (m_loggedIn, password);</span>
+<span class="nc bnc" id="L757" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;success=&quot; + m_loggedIn);</span>
+<span class="nc bnc" id="L758" title="All 2 branches missed.">		if (m_loggedIn)</span>
+<span class="nc" id="L759">			Env.setContext(m_ctx, Env.AD_USER_ID, getAD_User_ID());</span>
+<span class="nc" id="L760">		return m_loggedIn;</span>
+	}	//	isLoggedIn
+
+	/**
+	 * 	Log in with oassword
+	 */
+	public void logout ()
+	{
+<span class="nc" id="L768">		m_loggedIn = false;</span>
+<span class="nc" id="L769">	}	//	isLoggedIn</span>
+
+	/**
+	 * 	Is User Logged in
+	 *	@return is the user logged in
+	 */
+	public boolean isLoggedIn ()
+	{
+<span class="nc" id="L777">		return m_loggedIn;</span>
+	}	//	isLoggedIn
+
+	public String getPhone ()
+	{
+<span class="nc" id="L782">		return m_bpc.getPhone();</span>
+	}
+
+	public void setPhone (String phone)
+	{
+<span class="nc" id="L787">		m_bpc.setPhone(phone);</span>
+<span class="nc" id="L788">	}</span>
+
+	public String getPhone2 ()
+	{
+<span class="nc" id="L792">		return m_bpc.getPhone2();</span>
+	}
+
+	public void setPhone2 (String phone2)
+	{
+<span class="nc" id="L797">		m_bpc.setPhone2(phone2);</span>
+<span class="nc" id="L798">	}</span>
+
+	public String getFax ()
+	{
+<span class="nc" id="L802">		return m_bpc.getFax();</span>
+	}
+
+	public void setFax (String fax)
+	{
+<span class="nc" id="L807">		m_bpc.setFax(fax);</span>
+<span class="nc" id="L808">	}</span>
+
+	public Timestamp getBirthday ()
+	{
+<span class="nc" id="L812">		return m_bpc.getBirthday();</span>
+	}
+
+	public void setBirthday (Timestamp birthday)
+	{
+<span class="nc" id="L817">		m_bpc.setBirthday(birthday);</span>
+<span class="nc" id="L818">	}</span>
+
+	public String getTaxID ()
+	{
+<span class="nc" id="L822">		return m_bp.getTaxID();</span>
+	}
+
+	public void setTaxID (String taxID)
+	{
+<span class="nc" id="L827">		m_bp.setTaxID(taxID);</span>
+<span class="nc" id="L828">	}</span>
+
+	public int getAD_Client_ID ()
+	{
+<span class="nc" id="L832">		return m_bpc.getAD_Client_ID();</span>
+	}
+
+	public int getAD_User_ID ()
+	{
+<span class="nc" id="L837">		return m_bpc.getAD_User_ID();</span>
+	}
+
+	public int getContactID ()
+	{
+<span class="nc" id="L842">		return getAD_User_ID();</span>
+	}
+
+	/*************************************************************************/
+
+	/**
+	 * 	Get Company Name
+	 *	@return company name
+	 */
+	public String getCompany()
+	{
+<span class="nc" id="L853">		return m_bp.getName();</span>
+	}
+
+	public void setCompany(String company)
+	{
+<span class="nc bnc" id="L858" title="All 2 branches missed.">		if (company==null) {</span>
+<span class="nc" id="L859">			m_bp.setName (m_bpc.getName ());</span>
+<span class="nc" id="L860">		} else {</span>
+<span class="nc" id="L861">			m_bp.setName(company);</span>
+		}
+<span class="nc" id="L863">	}</span>
+
+	public int getC_BPartner_ID ()
+	{
+<span class="nc" id="L867">		return m_bp.getC_BPartner_ID();</span>
+	}
+	
+	public int getBpartnerID ()
+	{
+<span class="nc" id="L872">		return m_bp.getC_BPartner_ID();</span>
+	}
+
+	public int getM_PriceList_ID ()
+	{
+<span class="nc" id="L877">		return m_bp.getM_PriceList_ID();</span>
+	}
+
+
+	/*************************************************************************/
+
+	/**
+	 * 	Get BP Location ID
+	 *	@return BP Loaction
+	 */
+	public int getC_BPartner_Location_ID ()
+	{
+<span class="nc" id="L889">		return m_bpl.getC_BPartner_Location_ID();</span>
+	}
+
+	/**************************************************************************
+	 * 	Get Location
+	 *	@return location address
+	 */
+	public String getAddress ()
+	{
+<span class="nc" id="L898">		return m_loc.getAddress1();</span>
+	}
+
+	public void setAddress (String address)
+	{
+<span class="nc" id="L903">		m_loc.setAddress1(address);</span>
+<span class="nc" id="L904">	}</span>
+
+	public String getAddress2 ()
+	{
+<span class="nc" id="L908">		return m_loc.getAddress2();</span>
+	}
+
+	public void setAddress2 (String address2)
+	{
+<span class="nc" id="L913">		m_loc.setAddress2(address2);</span>
+<span class="nc" id="L914">	}</span>
+
+	public String getCity ()
+	{
+<span class="nc" id="L918">		return m_loc.getCity();</span>
+	}
+
+	public void setCity (String city)
+	{
+<span class="nc" id="L923">		m_loc.setCity(city);</span>
+<span class="nc" id="L924">	}</span>
+
+	public String getPostal ()
+	{
+<span class="nc" id="L928">		return m_loc.getPostal();</span>
+	}
+
+	public void setPostal (String postal)
+	{
+<span class="nc" id="L933">		m_loc.setPostal(postal);</span>
+<span class="nc" id="L934">	}</span>
+
+	/**************************************************************************
+	 * 	Get (additional) Region name
+	 *	@return location region name
+	 */
+	public String getRegionName ()
+	{
+<span class="nc" id="L942">		return m_loc.getRegionName(false);</span>
+	}
+
+	public void setRegionName (String region)
+	{
+<span class="nc" id="L947">		m_loc.setRegionName(region);</span>
+<span class="nc" id="L948">	}</span>
+
+	public int getC_Region_ID ()
+	{
+<span class="nc" id="L952">		return m_loc.getC_Region_ID();</span>
+	}
+
+	public String getRegionID ()
+	{
+<span class="nc" id="L957">		return String.valueOf(getC_Region_ID());</span>
+	}
+
+	public void setC_Region_ID (int C_Region_ID)
+	{
+<span class="nc" id="L962">		m_loc.setC_Region_ID(C_Region_ID);</span>
+<span class="nc" id="L963">	}</span>
+
+	public void setC_Region_ID (String C_Region_ID)
+	{
+		try
+		{
+<span class="nc bnc" id="L969" title="All 4 branches missed.">			if (C_Region_ID == null || C_Region_ID.length() == 0)</span>
+<span class="nc" id="L970">				setC_Region_ID(0);</span>
+			else
+<span class="nc" id="L972">				setC_Region_ID(Integer.parseInt(C_Region_ID));</span>
+<span class="nc" id="L973">		}</span>
+<span class="nc" id="L974">		catch (Exception e)</span>
+		{
+<span class="nc" id="L976">			setC_Region_ID(0);</span>
+<span class="nc" id="L977">			log.log(Level.WARNING, C_Region_ID, e);</span>
+		}
+<span class="nc" id="L979">	}</span>
+
+	public String getCountryName ()
+	{
+<span class="nc" id="L983">		return m_loc.getCountryName();</span>
+	}
+
+	public void setCountryName (String country)
+	{
+<span class="nc" id="L988">		log.warning(country + &quot; Ignored - C_Country_ID=&quot; + m_loc.getC_Country_ID());</span>
+		//	m_loc.setCountryName(country);
+<span class="nc" id="L990">	}</span>
+
+	public int getC_Country_ID ()
+	{
+<span class="nc" id="L994">		return m_loc.getC_Country_ID();</span>
+	}
+
+	public String getCountryID ()
+	{
+<span class="nc" id="L999">		return String.valueOf(getC_Country_ID());</span>
+	}
+
+	public void setC_Country_ID (int C_Country_ID)
+	{
+<span class="nc" id="L1004">		m_loc.setC_Country_ID(C_Country_ID);</span>
+<span class="nc" id="L1005">	}</span>
+
+	public void setC_Country_ID (String C_Country_ID)
+	{
+		try
+		{
+<span class="nc bnc" id="L1011" title="All 4 branches missed.">			if (C_Country_ID == null || C_Country_ID.length() == 0)</span>
+<span class="nc" id="L1012">				setC_Country_ID(0);</span>
+			else
+<span class="nc" id="L1014">				setC_Country_ID(Integer.parseInt(C_Country_ID));</span>
+<span class="nc" id="L1015">		}</span>
+<span class="nc" id="L1016">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1018">			setC_Country_ID(0);</span>
+<span class="nc" id="L1019">			log.log(Level.WARNING, C_Country_ID, e);</span>
+		}
+<span class="nc" id="L1021">	}</span>
+
+	public void setC_BP_Group_ID (int C_BP_Group_ID)
+	{
+<span class="nc" id="L1025">		m_bp.setC_BP_Group_ID (C_BP_Group_ID);</span>
+<span class="nc" id="L1026">	}</span>
+
+	public void setC_BP_Group_ID (String C_BP_Group_ID)
+	{
+		try
+		{
+<span class="nc bnc" id="L1032" title="All 4 branches missed.">			if (C_BP_Group_ID == null || C_BP_Group_ID.length() == 0)</span>
+<span class="nc" id="L1033">				setC_BP_Group_ID(0);</span>
+			else
+<span class="nc" id="L1035">				setC_BP_Group_ID(Integer.parseInt(C_BP_Group_ID));</span>
+<span class="nc" id="L1036">		}</span>
+<span class="nc" id="L1037">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1039">			setC_BP_Group_ID(0);</span>
+<span class="nc" id="L1040">			log.log(Level.WARNING, C_BP_Group_ID, e);</span>
+		}
+<span class="nc" id="L1042">	}</span>
+
+	public boolean isEmployee()
+	{
+<span class="nc" id="L1046">		return m_bp.isEmployee();</span>
+	}
+
+	public boolean isSalesRep()
+	{
+<span class="nc" id="L1051">		return m_bp.isSalesRep();</span>
+	}
+
+	public boolean isCustomer()
+	{
+<span class="nc" id="L1056">		return m_bp.isCustomer();</span>
+	}
+
+	public void setIsCustomer(boolean isCustomer)
+	{
+<span class="nc" id="L1061">		m_bp.setIsCustomer(isCustomer);</span>
+<span class="nc" id="L1062">	}</span>
+
+	public boolean isVendor()
+	{
+<span class="nc" id="L1066">		return m_bp.isVendor();</span>
+	}
+
+	public int getSalesRep_ID()
+	{
+<span class="nc" id="L1071">		return m_bp.getSalesRep_ID();</span>
+	}
+
+	public boolean hasBPAccess (String BPAccessType, Object[] params)
+	{
+<span class="nc" id="L1076">		return m_bpc.hasBPAccess (BPAccessType, params);</span>
+	}
+	
+	/**
+	 * 	Credit Status is Stop or Hold.
+	 * 	Used in Asset download
+	 *	@return true if Stop/Hold
+	 */
+	public boolean isCreditStopHold()
+	{
+<span class="nc" id="L1086">		return m_bp.isCreditStopHold();</span>
+	}	//	isCreditStopHold
+
+	/**
+	 * 	Credit Status is Critical.
+	 * 	Used in Web UI
+	 *	@return true if Stop/Hold/Watch
+	 */
+	public boolean isCreditCritical()
+	{
+<span class="nc" id="L1096">		String status = m_bp.getSOCreditStatus();</span>
+<span class="nc bnc" id="L1097" title="All 2 branches missed.">		return MBPartner.SOCREDITSTATUS_CreditStop.equals(status)</span>
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">			|| MBPartner.SOCREDITSTATUS_CreditHold.equals(status)</span>
+<span class="nc bnc" id="L1099" title="All 2 branches missed.">			|| MBPartner.SOCREDITSTATUS_CreditWatch.equals(status);</span>
+	}
+
+	/**
+	 * 	Credit Status Clear Text.
+	 * 	Used in Web UI
+	 *	@return Clear Text Credit Status
+	 */
+	public String getSOCreditStatus()
+	{
+<span class="nc" id="L1109">		return MRefList.getListName(m_ctx, MBPartner.SOCREDITSTATUS_AD_Reference_ID, m_bp.getSOCreditStatus());</span>
+	}	//	getSOCreditStatus
+
+	/**************************************************************************
+	 * 	Get BP Bank Account (or create it)
+	 *	@return Bank Account
+	 */
+	public MBPBankAccount getBankAccount()
+	{
+<span class="nc" id="L1118">		return getBankAccount(false);</span>
+	}
+	
+	/**************************************************************************
+	 * 	Get BP Bank Account (or create it)
+	 *  @param requery Requery data
+	 *	@return Bank Account
+	 */
+	public MBPBankAccount getBankAccount(boolean requery)
+	{
+<span class="nc" id="L1128">		MBPBankAccount retValue = null;</span>
+		//	Find Bank Account for exact User
+<span class="nc" id="L1130">		MBPBankAccount[] bas = m_bp.getBankAccounts(requery);</span>
+<span class="nc bnc" id="L1131" title="All 2 branches missed.">		for (int i = 0; i &lt; bas.length; i++)</span>
+		{
+<span class="nc bnc" id="L1133" title="All 4 branches missed.">			if (bas[i].getAD_User_ID() == getAD_User_ID() &amp;&amp; bas[i].isActive())</span>
+<span class="nc" id="L1134">				retValue = bas[i];</span>
+		}
+
+		//	create new
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">		if (retValue == null)</span>
+		{
+<span class="nc" id="L1140">			retValue = new MBPBankAccount (m_ctx, m_bp, m_bpc, m_loc);</span>
+<span class="nc" id="L1141">			retValue.setAD_User_ID(getAD_User_ID());</span>
+<span class="nc" id="L1142">			retValue.saveEx();</span>
+		}
+		
+<span class="nc" id="L1145">		return retValue;</span>
+	}	//	getBankAccount
+
+	/**
+	 * 	Get EMail Verification Code
+	 *	@return verification code
+	 */
+	public String getEMailVerifyCode()
+	{
+<span class="nc" id="L1154">		return m_bpc.getEMailVerifyCode();</span>
+	}
+
+	/**
+	 * 	Check and Set EMail Validation Code.
+	 *	@param code code
+	 *	@param info info
+	 */
+	public void setEMailVerifyCode(String code, String info)
+	{
+<span class="nc bnc" id="L1164" title="All 2 branches missed.">		if (m_bpc.setEMailVerifyCode(code, info))</span>
+<span class="nc" id="L1165">			setPasswordMessage(null);</span>
+		else
+<span class="nc" id="L1167">			setPasswordMessage(&quot;Invalid Code&quot;);</span>
+<span class="nc" id="L1168">		m_bpc.saveEx();</span>
+<span class="nc" id="L1169">	}	//	setEMailVerifyCode</span>
+	
+}	//	WebUser
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

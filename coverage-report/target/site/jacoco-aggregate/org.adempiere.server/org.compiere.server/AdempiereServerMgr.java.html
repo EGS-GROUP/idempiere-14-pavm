@@ -1,0 +1,931 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AdempiereServerMgr.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.server</a> &gt; <span class="el_source">AdempiereServerMgr.java</span></div><h1>AdempiereServerMgr.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.server;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.Service;
+import org.adempiere.server.AdempiereServerActivator;
+import org.adempiere.server.IServerFactory;
+import org.adempiere.util.ServerContext;
+import org.compiere.Adempiere;
+import org.compiere.model.AdempiereProcessor;
+import org.compiere.model.MScheduler;
+import org.compiere.model.MSession;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.idempiere.distributed.ICacheService;
+import org.idempiere.distributed.IClusterMember;
+import org.idempiere.distributed.IClusterService;
+import org.idempiere.server.cluster.ClusterServerMgr;
+import org.osgi.framework.BundleEvent;
+import org.osgi.framework.BundleListener;
+import org.osgi.framework.ServiceReference;
+import org.osgi.util.tracker.ServiceTracker;
+import org.osgi.util.tracker.ServiceTrackerCustomizer;
+
+/**
+ *	Adempiere Server Manager
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: AdempiereServerMgr.java,v 1.4 2006/10/09 00:23:26 jjanke Exp $
+ */
+public class AdempiereServerMgr implements ServiceTrackerCustomizer&lt;IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;, IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;&gt;, BundleListener, IServerManager
+{
+	private static ServiceTracker&lt;IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;, IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;&gt; serviceTracker;
+
+	/**
+	 * 	Get Adempiere Server Manager
+	 *	@return mgr
+	 */
+	public synchronized static AdempiereServerMgr get()
+	{
+<span class="nc" id="L68">		return get(true);</span>
+	}
+	
+	/**
+	 * 	Get Adempiere Server Manager
+	 *	@return mgr
+	 */
+	public synchronized static AdempiereServerMgr get(boolean createNew)
+	{
+<span class="nc bnc" id="L77" title="All 4 branches missed.">		if (m_serverMgr == null &amp;&amp; createNew)</span>
+		{
+<span class="nc" id="L79">			m_serverMgr = new AdempiereServerMgr();</span>
+<span class="nc" id="L80">			serviceTracker = new ServiceTracker&lt;IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;, IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;&gt;(AdempiereServerActivator.getBundleContext(), </span>
+<span class="nc" id="L81">					IServerFactory.class.getName(), m_serverMgr);</span>
+<span class="nc" id="L82">			serviceTracker.open();</span>
+<span class="nc" id="L83">			AdempiereServerActivator.getBundleContext().addBundleListener(m_serverMgr);</span>
+		}
+<span class="nc" id="L85">		return m_serverMgr;</span>
+	}	//	get
+	
+	/**	Singleton					*/
+<span class="nc" id="L89">	private static AdempiereServerMgr	m_serverMgr = null;</span>
+	/**	Logger			*/
+<span class="nc" id="L91">	protected static final CLogger	log = CLogger.getCLogger(AdempiereServerMgr.class);</span>
+	
+	/**************************************************************************
+	 * 	Adempiere Server Manager
+	 */
+	private AdempiereServerMgr ()
+	{
+<span class="nc" id="L98">		super();</span>
+<span class="nc" id="L99">		startEnvironment();</span>
+<span class="nc" id="L100">		m_servers=new ArrayList&lt;LocalServerController&gt;();</span>
+<span class="nc" id="L101">		processorClass = new HashSet&lt;String&gt;();</span>
+<span class="nc" id="L102">	}	//	AdempiereServerMgr</span>
+
+	/**	The Servers				*/
+<span class="nc" id="L105">	private ArrayList&lt;LocalServerController&gt;	m_servers = new ArrayList&lt;LocalServerController&gt;();</span>
+	/** Context					*/
+<span class="nc" id="L107">	private Properties		m_ctx = Env.getCtx();</span>
+	/** Start					*/
+<span class="nc" id="L109">	private Timestamp		m_start = new Timestamp(System.currentTimeMillis());</span>
+	
+	private Set&lt;String&gt; processorClass;
+
+	/**
+	 * 	Start Environment
+	 *	@return true if started
+	 */
+	private boolean startEnvironment()
+	{
+<span class="nc" id="L119">		Adempiere.startup(false);</span>
+<span class="nc" id="L120">		log.info(&quot;&quot;);</span>
+		
+		//	Set Session
+<span class="nc" id="L123">		MSession session = MSession.get(getCtx());</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if(session == null) {</span>
+<span class="nc" id="L125">			session = MSession.create(getCtx());</span>
+<span class="nc" id="L126">		} else {</span>
+<span class="nc" id="L127">			session = new MSession(getCtx(), session.getAD_Session_ID(), null);</span>
+		}
+<span class="nc" id="L129">		session.setWebStoreSession(false);</span>
+<span class="nc" id="L130">		session.setWebSession(&quot;Server&quot;);</span>
+<span class="nc" id="L131">		session.saveEx();</span>
+		//
+<span class="nc" id="L133">		return true;</span>
+	}	//	startEnvironment
+	
+	/**
+	 * 	Start Environment
+	 *	@return true if started
+	 */
+	@SuppressWarnings({ &quot;rawtypes&quot;, &quot;unchecked&quot; })
+	@Override
+	public synchronized String reload()
+	{
+<span class="nc" id="L144">		log.info(&quot;&quot;);</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">		if (stopAll() != null)</span>
+<span class="nc" id="L146">			return &quot;Failed to stop all servers&quot;;</span>
+		
+<span class="nc" id="L148">		String clusterId = getClusterMemberId();</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (clusterId != null) {</span>
+<span class="nc" id="L150">			Map&lt;String, String&gt; map = getServerOwnerMap();</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">			if (map != null) {</span>
+<span class="nc" id="L152">				ICacheService cacheService = Core.getCacheService();</span>
+				try {
+<span class="nc" id="L154">					String reloadLockKey = &quot;cluster.server.owner.map.reload&quot;;</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">					if (cacheService.tryLock(map, reloadLockKey, 30, TimeUnit.SECONDS)) {</span>
+						try {
+<span class="nc" id="L157">							List&lt;String&gt; toRemove = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">							for(Map.Entry&lt;String, String&gt; entry : map.entrySet()) {</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">								if (entry.getValue().equals(clusterId)) {</span>
+<span class="nc" id="L160">									toRemove.add(entry.getKey());</span>
+								}
+							}
+<span class="nc bnc" id="L163" title="All 2 branches missed.">							for(String key : toRemove) {</span>
+<span class="nc" id="L164">								map.remove(key);</span>
+							}
+<span class="nc" id="L166">						} finally {</span>
+<span class="nc" id="L167">							cacheService.unLock(map, reloadLockKey);</span>
+						}
+					}					
+<span class="nc" id="L170">				} catch (Exception e) {</span>
+<span class="nc" id="L171">					return &quot;Failed to lock cluster server owner map&quot;;</span>
+				}
+			}
+		}
+				
+<span class="nc" id="L176">		int noServers = 0;		</span>
+<span class="nc" id="L177">		m_servers=new ArrayList&lt;LocalServerController&gt;();</span>
+<span class="nc" id="L178">		processorClass = new HashSet&lt;String&gt;();</span>
+		
+		//osgi server
+<span class="nc" id="L181">		List&lt;IServerFactory&gt; serverFactoryList = Service.locator().list(IServerFactory.class).getServices();</span>
+<span class="nc bnc" id="L182" title="All 4 branches missed.">		if (serverFactoryList != null &amp;&amp; !serverFactoryList.isEmpty())</span>
+		{
+<span class="nc bnc" id="L184" title="All 2 branches missed.">			for(IServerFactory factory : serverFactoryList )</span>
+			{
+<span class="nc" id="L186">				createServers(factory);</span>
+			}
+		}
+		
+<span class="nc bnc" id="L190" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + noServers);</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">		return startAll() == null ? null : &quot;Failed to restart all servers&quot;; </span>
+	}	//	startEnvironment
+
+	private void createServers(IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt; factory) {
+<span class="nc" id="L195">		String name = factory.getProcessorClass().getName();</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">		if (!processorClass.contains(name))</span>
+		{
+<span class="nc" id="L198">			processorClass.add(name);</span>
+<span class="nc" id="L199">			AdempiereServer[] servers = factory.create(m_ctx);</span>
+<span class="nc bnc" id="L200" title="All 4 branches missed.">			if (servers != null &amp;&amp; servers.length &gt; 0)</span>
+			{
+<span class="nc bnc" id="L202" title="All 2 branches missed.">				for (AdempiereServer server : servers)</span>
+				{
+<span class="nc" id="L204">					AdempiereProcessor model = server.getModel();</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">					if (canRunHere(server, model)) {</span>
+<span class="nc" id="L206">						String clusterId = getClusterMemberId();</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">						if (clusterId != null) {</span>
+<span class="nc" id="L208">							Map&lt;String, String&gt; map = getServerOwnerMap();</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">							if (map != null) {</span>
+<span class="nc" id="L210">								ICacheService cacheService = Core.getCacheService();</span>
+								try {
+<span class="nc bnc" id="L212" title="All 2 branches missed.">									if (cacheService.tryLock(map, server.getServerID(), 30, TimeUnit.SECONDS)) {</span>
+										try {
+<span class="nc" id="L214">											String memberId = map.get(server.getServerID());</span>
+<span class="nc bnc" id="L215" title="All 4 branches missed.">											if (memberId != null &amp;&amp; !memberId.equals(clusterId)) {</span>
+												continue;
+<span class="nc bnc" id="L217" title="All 2 branches missed.">											} else if (memberId == null) {</span>
+<span class="nc" id="L218">												map.put(server.getServerID(), clusterId);</span>
+											}
+<span class="nc" id="L220">										} finally {</span>
+<span class="nc" id="L221">											cacheService.unLock(map, server.getServerID());</span>
+										}
+									} else {
+										continue;
+									}
+<span class="nc" id="L226">								} catch (Exception e) {</span>
+<span class="nc" id="L227">									continue;</span>
+								}
+							}
+						}
+<span class="nc" id="L231">						m_servers.add(new LocalServerController(server));</span>
+					}
+				}
+			}				
+		}
+<span class="nc" id="L236">	}</span>
+
+	private boolean canRunHere(AdempiereServer server, AdempiereProcessor model) {
+<span class="nc" id="L239">		return AdempiereServer.isOKtoRunOnIP(model);</span>
+	}
+	
+	/**
+	 * @param scheduler
+	 * @return error
+	 */
+	@SuppressWarnings({ &quot;rawtypes&quot;, &quot;unchecked&quot; })
+	@Override
+	public String addScheduler(MScheduler scheduler) {
+<span class="nc" id="L249">		String serverId = scheduler.getServerID();</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">		if (getServerInstance(serverId) != null)</span>
+<span class="nc" id="L251">			return null;</span>
+		
+		//osgi server
+<span class="nc" id="L254">		List&lt;IServerFactory&gt; serverFactoryList = Service.locator().list(IServerFactory.class).getServices();</span>
+<span class="nc bnc" id="L255" title="All 4 branches missed.">		if (serverFactoryList != null &amp;&amp; !serverFactoryList.isEmpty())</span>
+		{		
+<span class="nc bnc" id="L257" title="All 2 branches missed.">			for(IServerFactory factory : serverFactoryList )</span>
+			{
+<span class="nc bnc" id="L259" title="All 2 branches missed.">				if (factory.getProcessorClass().getName().equals(scheduler.getClass().getName())) {</span>
+<span class="nc" id="L260">					AdempiereServer server = factory.create(m_ctx, scheduler);</span>
+<span class="nc bnc" id="L261" title="All 4 branches missed.">					if (server != null &amp;&amp; canRunHere(server, scheduler)) {</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">						if (getServerInstance(scheduler.getServerID()) == null) {</span>
+<span class="nc" id="L263">							String clusterId = getClusterMemberId();</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">							if (clusterId != null) {</span>
+<span class="nc" id="L265">								Map&lt;String, String&gt; map = getServerOwnerMap();</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">								if (map != null) {</span>
+<span class="nc" id="L267">									ICacheService cacheService = Core.getCacheService();</span>
+									try {
+<span class="nc bnc" id="L269" title="All 2 branches missed.">										if (cacheService.tryLock(map, server.getServerID(), 30, TimeUnit.SECONDS)) {</span>
+											try {
+<span class="nc" id="L271">												String memberId = map.get(server.getServerID());</span>
+<span class="nc bnc" id="L272" title="All 4 branches missed.">												if (memberId != null &amp;&amp; !memberId.equals(clusterId)) {</span>
+													continue;
+<span class="nc bnc" id="L274" title="All 2 branches missed.">												} else if (memberId == null) {</span>
+<span class="nc" id="L275">													map.put(server.getServerID(), clusterId);</span>
+												}
+<span class="nc" id="L277">											} finally {</span>
+<span class="nc" id="L278">												cacheService.unLock(map, server.getServerID());</span>
+											}
+										} else {
+											continue;
+										}
+<span class="nc" id="L283">									} catch (Exception e) {</span>
+<span class="nc" id="L284">										continue;</span>
+									}
+								}
+							}
+<span class="nc" id="L288">							m_servers.add(new LocalServerController(server, false));</span>
+<span class="nc" id="L289">							return start(serverId);</span>
+						}
+					}
+				}
+			}
+		}
+		
+<span class="nc" id="L296">		return null;		</span>
+	}
+
+	@Override
+	public synchronized String removeScheduler(MScheduler scheduler) {
+<span class="nc" id="L301">		String serverId = scheduler.getServerID();</span>
+<span class="nc" id="L302">		LocalServerController serverController = getLocalServerController(serverId);</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">		if (serverController == null)</span>
+<span class="nc" id="L304">			return null;</span>
+		
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (serverController.isAlive()) {</span>
+<span class="nc" id="L307">			String error = stop(serverId);</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			if (error != null) {</span>
+<span class="nc" id="L309">				return error;</span>
+			}
+		}
+		
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		for (int i = 0; i &lt; m_servers.size(); i++) {</span>
+<span class="nc" id="L314">			serverController = m_servers.get(i);</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">			if (serverId.equals(serverController.server.getServerID())) {</span>
+<span class="nc" id="L316">				m_servers.remove(i);</span>
+				
+<span class="nc" id="L318">				String clusterId = getClusterMemberId();</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">				if (clusterId != null) {</span>
+<span class="nc" id="L320">					Map&lt;String, String&gt; map = getServerOwnerMap();</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">					if (map != null) {</span>
+<span class="nc" id="L322">						String ownerId = map.get(serverId);</span>
+<span class="nc bnc" id="L323" title="All 4 branches missed.">						if (ownerId != null &amp;&amp; ownerId.equals(clusterId)) {</span>
+<span class="nc" id="L324">							map.remove(serverId);</span>
+						}
+					}
+				}
+<span class="nc" id="L328">				return null;</span>
+			}
+		}
+		
+<span class="nc" id="L332">		return null;</span>
+		
+	}
+	
+	/**
+	 * 	Get Server Context
+	 *	@return ctx
+	 */
+	public Properties getCtx()
+	{
+<span class="nc" id="L342">		return m_ctx;</span>
+	}	//	getCtx
+	
+	/**
+	 * 	Start all servers
+	 *	@return true if started
+	 */
+	@Override
+	public synchronized String startAll()
+	{
+<span class="nc" id="L352">		log.info (&quot;&quot;);</span>
+<span class="nc" id="L353">		LocalServerController[] servers = getInActive();</span>
+<span class="nc" id="L354">		Properties currentContext = ServerContext.getCurrentInstance();</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">		for (int i = 0; i &lt; servers.length; i++)</span>
+		{
+<span class="nc" id="L357">			LocalServerController server = servers[i];</span>
+<span class="nc" id="L358">			Properties temp = null;</span>
+			try
+			{
+<span class="nc bnc" id="L361" title="All 4 branches missed.">				if (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone())</span>
+					continue;
+				//	Do start
+				//	replace
+<span class="nc bnc" id="L365" title="All 2 branches missed.">				if (Env.getAD_Client_ID(currentContext) != server.getServer().getModel().getAD_Client_ID())</span>
+				{
+<span class="nc" id="L367">					temp = new Properties(currentContext);</span>
+<span class="nc" id="L368">					Env.setContext(temp, Env.AD_CLIENT_ID, server.getServer().getModel().getAD_Client_ID());</span>
+<span class="nc" id="L369">					ServerContext.setCurrentInstance(temp);</span>
+				}
+<span class="nc" id="L371">				server.getServer().recalculateSleepMS();</span>
+<span class="nc" id="L372">				server.start();</span>
+<span class="nc" id="L373">			}</span>
+<span class="nc" id="L374">			catch (Exception e)</span>
+			{
+<span class="nc" id="L376">				log.log(Level.SEVERE, &quot;Server: &quot; + server, e);</span>
+			}
+			finally
+			{
+<span class="nc bnc" id="L380" title="All 2 branches missed.">				if (temp != null)</span>
+<span class="nc" id="L381">					ServerContext.setCurrentInstance(currentContext);</span>
+			}
+		}	//	for all servers		
+		
+		//	Final Check
+<span class="nc" id="L386">		int noRunning = 0;</span>
+<span class="nc" id="L387">		int noStopped = 0;</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		for (int i = 0; i &lt; servers.length; i++)</span>
+		{
+<span class="nc" id="L390">			LocalServerController server = servers[i];</span>
+			try
+			{
+<span class="nc bnc" id="L393" title="All 4 branches missed.">				if (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone())</span>
+				{
+<span class="nc bnc" id="L395" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info(&quot;Alive: &quot; + server);</span>
+<span class="nc" id="L396">					noRunning++;</span>
+<span class="nc" id="L397">				}</span>
+				else
+				{
+<span class="nc" id="L400">					log.warning(&quot;Dead: &quot; + server);</span>
+<span class="nc" id="L401">					noStopped++;</span>
+				}
+<span class="nc" id="L403">			}</span>
+<span class="nc" id="L404">			catch (Exception e)</span>
+			{
+<span class="nc" id="L406">				log.log(Level.SEVERE, &quot;(checking) - &quot; + server, e);</span>
+<span class="nc" id="L407">				noStopped++;</span>
+			}
+		}
+<span class="nc bnc" id="L410" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Running=&quot; + noRunning + &quot;, Stopped=&quot; + noStopped);</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">		return noStopped == 0 ? null : &quot;Failed to start all servers&quot;;</span>
+	}	//	startAll
+
+	/**
+	 * 	Start Server if not started yet
+	 * 	@param serverID server ID
+	 *	@return true if started
+	 */
+	@Override
+	public synchronized String start (String serverID)
+	{
+<span class="nc" id="L422">		LocalServerController server = getLocalServerController(serverID);</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (server == null)</span>
+<span class="nc" id="L424">			return &quot;Server not found&quot;;</span>
+<span class="nc bnc" id="L425" title="All 4 branches missed.">		if (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone())</span>
+<span class="nc" id="L426">			return &quot;Server is already running&quot;;</span>
+		
+<span class="nc" id="L428">		Properties currentContext = ServerContext.getCurrentInstance();</span>
+<span class="nc" id="L429">		Properties temp = null;</span>
+		try
+		{
+			//	replace
+<span class="nc bnc" id="L433" title="All 2 branches missed.">			if (Env.getAD_Client_ID(currentContext) != server.getServer().getModel().getAD_Client_ID())</span>
+			{
+<span class="nc" id="L435">				temp = new Properties(currentContext);</span>
+<span class="nc" id="L436">				Env.setContext(temp, Env.AD_CLIENT_ID, server.getServer().getModel().getAD_Client_ID());</span>
+<span class="nc" id="L437">				ServerContext.setCurrentInstance(temp);</span>
+			}
+<span class="nc" id="L439">			server.getServer().recalculateSleepMS();</span>
+<span class="nc" id="L440">			server.start();</span>
+<span class="nc" id="L441">		}</span>
+<span class="nc" id="L442">		catch (Exception e)</span>
+		{
+<span class="nc" id="L444">			log.log(Level.SEVERE, &quot;Server=&quot; + serverID, e);</span>
+<span class="nc" id="L445">			return e.getMessage();</span>
+		}
+		finally
+		{
+<span class="nc bnc" id="L449" title="All 2 branches missed.">			if (temp != null)</span>
+<span class="nc" id="L450">				ServerContext.setCurrentInstance(currentContext);</span>
+		}
+<span class="nc bnc" id="L452" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(server.toString());</span>
+<span class="nc bnc" id="L453" title="All 4 branches missed.">		return (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone()) ? null : &quot;Failed to start server&quot;; </span>
+	}	//	startIt
+	
+	/**
+	 * 	Stop all Servers
+	 *	@return true if stopped
+	 */
+	@Override
+	public synchronized String stopAll()
+	{
+<span class="nc" id="L463">		log.info (&quot;&quot;);</span>
+<span class="nc" id="L464">		LocalServerController[] servers = getActive();</span>
+		//	Interrupt
+<span class="nc bnc" id="L466" title="All 2 branches missed.">		for (int i = 0; i &lt; servers.length; i++)</span>
+		{
+<span class="nc" id="L468">			LocalServerController server = servers[i];</span>
+			try
+			{
+<span class="nc" id="L471">				server.stop();</span>
+<span class="nc" id="L472">			}</span>
+<span class="nc" id="L473">			catch (Exception e)</span>
+			{
+<span class="nc" id="L475">				log.log(Level.SEVERE, &quot;(interrupting) - &quot; + server, e);</span>
+			}
+		}	//	for all servers
+<span class="nc" id="L478">		Thread.yield();</span>
+		
+		//	Wait for death
+<span class="nc bnc" id="L481" title="All 2 branches missed.">		for (int i = 0; i &lt; servers.length; i++)</span>
+		{
+<span class="nc" id="L483">			LocalServerController server = servers[i];</span>
+			try
+			{
+<span class="nc" id="L486">				int maxWait = 10;	//	10 iterations = 1 sec</span>
+<span class="nc bnc" id="L487" title="All 4 branches missed.">				while (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone())</span>
+				{
+<span class="nc bnc" id="L489" title="All 2 branches missed.">					if (maxWait-- == 0)</span>
+					{
+<span class="nc" id="L491">						log.severe (&quot;Wait timeout for interruped &quot; + server);</span>
+<span class="nc" id="L492">						break;</span>
+					}
+<span class="nc" id="L494">					Thread.sleep(100);		//	1/10</span>
+				}
+<span class="nc" id="L496">			}</span>
+<span class="nc" id="L497">			catch (Exception e)</span>
+			{
+<span class="nc" id="L499">				log.log(Level.SEVERE, &quot;(waiting) - &quot; + server, e);</span>
+			}
+		}	//	for all servers
+		
+		//	Final Check
+<span class="nc" id="L504">		int noRunning = 0;</span>
+<span class="nc" id="L505">		int noStopped = 0;</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">		for (int i = 0; i &lt; servers.length; i++)</span>
+		{
+<span class="nc" id="L508">			LocalServerController server = servers[i];</span>
+			try
+			{
+<span class="nc bnc" id="L511" title="All 4 branches missed.">				if (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone())</span>
+				{
+<span class="nc" id="L513">					log.warning (&quot;Alive: &quot; + server);</span>
+<span class="nc" id="L514">					noRunning++;</span>
+<span class="nc" id="L515">				}</span>
+				else
+				{
+<span class="nc bnc" id="L518" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info (&quot;Stopped: &quot; + server);</span>
+<span class="nc" id="L519">					noStopped++;</span>
+				}
+<span class="nc" id="L521">			}</span>
+<span class="nc" id="L522">			catch (Exception e)</span>
+			{
+<span class="nc" id="L524">				log.log(Level.SEVERE, &quot;(checking) - &quot; + server, e);</span>
+<span class="nc" id="L525">				noRunning++;</span>
+			}
+		}
+<span class="nc bnc" id="L528" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Running=&quot; + noRunning + &quot;, Stopped=&quot; + noStopped);</span>
+<span class="nc" id="L529">		AdempiereServerGroup.get().dump();</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">		return noRunning == 0 ? null : &quot;Failed to stop all servers&quot;;</span>
+	}	//	stopAll
+
+	/**
+	 * 	Stop Server if not stopped
+	 * 	@param serverID server ID
+	 *	@return true if interrupted
+	 */
+	@Override
+	public synchronized String stop (String serverID)
+	{
+<span class="nc" id="L541">		LocalServerController server = getLocalServerController(serverID);</span>
+<span class="nc bnc" id="L542" title="All 2 branches missed.">		if (server == null)</span>
+<span class="nc" id="L543">			return &quot;Server not found&quot;;</span>
+<span class="nc bnc" id="L544" title="All 4 branches missed.">		if (server.scheduleFuture == null || server.scheduleFuture.isDone())</span>
+<span class="nc" id="L545">			return &quot;Server is already stop&quot;;</span>
+
+		try
+		{
+<span class="nc" id="L549">			server.stop();</span>
+<span class="nc" id="L550">			Thread.sleep(10);	//	1/100 sec</span>
+<span class="nc" id="L551">		}</span>
+<span class="nc" id="L552">		catch (Exception e)</span>
+		{
+<span class="nc" id="L554">			log.log(Level.SEVERE, &quot;stop&quot;, e);</span>
+<span class="nc" id="L555">			return e.getMessage();</span>
+		}
+<span class="nc bnc" id="L557" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(server.toString());</span>
+<span class="nc bnc" id="L558" title="All 4 branches missed.">		return (server.scheduleFuture == null || server.scheduleFuture.isDone()) ? null : &quot;Failed to stop server&quot;;</span>
+	}	//	stop
+
+	
+	/**
+	 * 	Destroy
+	 */
+	public synchronized void destroy ()
+	{
+<span class="nc" id="L567">		log.info (&quot;&quot;);</span>
+<span class="nc" id="L568">		stopAll();</span>
+<span class="nc" id="L569">		m_servers.clear();</span>
+<span class="nc" id="L570">	}	//	destroy</span>
+
+	/**
+	 * 	Get Active Servers
+	 *	@return array of active servers
+	 */
+	protected synchronized LocalServerController[] getActive()
+	{
+<span class="nc" id="L578">		ArrayList&lt;LocalServerController&gt; list = new ArrayList&lt;LocalServerController&gt;();</span>
+<span class="nc bnc" id="L579" title="All 2 branches missed.">		for (int i = 0; i &lt; m_servers.size(); i++)</span>
+		{
+<span class="nc" id="L581">			LocalServerController server = (LocalServerController)m_servers.get(i);</span>
+<span class="nc bnc" id="L582" title="All 6 branches missed.">			if (server != null &amp;&amp; server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone())</span>
+<span class="nc" id="L583">				list.add (server);</span>
+		}
+<span class="nc" id="L585">		LocalServerController[] retValue = new LocalServerController[list.size ()];</span>
+<span class="nc" id="L586">		list.toArray (retValue);</span>
+<span class="nc" id="L587">		return retValue;</span>
+	}	//	getActive
+	
+	/**
+	 * 	Get InActive Servers
+	 *	@return array of inactive servers
+	 */
+	protected synchronized LocalServerController[] getInActive()
+	{
+<span class="nc" id="L596">		ArrayList&lt;LocalServerController&gt; list = new ArrayList&lt;LocalServerController&gt;();</span>
+<span class="nc bnc" id="L597" title="All 2 branches missed.">		for (int i = 0; i &lt; m_servers.size(); i++)</span>
+		{
+<span class="nc" id="L599">			LocalServerController server = m_servers.get(i);</span>
+<span class="nc bnc" id="L600" title="All 6 branches missed.">			if (server != null &amp;&amp; (server.scheduleFuture == null || server.scheduleFuture.isDone()))</span>
+<span class="nc" id="L601">				list.add (server);</span>
+		}
+<span class="nc" id="L603">		LocalServerController[] retValue = new LocalServerController[list.size()];</span>
+<span class="nc" id="L604">		list.toArray (retValue);</span>
+<span class="nc" id="L605">		return retValue;</span>
+	}	//	getInActive
+
+	/**
+	 * 	Get all Servers
+	 *	@return array of servers
+	 */
+	private synchronized LocalServerController[] getLocalServerControllers()
+	{
+<span class="nc" id="L614">		LocalServerController[] retValue = new LocalServerController[m_servers.size()];</span>
+<span class="nc" id="L615">		m_servers.toArray (retValue);</span>
+<span class="nc" id="L616">		return retValue;</span>
+	}	//	getAll
+	
+	
+	@Override
+	public synchronized ServerInstance[] getServerInstances() {
+<span class="nc" id="L622">		List&lt;ServerInstance&gt; responses = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L623">		LocalServerController[] controllers = getLocalServerControllers();</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">		for (LocalServerController controller : controllers) {</span>
+<span class="nc bnc" id="L625" title="All 2 branches missed.">			if (controller.getServer() != null) {</span>
+<span class="nc" id="L626">				ServerInstance response = new ServerInstance(controller.getServer().getServerID(), controller.getServer().getModel(), </span>
+<span class="nc" id="L627">						controller.isAlive(), controller.isInterrupted(), controller.getServer().isSleeping(), </span>
+<span class="nc" id="L628">						controller.getServer().getStartTime(), controller.getServer().getStatistics(), controller.getServer().getServerInfo());</span>
+<span class="nc" id="L629">				responses.add(response);</span>
+			}
+		}
+<span class="nc" id="L632">		return responses.toArray(new ServerInstance[0]);</span>
+	}
+
+	public synchronized int getStatus(AdempiereProcessor processor)
+	{
+<span class="nc" id="L637">		return getServerStatus(processor.getServerID());</span>
+	}
+	
+	/**
+	 * 	Get Server with ID
+	 *	@param serverID server id
+	 *	@return server or null
+	 */
+	@Override
+	public synchronized ServerInstance getServerInstance(String serverID)
+	{
+<span class="nc bnc" id="L648" title="All 2 branches missed.">		if (serverID == null)</span>
+<span class="nc" id="L649">			return null;</span>
+<span class="nc bnc" id="L650" title="All 2 branches missed.">		for (int i = 0; i &lt; m_servers.size(); i++)</span>
+		{
+<span class="nc" id="L652">			LocalServerController server = m_servers.get(i);</span>
+<span class="nc bnc" id="L653" title="All 2 branches missed.">			if (serverID.equals(server.server.getServerID()))</span>
+<span class="nc" id="L654">				return new ServerInstance(server.getServer().getServerID(), server.getServer().getModel(), </span>
+<span class="nc" id="L655">						server.isAlive(), server.isInterrupted(), server.getServer().isSleeping(),</span>
+<span class="nc" id="L656">						server.getServer().getStartTime(), server.getServer().getStatistics(), server.getServer().getServerInfo());</span>
+		}
+<span class="nc" id="L658">		return null;</span>
+	}	//	getServer
+	
+	/**
+	 * 	Get Server with ID
+	 *	@param serverID server id
+	 *	@return server or null
+	 */
+	private synchronized LocalServerController getLocalServerController (String serverID)
+	{
+<span class="nc bnc" id="L668" title="All 2 branches missed.">		if (serverID == null)</span>
+<span class="nc" id="L669">			return null;</span>
+<span class="nc bnc" id="L670" title="All 2 branches missed.">		for (int i = 0; i &lt; m_servers.size(); i++)</span>
+		{
+<span class="nc" id="L672">			LocalServerController server = m_servers.get(i);</span>
+<span class="nc bnc" id="L673" title="All 2 branches missed.">			if (serverID.equals(server.server.getServerID()))</span>
+<span class="nc" id="L674">				return server;</span>
+		}
+<span class="nc" id="L676">		return null;</span>
+	}	//	getServer
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	public String toString ()
+	{
+<span class="nc" id="L685">		StringBuilder sb = new StringBuilder (&quot;AdempiereServerMgr[&quot;);</span>
+<span class="nc" id="L686">		sb.append(&quot;Servers=&quot;).append(m_servers.size())</span>
+<span class="nc" id="L687">			.append(&quot;,ContextSize=&quot;).append(m_ctx.size())</span>
+<span class="nc" id="L688">			.append(&quot;,Started=&quot;).append(m_start)</span>
+<span class="nc" id="L689">			.append (&quot;]&quot;);</span>
+<span class="nc" id="L690">		return sb.toString ();</span>
+	}	//	toString
+	
+	/**
+	 * 	Get Description
+	 *	@return description
+	 */
+	@Override
+	public String getDescription()
+	{
+<span class="nc" id="L700">		return Adempiere.getVersion();</span>
+	}	//	getDescription
+	
+	/**
+	 * 	Get Number Servers
+	 *	@return no of servers
+	 */
+	@Override
+	public synchronized ServerCount getServerCount()
+	{
+<span class="nc" id="L710">		ServerCount serverCount = new ServerCount();</span>
+<span class="nc bnc" id="L711" title="All 2 branches missed.">		for (int i = 0; i &lt; m_servers.size(); i++)</span>
+		{
+<span class="nc" id="L713">			LocalServerController server = m_servers.get(i);</span>
+<span class="nc bnc" id="L714" title="All 4 branches missed.">			if (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone())</span>
+<span class="nc" id="L715">				serverCount.addStarted(1);</span>
+			else
+<span class="nc" id="L717">				serverCount.addStopped(1);</span>
+		}
+<span class="nc" id="L719">		return serverCount;</span>
+	}	//	getServerCount
+	
+	/**
+	 * 	Get start date
+	 *	@return start date
+	 */
+	@Override
+	public Timestamp getStartTime()
+	{
+<span class="nc" id="L729">		return m_start;</span>
+	}	//	getStartTime
+
+	/**
+	 * Controller for background server thread 
+	 */
+	private class LocalServerController implements Runnable
+	{
+
+		protected AdempiereServer server;
+		protected volatile ScheduledFuture&lt;?&gt; scheduleFuture;
+		protected AtomicBoolean stop;
+
+		private LocalServerController(AdempiereServer server) {
+<span class="nc" id="L743">			this(server, true);</span>
+<span class="nc" id="L744">		}</span>
+		
+<span class="nc" id="L746">		private LocalServerController(AdempiereServer server, boolean start) {</span>
+<span class="nc" id="L747">			this.server = server;</span>
+<span class="nc" id="L748">			stop = new AtomicBoolean(true);</span>
+<span class="nc bnc" id="L749" title="All 2 branches missed.">			if (start)</span>
+<span class="nc" id="L750">				start();</span>
+<span class="nc" id="L751">		}</span>
+		
+		/**
+		 * Submit request to thread pool.
+		 */
+		public void start() {
+<span class="nc" id="L757">			stop.set(false);</span>
+<span class="nc" id="L758">			scheduleFuture = Adempiere.getThreadPoolExecutor().schedule(this, server.getInitialNap() * 1000 + server.getSleepMS(), TimeUnit.MILLISECONDS);</span>
+<span class="nc" id="L759">		}</span>
+
+		/**
+		 * Mark stop and interrupt background thread
+		 */
+		public void stop() {
+<span class="nc" id="L765">			stop.set(true);</span>
+<span class="nc bnc" id="L766" title="All 4 branches missed.">			if (scheduleFuture != null &amp;&amp; !scheduleFuture.isDone())</span>
+			{
+<span class="nc" id="L768">				scheduleFuture.cancel(true);</span>
+			}
+<span class="nc" id="L770">		}</span>
+		
+		@Override
+		public void run() {
+<span class="nc bnc" id="L774" title="All 2 branches missed.">			if (stop.get()) {</span>
+<span class="nc" id="L775">				scheduleFuture = null;</span>
+<span class="nc" id="L776">				return;</span>
+			}
+			
+<span class="nc bnc" id="L779" title="All 2 branches missed.">			if (server.isSleeping()) {</span>
+<span class="nc" id="L780">				server.run();</span>
+<span class="nc bnc" id="L781" title="All 4 branches missed.">				if (!isInterrupted() &amp;&amp; !stop.get()) {</span>
+<span class="nc bnc" id="L782" title="All 2 branches missed.">					if (server.getSleepMS() != 0) {</span>
+<span class="nc" id="L783">						scheduleFuture = Adempiere.getThreadPoolExecutor().schedule(this, server.getSleepMS(), TimeUnit.MILLISECONDS);</span>
+<span class="nc" id="L784">					} else {</span>
+<span class="nc" id="L785">						scheduleFuture = null;</span>
+					}
+<span class="nc" id="L787">				} else {</span>
+<span class="nc" id="L788">					scheduleFuture = null;</span>
+				}
+<span class="nc" id="L790">			}  else {</span>
+				//server busy, try again after one minute
+<span class="nc" id="L792">				scheduleFuture = Adempiere.getThreadPoolExecutor().schedule(this, 60 * 1000, TimeUnit.MILLISECONDS);</span>
+			}
+<span class="nc" id="L794">		}</span>
+		
+		/**
+		 * @return {@link AdempiereServer}
+		 */
+		public AdempiereServer getServer() {
+<span class="nc" id="L800">			return server;</span>
+		}
+
+		/**
+		 * @return true if server thread is running, false otherwise
+		 */
+		public boolean isAlive() {
+<span class="nc bnc" id="L807" title="All 6 branches missed.">			return scheduleFuture != null &amp;&amp; !scheduleFuture.isDone() &amp;&amp; !isStop();</span>
+		}
+
+		/**
+		 * @return true if server thread have been interrupted (for e.g, by {@link #stop} call).
+		 */
+		public boolean isInterrupted() {
+<span class="nc bnc" id="L814" title="All 4 branches missed.">			return scheduleFuture != null &amp;&amp; scheduleFuture.isCancelled();</span>
+		}
+		
+		/**
+		 * @return true if server have been marked as stop
+		 */
+		public boolean isStop() {
+<span class="nc" id="L821">			return stop.get();</span>
+		}
+	}
+
+	@Override
+	public synchronized IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt; addingService(
+			ServiceReference&lt;IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;&gt; reference) {
+<span class="nc" id="L828">		IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt; factory = AdempiereServerActivator.getBundleContext().getService(reference);</span>
+<span class="nc" id="L829">		createServers(factory);</span>
+<span class="nc" id="L830">		startAll();</span>
+<span class="nc" id="L831">		return factory;</span>
+	}
+
+	@Override
+	public void modifiedService(
+			ServiceReference&lt;IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;&gt; reference,
+			IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt; service) {
+<span class="nc" id="L838">	}</span>
+
+	@Override
+	public void removedService(
+			ServiceReference&lt;IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt;&gt; reference,
+			IServerFactory&lt;AdempiereServer, AdempiereProcessor&gt; service) {
+<span class="nc" id="L844">	}</span>
+
+	@Override
+	public void bundleChanged(BundleEvent event) {
+<span class="nc bnc" id="L848" title="All 2 branches missed.">		if (event.getType() == BundleEvent.STOPPED) {</span>
+<span class="nc bnc" id="L849" title="All 2 branches missed.">			if (serviceTracker != null)</span>
+<span class="nc" id="L850">				serviceTracker.close();</span>
+<span class="nc bnc" id="L851" title="All 2 branches missed.">		} else if (event.getType() == BundleEvent.STARTED) {</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">			if (serviceTracker != null)</span>
+<span class="nc" id="L853">				serviceTracker.open();</span>
+		}
+<span class="nc" id="L855">	}</span>
+
+	public Boolean remove(String serverID) {
+<span class="nc" id="L858">		LocalServerController server = getLocalServerController(serverID);</span>
+<span class="nc bnc" id="L859" title="All 2 branches missed.">		if (server == null)</span>
+<span class="nc" id="L860">			return false;</span>
+		
+<span class="nc bnc" id="L862" title="All 4 branches missed.">		if (server.scheduleFuture != null &amp;&amp; !server.scheduleFuture.isDone()) {</span>
+<span class="nc bnc" id="L863" title="All 2 branches missed.">			if (stop(serverID) != null) {</span>
+<span class="nc" id="L864">				return false;</span>
+			}
+		}
+		
+<span class="nc bnc" id="L868" title="All 2 branches missed.">		for (int i = 0; i &lt; m_servers.size(); i++) {</span>
+<span class="nc" id="L869">			server = m_servers.get(i);</span>
+<span class="nc bnc" id="L870" title="All 2 branches missed.">			if (serverID.equals(server.server.getServerID())) {</span>
+<span class="nc" id="L871">				m_servers.remove(i);</span>
+<span class="nc" id="L872">				return true;</span>
+			}
+		}
+		
+<span class="nc" id="L876">		return false;</span>
+	}
+
+	@Override
+	public String runNow(String serverId) {
+<span class="nc" id="L881">		LocalServerController serverInstance = getLocalServerController(serverId);</span>
+<span class="nc bnc" id="L882" title="All 4 branches missed.">		if (serverInstance == null || serverInstance.getServer() == null) {</span>
+<span class="nc" id="L883">			return &quot;Server &quot; + serverId + &quot; not found&quot;;</span>
+		}
+		
+<span class="nc bnc" id="L886" title="All 2 branches missed.">		if (serverInstance.getServer().isSleeping())</span>
+		{
+<span class="nc" id="L888">			serverInstance.getServer().runNow();</span>
+<span class="nc" id="L889">		}</span>
+		else
+		{
+<span class="nc" id="L892">			int count = 0;</span>
+<span class="nc bnc" id="L893" title="All 4 branches missed.">			while(!serverInstance.getServer().isSleeping() &amp;&amp; count &lt; 5)</span>
+			{
+<span class="nc" id="L895">				count++;</span>
+				try {
+<span class="nc" id="L897">					Thread.sleep(60000);</span>
+<span class="nc" id="L898">				} catch (InterruptedException e) {</span>
+<span class="nc" id="L899">					Thread.interrupted();</span>
+				}				
+			}
+<span class="nc bnc" id="L902" title="All 2 branches missed.">			if (serverInstance.getServer().isSleeping())</span>
+<span class="nc" id="L903">				serverInstance.getServer().runNow();</span>
+			else
+			{
+<span class="nc" id="L906">				return &quot;Timeout waiting for server process to be available for execution.&quot;;</span>
+			}
+		}
+		
+<span class="nc" id="L910">		return null;</span>
+	}
+	
+	private String getClusterMemberId() {
+<span class="nc" id="L914">		IClusterService service = ClusterServerMgr.getClusterService();</span>
+<span class="nc bnc" id="L915" title="All 2 branches missed.">		if (service != null) {</span>
+<span class="nc" id="L916">			IClusterMember local = service.getLocalMember();</span>
+<span class="nc bnc" id="L917" title="All 2 branches missed.">			if (local != null)</span>
+<span class="nc" id="L918">				return local.getId();</span>
+		}
+<span class="nc" id="L920">		return null;</span>
+	}
+	
+	private Map&lt;String, String&gt; getServerOwnerMap() {
+<span class="nc" id="L924">		ICacheService service = Core.getCacheService();</span>
+<span class="nc bnc" id="L925" title="All 2 branches missed.">		if (service != null) {</span>
+<span class="nc" id="L926">			return service.getMap(&quot;cluster.server.owner.map&quot;);</span>
+		}
+<span class="nc" id="L928">		return null;</span>
+	}
+}	//	AdempiereServerMgr
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

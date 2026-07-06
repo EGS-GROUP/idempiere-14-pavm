@@ -1,0 +1,605 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MRelationType.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.model</a> &gt; <span class="el_source">MRelationType.java</span></div><h1>MRelationType.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: ADempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2009 www.metas.de                                            *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.model;
+
+import static org.compiere.model.I_AD_Ref_Table.COLUMNNAME_AD_Reference_ID;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Properties;
+import java.util.Set;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.PORelationException;
+import org.adempiere.model.ZoomInfoFactory.ZoomInfo;
+import org.compiere.model.I_AD_Ref_Table;
+import org.compiere.model.Lookup;
+import org.compiere.model.MColumn;
+import org.compiere.model.MQuery;
+import org.compiere.model.MRefTable;
+import org.compiere.model.MReference;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.Query;
+import org.compiere.model.X_AD_RelationType;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ * Extended model class for AD_RelationType.&lt;br/&gt;
+ * Formal definition for a set of data record pairs.
+ * 
+ * @author Tobias Schoeneberg, www.metas.de - FR [ 2897194 ] Advanced Zoom and
+ *         RelationTypes
+ */
+public class MRelationType extends X_AD_RelationType implements IZoomProvider {
+
+<span class="nc" id="L57">	private static final CLogger logger = CLogger</span>
+<span class="nc" id="L58">			.getCLogger(MRelationType.class);</span>
+
+	/**
+	 * Selection for those relation types whose AD_Reference(s) might match a
+	 * given PO. Only evaluates the table and key column of the reference's
+	 * AD_Ref_Table entries.
+	 * &lt;p&gt;
+	 * &lt;b&gt;Warning:&lt;/b&gt; Doesn't support POs with more or less than one key
+	 * column.
+	 */
+	protected final static String SQL =
+	    &quot;  SELECT &quot;
+			+ &quot;    rt.AD_RelationType_ID&quot;
+			+ &quot;,   rt.Name&quot;
+			+ &quot;,   rt.IsDirected&quot;
+			+ &quot;,   ref.AD_Reference_ID&quot;
+			+ &quot;,   tab.WhereClause&quot;
+			+ &quot;,   tab.OrderByClause&quot;
+			+ &quot;  FROM&quot;
+			+ &quot;    AD_RelationType rt, AD_Reference ref, AD_Ref_Table tab&quot;
+			+ &quot;  WHERE &quot;
+			+ &quot;    rt.IsActive='Y'&quot;
+			+ &quot;    AND ref.IsActive='Y'&quot;
+			+ &quot;    AND ref.ValidationType='T'&quot; // must have table validation
+			+ &quot;    AND (&quot; // join the source AD_Reference
+			+ &quot;      rt.AD_Reference_Source_ID=ref.AD_Reference_ID&quot; //
+			+ &quot;      OR (&quot; // not directed? -&gt; also join the target AD_Reference
+			+ &quot;        rt.IsDirected='N' &quot;
+			+ &quot;        AND rt.AD_Reference_Target_ID=ref.AD_Reference_ID&quot;
+			+ &quot;      )&quot;
+			+ &quot;    )&quot;
+			+ &quot;    AND tab.IsActive='Y'&quot; // Join the AD_Reference's AD_Ref_Table
+			+ &quot;    AND tab.AD_Reference_ID=ref.AD_Reference_ID&quot;
+			+ &quot;    AND tab.AD_Table_ID=?&quot;
+			+ &quot;    AND tab.AD_Key=?&quot;
+			+ &quot;  ORDER BY rt.Name&quot;;
+
+	protected final static String SQL_WINDOW_NAME = &quot;SELECT Name FROM AD_Window WHERE AD_WINDOW_ID=?&quot;;
+
+	protected final static String SQL_WINDOW_NAME_TRL = &quot;SELECT Name FROM AD_Window_Trl WHERE AD_WINDOW_ID=? AND AD_LANGUAGE=?&quot;;
+
+	/**
+	 * generated serial id
+	 */
+<span class="nc" id="L102">	private static final long serialVersionUID = 5486148151201672913L;</span>
+
+	public int destinationRefId;
+
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param AD_RelationType_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MRelationType(Properties ctx, String AD_RelationType_UU, String trxName) {
+<span class="nc" id="L113">        super(ctx, AD_RelationType_UU, trxName);</span>
+<span class="nc" id="L114">    }</span>
+
+    /**
+     * @param ctx
+     * @param AD_RelationType_ID
+     * @param trxName
+     */
+	public MRelationType(Properties ctx, int AD_RelationType_ID, String trxName) {
+<span class="nc" id="L122">		super(ctx, AD_RelationType_ID, trxName);</span>
+<span class="nc" id="L123">	}</span>
+
+	/**
+	 * @param ctx
+	 * @param rs
+	 * @param trxName
+	 */
+	public MRelationType(Properties ctx, ResultSet rs, String trxName) {
+<span class="nc" id="L131">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L132">	}</span>
+
+	/**
+	 * @param ctx
+	 * @param AD_RelationType_ID
+	 * @param trxName
+	 * @param virtualColumns
+	 */
+	public MRelationType(Properties ctx, int AD_RelationType_ID, String trxName, String... virtualColumns) {
+<span class="nc" id="L141">		super(ctx, AD_RelationType_ID, trxName, virtualColumns);</span>
+<span class="nc" id="L142">	}</span>
+
+	/**
+	 * Returns the types that define a relation which contains the given PO.&lt;br/&gt;
+	 * Explicit types are returned even if they don't actually contain the given
+	 * PO.
+	 * 
+	 * @param po
+	 * @return matching relation types
+	 */
+	public static List&lt;MRelationType&gt; retrieveTypes(final PO po,
+			final int windowId) {
+
+<span class="nc bnc" id="L155" title="All 2 branches missed.">		if (po.get_KeyColumns().length != 1) {</span>
+
+<span class="nc" id="L157">			logger.severe(po + &quot; has &quot; + po.get_KeyColumns().length</span>
+					+ &quot; key column(s). Should have one.&quot;);
+<span class="nc" id="L159">			PORelationException.throwWrongKeyColumnCount(po);</span>
+		}
+
+<span class="nc" id="L162">		final String keyColumn = po.get_KeyColumns()[0];</span>
+
+<span class="nc" id="L164">		final int colId = MColumn.getColumn_ID(po.get_TableName(), keyColumn);</span>
+
+<span class="nc" id="L166">		final PreparedStatement pstmt = DB.prepareStatement(SQL, po</span>
+<span class="nc" id="L167">				.get_TrxName());</span>
+
+<span class="nc" id="L169">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L171">			pstmt.setInt(1, po.get_Table_ID());</span>
+<span class="nc" id="L172">			pstmt.setInt(2, colId);</span>
+
+<span class="nc" id="L174">			rs = pstmt.executeQuery();</span>
+
+<span class="nc" id="L176">			final List&lt;MRelationType&gt; result = evalResultSet(po, windowId, rs);</span>
+
+<span class="nc bnc" id="L178" title="All 2 branches missed.">			if (logger.isLoggable(Level.INFO)) logger.info(&quot;There are &quot; + result.size() + &quot; matching types for &quot;</span>
+<span class="nc" id="L179">					+ po);</span>
+
+<span class="nc" id="L181">			return result;</span>
+
+<span class="nc" id="L183">		} catch (SQLException e) {</span>
+<span class="nc" id="L184">			logger.severe(e.getMessage());</span>
+<span class="nc" id="L185">			throw new AdempiereException(e);</span>
+		} finally {
+<span class="nc" id="L187">			DB.close(rs, pstmt);</span>
+		}
+	}
+
+	/**
+	 * @param po
+	 * @param windowID
+	 * @return zoom info records from matching relation types
+	 */
+	public static List&lt;ZoomInfo&gt; retrieveZoomInfos(final PO po,
+			final int windowID) {
+
+<span class="nc" id="L199">		final List&lt;MRelationType&gt; matchingTypes = MRelationType.retrieveTypes(</span>
+<span class="nc" id="L200">				po, windowID);</span>
+
+<span class="nc" id="L202">		final List&lt;ZoomInfo&gt; result = new ArrayList&lt;ZoomInfo&gt;();</span>
+
+<span class="nc bnc" id="L204" title="All 2 branches missed.">		for (final MRelationType currentType : matchingTypes) {</span>
+
+<span class="nc" id="L206">			result.addAll(currentType.retrieveZoomInfos(po));</span>
+
+		}
+<span class="nc" id="L209">		return result;</span>
+	}
+
+	/**
+	 * @return display text from lookup of destination reference
+	 */
+	private String getDestinationRoleDisplay() {
+
+<span class="nc" id="L217">		checkDestinationRefId();</span>
+
+		final Integer colIdx;
+		final String keyValue;
+
+<span class="nc bnc" id="L222" title="All 2 branches missed.">		if (destinationRefId == getAD_Reference_Source_ID()) {</span>
+
+<span class="nc" id="L224">			colIdx = this.get_ColumnIndex(COLUMNNAME_Role_Source);</span>
+<span class="nc" id="L225">			keyValue = getRole_Source();</span>
+<span class="nc" id="L226">		} else {</span>
+<span class="nc" id="L227">			colIdx = this.get_ColumnIndex(COLUMNNAME_Role_Target);</span>
+<span class="nc" id="L228">			keyValue = getRole_Target();</span>
+		}
+
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		if (Util.isEmpty(keyValue)) {</span>
+<span class="nc" id="L232">			return &quot;&quot;;</span>
+		}
+<span class="nc" id="L234">		final Lookup lookup = this.p_info.getColumnLookup(colIdx);</span>
+<span class="nc" id="L235">		return lookup.getDisplay(keyValue);</span>
+	}
+
+	/**
+	 * @param windowId
+	 * @return window name
+	 */
+	private String retrieveWindowName(final int windowId) {
+
+<span class="nc" id="L244">		final boolean baseLanguage = Env.isBaseLanguage(Env.getCtx(),</span>
+<span class="nc" id="L245">				&quot;AD_Window&quot;);</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">		final String sql = baseLanguage ? SQL_WINDOW_NAME : SQL_WINDOW_NAME_TRL;</span>
+
+<span class="nc" id="L248">		final PreparedStatement pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L249">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L251">			pstmt.setInt(1, windowId);</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">			if(!baseLanguage)</span>
+			{    
+<span class="nc" id="L254">			pstmt.setString(2, Env.getAD_Language(Env.getCtx()));</span>
+			}
+<span class="nc" id="L256">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">			if (rs.next()) {</span>
+<span class="nc" id="L258">				return rs.getString(1);</span>
+			}
+<span class="nc" id="L260">			return null;</span>
+<span class="nc" id="L261">		} catch (SQLException e) {</span>
+<span class="nc" id="L262">			throw new AdempiereException(e);</span>
+		} finally {
+<span class="nc" id="L264">			DB.close(rs, pstmt);</span>
+		}
+	}
+
+	/**
+	 * @param po
+	 * @param windowId
+	 * @param rs
+	 * @return relation types
+	 * @throws SQLException
+	 */
+	private static List&lt;MRelationType&gt; evalResultSet(final PO po,
+			final int windowId, final ResultSet rs) throws SQLException {
+
+<span class="nc" id="L278">		final List&lt;MRelationType&gt; result = new ArrayList&lt;MRelationType&gt;();</span>
+
+<span class="nc" id="L280">		final Set&lt;Integer&gt; alreadySeen = new HashSet&lt;Integer&gt;();</span>
+
+<span class="nc bnc" id="L282" title="All 2 branches missed.">		while (rs.next()) {</span>
+
+<span class="nc" id="L284">			final int relTypeId = rs.getInt(COLUMNNAME_AD_RelationType_ID);</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">			if (!alreadySeen.add(relTypeId)) {</span>
+<span class="nc" id="L286">				continue;</span>
+			}
+
+<span class="nc" id="L289">			final MRelationType newType = new MRelationType(po.getCtx(),</span>
+<span class="nc" id="L290">					relTypeId, po.get_TrxName());</span>
+
+			// figure out which AD_reference is the destination relative to the
+			// given po and windowID
+
+<span class="nc bnc" id="L295" title="All 2 branches missed.">			if (newType.isDirected()) {</span>
+				// the type is directed, so the target reference is always the
+				// destination.
+<span class="nc" id="L298">				newType.destinationRefId = newType.getAD_Reference_Target_ID();</span>
+<span class="nc" id="L299">			}</span>
+
+<span class="nc" id="L301">			else if (newType.retrieveSourceTableName().equals(</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">					newType.retrieveTargetTableName())) {</span>
+
+<span class="nc" id="L304">				final MRefTable sourceRefTable = retrieveRefTable(po.getCtx(),</span>
+<span class="nc" id="L305">						newType.getAD_Reference_Source_ID(), po.get_TrxName());</span>
+
+<span class="nc bnc" id="L307" title="All 2 branches missed.">				if (windowId == newType.retrieveWindowID(po, sourceRefTable)) {</span>
+
+<span class="nc" id="L309">					newType.destinationRefId = newType</span>
+<span class="nc" id="L310">							.getAD_Reference_Target_ID();</span>
+<span class="nc" id="L311">				} else {</span>
+<span class="nc" id="L312">					newType.destinationRefId = newType</span>
+<span class="nc" id="L313">							.getAD_Reference_Source_ID();</span>
+				}
+<span class="nc" id="L315">			} else {</span>
+
+<span class="nc" id="L317">				if (po.get_TableName()</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">						.equals(newType.retrieveSourceTableName())) {</span>
+
+<span class="nc" id="L320">					newType.destinationRefId = newType</span>
+<span class="nc" id="L321">							.getAD_Reference_Target_ID();</span>
+<span class="nc" id="L322">				} else {</span>
+<span class="nc" id="L323">					newType.destinationRefId = newType</span>
+<span class="nc" id="L324">							.getAD_Reference_Source_ID();</span>
+				}
+			}
+<span class="nc" id="L327">			result.add(newType);</span>
+		}
+<span class="nc" id="L329">		return result;</span>
+	}
+
+	/**
+	 * @param po
+	 * @param where
+	 * @return true if where is empty or match found in DB
+	 */
+	protected static boolean whereClauseMatches(PO po, String where) {
+
+<span class="nc bnc" id="L339" title="All 2 branches missed.">		if (Util.isEmpty(where, true)) {</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">			if (logger.isLoggable(Level.FINE))</span>
+<span class="nc" id="L341">				logger.fine(&quot;whereClause is empty. Returning true&quot;);</span>
+<span class="nc" id="L342">			return true;</span>
+		}
+
+<span class="nc" id="L345">		final String parsedWhere = parseWhereClause(po, where);</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		if (Util.isEmpty(parsedWhere)) {</span>
+<span class="nc" id="L347">			return false;</span>
+		}
+
+<span class="nc" id="L350">		final PO result = new Query(po.getCtx(), po.get_TableName(),</span>
+<span class="nc" id="L351">				parsedWhere, po.get_TrxName()).first();</span>
+<span class="nc bnc" id="L352" title="All 2 branches missed.">		final boolean match = result != null;</span>
+
+<span class="nc bnc" id="L354" title="All 2 branches missed.">		if (logger.isLoggable(Level.FINE)) logger.fine(&quot;whereClause='&quot; + parsedWhere + &quot;' matches po='&quot; + po</span>
+<span class="nc" id="L355">				+ &quot;':&quot; + match);</span>
+<span class="nc" id="L356">		return match;</span>
+	}
+
+	/**
+	 * @param po
+	 * @param where
+	 * @return parsed where clause
+	 */
+	public static String parseWhereClause(final PO po, final String where) {
+<span class="nc" id="L365">		return parseWhereClause(po, where, null);</span>
+	}
+	
+	/**
+	 * @param po
+	 * @param where
+	 * @param params
+	 * @return parsed where clause
+	 */
+	public static String parseWhereClause(final PO po, final String where, List&lt;Object&gt; params) {
+
+<span class="nc bnc" id="L376" title="All 2 branches missed.">		if (logger.isLoggable(Level.FINE))</span>
+<span class="nc" id="L377">			logger.fine(&quot;building private ctx instance containing the PO's String and int values&quot;);</span>
+		
+<span class="nc" id="L379">		final Properties privateCtx = new Properties();</span>
+<span class="nc" id="L380">		privateCtx.putAll(po.getCtx());</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">		for (int i = 0; i &lt; po.get_ColumnCount(); i++) {</span>
+<span class="nc" id="L382">			final Object val = po.get_Value(i);</span>
+
+<span class="nc bnc" id="L384" title="All 2 branches missed.">			if (val == null) {</span>
+<span class="nc" id="L385">				continue;</span>
+			}
+
+<span class="nc bnc" id="L388" title="All 2 branches missed.">			if (val instanceof Integer) {</span>
+
+<span class="nc" id="L390">				Env.setContext(privateCtx, &quot;#&quot; + po.get_ColumnName(i),</span>
+<span class="nc" id="L391">						(Integer) val);</span>
+<span class="nc" id="L392">				Env.setContext(privateCtx, po.get_ColumnName(i),</span>
+<span class="nc" id="L393">						(Integer) val);</span>
+
+<span class="nc bnc" id="L395" title="All 2 branches missed.">			} else if (val instanceof String) {</span>
+
+<span class="nc" id="L397">				Env.setContext(privateCtx, &quot;#&quot; + po.get_ColumnName(i),</span>
+<span class="nc" id="L398">						(String) val);</span>
+<span class="nc" id="L399">				Env.setContext(privateCtx, po.get_ColumnName(i),</span>
+<span class="nc" id="L400">						(String) val);</span>
+			}
+		}
+
+<span class="nc bnc" id="L404" title="All 2 branches missed.">		final String parsedWhere = params == null </span>
+<span class="nc" id="L405">				? Env.parseContext(privateCtx, -1, where, false)</span>
+<span class="nc" id="L406">				: Env.parseContextForSql(privateCtx, -1, where, false, params);</span>
+
+<span class="nc bnc" id="L408" title="All 2 branches missed.">		if (logger.isLoggable(Level.FINE)) logger.fine(&quot;whereClause='&quot; + where + &quot;'; parsedWhere='&quot; + parsedWhere</span>
+				+ &quot;'&quot;);
+
+<span class="nc" id="L411">		return parsedWhere;</span>
+	}
+
+	/**
+	 * throw exception if destination reference is not valid
+	 */
+	public void checkDestinationRefId() {
+
+<span class="nc bnc" id="L419" title="All 2 branches missed.">		if (destinationRefId == 0) {</span>
+<span class="nc" id="L420">			throw new IllegalStateException(</span>
+<span class="nc" id="L421">					&quot;Can't create a destination query when I don't know which one of the two AD_Reference_ID is the destination.&quot;);</span>
+		}
+<span class="nc" id="L423">	}</span>
+
+	/**
+	 * 
+	 * @param po
+	 * @return zoom info records from destination reference
+	 */
+	public List&lt;ZoomInfoFactory.ZoomInfo&gt; retrieveZoomInfos(final PO po) {
+
+<span class="nc" id="L432">		checkDestinationRefId();</span>
+
+<span class="nc" id="L434">		final MRefTable refTable = retrieveRefTable(getCtx(), destinationRefId,</span>
+<span class="nc" id="L435">				get_TrxName());</span>
+
+<span class="nc" id="L437">		final MQuery query = new MQuery();</span>
+<span class="nc" id="L438">		List&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L439">		String whereClause = parseWhereClause(po, refTable.getWhereClause(), params);</span>
+<span class="nc" id="L440">		query.addRestriction(new SQLFragment(whereClause, params));</span>
+<span class="nc" id="L441">		query.setZoomTableName(retrieveDestinationTableName());</span>
+<span class="nc" id="L442">		query.setZoomColumnName(retrieveDestinationKeyColName());</span>
+
+<span class="nc" id="L444">		evaluateQuery(query);</span>
+
+<span class="nc" id="L446">		final int windowId = retrieveWindowID(po, refTable);</span>
+
+<span class="nc" id="L448">		String display = getDestinationRoleDisplay();</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">		if (Util.isEmpty(display)) {</span>
+<span class="nc" id="L450">			display = retrieveWindowName(windowId);</span>
+		}
+<span class="nc bnc" id="L452" title="All 2 branches missed.">		assert !Util.isEmpty(display);</span>
+		
+<span class="nc" id="L454">		return Collections.singletonList(new ZoomInfoFactory.ZoomInfo(windowId,</span>
+<span class="nc" id="L455">				query, display));</span>
+	}
+
+	/**
+	 * @param po
+	 * @param refTable
+	 * @return AD_Window_ID
+	 */
+	public int retrieveWindowID(final PO po, final MRefTable refTable) {
+
+<span class="nc" id="L465">		MTable table = null;</span>
+
+<span class="nc" id="L467">		int windowId = refTable.getAD_Window_ID();</span>
+<span class="nc" id="L468">		boolean isSoTrx = false;</span>
+		
+<span class="nc bnc" id="L470" title="All 2 branches missed.">		if (windowId == 0) {</span>
+
+<span class="nc" id="L472">			final int tableId = refTable.getAD_Table_ID();</span>
+<span class="nc" id="L473">			table = MTable.get(po.getCtx(), tableId);</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">			if (po.get_ColumnIndex(&quot;IsSOTrx&quot;) &gt;= 0) {</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">				if (isSoTrx = po.get_ValueAsBoolean(&quot;IsSOTrx&quot;)) {</span>
+<span class="nc" id="L476">					windowId = table.getAD_Window_ID();</span>
+<span class="nc" id="L477">				} else {</span>
+<span class="nc" id="L478">					windowId = table.getPO_Window_ID();</span>
+				}
+<span class="nc bnc" id="L480" title="All 2 branches missed.">			} else if ( isSoTrx = Env.isSOTrx(po.getCtx())) {</span>
+<span class="nc" id="L481">				windowId = table.getAD_Window_ID();</span>
+<span class="nc" id="L482">			} else {</span>
+<span class="nc" id="L483">				windowId = table.getPO_Window_ID();</span>
+			}
+		}
+
+<span class="nc bnc" id="L487" title="All 2 branches missed.">		if (windowId == 0) {</span>
+<span class="nc" id="L488">			MReference refTarget = MReference.get(getAD_Reference_Target_ID());</span>
+<span class="nc" id="L489">			PORelationException.throwMissingWindowId(po, refTarget.getName(), table.getName(),isSoTrx);</span>
+		}
+<span class="nc" id="L491">		return windowId;</span>
+
+	}
+
+	/**
+	 * @param ctx
+	 * @param referenceId
+	 * @param trxName
+	 * @return MRefTable
+	 */
+	public static MRefTable retrieveRefTable(final Properties ctx,
+			final int referenceId, final String trxName) {
+
+<span class="nc" id="L504">		final Object[] params = { referenceId };</span>
+
+<span class="nc" id="L506">		final MRefTable refTable = new Query(ctx, I_AD_Ref_Table.Table_Name,</span>
+<span class="nc" id="L507">				COLUMNNAME_AD_Reference_ID + &quot;=?&quot;, trxName).setParameters(</span>
+<span class="nc" id="L508">				params).firstOnly();</span>
+
+<span class="nc" id="L510">		return refTable;</span>
+	}
+
+	/**
+	 * Update record count and zoom value of query
+	 * @param query
+	 */
+	private static void evaluateQuery(final MQuery query) {
+
+<span class="nc" id="L519">		SQLFragment filter = query.getSQLFilter(false);</span>
+<span class="nc" id="L520">		StringBuilder sqlCommon = new StringBuilder(&quot; FROM &quot;).append(query.getZoomTableName())</span>
+<span class="nc" id="L521">				.append(&quot; WHERE &quot;).append(filter.sqlClause());</span>
+
+<span class="nc" id="L523">		final String sqlCount = &quot;SELECT COUNT(*) &quot; + sqlCommon;</span>
+
+<span class="nc" id="L525">		final int count = DB.getSQLValueEx(null, sqlCount, filter.parameters());</span>
+<span class="nc" id="L526">		query.setRecordCount(count);</span>
+
+<span class="nc bnc" id="L528" title="All 2 branches missed.">		if (count &gt; 0) {</span>
+
+<span class="nc" id="L530">			StringBuilder sqlFirstKey = new StringBuilder(&quot;SELECT &quot;).append(query.getZoomColumnName())</span>
+<span class="nc" id="L531">					.append(sqlCommon);</span>
+
+<span class="nc" id="L533">			final int firstKey = DB.getSQLValueEx(null, sqlFirstKey.toString(), filter.parameters());</span>
+<span class="nc" id="L534">			query.setZoomValue(firstKey);</span>
+		}
+<span class="nc" id="L536">	}</span>
+
+	/**
+	 * @return table name of source reference
+	 */
+	private String retrieveSourceTableName() {
+
+<span class="nc" id="L543">		return retrieveTableName(getAD_Reference_Source_ID());</span>
+	}
+
+	/**
+	 * @return table name of target reference
+	 */
+	private String retrieveTargetTableName() {
+
+<span class="nc" id="L551">		return retrieveTableName(getAD_Reference_Target_ID());</span>
+	}
+
+	/**
+	 * @return table name of destination reference
+	 */
+	public String retrieveDestinationTableName() {
+
+<span class="nc" id="L559">		return retrieveTableName(destinationRefId);</span>
+	}
+
+	/**
+	 * @param refId
+	 * @return table name
+	 */
+	private String retrieveTableName(final int refId) {
+
+<span class="nc" id="L568">		return retrieveRefTable(getCtx(), refId, get_TrxName()).getAD_Table()</span>
+<span class="nc" id="L569">				.getTableName();</span>
+	}
+
+	/**
+	 * @return key column name of destination reference
+	 */
+	public String retrieveDestinationKeyColName() {
+
+<span class="nc" id="L577">		final int keyColumnId = retrieveRefTable(getCtx(), destinationRefId,</span>
+<span class="nc" id="L578">				get_TrxName()).getAD_Key();</span>
+<span class="nc" id="L579">		return MColumn.getColumnName(getCtx(), keyColumnId);</span>
+	}
+
+	@Override
+	public String toString() {
+<span class="nc" id="L584">		StringBuilder sb = new StringBuilder(&quot;MRelationType[&quot;);</span>
+		//
+<span class="nc" id="L586">		sb.append(get_ID());</span>
+<span class="nc" id="L587">		sb.append(&quot;, Name=&quot;).append(getName());</span>
+<span class="nc" id="L588">		sb.append(&quot;, Type=&quot;).append(getType());</span>
+
+<span class="nc" id="L590">		sb.append(&quot;, AD_Reference_Destination_RefId=&quot;).append(destinationRefId);</span>
+
+<span class="nc" id="L592">		sb.append(&quot;, AD_Reference_Source_ID=&quot;).append(</span>
+<span class="nc" id="L593">				getAD_Reference_Source_ID());</span>
+<span class="nc" id="L594">		sb.append(&quot;, Role_Source=&quot;).append(getRole_Source());</span>
+
+<span class="nc" id="L596">		sb.append(&quot;, AD_Reference_Target_ID=&quot;).append(</span>
+<span class="nc" id="L597">				getAD_Reference_Target_ID());</span>
+<span class="nc" id="L598">		sb.append(&quot;, Role_Target=&quot;).append(getRole_Target()); //</span>
+
+<span class="nc" id="L600">		sb.append(&quot;]&quot;);</span>
+
+<span class="nc" id="L602">		return sb.toString();</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

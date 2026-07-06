@@ -1,0 +1,499 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>WorkflowProcessor.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.server</a> &gt; <span class="el_source">WorkflowProcessor.java</span></div><h1>WorkflowProcessor.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.server;
+
+import java.io.File;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.logging.Level;
+
+import org.compiere.model.MClient;
+import org.compiere.model.MOrgInfo;
+import org.compiere.model.MUserRoles;
+import org.compiere.model.PO;
+import org.compiere.process.DocAction;
+import org.compiere.process.StateEngine;
+import org.compiere.util.DB;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.wf.MWFActivity;
+import org.compiere.wf.MWFNode;
+import org.compiere.wf.MWFProcess;
+import org.compiere.wf.MWFResponsible;
+import org.compiere.wf.MWorkflowProcessor;
+import org.compiere.wf.MWorkflowProcessorLog;
+
+
+/**
+ *	Workflow Processor
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: WorkflowProcessor.java,v 1.4 2006/07/30 00:53:33 jjanke Exp $
+ */
+public class WorkflowProcessor extends AdempiereServer
+{
+	/**
+	 * 	WorkflowProcessor
+	 *	@param model model
+	 */
+	public WorkflowProcessor (MWorkflowProcessor model)
+	{
+<span class="nc" id="L58">		super (model, 30);	//	30 seconds delay</span>
+<span class="nc" id="L59">		m_model = model;</span>
+<span class="nc" id="L60">		m_client = MClient.get(model.getCtx(), model.getAD_Client_ID());</span>
+<span class="nc" id="L61">	}	//	WorkflowProcessor</span>
+	
+	/**	The Concrete Model			*/
+<span class="nc" id="L64">	protected	MWorkflowProcessor	m_model = null;</span>
+	/**	Last Summary				*/
+<span class="nc" id="L66">	protected StringBuffer 		m_summary = new StringBuffer();</span>
+	/** Client onfo					*/
+<span class="nc" id="L68">	protected MClient 			m_client = null;</span>
+	
+	/**
+	 * 	Work
+	 */
+	protected void doWork ()
+	{
+<span class="nc" id="L75">		m_summary = new StringBuffer();</span>
+		//
+<span class="nc" id="L77">		wakeup();</span>
+<span class="nc" id="L78">		dynamicPriority();</span>
+<span class="nc" id="L79">		sendAlerts();</span>
+		//
+<span class="nc" id="L81">		int no = m_model.deleteLog();</span>
+<span class="nc" id="L82">		m_summary.append(&quot;Logs deleted=&quot;).append(no);</span>
+		//
+<span class="nc" id="L84">		MWorkflowProcessorLog pLog = new MWorkflowProcessorLog(m_model, m_summary.toString());</span>
+<span class="nc" id="L85">		pLog.setReference(&quot;#&quot; + String.valueOf(p_runCount) </span>
+<span class="nc" id="L86">			+ &quot; - &quot; + TimeUtil.formatElapsed(new Timestamp(p_startWork)));</span>
+<span class="nc" id="L87">		pLog.saveEx();</span>
+<span class="nc" id="L88">	}	//	doWork</span>
+
+	/**
+	 * 	Continue Workflow After Sleep
+	 */
+	protected void wakeup()
+	{
+<span class="nc" id="L95">		String sql = &quot;SELECT * &quot;</span>
+			+ &quot;FROM AD_WF_Activity a &quot;
+			+ &quot;WHERE Processed='N' AND WFState='OS'&quot;	//	suspended
+			+ &quot; AND EndWaitTime &lt;= getDate()&quot;
+			+ &quot; AND AD_Client_ID=?&quot;
+			+ &quot; AND EXISTS (SELECT * FROM AD_Workflow wf &quot;
+				+ &quot; INNER JOIN AD_WF_Node wfn ON (wf.AD_Workflow_ID=wfn.AD_Workflow_ID) &quot;
+				+ &quot;WHERE a.AD_WF_Node_ID=wfn.AD_WF_Node_ID&quot;
+				+ &quot; AND wfn.Action='Z'&quot;		//	sleeping
+				+ &quot; AND (wf.AD_WorkflowProcessor_ID IS NULL OR wf.AD_WorkflowProcessor_ID=?))&quot;;
+<span class="nc" id="L105">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L106">		ResultSet rs = null;</span>
+<span class="nc" id="L107">		int count = 0;</span>
+		try
+		{
+<span class="nc" id="L110">			pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L111">			pstmt.setInt (1, m_model.getAD_Client_ID());</span>
+<span class="nc" id="L112">			pstmt.setInt (2, m_model.getAD_WorkflowProcessor_ID());</span>
+<span class="nc" id="L113">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L116">				MWFActivity activity = new MWFActivity (getCtx(), rs, null);</span>
+<span class="nc" id="L117">				activity.setWFState (StateEngine.STATE_Completed);</span>
+				// saves and calls MWFProcess.checkActivities();
+<span class="nc" id="L119">				count++;</span>
+<span class="nc" id="L120">				MWFProcess wfpr = new MWFProcess(activity.getCtx(), activity.getAD_WF_Process_ID(), activity.get_TrxName());</span>
+<span class="nc" id="L121">				wfpr.checkCloseActivities(activity.get_TrxName());</span>
+			}
+<span class="nc" id="L123">		}</span>
+<span class="nc" id="L124">		catch (Exception e)</span>
+		{
+<span class="nc" id="L126">			log.log(Level.SEVERE, &quot;wakeup&quot;, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L130">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L131">			rs = null;</span>
+<span class="nc" id="L132">			pstmt = null;</span>
+		}
+<span class="nc" id="L134">		m_summary.append(&quot;Wakeup #&quot;).append(count).append (&quot; - &quot;);</span>
+<span class="nc" id="L135">	}	//	wakeup</span>
+	
+	/**
+	 * 	Set/Increase Priority dynamically
+	 */
+	protected void dynamicPriority()
+	{
+		//	suspened activities with dynamic priority node
+<span class="nc" id="L143">		String sql = &quot;SELECT * &quot;</span>
+			+ &quot;FROM AD_WF_Activity a &quot;
+			+ &quot;WHERE Processed='N' AND WFState='OS'&quot;	//	suspended
+			+ &quot; AND EXISTS (SELECT * FROM AD_Workflow wf&quot;
+				+ &quot; INNER JOIN AD_WF_Node wfn ON (wf.AD_Workflow_ID=wfn.AD_Workflow_ID) &quot;
+				+ &quot;WHERE a.AD_WF_Node_ID=wfn.AD_WF_Node_ID AND wf.AD_WorkflowProcessor_ID=?&quot;
+				+ &quot; AND wfn.DynPriorityUnit IS NOT NULL AND wfn.DynPriorityChange IS NOT NULL)&quot;;
+<span class="nc" id="L150">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L151">		ResultSet rs = null;</span>
+<span class="nc" id="L152">		int count = 0;</span>
+		try
+		{
+<span class="nc" id="L155">			pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L156">			pstmt.setInt(1, m_model.getAD_WorkflowProcessor_ID());</span>
+<span class="nc" id="L157">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L160">				MWFActivity activity = new MWFActivity (getCtx(), rs, null);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">				if (activity.getDynPriorityStart() == 0)</span>
+<span class="nc" id="L162">					activity.setDynPriorityStart(activity.getPriority());</span>
+<span class="nc" id="L163">				long ms = System.currentTimeMillis() - activity.getCreated().getTime();</span>
+<span class="nc" id="L164">				MWFNode node = activity.getNode();</span>
+<span class="nc" id="L165">				int prioDiff = node.calculateDynamicPriority ((int)(ms / 1000));</span>
+<span class="nc" id="L166">				activity.setPriority(activity.getDynPriorityStart() + prioDiff);</span>
+<span class="nc" id="L167">				activity.saveEx();</span>
+<span class="nc" id="L168">				count++;</span>
+			}
+<span class="nc" id="L170">		}</span>
+<span class="nc" id="L171">		catch (Exception e)</span>
+		{
+<span class="nc" id="L173">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L177">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L178">			rs = null;</span>
+<span class="nc" id="L179">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L182">		m_summary.append(&quot;DynPriority #&quot;).append(count).append (&quot; - &quot;);		    </span>
+<span class="nc" id="L183">	}	//	setPriority</span>
+	
+	
+	/**
+	 * 	Send Alerts
+	 */
+	protected void sendAlerts()
+	{
+		//	Alert over Priority
+<span class="nc bnc" id="L192" title="All 2 branches missed.">		if (m_model.getAlertOverPriority() &gt; 0)</span>
+		{
+<span class="nc" id="L194">			String sql = &quot;SELECT * &quot;</span>
+				+ &quot;FROM AD_WF_Activity a &quot;
+				+ &quot;WHERE Processed='N' AND WFState='OS'&quot;	//	suspended
+				+ &quot; AND Priority &gt;= ?&quot;				//	##1
+				+ &quot; AND (DateLastAlert IS NULL&quot;;
+<span class="nc bnc" id="L199" title="All 2 branches missed.">			if (m_model.getRemindDays() &gt; 0)</span>
+<span class="nc" id="L200">				sql += &quot; OR (DateLastAlert+&quot; + m_model.getRemindDays() </span>
+					+ &quot;) &lt; getDate()&quot;;
+<span class="nc" id="L202">			sql += &quot;) AND EXISTS (SELECT * FROM AD_Workflow wf &quot;</span>
+					+ &quot; INNER JOIN AD_WF_Node wfn ON (wf.AD_Workflow_ID=wfn.AD_Workflow_ID) &quot;
+					+ &quot;WHERE a.AD_WF_Node_ID=wfn.AD_WF_Node_ID&quot;
+					+ &quot; AND (wf.AD_WorkflowProcessor_ID IS NULL OR wf.AD_WorkflowProcessor_ID=?))&quot;;
+<span class="nc" id="L206">			int count = 0;</span>
+<span class="nc" id="L207">			int countEMails = 0;</span>
+<span class="nc" id="L208">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L209">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L212">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L213">				pstmt.setInt (1, m_model.getAlertOverPriority());</span>
+<span class="nc" id="L214">				pstmt.setInt (2, m_model.getAD_WorkflowProcessor_ID());</span>
+<span class="nc" id="L215">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">				while (rs.next())</span>
+				{
+<span class="nc" id="L218">					MWFActivity activity = new MWFActivity (getCtx(), rs, null);</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">					boolean escalate = activity.getDateLastAlert() != null; </span>
+<span class="nc" id="L220">					countEMails += sendEmail (activity, &quot;ActivityOverPriority&quot;,</span>
+<span class="nc" id="L221">						escalate, true);</span>
+<span class="nc" id="L222">					activity.setDateLastAlert(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L223">					activity.saveEx();</span>
+<span class="nc" id="L224">					count++;</span>
+				}
+<span class="nc" id="L226">			}</span>
+<span class="nc" id="L227">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L229">				log.log(Level.SEVERE, &quot;(Priority) - &quot; + sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L233">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L234">				rs = null;</span>
+<span class="nc" id="L235">				pstmt = null;</span>
+			}
+<span class="nc" id="L237">			m_summary.append(&quot;OverPriority #&quot;).append(count);</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">			if (countEMails &gt; 0)</span>
+<span class="nc" id="L239">				m_summary.append(&quot; (&quot;).append(countEMails).append(&quot; EMail)&quot;);</span>
+<span class="nc" id="L240">			m_summary.append (&quot; - &quot;);</span>
+		}	//	Alert over Priority
+
+		/**
+		 * 	Over End Wait
+		 */
+<span class="nc" id="L246">		String sql = &quot;SELECT * &quot;</span>
+			+ &quot;FROM AD_WF_Activity a &quot;
+			+ &quot;WHERE Processed='N' AND WFState='OS'&quot;	//	suspended
+			+ &quot; AND EndWaitTime &lt; getDate()&quot;
+			+ &quot; AND (DateLastAlert IS NULL&quot;;
+<span class="nc bnc" id="L251" title="All 2 branches missed.">		if (m_model.getRemindDays() &gt; 0)</span>
+<span class="nc" id="L252">			sql += &quot; OR (DateLastAlert+&quot; + m_model.getRemindDays() </span>
+				+ &quot;) &lt; getDate()&quot;;
+<span class="nc" id="L254">		sql += &quot;) AND EXISTS (SELECT * FROM AD_Workflow wf &quot;</span>
+				+ &quot; INNER JOIN AD_WF_Node wfn ON (wf.AD_Workflow_ID=wfn.AD_Workflow_ID) &quot;
+				+ &quot;WHERE a.AD_WF_Node_ID=wfn.AD_WF_Node_ID&quot;
+				+ &quot; AND wfn.Action&lt;&gt;'Z'&quot;	//	not sleeping
+				+ &quot; AND (wf.AD_WorkflowProcessor_ID IS NULL OR wf.AD_WorkflowProcessor_ID=?))&quot;;
+<span class="nc" id="L259">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L260">		ResultSet rs = null;</span>
+<span class="nc" id="L261">		int count = 0;</span>
+<span class="nc" id="L262">		int countEMails = 0;</span>
+		try
+		{
+<span class="nc" id="L265">			pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L266">			pstmt.setInt(1, m_model.getAD_WorkflowProcessor_ID());</span>
+<span class="nc" id="L267">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L270">				MWFActivity activity = new MWFActivity (getCtx(), rs, null);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">				boolean escalate = activity.getDateLastAlert() != null; </span>
+<span class="nc" id="L272">				countEMails += sendEmail (activity, &quot;ActivityEndWaitTime&quot;, </span>
+<span class="nc" id="L273">					escalate, false);</span>
+<span class="nc" id="L274">				activity.setDateLastAlert(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L275">				activity.saveEx();</span>
+<span class="nc" id="L276">				count++;</span>
+			}
+<span class="nc" id="L278">		}</span>
+<span class="nc" id="L279">		catch (Exception e)</span>
+		{
+<span class="nc" id="L281">			log.log(Level.SEVERE, &quot;(EndWaitTime) - &quot; + sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L285">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L286">			rs = null;</span>
+<span class="nc" id="L287">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L290">		m_summary.append(&quot;EndWaitTime #&quot;).append(count);</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">		if (countEMails &gt; 0)</span>
+<span class="nc" id="L292">			m_summary.append(&quot; (&quot;).append(countEMails).append(&quot; EMail)&quot;);</span>
+<span class="nc" id="L293">		m_summary.append (&quot; - &quot;);</span>
+
+		/**
+		 *  Send inactivity alerts
+		 */
+<span class="nc bnc" id="L298" title="All 2 branches missed.">		if (m_model.getInactivityAlertDays() &gt; 0)</span>
+		{
+<span class="nc" id="L300">			sql = &quot;SELECT * &quot;</span>
+				+ &quot;FROM AD_WF_Activity a &quot;
+				+ &quot;WHERE Processed='N' AND WFState='OS'&quot;	//	suspended
+<span class="nc" id="L303">				+ &quot; AND (Updated+&quot; + m_model.getInactivityAlertDays() + &quot;) &lt; getDate()&quot;</span>
+				+ &quot; AND (DateLastAlert IS NULL&quot;;
+<span class="nc bnc" id="L305" title="All 2 branches missed.">			if (m_model.getRemindDays() &gt; 0)</span>
+<span class="nc" id="L306">				sql += &quot; OR (DateLastAlert+&quot; + m_model.getRemindDays() </span>
+					+ &quot;) &lt; getDate()&quot;;
+<span class="nc" id="L308">			sql += &quot;) AND EXISTS (SELECT * FROM AD_Workflow wf &quot;</span>
+					+ &quot; INNER JOIN AD_WF_Node wfn ON (wf.AD_Workflow_ID=wfn.AD_Workflow_ID) &quot;
+					+ &quot;WHERE a.AD_WF_Node_ID=wfn.AD_WF_Node_ID&quot;
+					+ &quot; AND (wf.AD_WorkflowProcessor_ID IS NULL OR wf.AD_WorkflowProcessor_ID=?))&quot;;
+<span class="nc" id="L312">			count = 0;</span>
+<span class="nc" id="L313">			countEMails = 0;</span>
+			try
+			{
+<span class="nc" id="L316">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L317">				pstmt.setInt (1, m_model.getAD_WorkflowProcessor_ID());</span>
+<span class="nc" id="L318">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">				while (rs.next())</span>
+				{
+<span class="nc" id="L321">					MWFActivity activity = new MWFActivity (getCtx(), rs, null);</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">					boolean escalate = activity.getDateLastAlert() != null; </span>
+<span class="nc" id="L323">					countEMails += sendEmail (activity, &quot;ActivityInactivity&quot;,</span>
+<span class="nc" id="L324">						escalate, false);</span>
+<span class="nc" id="L325">					activity.setDateLastAlert(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L326">					activity.saveEx();</span>
+<span class="nc" id="L327">					count++;</span>
+				}
+<span class="nc" id="L329">			}</span>
+<span class="nc" id="L330">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L332">				log.log(Level.SEVERE, &quot;(Inactivity): &quot; + sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L336">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L337">				rs = null;</span>
+<span class="nc" id="L338">				pstmt = null;</span>
+			}
+<span class="nc" id="L340">			m_summary.append(&quot;Inactivity #&quot;).append(count);</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">			if (countEMails &gt; 0)</span>
+<span class="nc" id="L342">				m_summary.append(&quot; (&quot;).append(countEMails).append(&quot; EMail)&quot;);</span>
+<span class="nc" id="L343">			m_summary.append (&quot; - &quot;);</span>
+		}	//	Inactivity		
+<span class="nc" id="L345">	}	//	sendAlerts</span>
+	
+	/**
+	 *  Send Alert EMail
+	 *  @param activity activity
+	 *  @param AD_Message message
+	 *  @param toProcess true if to process owner
+	 *  @param toSupervisor true if to Supervisor
+	 * 	@return number of mails sent
+	 */
+	protected int sendEmail (MWFActivity activity, String AD_Message,
+		boolean toProcess, boolean toSupervisor)
+	{
+<span class="nc bnc" id="L358" title="All 4 branches missed.">		if (m_client == null || m_client.getAD_Client_ID() != activity.getAD_Client_ID())</span>
+<span class="nc" id="L359">			m_client = MClient.get(getCtx(), activity.getAD_Client_ID());</span>
+			
+<span class="nc" id="L361">		MWFProcess process = new MWFProcess (getCtx(), activity.getAD_WF_Process_ID(), null);</span>
+
+<span class="nc" id="L363">		String subjectVar = activity.getNode().getName();</span>
+<span class="nc" id="L364">		String message = activity.getTextMsg();</span>
+<span class="nc bnc" id="L365" title="All 4 branches missed.">		if (message == null || message.length() == 0)</span>
+<span class="nc" id="L366">			message = process.getTextMsg();</span>
+<span class="nc" id="L367">		File pdf = null; </span>
+<span class="nc" id="L368">		PO po = activity.getPO();</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">		if (po instanceof DocAction)</span>
+		{
+<span class="nc" id="L371">			message = ((DocAction)po).getDocumentInfo() + &quot;\n&quot; + message;</span>
+<span class="nc" id="L372">			pdf = ((DocAction)po).createPDF();</span>
+		}
+		
+		//  Inactivity Alert: Workflow Activity {0}
+<span class="nc" id="L376">		String subject = Msg.getMsg(m_client.getAD_Language(), AD_Message, </span>
+<span class="nc" id="L377">			new Object[] {subjectVar});</span>
+		
+		//	Prevent duplicates
+<span class="nc" id="L380">		ArrayList&lt;Integer&gt; list = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc" id="L381">		int counter = 0;</span>
+		
+		//	To Activity Owner
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (m_client.sendEMail(activity.getAD_User_ID(), subject, message, pdf))</span>
+<span class="nc" id="L385">			counter++;</span>
+<span class="nc" id="L386">		list.add (Integer.valueOf(activity.getAD_User_ID()));</span>
+
+		//	To Process Owner
+<span class="nc bnc" id="L389" title="All 2 branches missed.">		if (toProcess</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">			&amp;&amp; process.getAD_User_ID() != activity.getAD_User_ID())</span>
+		{
+<span class="nc bnc" id="L392" title="All 2 branches missed.">			if (m_client.sendEMail(process.getAD_User_ID(), subject, message, pdf))</span>
+<span class="nc" id="L393">				counter++;</span>
+<span class="nc" id="L394">			list.add (Integer.valueOf(process.getAD_User_ID()));</span>
+		}
+		
+		//	To Activity Responsible
+<span class="nc" id="L398">		MWFResponsible responsible = MWFResponsible.get(getCtx(), activity.getAD_WF_Responsible_ID());</span>
+<span class="nc" id="L399">		counter += sendAlertToResponsible (responsible, list, process,</span>
+<span class="nc" id="L400">			subject, message, pdf);</span>
+		
+		//	To Process Responsible
+<span class="nc bnc" id="L403" title="All 2 branches missed.">		if (toProcess</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">			&amp;&amp; process.getAD_WF_Responsible_ID() != activity.getAD_WF_Responsible_ID())</span>
+		{
+<span class="nc" id="L406">			responsible = MWFResponsible.get(getCtx(), process.getAD_WF_Responsible_ID());</span>
+<span class="nc" id="L407">			counter += sendAlertToResponsible (responsible, list, process,</span>
+<span class="nc" id="L408">				subject, message, pdf);</span>
+		}
+		
+		//	Processor SuperVisor
+<span class="nc bnc" id="L412" title="All 2 branches missed.">		if (toSupervisor </span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">			&amp;&amp; m_model.getSupervisor_ID() != 0</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">			&amp;&amp; !list.contains(Integer.valueOf(m_model.getSupervisor_ID())))</span>
+		{
+<span class="nc bnc" id="L416" title="All 2 branches missed.">			if (m_client.sendEMail(m_model.getSupervisor_ID(), subject, message, pdf))</span>
+<span class="nc" id="L417">				counter++;</span>
+<span class="nc" id="L418">			list.add (Integer.valueOf(m_model.getSupervisor_ID()));</span>
+		}
+
+<span class="nc" id="L421">		return counter;</span>
+	}   //  sendAlert
+	
+	/**
+	 * 	Send Alert To Responsible
+	 *	@param responsible responsible
+	 *	@param list list of already sent users
+	 *	@param process process
+	 *	@param subject subject
+	 *	@param message message
+	 *	@param pdf optional pdf
+	 *	@return number of mail sent
+	 */
+	protected int sendAlertToResponsible (MWFResponsible responsible, 
+		ArrayList&lt;Integer&gt; list, MWFProcess process,
+		String subject, String message, File pdf)
+	{
+<span class="nc" id="L438">		int counter = 0;</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">		if (responsible.isInvoker())</span>
+<span class="nc" id="L440">			;</span>
+		//	Human
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		else if (MWFResponsible.RESPONSIBLETYPE_Human.equals(responsible.getResponsibleType())</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">			&amp;&amp; responsible.getAD_User_ID() != 0</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">			&amp;&amp; !list.contains(Integer.valueOf(responsible.getAD_User_ID())))</span>
+		{
+<span class="nc bnc" id="L446" title="All 2 branches missed.">			if (m_client.sendEMail(responsible.getAD_User_ID(), subject, message, pdf))</span>
+<span class="nc" id="L447">				counter++;</span>
+<span class="nc" id="L448">			list.add (Integer.valueOf(responsible.getAD_User_ID()));</span>
+<span class="nc" id="L449">		}</span>
+		//	Org of the Document
+<span class="nc bnc" id="L451" title="All 2 branches missed.">		else if (MWFResponsible.RESPONSIBLETYPE_Organization.equals(responsible.getResponsibleType()))</span>
+		{
+<span class="nc" id="L453">			PO document = process.getPO();</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">			if (document != null)</span>
+			{
+<span class="nc" id="L456">				MOrgInfo org = MOrgInfo.get (getCtx(), document.getAD_Org_ID(), null);</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">				if (org.getSupervisor_ID() != 0</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">					&amp;&amp; !list.contains(Integer.valueOf(org.getSupervisor_ID())))</span>
+				{
+<span class="nc bnc" id="L460" title="All 2 branches missed.">					if (m_client.sendEMail(org.getSupervisor_ID(), subject, message, pdf))</span>
+<span class="nc" id="L461">						counter++;</span>
+<span class="nc" id="L462">					list.add (Integer.valueOf(org.getSupervisor_ID()));</span>
+				}
+			}
+<span class="nc" id="L465">		}</span>
+		//	Role
+<span class="nc bnc" id="L467" title="All 2 branches missed.">		else if (MWFResponsible.RESPONSIBLETYPE_Role.equals(responsible.getResponsibleType())</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">			&amp;&amp; responsible.getAD_Role_ID() != 0)</span>
+		{
+<span class="nc" id="L470">			MUserRoles[] userRoles = MUserRoles.getOfRole(getCtx(), responsible.getAD_Role_ID());</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">			for (int i = 0; i &lt; userRoles.length; i++)</span>
+			{
+<span class="nc" id="L473">				MUserRoles roles = userRoles[i];</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">				if (!roles.isActive())</span>
+<span class="nc" id="L475">					continue;</span>
+<span class="nc" id="L476">				int AD_User_ID = roles.getAD_User_ID();</span>
+<span class="nc bnc" id="L477" title="All 2 branches missed.">				if (!list.contains(Integer.valueOf(AD_User_ID)))</span>
+				{
+<span class="nc bnc" id="L479" title="All 2 branches missed.">					if (m_client.sendEMail(AD_User_ID, subject, message, pdf))</span>
+<span class="nc" id="L480">						counter++;</span>
+<span class="nc" id="L481">					list.add (Integer.valueOf(AD_User_ID));</span>
+				}
+			}
+		}
+<span class="nc" id="L485">		return counter;</span>
+	}	//	sendAlertToResponsible
+	
+	
+	/**
+	 * 	Get Server Info
+	 *	@return info
+	 */
+	public String getServerInfo()
+	{
+<span class="nc" id="L495">		return &quot;#&quot; + p_runCount + &quot; - Last=&quot; + m_summary.toString();</span>
+	}	//	getServerInfo
+
+}	//	WorkflowProcessor
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

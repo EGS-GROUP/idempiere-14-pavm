@@ -1,0 +1,513 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>RequestEMailProcessor.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">RequestEMailProcessor.java</span></div><h1>RequestEMailProcessor.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+import javax.mail.BodyPart;
+import javax.mail.Flags;
+import javax.mail.Folder;
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.Session;
+import javax.mail.Store;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MAttachment;
+import org.compiere.model.MColumn;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MRequest;
+import org.compiere.model.MRequestType;
+import org.compiere.model.MUser;
+import org.compiere.util.DB;
+import org.compiere.util.EmailSrv;
+import org.compiere.util.EmailSrv.EmailContent;
+import org.compiere.util.EmailSrv.ProcessEmailHandle;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+
+/**
+ *	Request Email Processor
+ *	
+ *  @author Carlos Ruiz based on initial work by Jorg Janke - sponsored by DigitalArmour
+ *  @version $Id: RequestEMailProcessor.java,v 1.2 2006/10/23 06:01:20 cruiz Exp $
+ *  hieplq:separate email process to other class for easy re-use and do IDEMPIERE-2244
+ *  
+ *  IMAPHost format: {imap|imaps}://[IMAPHostURL]:[Port] example: imaps://imap.gmail.com:993
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L61">public class RequestEMailProcessor extends SvrProcess implements ProcessEmailHandle</span>
+{
+<span class="nc" id="L63">	protected String	p_IMAPHost = null;</span>
+<span class="nc" id="L64">	protected int		p_IMAPPort = 143;</span>
+<span class="nc" id="L65">	protected String	p_IMAPUser = null;</span>
+<span class="nc" id="L66">	protected String	p_IMAPPwd = null;</span>
+<span class="nc" id="L67">	protected String	p_RequestFolder = null;</span>
+<span class="nc" id="L68">	protected String	p_InboxFolder = null;</span>
+<span class="nc" id="L69">	protected Boolean	p_NestInbox = true;</span>
+<span class="nc" id="L70">	protected String	p_ErrorFolder = null;</span>
+<span class="nc" id="L71">	protected Boolean 	isSSL = null;</span>
+<span class="nc" id="L72">	protected int C_BPartner_ID = 0;</span>
+<span class="nc" id="L73">	protected int AD_User_ID = 0;</span>
+<span class="nc" id="L74">	protected int AD_Role_ID = 0;</span>
+<span class="nc" id="L75">	protected int SalesRep_ID = 0;</span>
+<span class="nc" id="L76">	protected int R_RequestType_ID = 0;</span>
+<span class="nc" id="L77">	protected String p_DefaultPriority = null;</span>
+<span class="nc" id="L78">	protected String p_DefaultConfidentiality = null;</span>
+<span class="nc" id="L79">	protected String p_HTMLAttachmentType = &quot;H&quot;;</span>
+
+<span class="nc" id="L81">	protected int noProcessed = 0;</span>
+<span class="nc" id="L82">	protected int noRequest = 0;</span>
+<span class="nc" id="L83">	protected int noError = 0;</span>
+	/**	Session				*/
+<span class="nc" id="L85">	protected Session 	m_session = null;</span>
+	/**	Store				*/
+<span class="nc" id="L87">	protected Store 		m_store = null;</span>
+	/**	Process Error				*/
+	protected static final int		ERROR = 0;
+	/**	Process Request				*/
+	protected static final int		REQUEST = 1;
+	
+	protected Folder errorFolder;
+	protected Folder requestFolder;
+<span class="nc" id="L95">	protected List&lt;Folder&gt; lsFolderProcess = new ArrayList&lt;Folder&gt;();</span>
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L101">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L104">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">			if (para[i].getParameter() == null)</span>
+<span class="nc" id="L106">				;</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			else if (name.equals(&quot;p_IMAPHost&quot;))</span>
+<span class="nc" id="L108">				p_IMAPHost = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">			else if (name.equals(&quot;p_IMAPUser&quot;))</span>
+<span class="nc" id="L110">				p_IMAPUser = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">			else if (name.equals(&quot;p_IMAPPwd&quot;))</span>
+<span class="nc" id="L112">				p_IMAPPwd = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">			else if (name.equals(&quot;p_RequestFolder&quot;))</span>
+<span class="nc" id="L114">				p_RequestFolder = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			else if (name.equals(&quot;p_InboxFolder&quot;))</span>
+<span class="nc" id="L116">				p_InboxFolder = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">			else if (name.equals(&quot;p_ErrorFolder&quot;))</span>
+<span class="nc" id="L118">				p_ErrorFolder = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">			else if (name.equals(&quot;C_BPartner_ID&quot;))</span>
+<span class="nc" id="L120">				C_BPartner_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			else if (name.equals(&quot;AD_User_ID&quot;))</span>
+<span class="nc" id="L122">				AD_User_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">			else if (name.equals(&quot;AD_Role_ID&quot;))</span>
+<span class="nc" id="L124">				AD_Role_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			else if (name.equals(&quot;SalesRep_ID&quot;))</span>
+<span class="nc" id="L126">				SalesRep_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">			else if (name.equals(&quot;R_RequestType_ID&quot;))</span>
+<span class="nc" id="L128">				R_RequestType_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">			else if (name.equals(&quot;p_DefaultPriority&quot;))</span>
+<span class="nc" id="L130">				p_DefaultPriority = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			else if (name.equals(&quot;p_DefaultConfidentiality&quot;))</span>
+<span class="nc" id="L132">				p_DefaultConfidentiality = ((String)para[i].getParameter());</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">			else if (name.equals(&quot;p_NestInbox&quot;))</span>
+<span class="nc" id="L134">				p_NestInbox = &quot;Y&quot;.equalsIgnoreCase(para[i].getParameter().toString());</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">			else if (name.equals(&quot;HTMLAttachmentType&quot;))</span>
+<span class="nc" id="L136">				p_HTMLAttachmentType = para[i].getParameterAsString();</span>
+			else
+<span class="nc" id="L138">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+		
+<span class="nc bnc" id="L141" title="All 2 branches missed.">		if(p_HTMLAttachmentType == null)</span>
+<span class="nc" id="L142">			p_HTMLAttachmentType = &quot;H&quot;;</span>
+		
+<span class="nc" id="L144">	}	//	prepare</span>
+
+	/**
+	 *  Perform process.
+	 *  @return Message (clear text)
+	 *  @throws Exception if not successful
+	 */
+	protected String doIt() throws Exception
+	{
+<span class="nc" id="L153">		parseParameter();</span>
+		
+<span class="nc" id="L155">		EmailSrv emailSrv = new EmailSrv(p_IMAPHost, p_IMAPUser, p_IMAPPwd, p_IMAPPort, isSSL);</span>
+		
+<span class="nc" id="L157">		checkInputParameter (emailSrv);		</span>
+		
+<span class="nc" id="L159">		EmailSrv.readEmailFolder(emailSrv, p_InboxFolder, p_NestInbox, this);</span>
+		
+<span class="nc" id="L161">		StringBuilder msgreturn = new StringBuilder(&quot;processInBox - Total=&quot;).append(noProcessed) </span>
+<span class="nc" id="L162">				.append(&quot; - Requests=&quot;).append(noRequest)</span>
+<span class="nc" id="L163">				.append(&quot; - Errors=&quot;).append(noError);</span>
+<span class="nc" id="L164">		return msgreturn.toString();</span>
+	}	//	doIt
+	
+	protected void parseParameter() {
+		// === check for ssl input parameter ===
+<span class="nc" id="L169">		int imapProtocolIndex = p_IMAPHost.lastIndexOf(&quot;://&quot;);</span>
+		
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if(imapProtocolIndex &gt; 0) {</span>
+<span class="nc" id="L172">			String str_Protocol = p_IMAPHost.substring(0, imapProtocolIndex);</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">			if(str_Protocol.toLowerCase().equals(&quot;imaps&quot;))</span>
+<span class="nc" id="L174">				isSSL  = true;</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">			else if(str_Protocol.toLowerCase().equals(&quot;imap&quot;))</span>
+<span class="nc" id="L176">				isSSL = false;</span>
+			else
+<span class="nc" id="L178">				log.warning(&quot;Unrecognized protocol - &quot; + str_Protocol);</span>
+			
+<span class="nc bnc" id="L180" title="All 2 branches missed.">			if(isSSL != null)	// Remove Imap Protocol</span>
+<span class="nc" id="L181">				p_IMAPHost = p_IMAPHost.substring(imapProtocolIndex + 3, p_IMAPHost.length());</span>
+		}
+
+		// === check input parameter === 
+<span class="nc" id="L185">		int portStartIndex = p_IMAPHost.lastIndexOf(&quot;:&quot;);</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">		if (portStartIndex &gt; 0){</span>
+<span class="nc" id="L187">			String strPort = p_IMAPHost.substring(portStartIndex + 1, p_IMAPHost.length());</span>
+<span class="nc" id="L188">			p_IMAPHost = p_IMAPHost.substring(0, portStartIndex);</span>
+			try{
+<span class="nc" id="L190">				p_IMAPPort = Integer.parseInt(strPort);				</span>
+<span class="nc" id="L191">			}catch (Exception ex){</span>
+<span class="nc" id="L192">				throw new AdempiereException(&quot;Error format port : &quot; + strPort);</span>
+			}			
+<span class="nc bnc" id="L194" title="All 2 branches missed.">		}else if (p_IMAPHost.startsWith(&quot;imap.gmail.com&quot;)){</span>
+<span class="nc" id="L195">			p_IMAPPort = 993;</span>
+<span class="nc bnc" id="L196" title="All 6 branches missed.">		} else if(portStartIndex &lt;= 0 &amp;&amp; isSSL != null &amp;&amp; isSSL) {</span>
+<span class="nc" id="L197">			p_IMAPPort = 993;	// Default Port for IMAPS protocol</span>
+		}
+<span class="nc" id="L199">	}</span>
+	
+	protected void checkInputParameter (EmailSrv emailSrv) throws MessagingException, Exception {
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;doIt - IMAPHost=&quot; + p_IMAPHost +</span>
+<span class="nc" id="L203">					   &quot; IMAPPort=&quot; + p_IMAPPort  +</span>
+<span class="nc" id="L204">				       &quot; IMAPUser=&quot; + p_IMAPUser  +</span>
+<span class="nc" id="L205">				       &quot; RequestFolder=&quot; + p_RequestFolder +</span>
+<span class="nc" id="L206">				       &quot; InboxFolder=&quot; + p_InboxFolder +</span>
+<span class="nc" id="L207">				       &quot; ErrorFolder=&quot; + p_ErrorFolder);</span>
+		
+<span class="nc bnc" id="L209" title="All 4 branches missed.">		if (R_RequestType_ID &lt; 1 &amp;&amp; MRequestType.getDefault(getCtx()) == null){</span>
+<span class="nc" id="L210">			throw new AdempiereException(&quot;request type: must define a default request type, or select one in request type field&quot;);</span>
+			
+		}
+		
+<span class="nc" id="L214">		requestFolder = EmailSrv.getFolder(emailSrv.getMailStore(), p_RequestFolder, p_NestInbox, true);</span>
+<span class="nc" id="L215">		errorFolder = EmailSrv.getFolder(emailSrv.getMailStore(), p_ErrorFolder, p_NestInbox, true);</span>
+		
+<span class="nc" id="L217">		lsFolderProcess.add(requestFolder);</span>
+<span class="nc" id="L218">		lsFolderProcess.add(errorFolder);</span>
+<span class="nc" id="L219">	}</span>
+
+	@Override
+	public boolean checkEmailHeader(EmailContent emailHeader, Message emailRaw) throws MessagingException {
+<span class="nc bnc" id="L223" title="All 2 branches missed.">		boolean isCancel = emailHeader.fromAddress.size() == 0;</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">		if (isCancel){</span>
+<span class="nc" id="L225">			errorFolder.appendMessages(new Message[]{emailRaw});</span>
+<span class="nc" id="L226">			noError++;</span>
+		}		
+<span class="nc" id="L228">		return isCancel;</span>
+	}
+	
+	@Override
+	public void processEmailContent(EmailContent emailHeader, Message emailRaw, Store mailStore, Folder mailFolder) throws MessagingException, IOException {
+<span class="nc" id="L233">		Trx trxRequest = null;</span>
+		try {			
+<span class="nc" id="L235">			trxRequest = Trx.get(Trx.createTrxName(&quot;SvrProcess-makerequest&quot;), true);</span>
+<span class="nc" id="L236">			trxRequest.setDisplayName(getClass().getName()+&quot;_processEmailContent&quot;);</span>
+<span class="nc" id="L237">			trxRequest.start();</span>
+			
+<span class="nc" id="L239">			createRequest(emailHeader, trxRequest.getTrxName());</span>
+<span class="nc" id="L240">			emailRaw.setFlag(Flags.Flag.SEEN, true);</span>
+<span class="nc" id="L241">			emailRaw.setFlag(Flags.Flag.ANSWERED, true);</span>
+<span class="nc" id="L242">			requestFolder.appendMessages(new Message[]{emailRaw});</span>
+			// log movement
+<span class="nc bnc" id="L244" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;message &quot; + emailHeader.subject + &quot; moved to &quot; + p_RequestFolder + &quot; folder&quot;);</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;message info: Sent -&gt; &quot; + emailHeader.sentDate + &quot; From -&gt; &quot; + emailHeader.fromAddress.get(0).toString());</span>
+			// Delete in InBox
+<span class="nc" id="L247">			emailRaw.setFlag(Flags.Flag.DELETED, true);</span>
+			@SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L249">			Message[] deleted = mailFolder.expunge();</span>
+<span class="nc" id="L250">			noRequest++;</span>
+<span class="nc" id="L251">			trxRequest.commit(true);</span>
+<span class="nc" id="L252">		} catch (Exception e) {</span>
+<span class="nc" id="L253">			trxRequest.rollback();			</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;message &quot; + emailHeader.subject + &quot; threw error&quot;);</span>
+<span class="nc" id="L255">			e.printStackTrace();</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">			if (e instanceof AdempiereException){</span>
+<span class="nc" id="L257">				throw (AdempiereException)e;</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">			}else if (e instanceof MessagingException){</span>
+<span class="nc" id="L259">				throw (MessagingException)e;</span>
+			}else{
+<span class="nc" id="L261">				throw new AdempiereException (e.getMessage());</span>
+			}
+		}finally{
+<span class="nc bnc" id="L264" title="All 2 branches missed.">			if (trxRequest != null){</span>
+<span class="nc" id="L265">				trxRequest.close();</span>
+<span class="nc" id="L266">				trxRequest = null;</span>
+			}
+		}
+		
+<span class="nc" id="L270">	}</span>
+	
+	
+	/**
+	 * 	Create request
+	 * @param emailContent
+	 * @param trxName
+	 * @throws Exception
+	 */
+	protected void createRequest(EmailContent emailContent, String trxName) throws Exception {
+		// Assign from variable
+<span class="nc" id="L281">		String fromAddress = emailContent.fromAddress.get(0);		</span>
+		
+<span class="nc" id="L283">		int maxlen = MColumn.get(getCtx(), MRequest.Table_Name, MRequest.COLUMNNAME_DocumentNo).getFieldLength();</span>
+<span class="nc" id="L284">		String documentNo = emailContent.messageID;</span>
+		
+<span class="nc bnc" id="L286" title="All 2 branches missed.">		if (documentNo.length() &gt; maxlen)</span>
+<span class="nc" id="L287">			documentNo = documentNo.substring(0,30);</span>
+		
+		// Review if the e-mail was already created, comparing Message-ID+From+body
+<span class="nc" id="L290">		int retValuedup = 0;</span>
+<span class="nc" id="L291">		String sqldup = &quot;SELECT R_Request_ID FROM R_Request &quot;</span>
+			 + &quot;WHERE AD_Client_ID = ? &quot;
+			 + &quot;AND DocumentNo = ? &quot;
+			 + &quot;AND StartDate = ?&quot;;
+<span class="nc" id="L295">		PreparedStatement pstmtdup = null;</span>
+<span class="nc" id="L296">		ResultSet rsdup = null;</span>
+		try 
+		{
+<span class="nc" id="L299">			pstmtdup = DB.prepareStatement (sqldup, null);</span>
+<span class="nc" id="L300">			pstmtdup.setInt(1, getAD_Client_ID());</span>
+<span class="nc" id="L301">			pstmtdup.setString(2, documentNo);</span>
+<span class="nc" id="L302">			pstmtdup.setTimestamp(3, new Timestamp(emailContent.sentDate.getTime()));</span>
+<span class="nc" id="L303">			rsdup = pstmtdup.executeQuery ();</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">			if (rsdup.next ())</span>
+<span class="nc" id="L305">				retValuedup = rsdup.getInt(1);</span>
+<span class="nc" id="L306">		} catch (SQLException e) </span>
+		{
+<span class="nc" id="L308">			throw e;</span>
+		}
+		finally
+		{
+<span class="nc" id="L312">			DB.close (rsdup,pstmtdup);</span>
+<span class="nc" id="L313">			rsdup = null;pstmtdup = null;</span>
+		}
+<span class="nc bnc" id="L315" title="All 2 branches missed.">		if (retValuedup &gt; 0) {</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;request already existed for msg -&gt; &quot; + emailContent.subject);</span>
+<span class="nc" id="L317">			return;</span>
+		}
+		
+		// Analyze subject if Re: find the original request by subject + e-mail and add an action
+<span class="nc" id="L321">		int request_upd = 0;</span>
+<span class="nc" id="L322">		String sqlupd = &quot;SELECT r_request_id &quot;</span>
+			 + &quot;  FROM r_request &quot;
+			 + &quot; WHERE ad_client_id = ? &quot;
+			 + &quot;   AND summary LIKE 'FROM: ' || ? || '%' &quot;
+			 + &quot;   AND (   documentno = &quot;
+			 + &quot;              SUBSTR &quot;
+			 + &quot;                 (?, &quot;
+			 + &quot;                  INSTR &quot;
+			 + &quot;                      (?, &quot;
+			 + &quot;                       '&lt;' &quot;
+			 + &quot;                      ) &quot;
+			 + &quot;                 ) &quot;
+			 + &quot;        OR (    ? LIKE 'Re: %' &quot;
+			 + &quot;            AND summary = &quot;
+			 + &quot;                      'FROM: ' &quot;
+			 + &quot;                   || ? &quot;
+			 + &quot;                   || CHR (10) &quot;
+			 + &quot;                   || SUBSTR (?, 5) &quot;
+			 + &quot;           ) &quot;
+			 + &quot;       ) &quot;;
+<span class="nc" id="L342">		PreparedStatement pstmtupd = null;</span>
+<span class="nc" id="L343">		ResultSet rsupd = null;</span>
+		try 
+		{
+<span class="nc" id="L346">			pstmtupd = DB.prepareStatement (sqlupd, null);</span>
+<span class="nc" id="L347">			pstmtupd.setInt(1, getAD_Client_ID());</span>
+<span class="nc" id="L348">			pstmtupd.setString(2, fromAddress);</span>
+<span class="nc" id="L349">			pstmtupd.setString(3, emailContent.subject);</span>
+<span class="nc" id="L350">			pstmtupd.setString(4, emailContent.subject);</span>
+<span class="nc" id="L351">			pstmtupd.setString(5, emailContent.subject);</span>
+<span class="nc" id="L352">			pstmtupd.setString(6, fromAddress);</span>
+<span class="nc" id="L353">			pstmtupd.setString(7, emailContent.subject);</span>
+<span class="nc" id="L354">			rsupd = pstmtupd.executeQuery ();</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">			if (rsupd.next ())</span>
+<span class="nc" id="L356">				request_upd = rsupd.getInt(1);</span>
+<span class="nc" id="L357">		} </span>
+<span class="nc" id="L358">		catch (SQLException e) </span>
+		{
+<span class="nc" id="L360">			throw e;</span>
+		}
+		finally
+		{
+<span class="nc" id="L364">			DB.close(rsupd,pstmtupd);</span>
+<span class="nc" id="L365">			rsupd = null;pstmtupd = null;</span>
+		}
+<span class="nc bnc" id="L367" title="All 2 branches missed.">		if (request_upd &gt; 0) {</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;msg -&gt; &quot; + emailContent.subject + &quot; is an answer for req &quot; + request_upd);</span>
+<span class="nc" id="L369">			updateRequest(request_upd, emailContent, trxName);</span>
+<span class="nc" id="L370">			return;</span>
+		}
+		
+<span class="nc" id="L373">		MRequest req = new MRequest(getCtx(), 0, trxName);</span>
+		// Subject as summary
+<span class="nc" id="L375">		StringBuilder msgreq = new StringBuilder(&quot;FROM: &quot;).append(fromAddress).append(&quot;\n&quot;).append(emailContent.subject);</span>
+<span class="nc" id="L376">		req.setSummary(msgreq.toString());</span>
+		// Body as result
+		//TODO:1. improve to when email only html content, convert it to text and set here
+		//TODO:2. improve to add control display html at form, no need open attach to see
+<span class="nc" id="L380">		msgreq = new StringBuilder(&quot;FROM: &quot;) .append(emailContent.fromAddress.get(0)).append(&quot;\n&quot;).append(emailContent.getTextContent());</span>
+<span class="nc" id="L381">		req.setResult(msgreq.toString());</span>
+		// Message-ID as documentNo
+<span class="nc" id="L383">		req.setDocumentNo(documentNo);</span>
+
+		// Default request type for this process
+<span class="nc bnc" id="L386" title="All 2 branches missed.">		if (R_RequestType_ID &gt; 0)</span>
+<span class="nc" id="L387">			req.setR_RequestType_ID(R_RequestType_ID);</span>
+		else
+<span class="nc" id="L389">			req.setR_RequestType_ID();</span>
+			
+		// set Default sales representative 
+<span class="nc bnc" id="L392" title="All 2 branches missed.">		if (SalesRep_ID &gt; 0)</span>
+<span class="nc" id="L393">			req.setSalesRep_ID(SalesRep_ID);</span>
+		
+		// set Default role
+<span class="nc bnc" id="L396" title="All 2 branches missed.">		if (AD_Role_ID &gt; 0)</span>
+<span class="nc" id="L397">			req.setAD_Role_ID(AD_Role_ID);</span>
+
+		// Look for user via e-mail		
+<span class="nc" id="L400">		int retValueu = -1;</span>
+<span class="nc" id="L401">		String sqlu = &quot;SELECT ad_user_id &quot;</span>
+			+ &quot;  FROM ad_user &quot;
+			+ &quot; WHERE UPPER (email) = UPPER (?) &quot;
+			+ &quot;   AND ad_client_id = ?&quot;;
+<span class="nc" id="L405">		PreparedStatement pstmtu = null;</span>
+<span class="nc" id="L406">		ResultSet rsu = null;</span>
+		try 
+		{
+<span class="nc" id="L409">			pstmtu = DB.prepareStatement (sqlu, null);</span>
+<span class="nc" id="L410">			pstmtu.setString(1, fromAddress);</span>
+<span class="nc" id="L411">			pstmtu.setInt(2, getAD_Client_ID());</span>
+<span class="nc" id="L412">			rsu = pstmtu.executeQuery ();</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">			if (rsu.next ())</span>
+<span class="nc" id="L414">				retValueu = rsu.getInt(1);</span>
+<span class="nc" id="L415">		}</span>
+<span class="nc" id="L416">		catch(SQLException e)</span>
+		{
+<span class="nc" id="L418">			throw e;</span>
+		}
+		finally
+		{
+<span class="nc" id="L422">			DB.close (rsu,pstmtu);</span>
+<span class="nc" id="L423">			rsu = null;pstmtu = null;</span>
+		}
+<span class="nc bnc" id="L425" title="All 2 branches missed.">		if (retValueu &gt; 0) {</span>
+<span class="nc" id="L426">			req.setAD_User_ID(retValueu);</span>
+<span class="nc" id="L427">		} else {</span>
+			// set default user
+<span class="nc bnc" id="L429" title="All 2 branches missed.">			if (AD_User_ID &gt; 0)</span>
+<span class="nc" id="L430">				req.setAD_User_ID(AD_User_ID);</span>
+		}
+		
+		// Look BP
+<span class="nc bnc" id="L434" title="All 2 branches missed.">		if (req.getAD_User_ID() &gt; 0) {</span>
+<span class="nc" id="L435">			MUser us = new MUser(getCtx(), req.getAD_User_ID(), trxName);</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">			if (us.getC_BPartner_ID() &gt; 0)</span>
+<span class="nc" id="L437">				req.setC_BPartner_ID(us.getC_BPartner_ID());</span>
+		}
+<span class="nc bnc" id="L439" title="All 4 branches missed.">		if (req.getC_BPartner_ID() &lt;= 0 &amp;&amp; C_BPartner_ID &gt; 0) {</span>
+			// set default business partner
+<span class="nc" id="L441">			req.setC_BPartner_ID(C_BPartner_ID);</span>
+		}
+		
+		// Set start date as sent date of e-mail
+<span class="nc" id="L445">		req.setStartDate(new Timestamp(emailContent.sentDate.getTime()));</span>
+		
+		// defaults priority Medium, confidentiality partner
+<span class="nc bnc" id="L448" title="All 2 branches missed.">		if (p_DefaultConfidentiality != null) {</span>
+<span class="nc" id="L449">			req.setConfidentialType (p_DefaultConfidentiality);</span>
+<span class="nc" id="L450">			req.setConfidentialTypeEntry (p_DefaultConfidentiality);</span>
+		}
+<span class="nc bnc" id="L452" title="All 2 branches missed.">		if (p_DefaultPriority != null) {</span>
+<span class="nc" id="L453">			req.setPriority(p_DefaultPriority);</span>
+<span class="nc" id="L454">			req.setPriorityUser(p_DefaultPriority);</span>
+		}
+		
+<span class="nc" id="L457">		req.saveEx(trxName);</span>
+<span class="nc" id="L458">		addLog(req.getR_Request_ID(), null, null, Msg.parseTranslation(getCtx(), &quot;@Added@ @R_Request_ID@ &quot;) + req.getDocumentNo(), MRequest.Table_ID, req.getR_Request_ID());</span>
+		
+<span class="nc bnc" id="L460" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;created request &quot; + req.getR_Request_ID() + &quot; from msg -&gt; &quot; + emailContent.subject);</span>
+		
+<span class="nc bnc" id="L462" title="All 2 branches missed.">		if(&quot;H&quot;.equals(p_HTMLAttachmentType)) {</span>
+<span class="nc" id="L463">			String htmlContent = emailContent.getHtmlContent(true);</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">			if (htmlContent != null){</span>
+<span class="nc" id="L465">				MAttachment attach = req.createAttachment();</span>
+				
+<span class="nc" id="L467">				attach.addEntry(emailContent.subject + &quot;.html&quot;, emailContent.getHtmlContent(true).getBytes(Charset.forName(&quot;UTF-8&quot;)));</span>
+<span class="nc" id="L468">				attach.saveEx(trxName);</span>
+			}
+<span class="nc bnc" id="L470" title="All 2 branches missed.">		} else if(&quot;I&quot;.equals(p_HTMLAttachmentType)) {</span>
+<span class="nc" id="L471">			ArrayList&lt;BodyPart&gt; imagesList = emailContent.getHTMLImageBodyParts();</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">			if(imagesList != null) {</span>
+<span class="nc bnc" id="L473" title="All 2 branches missed.">				for(BodyPart image: imagesList) {</span>
+<span class="nc" id="L474">					MAttachment attach = req.createAttachment();</span>
+					
+<span class="nc" id="L476">					attach.addEntry(image.getFileName(), EmailSrv.getBinaryData(image));</span>
+<span class="nc" id="L477">					attach.saveEx(trxName);</span>
+				}
+			}
+		}
+				
+<span class="nc bnc" id="L482" title="All 2 branches missed.">		for (BodyPart attachFile : emailContent.lsAttachPart){</span>
+<span class="nc" id="L483">			MAttachment attach = req.createAttachment();</span>
+<span class="nc" id="L484">			attach.addEntry(attachFile.getFileName(), EmailSrv.getBinaryData(attachFile));</span>
+<span class="nc" id="L485">			attach.saveEx(trxName);</span>
+		}
+		
+<span class="nc" id="L488">	}</span>
+	
+	protected void updateRequest(int request_upd, EmailContent emailContent, String trxName) throws MessagingException, SQLException {
+<span class="nc" id="L491">		MRequest requp = new MRequest(getCtx(), request_upd, trxName);</span>
+		// Body as result
+		
+<span class="nc" id="L494">		StringBuilder msgreq = new StringBuilder(&quot;FROM: &quot;).append(emailContent.fromAddress.get(0)).append(&quot;\n&quot;).append(emailContent.getTextContent());</span>
+<span class="nc" id="L495">		requp.setResult(msgreq.toString());</span>
+<span class="nc" id="L496">		requp.saveEx(trxName);</span>
+<span class="nc" id="L497">		addLog(requp.getR_Request_ID(), null, null, Msg.parseTranslation(getCtx(), &quot;@Updated@ @R_Request_ID@ &quot;) + requp.getDocumentNo(), MRequest.Table_ID, requp.getR_Request_ID());</span>
+<span class="nc" id="L498">	}</span>
+
+	@Override
+	public void processEmailError(EmailContent emailHeader, Message emailRaw,
+			Store mailStore, Folder mailFolder) throws MessagingException {
+<span class="nc" id="L503">		noError++;</span>
+<span class="nc" id="L504">		errorFolder.appendMessages(new Message[]{emailRaw});</span>
+<span class="nc" id="L505">	}</span>
+
+	@Override
+	public List&lt;Folder&gt; getListFolder() {
+<span class="nc" id="L509">		return lsFolderProcess;</span>
+	}
+
+}	//	RequestEMailProcessor
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DocWorkflowManager.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.wf</a> &gt; <span class="el_source">DocWorkflowManager.java</span></div><h1>DocWorkflowManager.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.wf;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.logging.Level;
+
+import org.compiere.model.DocWorkflowMgr;
+import org.compiere.model.PO;
+import static org.compiere.model.SystemIDs.*;
+import org.compiere.process.ProcessInfo;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Evaluator;
+
+/**
+ *	Document Value Workflow Manager
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: DocWorkflowManager.java,v 1.2 2006/07/30 00:51:05 jjanke Exp $
+ */
+public class DocWorkflowManager implements DocWorkflowMgr
+{
+	/**
+	 * 	Get the singleton Document Workflow Manager instance
+	 *	@return mgr
+	 */
+	public static DocWorkflowManager get()
+	{
+<span class="nc bnc" id="L46" title="All 2 branches missed.">		if (s_mgr == null)</span>
+<span class="nc" id="L47">			s_mgr = new DocWorkflowManager();</span>
+<span class="nc" id="L48">		return s_mgr;</span>
+	}	//	get
+
+	//	Set PO Workflow Manager
+	static {
+<span class="nc" id="L53">		PO.setDocWorkflowMgr(get());</span>
+	}
+	
+	/**	Document Workflow Manager		*/
+<span class="nc" id="L57">	private volatile static DocWorkflowManager	s_mgr = null;</span>
+	/**	Logger			*/
+<span class="nc" id="L59">	private static CLogger log = CLogger.getCLogger(DocWorkflowManager.class);</span>
+		
+	/**
+	 * 	Doc Workflow Manager
+	 */
+	private DocWorkflowManager ()
+	{
+<span class="nc" id="L66">		super ();</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">		if (s_mgr == null)</span>
+<span class="nc" id="L68">			s_mgr = this;</span>
+<span class="nc" id="L69">	}	//	DocWorkflowManager</span>
+
+<span class="nc" id="L71">	private int	m_noCalled = 0;</span>
+<span class="nc" id="L72">	private int	m_noStarted = 0;</span>
+	
+	/**
+	 * 	Process Document Value Workflow
+	 *	@param document document
+	 *	@param AD_Table_ID table
+	 *	@return true if WF started
+	 */
+	@Override
+	public boolean process (PO document, int AD_Table_ID)
+	{
+<span class="nc" id="L83">		m_noCalled++;</span>
+<span class="nc" id="L84">		MWorkflow[] wfs = MWorkflow.getDocValue (document.getCtx(), </span>
+<span class="nc" id="L85">			document.getAD_Client_ID(), AD_Table_ID</span>
+<span class="nc" id="L86">			, document.get_TrxName() // Bug 1568766 Trx should be kept all along the road	</span>
+		);
+<span class="nc bnc" id="L88" title="All 4 branches missed.">		if (wfs == null || wfs.length == 0)</span>
+<span class="nc" id="L89">			return false;</span>
+		
+<span class="nc" id="L91">		boolean started = false;</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">		for (int i = 0; i &lt; wfs.length; i++)</span>
+		{
+<span class="nc" id="L94">			MWorkflow wf = wfs[i];</span>
+			//	We have a Document Workflow
+<span class="nc" id="L96">			String logic = wf.getDocValueLogic();</span>
+<span class="nc bnc" id="L97" title="All 4 branches missed.">			if (logic == null || logic.length() == 0)</span>
+			{
+<span class="nc" id="L99">				log.severe (&quot;Workflow has no Logic - &quot; + wf.getName());</span>
+<span class="nc" id="L100">				continue;</span>
+			}
+		
+			//	Re-check: Document must be same Client as workflow
+<span class="nc bnc" id="L104" title="All 2 branches missed.">			if (wf.getAD_Client_ID() != document.getAD_Client_ID())</span>
+<span class="nc" id="L105">				continue;</span>
+		
+			//	Check Logic
+<span class="nc" id="L108">			boolean sql = logic.startsWith(&quot;SQL=&quot;);</span>
+<span class="nc bnc" id="L109" title="All 4 branches missed.">			if (sql &amp;&amp; !testStart(wf, document))</span>
+			{
+<span class="nc bnc" id="L111" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;SQL Logic evaluated to false (&quot; + logic + &quot;)&quot;);</span>
+<span class="nc" id="L112">				continue;</span>
+			}
+<span class="nc bnc" id="L114" title="All 4 branches missed.">			if (!sql &amp;&amp; !Evaluator.evaluateLogic(document, logic))</span>
+			{
+<span class="nc bnc" id="L116" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Logic evaluated to false (&quot; + logic + &quot;)&quot;);</span>
+<span class="nc" id="L117">				continue;</span>
+			}
+		
+			//	Start Workflow
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(logic);</span>
+<span class="nc" id="L122">			int AD_Process_ID = PROCESS_AD_WORKFLOW_DOCVALUE;		//	HARDCODED</span>
+<span class="nc" id="L123">			ProcessInfo pi = new ProcessInfo (wf.getName(), AD_Process_ID, </span>
+<span class="nc" id="L124">				AD_Table_ID, document.get_ID());</span>
+<span class="nc" id="L125">			pi.setAD_User_ID (Env.getAD_User_ID(document.getCtx()));</span>
+<span class="nc" id="L126">			pi.setAD_Client_ID(document.getAD_Client_ID());</span>
+			//
+<span class="nc bnc" id="L128" title="All 2 branches missed.">			if (wf.start(pi, document.get_TrxName()) != null)</span>
+			{
+<span class="nc bnc" id="L130" title="All 2 branches missed.">				if (log.isLoggable(Level.CONFIG)) log.config(wf.getName());</span>
+<span class="nc" id="L131">				m_noStarted++;</span>
+<span class="nc" id="L132">				started = true;</span>
+			}
+		}
+<span class="nc" id="L135">		return started;</span>
+	}	//	process
+
+	/**
+	 * 	Test Start condition
+	 *	@param wf workflow
+	 *	@param document document
+	 *	@return true if WF should be started
+	 */
+	private boolean testStart (MWorkflow wf, PO document)
+	{
+<span class="nc" id="L146">		boolean retValue = false;</span>
+<span class="nc" id="L147">		String logic = wf.getDocValueLogic();</span>
+<span class="nc" id="L148">		logic = logic.substring(4);		//	&quot;SQL=&quot;</span>
+		//
+<span class="nc" id="L150">		String tableName = document.get_TableName();</span>
+<span class="nc" id="L151">		String[] keyColumns = document.get_KeyColumns();</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		if (keyColumns.length != 1)</span>
+		{
+<span class="nc" id="L154">			log.severe(&quot;Tables with more then one key column not supported - &quot; </span>
+<span class="nc" id="L155">				+ tableName + &quot; = &quot; + keyColumns.length);</span>
+<span class="nc" id="L156">			return false;</span>
+		}
+<span class="nc" id="L158">		String keyColumn = keyColumns[0];</span>
+<span class="nc" id="L159">		StringBuilder sql = new StringBuilder(&quot;SELECT &quot;)</span>
+<span class="nc" id="L160">			.append(keyColumn).append(&quot; FROM &quot;).append(tableName)</span>
+<span class="nc" id="L161">			.append(&quot; WHERE AD_Client_ID=? AND &quot;)		//	#1</span>
+<span class="nc" id="L162">				.append(keyColumn).append(&quot;=? AND &quot;)	//	#2</span>
+<span class="nc" id="L163">			.append(logic)</span>
+		//	Duplicate Open Workflow test
+<span class="nc" id="L165">			.append(&quot; AND NOT EXISTS (SELECT * FROM AD_WF_Process wfp &quot;)</span>
+<span class="nc" id="L166">				.append(&quot;WHERE wfp.AD_Table_ID=? AND wfp.Record_ID=&quot;)	//	#3</span>
+<span class="nc" id="L167">				.append(tableName).append(&quot;.&quot;).append(keyColumn)</span>
+<span class="nc" id="L168">				.append(&quot; AND wfp.AD_Workflow_ID=?&quot;)	//	#4</span>
+<span class="nc" id="L169">				.append(&quot; AND SUBSTR(wfp.WFState,1,1)='O')&quot;);</span>
+<span class="nc" id="L170">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L171">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L174">			pstmt = DB.prepareStatement (sql.toString(), document.get_TrxName());</span>
+<span class="nc" id="L175">			pstmt.setInt (1, wf.getAD_Client_ID());</span>
+<span class="nc" id="L176">			pstmt.setInt (2, document.get_ID());</span>
+<span class="nc" id="L177">			pstmt.setInt (3, document.get_Table_ID());</span>
+<span class="nc" id="L178">			pstmt.setInt (4, wf.getAD_Workflow_ID());</span>
+<span class="nc" id="L179">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">			if (rs.next ())</span>
+<span class="nc" id="L181">				retValue = true;</span>
+<span class="nc" id="L182">		}</span>
+<span class="nc" id="L183">		catch (Exception e)</span>
+		{
+<span class="nc" id="L185">			log.log (Level.SEVERE, &quot;Logic=&quot; + logic</span>
+<span class="nc" id="L186">				+ &quot; - SQL=&quot; + sql.toString(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L190">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L191">			rs = null; </span>
+<span class="nc" id="L192">			pstmt = null;</span>
+		}
+
+<span class="nc" id="L195">		return retValue;</span>
+	}	//	testStart
+		
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L205">		StringBuilder sb = new StringBuilder(&quot;DocWorkflowManager[&quot;);</span>
+<span class="nc" id="L206">		sb.append(&quot;Called=&quot;).append(m_noCalled)</span>
+<span class="nc" id="L207">			.append(&quot;,Stated=&quot;).append(m_noStarted)</span>
+<span class="nc" id="L208">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L209">		return sb.toString();</span>
+	}	//	toString
+}	//	DocWorkflowManager
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

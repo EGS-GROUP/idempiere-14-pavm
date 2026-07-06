@@ -1,0 +1,497 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ImageDBLOBStore.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">ImageDBLOBStore.java</span></div><h1>ImageDBLOBStore.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2012 Trek Global                                             *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.sql.Blob;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.logging.Level;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.osgi.service.component.annotations.Component;
+
+/**
+ * Image Store implementation for DB_LOB method.
+ */
+@Component(service = IImageStore.class, immediate = true, property = {&quot;method=DB_LOB&quot;})
+<span class="nc" id="L46">public class ImageDBLOBStore implements IImageStore {</span>
+
+	private static final String AD_IMAGE_BLOB_GET = &quot;SELECT BinaryData FROM AD_Image_Blob WHERE AD_Image_ID = ?&quot;;
+	
+	private static final String AD_IMAGE_BLOB_INSERT = &quot;INSERT INTO AD_Image_Blob(AD_Image_ID, BinaryData) Values (?, ?)&quot;;
+	
+<span class="nc" id="L52">	private static final String AD_IMAGE_BLOB_DELETE = &quot;DELETE FROM AD_Image_Blob WHERE AD_Image_ID=?&quot;;</span>
+	
+<span class="nc" id="L54">	private final CLogger log = CLogger.getCLogger(getClass());</span>
+	
+	//temporary buffer when AD_Image_ID=0;
+	private byte[] buffer;
+	private InputStream bufferInputStream;
+		
+	@Override
+	public byte[] load(MImage image, MStorageProvider prov) {
+<span class="nc" id="L62">		byte[] deflatedData = image.getByteData();</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">		if (deflatedData == null)</span>
+<span class="nc" id="L64">			return null;</span>
+		//		
+<span class="nc bnc" id="L66" title="All 2 branches missed.">		if (deflatedData.length == 0)</span>
+<span class="nc" id="L67">			return null;</span>
+		
+<span class="nc" id="L69">		return getBlobDataAsBytes(image);</span>
+	}
+
+	/**
+	 * Get data from AD_Image_Blob table
+	 * @param image
+	 * @return byte[] of the image data
+	 */
+	private byte[] getBlobDataAsBytes(MImage image) {
+<span class="nc" id="L78">		Connection conn = null; </span>
+		// With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L80" title="All 4 branches missed.">    	if (image.get_TrxName() == null &amp;&amp; DB.isPostgreSQL()) {</span>
+<span class="nc" id="L81">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    		try {
+<span class="nc" id="L83">				conn.setAutoCommit(false);</span>
+<span class="nc" id="L84">			} catch (SQLException e) {</span>
+				try {
+<span class="nc" id="L86">					conn.close();</span>
+<span class="nc" id="L87">				} catch (SQLException e1) {</span>
+				}
+<span class="nc" id="L89">				throw new RuntimeException(&quot;Error setting auto commit to false&quot;, e);</span>
+			}
+    	}
+    	
+<span class="nc" id="L93">		String sql = AD_IMAGE_BLOB_GET;</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">		try (PreparedStatement pstmt = conn != null</span>
+<span class="nc" id="L95">				? DB.prepareStatement(conn, sql)</span>
+<span class="nc" id="L96">				: DB.prepareStatement(sql, image.get_TrxName())) {</span>
+<span class="nc" id="L97">			pstmt.setInt(1, image.getAD_Image_ID());</span>
+<span class="nc" id="L98">			try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L100">					Blob blob = rs.getBlob(1);</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">					if (blob != null) {</span>
+<span class="nc" id="L102">						try (InputStream inputStream = blob.getBinaryStream();</span>
+<span class="nc" id="L103">	                        ZipInputStream zis = new ZipInputStream(inputStream)) {</span>
+<span class="nc" id="L104">							ZipEntry entry = zis.getNextEntry();</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                            assert entry != null;</span>
+<span class="nc" id="L106">							ByteArrayOutputStream out = new ByteArrayOutputStream();</span>
+<span class="nc" id="L107">							byte[] buffer = new byte[2048];</span>
+							int length;
+<span class="nc bnc" id="L109" title="All 2 branches missed.">							while ((length = zis.read(buffer)) != -1) </span>
+<span class="nc" id="L110">								out.write(buffer, 0, length);</span>
+<span class="nc" id="L111">							return out.toByteArray();</span>
+						} finally {
+<span class="nc" id="L113">							blob.free();</span>
+						}
+					}
+				}
+			}
+<span class="nc" id="L118">		} catch (Exception e) {</span>
+<span class="nc" id="L119">			log.log(Level.SEVERE, e.getMessage(), e);</span>
+		} finally {
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			if (conn != null) {</span>
+				try {
+<span class="nc" id="L123">					conn.commit();</span>
+<span class="nc" id="L124">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L127">					conn.setAutoCommit(true);</span>
+<span class="nc" id="L128">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L131">					conn.close();</span>
+<span class="nc" id="L132">				} catch (SQLException e) {</span>
+				}
+			}
+		}
+<span class="nc" id="L136">		return null;</span>
+	}
+	
+	
+	@Override
+	public InputStream loadAsStream(MImage image, MStorageProvider prov) {
+<span class="nc" id="L142">		buffer = null;</span>
+<span class="nc" id="L143">		bufferInputStream = null;</span>
+		
+<span class="nc" id="L145">		byte[] deflatedData = image.getByteData();</span>
+<span class="nc bnc" id="L146" title="All 4 branches missed.">		if (deflatedData == null || deflatedData.length == 0)</span>
+<span class="nc" id="L147">			return null;</span>
+		
+<span class="nc" id="L149">		String strValue = new String(deflatedData, StandardCharsets.US_ASCII);</span>
+<span class="nc" id="L150">		long size = Long.parseLong(strValue);</span>
+<span class="nc" id="L151">		return getBlobDataAsStream(image, size);</span>
+	}
+
+	/**
+	 * Convert Blob stream to ByteArrayInputStream (if &lt; 2MB) or FileInputStream depends on size
+	 * @param blob
+	 * @param size 
+	 * @return ByteArrayInputStream or FileInputStream
+	 * @throws IOException
+	 */
+	private InputStream blobToLocalInputStream(Blob blob, long size) throws IOException {
+		// If the blob is small enough, read it into memory
+		try {
+<span class="nc bnc" id="L164" title="All 2 branches missed.">			if (size &lt; (1024 * 1024 * 2)) { </span>
+<span class="nc" id="L165">				try (InputStream inputStream = blob.getBinaryStream();</span>
+<span class="nc" id="L166">                    ZipInputStream zis = new ZipInputStream(inputStream)) {</span>
+<span class="nc" id="L167">					ZipEntry entry = zis.getNextEntry();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">                    assert entry != null;</span>
+<span class="nc" id="L169">					ByteArrayOutputStream out = new ByteArrayOutputStream();</span>
+<span class="nc" id="L170">					byte[] buffer = new byte[2048];</span>
+<span class="nc" id="L171">					int length = 0;</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">					while ((length = zis.read(buffer)) != -1) {</span>
+<span class="nc" id="L173">						out.write(buffer, 0, length);</span>
+					}
+<span class="nc" id="L175">					return new ByteArrayInputStream(out.toByteArray());</span>
+				} finally {
+<span class="nc" id="L177">					blob.free();</span>
+				}
+			}
+<span class="nc" id="L180">		} catch (SQLException e) {</span>
+<span class="nc" id="L181">			throw new DBException(&quot;Error reading blob data&quot;, e);</span>
+<span class="nc" id="L182">		} catch (IOException e) {</span>
+<span class="nc" id="L183">			throw new AdempiereException(&quot;Error reading blob data&quot;, e);</span>
+		}
+		
+		// If the blob is too large, write it to a temporary file
+<span class="nc" id="L187">		Path tempDir = Files.createTempDirectory(&quot;image_blob_&quot;);</span>
+<span class="nc" id="L188">		try (InputStream inputStream = blob.getBinaryStream();</span>
+<span class="nc" id="L189">            ZipInputStream zis = new ZipInputStream(inputStream)) {</span>
+<span class="nc" id="L190">			ZipEntry entry = zis.getNextEntry();</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            assert entry != null;</span>
+<span class="nc" id="L192">			Path tempFile = tempDir.resolve(&quot;blob_data&quot;);</span>
+<span class="nc" id="L193">			Files.copy(zis, tempFile, StandardCopyOption.REPLACE_EXISTING);</span>
+<span class="nc" id="L194">			return Files.newInputStream(tempFile);</span>
+<span class="nc" id="L195">		} catch (SQLException e) {</span>
+<span class="nc" id="L196">			throw new DBException(&quot;Error reading blob data&quot;, e);</span>
+		} finally {
+			try {
+<span class="nc" id="L199">				blob.free();</span>
+<span class="nc" id="L200">			} catch (SQLException e) {</span>
+			}
+		}
+	}
+	
+	/**
+	 * Get data stream from AD_Image_Blob table
+	 * @param image
+	 * @param size 
+	 * @return InputStream of the image data
+	 */
+	private InputStream getBlobDataAsStream(MImage image, long size) {
+<span class="nc" id="L212">		Connection conn = null; </span>
+		// With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L214" title="All 4 branches missed.">		if (image.get_TrxName() == null &amp;&amp; DB.isPostgreSQL()) {</span>
+<span class="nc" id="L215">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    		try {
+<span class="nc" id="L217">				conn.setAutoCommit(false);</span>
+<span class="nc" id="L218">			} catch (SQLException e) {</span>
+				try {
+<span class="nc" id="L220">					conn.close();</span>
+<span class="nc" id="L221">				} catch (SQLException e1) {</span>
+				}
+<span class="nc" id="L223">				throw new RuntimeException(&quot;Error setting auto commit to false&quot;, e);</span>
+			}
+    	}
+<span class="nc" id="L226">		String sql = AD_IMAGE_BLOB_GET;</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">		try (PreparedStatement pstmt = conn != null </span>
+<span class="nc" id="L228">				? DB.prepareStatement(conn, sql) </span>
+<span class="nc" id="L229">				: DB.prepareStatement(sql, image.get_TrxName())) {</span>
+<span class="nc" id="L230">			pstmt.setInt(1, image.getAD_Image_ID());</span>
+<span class="nc" id="L231">			try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L233">					Blob blob = rs.getBlob(1);</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">					if (blob != null) {</span>
+<span class="nc" id="L235">						return blobToLocalInputStream(blob, size);</span>
+					}
+				}
+			}
+<span class="nc" id="L239">		} catch (Exception e) {</span>
+<span class="nc" id="L240">			log.log(Level.SEVERE, e.getMessage(), e);</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">			if (conn != null) {</span>
+				try {
+<span class="nc" id="L243">					conn.rollback();</span>
+<span class="nc" id="L244">				} catch (SQLException e1) {</span>
+				}
+			}
+		} finally {
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if (conn != null) {</span>
+				try {
+<span class="nc" id="L250">					conn.commit();</span>
+<span class="nc" id="L251">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L254">					conn.setAutoCommit(true);</span>
+<span class="nc" id="L255">				} catch (SQLException e) {</span>
+				}
+				try {
+<span class="nc" id="L258">					conn.close();</span>
+<span class="nc" id="L259">				} catch (SQLException e) {</span>
+				}
+			}
+		}
+
+<span class="nc" id="L264">		return null;</span>
+	}
+	
+	@Override
+	public void save(MImage image, MStorageProvider prov, byte[] byteDatas) {
+<span class="nc bnc" id="L269" title="All 4 branches missed.">		if (byteDatas == null || byteDatas.length == 0)</span>
+<span class="nc" id="L270">			throw new IllegalArgumentException(&quot;byteDatas is NULL&quot;);</span>
+		
+<span class="nc bnc" id="L272" title="All 2 branches missed.">		if(image.get_ID()==0){</span>
+			//set binary data otherwise save will fail
+<span class="nc" id="L274">			image.setByteData(new byte[]{'0'});</span>
+<span class="nc" id="L275">			buffer = byteDatas;</span>
+<span class="nc" id="L276">			bufferInputStream = null;</span>
+<span class="nc" id="L277">		} else {		</span>
+<span class="nc" id="L278">			write(image, prov, byteDatas, null);			</span>
+		}
+<span class="nc" id="L280">	}</span>
+
+	@Override
+	public void save(MImage image, MStorageProvider prov, InputStream inputStream) {
+<span class="nc bnc" id="L284" title="All 2 branches missed.">		if (inputStream == null) {</span>
+<span class="nc" id="L285">			throw new IllegalArgumentException(&quot;inputStream is NULL&quot;);</span>
+		}
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		if(image.get_ID()==0){</span>
+			//set binary data otherwise save will fail
+<span class="nc" id="L289">			image.setByteData(new byte[]{'0'});</span>
+<span class="nc" id="L290">			bufferInputStream = inputStream;</span>
+<span class="nc" id="L291">			buffer = null;</span>
+<span class="nc" id="L292">		} else {		</span>
+<span class="nc" id="L293">			write(image, prov, null, inputStream);			</span>
+		}
+<span class="nc" id="L295">	}</span>
+
+	/**
+	 * Write image data to AD_Image_Blob table
+	 * @param image
+	 * @param prov
+	 * @param byteDatas image data
+	 * @param inputStream InputStream to read data from, if null, byteDatas will be used
+	 */
+	private void write(MImage image, MStorageProvider prov,
+			byte[] byteDatas, InputStream inputStream) {
+<span class="nc bnc" id="L306" title="All 6 branches missed.">		if ((byteDatas == null || byteDatas.length == 0) &amp;&amp; inputStream == null) {</span>
+<span class="nc" id="L307">			throw new IllegalArgumentException(&quot;Both byteDatas and inputStream is NULL&quot;);</span>
+		}
+		
+<span class="nc" id="L310">		BufferedOutputStream out = null;</span>
+		try {
+<span class="nc" id="L312">			Connection conn = null; </span>
+			// With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L314" title="All 4 branches missed.">	    	if (image.get_TrxName() == null &amp;&amp; DB.isPostgreSQL()) {</span>
+<span class="nc" id="L315">	    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+	    		try {
+<span class="nc" id="L317">					conn.setAutoCommit(false);</span>
+<span class="nc" id="L318">				} catch (SQLException e) {</span>
+					try {
+<span class="nc" id="L320">						conn.close();</span>
+<span class="nc" id="L321">					} catch (SQLException e1) {</span>
+					}
+<span class="nc" id="L323">					throw new RuntimeException(&quot;Error setting auto commit to false&quot;, e);</span>
+				}
+	    	}
+	    	
+	    	// try to find existing blob
+<span class="nc" id="L328">	    	String sql = AD_IMAGE_BLOB_GET;</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">	    	if (DB.isOracle())</span>
+<span class="nc" id="L330">	            sql += &quot; FOR UPDATE &quot;;</span>
+<span class="nc" id="L331">	    	boolean updateBlob = false;</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">			try (PreparedStatement pstmt = conn != null </span>
+<span class="nc" id="L333">					? DB.prepareStatement(conn, sql) </span>
+<span class="nc" id="L334">					: DB.prepareStatement(sql, image.get_TrxName())) {</span>
+<span class="nc" id="L335">				pstmt.setInt(1, image.getAD_Image_ID());</span>
+<span class="nc" id="L336">				try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">					if (rs.next()) {</span>
+<span class="nc" id="L338">						updateBlob = true;</span>
+<span class="nc" id="L339">						Blob blob = rs.getBlob(1);</span>
+<span class="nc" id="L340">						long size = 0;</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">						if (inputStream != null) {</span>
+<span class="nc" id="L342">							try (ZipOutputStream zos = new ZipOutputStream(blob.setBinaryStream(1))) {</span>
+<span class="nc" id="L343">	                            ZipEntry zipEntry = new ZipEntry(image.getName());</span>
+<span class="nc" id="L344">	                            zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L345">								byte[] buffer = new byte[2048];</span>
+<span class="nc" id="L346">								int length = 0;							</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">								while ((length = inputStream.read(buffer)) != -1) {</span>
+<span class="nc" id="L348">									zos.write(buffer, 0, length);</span>
+<span class="nc" id="L349">									size += length;</span>
+								}
+							} finally {
+<span class="nc" id="L352">								blob.free();</span>
+							}
+<span class="nc bnc" id="L354" title="All 4 branches missed.">						} else if (byteDatas != null &amp;&amp; byteDatas.length &gt; 0) {</span>
+<span class="nc" id="L355">							try (ZipOutputStream zos = new ZipOutputStream(blob.setBinaryStream(1))) {</span>
+<span class="nc" id="L356">	                            ZipEntry zipEntry = new ZipEntry(image.getName());</span>
+<span class="nc" id="L357">	                            zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L358">								zos.write(byteDatas);</span>
+<span class="nc" id="L359">								size = byteDatas.length;</span>
+							} finally {
+<span class="nc" id="L361">								blob.free();</span>
+							}
+						}
+<span class="nc bnc" id="L364" title="All 2 branches missed.">						if (size &gt; 0)</span>
+<span class="nc" id="L365">							image.setByteData(String.valueOf(size).getBytes(StandardCharsets.US_ASCII));</span>
+						else
+<span class="nc" id="L367">							image.setByteData(null);</span>
+<span class="nc" id="L368">						return;</span>
+					}
+				}
+<span class="nc bnc" id="L371" title="All 4 branches missed.">				if (updateBlob &amp;&amp; conn != null)</span>
+<span class="nc" id="L372">					conn.commit();</span>
+<span class="nc" id="L373">			} catch (Exception e) {</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">				if (conn != null) {</span>
+<span class="nc" id="L375">					conn.rollback();</span>
+				}
+<span class="nc" id="L377">				image.setByteData(null);</span>
+<span class="nc" id="L378">				throw new RuntimeException(e);</span>
+			} finally {
+<span class="nc bnc" id="L380" title="All 2 branches missed.">				if (conn != null)</span>
+	    		{
+	    			try {
+<span class="nc" id="L383">						conn.setAutoCommit(true);</span>
+<span class="nc" id="L384">					} catch (SQLException e) {</span>
+					}
+	    			try {
+<span class="nc" id="L387">						conn.close();</span>
+<span class="nc" id="L388">					} catch (SQLException e) {</span>
+					}
+	    		}
+			}
+			
+			// no existing blob found, create a new one
+<span class="nc" id="L394">			sql = AD_IMAGE_BLOB_INSERT;</span>
+<span class="nc" id="L395">			Path tempFile = null;</span>
+			try {
+<span class="nc" id="L397">				long size = 0;</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">				try (PreparedStatement pstmt = conn != null </span>
+<span class="nc" id="L399">						? DB.prepareStatement(conn, sql) </span>
+<span class="nc" id="L400">						: DB.prepareStatement(sql, image.get_TrxName())) {</span>
+<span class="nc" id="L401">					pstmt.setInt(1, image.getAD_Image_ID());</span>
+					try {
+<span class="nc" id="L403">		                Path tempDir = Files.createTempDirectory(&quot;images_&quot;);</span>
+<span class="nc" id="L404">		                tempFile = tempDir.resolve(image.getName() + &quot;.zip&quot;);</span>
+<span class="nc" id="L405">		                try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(tempFile))) {</span>
+<span class="nc" id="L406">		                    ZipEntry zipEntry = new ZipEntry(image.getName());</span>
+<span class="nc" id="L407">		                    zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L408">		                    byte[] buffer = new byte[2048];</span>
+		                    int length;
+<span class="nc" id="L410">		                    InputStream inputStreamToUse = null;</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">		                    if (inputStream != null) {</span>
+<span class="nc" id="L412">		                        inputStreamToUse = inputStream;</span>
+<span class="nc bnc" id="L413" title="All 4 branches missed.">		                    } else if (byteDatas != null &amp;&amp; byteDatas.length &gt; 0) {</span>
+<span class="nc" id="L414">		                    	inputStreamToUse = new ByteArrayInputStream(byteDatas);</span>
+		                    } 
+<span class="nc bnc" id="L416" title="All 2 branches missed.">		                    if (inputStreamToUse != null) {</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">		                        while ((length = inputStreamToUse.read(buffer)) != -1) {</span>
+<span class="nc" id="L418">		                            zos.write(buffer, 0, length);</span>
+<span class="nc" id="L419">		                            size += length;</span>
+		                        }
+		                    }
+		                }
+<span class="nc" id="L423">		            } catch (Exception e) {</span>
+<span class="nc" id="L424">		                throw new AdempiereException(e);</span>
+		            }
+<span class="nc" id="L426">					pstmt.setBlob(2, Files.newInputStream(tempFile));</span>
+<span class="nc" id="L427">					pstmt.executeUpdate();</span>
+<span class="nc bnc" id="L428" title="All 2 branches missed.">					if (size &gt; 0)</span>
+<span class="nc" id="L429">						image.setByteData(String.valueOf(size).getBytes(StandardCharsets.US_ASCII));</span>
+					else
+<span class="nc" id="L431">						image.setByteData(null);</span>
+<span class="nc" id="L432">				} catch (Exception e) {</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">					if (conn != null) {</span>
+<span class="nc" id="L434">						conn.rollback();</span>
+					}
+<span class="nc" id="L436">					throw e;</span>
+				}
+<span class="nc bnc" id="L438" title="All 2 branches missed.">				if (conn != null) {</span>
+<span class="nc" id="L439">					conn.commit();</span>
+				}
+<span class="nc" id="L441">			} finally {</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">				if (conn != null)</span>
+	    		{
+	    			try {
+<span class="nc" id="L445">						conn.setAutoCommit(true);</span>
+<span class="nc" id="L446">					} catch (SQLException e) {</span>
+					}
+	    			try {
+<span class="nc" id="L449">						conn.close();</span>
+<span class="nc" id="L450">					} catch (SQLException e) {</span>
+					}
+	    		}
+<span class="nc bnc" id="L453" title="All 2 branches missed.">				if (tempFile != null) {</span>
+<span class="nc" id="L454">	                File f = tempFile.toFile();</span>
+<span class="nc bnc" id="L455" title="All 2 branches missed.">	                if (f.exists()) {</span>
+<span class="nc bnc" id="L456" title="All 2 branches missed.">	                    if (!f.delete())</span>
+<span class="nc" id="L457">	                        f.deleteOnExit();;</span>
+	                }
+	            }
+			}
+<span class="nc" id="L461">		} catch (Exception e) {</span>
+<span class="nc" id="L462">			image.setByteData(null);</span>
+<span class="nc" id="L463">			throw new RuntimeException(e);</span>
+		} finally {
+<span class="nc bnc" id="L465" title="All 2 branches missed.">			if(out != null){</span>
+				try {
+<span class="nc" id="L467">					out.close();</span>
+<span class="nc" id="L468">				} catch (Exception e) {	}</span>
+			}
+		}
+<span class="nc" id="L471">	}</span>
+	
+	@Override
+	public boolean delete(MImage image, MStorageProvider prov) {
+<span class="nc" id="L475">		DB.executeUpdateEx(AD_IMAGE_BLOB_DELETE, new Object[] {image.getAD_Image_ID()}, image.get_TrxName());</span>
+<span class="nc" id="L476">		return true;</span>
+	}
+
+	@Override
+	public boolean isPendingFlush() {
+<span class="nc bnc" id="L481" title="All 6 branches missed.">		return (buffer != null &amp;&amp; buffer.length &gt; 0) || bufferInputStream != null;</span>
+	}
+
+	@Override
+	public void flush(MImage image, MStorageProvider prov) {
+		try {
+<span class="nc bnc" id="L487" title="All 6 branches missed.">			if ((buffer != null &amp;&amp; buffer.length &gt; 0) || bufferInputStream != null) {</span>
+<span class="nc" id="L488">				write(image, prov, buffer, bufferInputStream);			</span>
+			}
+<span class="nc" id="L490">		} finally {</span>
+<span class="nc" id="L491">			buffer = null;</span>
+<span class="nc" id="L492">			bufferInputStream = null;</span>
+		}
+<span class="nc" id="L494">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

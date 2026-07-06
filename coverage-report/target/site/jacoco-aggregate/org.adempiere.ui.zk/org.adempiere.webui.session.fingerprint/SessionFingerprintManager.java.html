@@ -1,0 +1,334 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>SessionFingerprintManager.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.session.fingerprint</a> &gt; <span class="el_source">SessionFingerprintManager.java</span></div><h1>SessionFingerprintManager.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz - globalqss - bxservice                               *
+ **********************************************************************/
+
+package org.adempiere.webui.session.fingerprint;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
+
+import org.adempiere.base.Service;
+import org.compiere.model.MSysConfig;
+import org.compiere.util.CCache;
+import org.compiere.util.CLogger;
+
+/**
+ * Manager for extensible session fingerprinting.
+ * Discovers and coordinates all registered {@link ISessionFingerprintComponent} services
+ * to create and validate session fingerprints.
+ * 
+ * &lt;p&gt;Components are discovered via OSGi service registry and sorted by priority.&lt;/p&gt;
+ * 
+ * &lt;p&gt;Global enable/disable is controlled via AD_SysConfig ZK_SESSION_FINGERPRINT_ENABLED&lt;/p&gt;
+ */
+public class SessionFingerprintManager {
+
+<span class="nc" id="L56">	private static final CLogger log = CLogger.getCLogger(SessionFingerprintManager.class);</span>
+
+	/** Session attribute name for storing the composite fingerprint */
+	public static final String SESSION_FINGERPRINT_ATTR = &quot;session.fingerprint&quot;;
+
+	/** Cache key for components list */
+	private static final String COMPONENTS_CACHE_KEY = &quot;fingerprint.components&quot;;
+
+	/** Cache for fingerprint components - expires after 60 minutes */
+<span class="nc" id="L65">	private static final CCache&lt;String, List&lt;ISessionFingerprintComponent&gt;&gt; s_componentsCache = </span>
+<span class="nc" id="L66">			new CCache&lt;&gt;(null, &quot;SessionFingerprintComponents&quot;, 1, 60, false);</span>
+
+	/**
+	 * Composite fingerprint stored in session, containing values from all components
+	 */
+	public static class CompositeFingerprint implements Serializable {
+		/**
+		 * 
+		 */
+		private static final long serialVersionUID = 1352639946351252330L;
+
+<span class="nc" id="L77">		private final Map&lt;String, String&gt; componentValues = new ConcurrentHashMap&lt;&gt;();</span>
+		private final long createdAt;
+		private int sessionId;
+
+<span class="nc" id="L81">		public CompositeFingerprint() {</span>
+<span class="nc" id="L82">			this.createdAt = System.currentTimeMillis();</span>
+<span class="nc" id="L83">		}</span>
+
+		public void setValue(String componentId, String value) {
+<span class="nc" id="L86">			componentValues.put(componentId, value);</span>
+<span class="nc" id="L87">		}</span>
+
+		public String getValue(String componentId) {
+<span class="nc" id="L90">			return componentValues.get(componentId);</span>
+		}
+
+		public boolean hasValue(String componentId) {
+<span class="nc" id="L94">			return componentValues.containsKey(componentId);</span>
+		}
+
+		public long getCreatedAt() {
+<span class="nc" id="L98">			return createdAt;</span>
+		}
+
+		public Map&lt;String, String&gt; getAllValues() {
+<span class="nc" id="L102">			return new HashMap&lt;&gt;(componentValues);</span>
+		}
+
+		public int getAD_Session_ID() {
+<span class="nc" id="L106">			return sessionId;</span>
+		}
+
+		public void setAD_Session_ID(int adSessionId) {
+<span class="nc" id="L110">			this.sessionId = adSessionId;</span>
+<span class="nc" id="L111">		}</span>
+
+		@Override
+		public String toString() {
+<span class="nc" id="L115">			return &quot;CompositeFingerprint[AD_Session_ID=&quot; + sessionId + &quot;, created=&quot; + createdAt + &quot;, values=&quot; + componentValues + &quot;]&quot;;</span>
+		}
+	}
+
+	/**
+	 * Private constructor - utility class with static methods
+	 */
+	private SessionFingerprintManager() {
+	}
+
+	/**
+	 * Check if session fingerprint validation is enabled globally
+	 * @return true if fingerprint validation is enabled
+	 */
+	public static boolean isEnabled() {
+<span class="nc" id="L130">		return MSysConfig.getBooleanValue(MSysConfig.ZK_SESSION_FINGERPRINT_ENABLED, true);</span>
+	}
+
+	/**
+	 * Get all registered fingerprint components, sorted by priority.
+	 * Results are cached for performance.
+	 * @return list of components (empty list if no OSGi services registered)
+	 */
+	public static List&lt;ISessionFingerprintComponent&gt; getComponents() {
+<span class="nc" id="L139">		List&lt;ISessionFingerprintComponent&gt; components = s_componentsCache.get(COMPONENTS_CACHE_KEY);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (components != null) {</span>
+<span class="nc" id="L141">			return components;</span>
+		}
+
+<span class="nc" id="L144">		synchronized (s_componentsCache) {</span>
+<span class="nc" id="L145">			components = Service.locator().list(ISessionFingerprintComponent.class).getServices();</span>
+
+<span class="nc bnc" id="L147" title="All 2 branches missed.">			if (components == null) {</span>
+<span class="nc" id="L148">				components = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L149">			} else {</span>
+				// Make a mutable copy for sorting
+<span class="nc" id="L151">				components = new ArrayList&lt;&gt;(components);</span>
+			}
+
+			// Sort by priority
+<span class="nc" id="L155">			components.sort(Comparator.comparingInt(ISessionFingerprintComponent::getPriority));</span>
+
+<span class="nc" id="L157">			s_componentsCache.put(COMPONENTS_CACHE_KEY, components);</span>
+
+<span class="nc bnc" id="L159" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) {</span>
+<span class="nc" id="L160">				log.fine(&quot;Cached &quot; + components.size() + &quot; fingerprint components&quot;);</span>
+			}
+		}
+
+<span class="nc" id="L164">		return components;</span>
+	}
+
+	/**
+	 * Create a new composite fingerprint from the HTTP request and store it in the session.
+	 * This should be called after successful user authentication.
+	 * 
+	 * @param request the HTTP servlet request
+	 * @param session the HTTP session
+	 * @param sessionId the AD_Session_ID for logging purposes
+	 * @return the created fingerprint, or null if fingerprinting is disabled
+	 */
+	public static CompositeFingerprint create(HttpServletRequest request, HttpSession session, int sessionId) {
+<span class="nc bnc" id="L177" title="All 2 branches missed.">		if (!isEnabled()) {</span>
+<span class="nc" id="L178">			return null;</span>
+		}
+
+<span class="nc" id="L181">		CompositeFingerprint fingerprint = new CompositeFingerprint();</span>
+<span class="nc" id="L182">		fingerprint.setAD_Session_ID(sessionId);</span>
+<span class="nc" id="L183">		List&lt;ISessionFingerprintComponent&gt; components = getComponents();</span>
+
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		for (ISessionFingerprintComponent component : components) {</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">			if (component.isEnabled()) {</span>
+				try {
+<span class="nc" id="L188">					String value = component.extractValue(request);</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">					if (value != null)</span>
+<span class="nc" id="L190">						fingerprint.setValue(component.getComponentId(), value);</span>
+
+<span class="nc bnc" id="L192" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) {</span>
+<span class="nc" id="L193">						log.fine(&quot;Fingerprint component &quot; + component.getComponentId() + </span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">								&quot; = &quot; + (value != null ? value.substring(0, Math.min(50, value.length())) : &quot;null&quot;));</span>
+					}
+<span class="nc" id="L196">				} catch (Exception e) {</span>
+<span class="nc" id="L197">					log.log(Level.WARNING, &quot;Error extracting fingerprint component: &quot; + </span>
+<span class="nc" id="L198">							component.getComponentId(), e);</span>
+				}
+			}
+		}
+
+<span class="nc" id="L203">		session.setAttribute(SESSION_FINGERPRINT_ATTR, fingerprint);</span>
+
+<span class="nc bnc" id="L205" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) {</span>
+<span class="nc" id="L206">			log.fine(&quot;Session fingerprint created: &quot; + fingerprint);</span>
+		}
+
+<span class="nc" id="L209">		return fingerprint;</span>
+	}
+
+	/**
+	 * Validate the current request against the stored session fingerprint.
+	 * This should be called on each request to detect session hijacking attempts.
+	 * 
+	 * @param request the HTTP servlet request
+	 * @param session the HTTP session
+	 * @return validation result with details about any mismatches
+	 */
+	public static FingerprintValidationResult validate(HttpServletRequest request, HttpSession session) {
+<span class="nc" id="L221">		FingerprintValidationResult result = new FingerprintValidationResult();</span>
+
+<span class="nc bnc" id="L223" title="All 2 branches missed.">		if (!isEnabled()) {</span>
+<span class="nc" id="L224">			return result; // Valid by default when disabled</span>
+		}
+
+<span class="nc" id="L227">		CompositeFingerprint stored = (CompositeFingerprint) session.getAttribute(SESSION_FINGERPRINT_ATTR);</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">		if (stored == null) {</span>
+			// No fingerprint stored yet - this is OK for pre-login requests
+<span class="nc" id="L230">			return result;</span>
+		}
+
+<span class="nc" id="L233">		List&lt;ISessionFingerprintComponent&gt; components = getComponents();</span>
+
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		for (ISessionFingerprintComponent component : components) {</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">			if (!component.isEnabled()) {</span>
+<span class="nc" id="L237">				continue;</span>
+			}
+
+<span class="nc" id="L240">			String action = component.getMismatchAction();</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">			if (ISessionFingerprintComponent.ACTION_NOTHING.equals(action)) {</span>
+<span class="nc" id="L242">				continue; // Skip validation if action is nothing</span>
+			}
+
+			try {
+				// Skip if we don't have a stored value for this component
+<span class="nc bnc" id="L247" title="All 2 branches missed.">				if (!stored.hasValue(component.getComponentId())) {</span>
+<span class="nc" id="L248">					continue;</span>
+				}
+
+<span class="nc" id="L251">				String storedValue = stored.getValue(component.getComponentId());</span>
+<span class="nc" id="L252">				String currentValue = component.extractValue(request);</span>
+<span class="nc" id="L253">				int sessionId = stored.getAD_Session_ID();</span>
+
+<span class="nc bnc" id="L255" title="All 2 branches missed.">				if (!component.verify(storedValue, currentValue)) {</span>
+
+<span class="nc" id="L257">					FingerprintValidationResult.ComponentMismatch mismatch = </span>
+<span class="nc" id="L258">							new FingerprintValidationResult.ComponentMismatch(</span>
+<span class="nc" id="L259">									component.getComponentId(),</span>
+<span class="nc" id="L260">									component.getDisplayName(),</span>
+<span class="nc" id="L261">									storedValue,</span>
+<span class="nc" id="L262">									currentValue,</span>
+<span class="nc" id="L263">									action,</span>
+<span class="nc" id="L264">									sessionId);</span>
+
+<span class="nc" id="L266">					result.addMismatch(mismatch);</span>
+
+<span class="nc bnc" id="L268" title="All 2 branches missed.">					if (   ISessionFingerprintComponent.ACTION_LOG_SEVERE.equals(action)</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">						|| ISessionFingerprintComponent.ACTION_STOP.equals(action))</span>
+<span class="nc" id="L270">						log.severe(&quot;Session &quot; + sessionId + &quot; fingerprint mismatch: &quot; + mismatch);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">					else if (ISessionFingerprintComponent.ACTION_LOG_WARNING.equals(action))</span>
+<span class="nc" id="L272">						log.warning(&quot;Session &quot; + sessionId + &quot; fingerprint mismatch: &quot; + mismatch);</span>
+
+<span class="nc bnc" id="L274" title="All 2 branches missed.">					if (!ISessionFingerprintComponent.ACTION_STOP.equals(action))</span>
+<span class="nc" id="L275">						stored.setValue(component.getComponentId(), currentValue);</span>
+				}
+<span class="nc" id="L277">			} catch (Exception e) {</span>
+<span class="nc" id="L278">				log.log(Level.WARNING, &quot;Error validating fingerprint component: &quot; + </span>
+<span class="nc" id="L279">						component.getComponentId(), e);</span>
+			}
+		}
+
+<span class="nc" id="L283">		return result;</span>
+	}
+
+	/**
+	 * Simple validation that returns boolean for backward compatibility.
+	 * Returns false only if validation failed AND action is STOP.
+	 * 
+	 * @param request the HTTP servlet request
+	 * @param session the HTTP session
+	 * @return true if valid or no stop action required, false if session should be invalidated
+	 */
+	public static boolean isValid(HttpServletRequest request, HttpSession session) {
+<span class="nc" id="L295">		FingerprintValidationResult result = validate(request, session);</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		return !result.shouldStop();</span>
+	}
+
+	/**
+	 * Remove the fingerprint from the session.
+	 * This should be called on logout.
+	 * 
+	 * @param session the HTTP session
+	 */
+	public static void remove(HttpSession session) {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (session != null) {</span>
+<span class="nc" id="L307">			session.removeAttribute(SESSION_FINGERPRINT_ATTR);</span>
+		}
+<span class="nc" id="L309">	}</span>
+
+	/**
+	 * Update a specific component value in the stored fingerprint.
+	 * Useful for components that receive values asynchronously (e.g., via JavaScript).
+	 * 
+	 * @param session the HTTP session
+	 * @param componentId the component ID
+	 * @param value the new value
+	 */
+	public static void updateComponentValue(HttpSession session, String componentId, String value) {
+<span class="nc bnc" id="L320" title="All 2 branches missed.">		if (session == null) {</span>
+<span class="nc" id="L321">			return;</span>
+		}
+
+<span class="nc" id="L324">		CompositeFingerprint fingerprint = (CompositeFingerprint) session.getAttribute(SESSION_FINGERPRINT_ATTR);</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">		if (fingerprint != null) {</span>
+<span class="nc" id="L326">			fingerprint.setValue(componentId, value);</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) {</span>
+<span class="nc" id="L328">				log.fine(&quot;Updated fingerprint component &quot; + componentId + &quot; = &quot; + value);</span>
+			}
+		}
+<span class="nc" id="L331">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

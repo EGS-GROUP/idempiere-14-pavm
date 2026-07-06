@@ -1,0 +1,2243 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MQuery.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MQuery.java</span></div><h1>MQuery.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.Serializable;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.MessageFormat;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DefaultEvaluatee;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Evaluatee;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ *	Query Descriptor.
+ * 	Maintains restrictions (WHERE clause).
+ *
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: MQuery.java,v 1.4 2006/07/30 00:58:04 jjanke Exp $
+ * 
+ *  @author Teo Sarca
+ * 		&lt;li&gt;BF [ 2860022 ] MQuery.get() is generating restrictions for non-existent column
+ * 			https://sourceforge.net/p/adempiere/bugs/2099/
+ */
+public class MQuery implements Serializable, Cloneable
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -8671209250739719461L;
+
+	/**
+	 *	Create new Query for report
+	 *	@param ctx context
+	 *  @param AD_PInstance_ID process instance for report
+	 *  @param TableName table name
+	 *  @return MQuery
+	 */
+	static public MQuery get (Properties ctx, int AD_PInstance_ID, String TableName)
+	{
+<span class="nc bnc" id="L71" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO)) s_log.info(&quot;AD_PInstance_ID=&quot; + AD_PInstance_ID + &quot;, TableName=&quot; + TableName);</span>
+<span class="nc" id="L72">		MQuery reportQuery = new MQuery(TableName);</span>
+		//	Temporary Tables - add qualifier (not displayed)
+<span class="nc" id="L74">		MTable table =  MTable.get(ctx, TableName);</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">		if (TableName.startsWith(&quot;T_&quot;))</span>
+		{
+<span class="nc" id="L77">			reportQuery.addRestriction(new SQLFragment(TableName + &quot;.AD_PInstance_ID=?&quot;, List.of(AD_PInstance_ID)));</span>
+		}
+		//use separate query object for rendering of parameter at report
+<span class="nc" id="L80">		reportQuery.setReportProcessQuery(new MQuery(TableName));</span>
+<span class="nc" id="L81">		reportQuery.m_AD_PInstance_ID = AD_PInstance_ID;</span>
+
+		//	How many rows do we have?
+<span class="nc" id="L84">		String SQL = &quot;SELECT COUNT(*) FROM AD_PInstance_Para WHERE AD_PInstance_ID=?&quot;;</span>
+<span class="nc" id="L85">		int rows = DB.getSQLValue(null, SQL, AD_PInstance_ID);</span>
+
+<span class="nc bnc" id="L87" title="All 2 branches missed.">		if (rows &lt; 1)</span>
+<span class="nc" id="L88">			return reportQuery;</span>
+
+<span class="nc" id="L90">		Map&lt;String, String&gt; parameterMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L91">		List&lt;String&gt; queryList = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">		boolean trl = !Env.isBaseLanguage(ctx, &quot;AD_Process_Para&quot;);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">		if (!trl)</span>
+<span class="nc" id="L94">			SQL = &quot;SELECT ip.ParameterName,ip.P_String,ip.P_String_To,&quot;			//	1..3</span>
+				+ &quot;ip.P_Number,ip.P_Number_To,&quot;									//	4..5
+				+ &quot;ip.P_Date,ip.P_Date_To, ip.Info,ip.Info_To, &quot;				//	6..9
+				+ &quot;pp.Name, pp.IsRange, pp.AD_Reference_ID, pp.Query, &quot;			//	10..13
+				+ &quot;pp.AD_Process_ID, pp.AD_Process_Para_ID, &quot;					//	14..15
+				+ &quot;ip.IsNotClause &quot;
+				+ &quot;FROM AD_PInstance_Para ip, AD_PInstance i, AD_Process_Para pp &quot;
+				+ &quot;WHERE i.AD_PInstance_ID=ip.AD_PInstance_ID&quot;
+				+ &quot; AND pp.AD_Process_ID=i.AD_Process_ID&quot;
+				+ &quot; AND pp.ColumnName=ip.ParameterName&quot;
+				+ &quot; AND pp.IsActive='Y'&quot;
+				+ &quot; AND ip.AD_PInstance_ID=?&quot;
+<span class="nc" id="L106">				+ &quot; ORDER BY pp.SeqNo&quot;;</span>
+		else
+<span class="nc" id="L108">			SQL = &quot;SELECT ip.ParameterName,ip.P_String,ip.P_String_To, ip.P_Number,ip.P_Number_To,&quot;</span>
+				+ &quot;ip.P_Date,ip.P_Date_To, ip.Info,ip.Info_To, &quot;
+				+ &quot;ppt.Name, pp.IsRange, pp.AD_Reference_ID, pp.Query, &quot;
+				+ &quot;pp.AD_Process_ID, pp.AD_Process_Para_ID, &quot;
+				+ &quot;ip.IsNotClause &quot;
+				+ &quot;FROM AD_PInstance_Para ip, AD_PInstance i, AD_Process_Para pp, AD_Process_Para_Trl ppt &quot;
+				+ &quot;WHERE i.AD_PInstance_ID=ip.AD_PInstance_ID&quot;
+				+ &quot; AND pp.AD_Process_ID=i.AD_Process_ID&quot;
+				+ &quot; AND pp.ColumnName=ip.ParameterName&quot;
+				+ &quot; AND pp.IsActive='Y'&quot;
+				+ &quot; AND pp.AD_Process_Para_ID=ppt.AD_Process_Para_ID&quot;
+				+ &quot; AND ip.AD_PInstance_ID=?&quot;
+				+ &quot; AND ppt.AD_Language=?&quot;
+				+ &quot; ORDER BY pp.SeqNo&quot;;
+<span class="nc" id="L122">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L123">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L126">			pstmt = DB.prepareStatement(SQL, null);</span>
+<span class="nc" id="L127">			pstmt.setInt(1, AD_PInstance_ID);</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">			if (trl)</span>
+<span class="nc" id="L129">				pstmt.setString(2, Env.getAD_Language(ctx));</span>
+<span class="nc" id="L130">			rs = pstmt.executeQuery();</span>
+			//	all records
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			for (int row = 0; rs.next(); row++)</span>
+			{
+<span class="nc bnc" id="L134" title="All 2 branches missed.">				if (row == rows)</span>
+				{
+<span class="nc" id="L136">					s_log.log(Level.SEVERE, &quot;(Parameter) - more rows than expected&quot;);</span>
+<span class="nc" id="L137">					break;</span>
+				}
+<span class="nc" id="L139">				MQuery query = reportQuery;</span>
+<span class="nc" id="L140">				String ParameterName = rs.getString(1);</span>
+<span class="nc" id="L141">				String P_String = rs.getString(2);</span>
+<span class="nc" id="L142">				String P_String_To = rs.getString(3);</span>
+<span class="nc" id="L143">				int restrictionCount = reportQuery.getRestrictionCount();</span>
+				//
+<span class="nc" id="L145">				Double P_Number = null;</span>
+<span class="nc" id="L146">				double d = rs.getDouble(4);</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">				if (!rs.wasNull())</span>
+<span class="nc" id="L148">					P_Number = Double.valueOf(d);</span>
+<span class="nc" id="L149">				Double P_Number_To = null;</span>
+<span class="nc" id="L150">				d = rs.getDouble(5);</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">				if (!rs.wasNull())</span>
+<span class="nc" id="L152">					P_Number_To = Double.valueOf(d);</span>
+				//
+<span class="nc" id="L154">				Timestamp P_Date = rs.getTimestamp(6);</span>
+<span class="nc" id="L155">				Timestamp P_Date_To = rs.getTimestamp(7);</span>
+				//
+<span class="nc" id="L157">				String Info = rs.getString(8);</span>
+<span class="nc" id="L158">				String Info_To = rs.getString(9);</span>
+				//
+<span class="nc" id="L160">				String Name = rs.getString(10);</span>
+<span class="nc" id="L161">				boolean isRange = &quot;Y&quot;.equals(rs.getString(11));</span>
+				//
+<span class="nc" id="L163">				int Reference_ID = rs.getInt(12);</span>
+
+<span class="nc" id="L165">				MUserDefProcParameter udpp = MUserDefProcParameter.get(ctx, rs.getInt(15), rs.getInt(14));</span>
+<span class="nc bnc" id="L166" title="All 4 branches missed.">				if (udpp != null &amp;&amp; udpp.getAD_Reference_ID() &gt; 0)</span>
+<span class="nc" id="L167">					Reference_ID = udpp.getAD_Reference_ID();</span>
+
+<span class="nc" id="L169">				String P_Query = rs.getString(13);</span>
+<span class="nc" id="L170">				boolean isNotClause = &quot;Y&quot;.equals(rs.getString(16));</span>
+				//
+<span class="nc bnc" id="L172" title="All 2 branches missed.">				if (s_log.isLoggable(Level.FINE)) s_log.fine(ParameterName + &quot; S=&quot; + P_String + &quot;-&quot; + P_String_To</span>
+<span class="nc" id="L173">					+ &quot;, N=&quot; + P_Number + &quot;-&quot; + P_Number_To + &quot;, D=&quot; + P_Date + &quot;-&quot; + P_Date_To</span>
+<span class="nc" id="L174">					+ &quot;; Name=&quot; + Name + &quot;, Info=&quot; + Info + &quot;-&quot; + Info_To + &quot;, Range=&quot; + isRange</span>
+<span class="nc" id="L175">					+ &quot;, Not Clause=&quot; + isNotClause);</span>
+				//
+				//custom query or column not exists - render as report parameters
+<span class="nc bnc" id="L178" title="All 6 branches missed.">				if (!Util.isEmpty(P_Query) || (table != null &amp;&amp; table.getColumn(ParameterName) == null))</span>
+				{
+<span class="nc" id="L180">					query = reportQuery.getReportProcessQuery();</span>
+				}
+
+<span class="nc bnc" id="L183" title="All 4 branches missed.">				if (table != null &amp;&amp; table.getColumn(ParameterName) != null) {</span>
+<span class="nc" id="L184">					MColumn column = table.getColumn(ParameterName);</span>
+<span class="nc bnc" id="L185" title="All 4 branches missed.">					if (column != null &amp;&amp; !Util.isEmpty(column.getColumnSQL()))</span>
+<span class="nc" id="L186">						ParameterName = column.getColumnSQL();</span>
+				}
+
+				//-------------------------------------------------------------
+<span class="nc bnc" id="L190" title="All 2 branches missed.">				if (P_String != null)</span>
+				{
+<span class="nc" id="L192">					parameterMap.put(ParameterName, P_String);</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">					if (P_String_To == null)</span>
+					{
+<span class="nc bnc" id="L195" title="All 2 branches missed.">						if (Reference_ID == DisplayType.ChosenMultipleSelectionList)</span>
+						{
+<span class="nc" id="L197">							String columnName = TableName + &quot;.&quot; + ParameterName;		</span>
+<span class="nc" id="L198">							int cnt = DB.getSQLValueEx(null, &quot;SELECT Count(*) From AD_Column WHERE IsActive='Y' AND AD_Client_ID=0 AND Upper(ColumnName)=? AND AD_Reference_ID=?&quot;, ParameterName.toUpperCase(), DisplayType.ChosenMultipleSelectionList);</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">							if (cnt &gt; 0)</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">								query.addRestriction(DB.intersectFilterForCSV(columnName, P_String, isNotClause), isNotClause ? MQuery.NOT_EQUAL : MQuery.EQUAL, Name, Info);</span>
+							else
+<span class="nc bnc" id="L202" title="All 2 branches missed.">								query.addRestriction(DB.inFilterForCSV(columnName, P_String, isNotClause), isNotClause ? MQuery.NOT_EQUAL : MQuery.EQUAL, Name, Info);</span>
+<span class="nc" id="L203">						} </span>
+<span class="nc bnc" id="L204" title="All 4 branches missed.">						else if (Reference_ID == DisplayType.ChosenMultipleSelectionTable || Reference_ID == DisplayType.ChosenMultipleSelectionSearch)</span>
+						{
+<span class="nc" id="L206">							String columnName = TableName + &quot;.&quot; + ParameterName;</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">							if (columnName.endsWith(&quot;_ID&quot;))</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">								query.addRestriction(DB.inFilterForCSV(columnName, P_String, isNotClause), isNotClause ? MQuery.NOT_EQUAL : MQuery.EQUAL, Name, Info);</span>
+							else
+<span class="nc bnc" id="L210" title="All 2 branches missed.">								query.addRestriction(DB.intersectFilterForCSV(columnName, P_String, isNotClause), isNotClause ? MQuery.NOT_EQUAL : MQuery.EQUAL, Name, Info);</span>
+<span class="nc" id="L211">						}</span>
+						else
+						{
+<span class="nc bnc" id="L214" title="All 2 branches missed.">							if (P_String.indexOf('%') == -1)</span>
+<span class="nc" id="L215">								query.addRestriction(ParameterName, MQuery.EQUAL, </span>
+<span class="nc" id="L216">									P_String, Name, Info);</span>
+							else
+<span class="nc" id="L218">								query.addRestriction(ParameterName, MQuery.LIKE, </span>
+<span class="nc" id="L219">									P_String, Name, Info);</span>
+						}
+<span class="nc" id="L221">					}</span>
+					else
+					{
+<span class="nc" id="L224">						query.addRangeRestriction(ParameterName, </span>
+<span class="nc" id="L225">							P_String, P_String_To, Name, Info, Info_To);</span>
+<span class="nc" id="L226">						parameterMap.put(&quot;To_&quot;+ParameterName, P_String_To);</span>
+					}
+<span class="nc" id="L228">				}</span>
+				//	Number
+<span class="nc bnc" id="L230" title="All 4 branches missed.">				else if (P_Number != null || P_Number_To != null)</span>
+				{
+<span class="nc bnc" id="L232" title="All 2 branches missed.">					if (P_Number_To == null)</span>
+					{
+<span class="nc" id="L234">						parameterMap.put(ParameterName, P_Number.toString());</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">						if (isRange)</span>
+<span class="nc" id="L236">							query.addRestriction(ParameterName, MQuery.GREATER_EQUAL, </span>
+<span class="nc" id="L237">								P_Number, Name, Info);</span>
+						else
+<span class="nc" id="L239">							query.addRestriction(ParameterName, MQuery.EQUAL, </span>
+<span class="nc" id="L240">								P_Number, Name, Info);</span>
+<span class="nc" id="L241">					}</span>
+					else	//	P_Number_To != null
+					{
+<span class="nc" id="L244">						parameterMap.put(&quot;To_&quot;+ParameterName, P_Number_To.toString());</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">						if (P_Number == null)							</span>
+<span class="nc" id="L246">							query.addRestriction(ParameterName, MQuery.LESS_EQUAL, </span>
+<span class="nc" id="L247">								P_Number_To, Name, Info);</span>
+						else
+						{
+<span class="nc" id="L250">							query.addRangeRestriction(ParameterName, </span>
+<span class="nc" id="L251">								P_Number, P_Number_To, Name, Info, Info_To);</span>
+<span class="nc" id="L252">							parameterMap.put(ParameterName, P_Number.toString());</span>
+						}
+					}
+<span class="nc" id="L255">				}</span>
+				//	Date
+<span class="nc bnc" id="L257" title="All 4 branches missed.">				else if (P_Date != null || P_Date_To != null)</span>
+				{
+<span class="nc bnc" id="L259" title="All 2 branches missed.">					String paramName = (Reference_ID == DisplayType.DateTime) ? ParameterName</span>
+<span class="nc" id="L260">							: &quot;TRUNC(&quot; + ParameterName + &quot;)&quot;;</span>
+
+<span class="nc bnc" id="L262" title="All 2 branches missed.">					if (P_Date_To == null)</span>
+					{
+<span class="nc" id="L264">						parameterMap.put(ParameterName, DisplayType.getDateFormat().format(P_Date));</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">						if (isRange)</span>
+<span class="nc" id="L266">							query.addRestriction(paramName, MQuery.GREATER_EQUAL, P_Date, Name, Info);</span>
+						else
+<span class="nc" id="L268">							query.addRestriction(paramName, MQuery.EQUAL, P_Date, Name, Info);</span>
+<span class="nc" id="L269">					}</span>
+					else // P_Date_To != null
+					{
+<span class="nc" id="L272">						parameterMap.put(&quot;To_&quot;+ParameterName, DisplayType.getDateFormat().format(P_Date_To));</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">						if (P_Date == null)</span>
+<span class="nc" id="L274">							query.addRestriction(paramName, MQuery.LESS_EQUAL, P_Date_To, Name, Info);</span>
+						else
+						{
+<span class="nc" id="L277">							query.addRangeRestriction(paramName, P_Date, P_Date_To, Name, Info, Info_To);</span>
+<span class="nc" id="L278">							parameterMap.put(ParameterName, DisplayType.getDateFormat().format(P_Date));</span>
+						}
+					}
+				}
+				
+				//keep custom query for later context parsing
+<span class="nc bnc" id="L284" title="All 6 branches missed.">				if (!Util.isEmpty(P_Query) &amp;&amp; (parameterMap.containsKey(ParameterName) || parameterMap.containsKey(&quot;To_&quot;+ParameterName)))</span>
+<span class="nc" id="L285">					queryList.add(P_Query);</span>
+				
+				//add to reportprocessquery if new restriction added to reportquery
+<span class="nc bnc" id="L288" title="All 4 branches missed.">				if (query == reportQuery &amp;&amp; reportQuery.getReportProcessQuery() != null </span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">					&amp;&amp; reportQuery.getRestrictionCount() &gt; restrictionCount) </span>
+				{
+<span class="nc" id="L291">					reportQuery.getReportProcessQuery().m_list.add(reportQuery.m_list.get(reportQuery.m_list.size()-1));</span>
+				}
+			}
+<span class="nc" id="L294">		}</span>
+<span class="nc" id="L295">		catch (SQLException e2)</span>
+		{
+<span class="nc" id="L297">			s_log.log(Level.SEVERE, SQL, e2);</span>
+		}
+		finally
+		{
+<span class="nc" id="L301">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L302">			rs = null; pstmt = null;</span>
+		}
+		
+		//add custom query (this is subject to SQL injection attacks - use with care)
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (queryList.size() &gt; 0)</span>
+		{
+<span class="nc" id="L308">			QueryEvaluatee evaluatee=  new QueryEvaluatee(parameterMap);</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">			for(String query : queryList)</span>
+			{
+<span class="nc bnc" id="L311" title="All 2 branches missed.">				if (query.indexOf(&quot;@&quot;) &gt;= 0)</span>
+				{
+<span class="nc" id="L313">					query = parseVariable(evaluatee, query, false);					</span>
+				}
+<span class="nc" id="L315">				reportQuery.addRestriction(new SQLFragment(query, List.of()));</span>
+			}
+		}
+		
+<span class="nc bnc" id="L319" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO)) s_log.info(reportQuery.toString());</span>
+<span class="nc" id="L320">		return reportQuery;</span>
+	}	//	get
+	
+	/**
+	 * Parse expression with variable
+	 * @param evaluatee Resolver for variables in expression
+	 * @param expression expression to parse
+	 * @param ignoreUnparseable if true and there are variables that can't be resolved, return empty string  
+	 * @return parsed expression
+	 */
+	private static String parseVariable(Evaluatee evaluatee, String expression, boolean ignoreUnparseable) {
+<span class="nc bnc" id="L331" title="All 4 branches missed.">		if (expression == null || expression.length() == 0)</span>
+<span class="nc" id="L332">			return &quot;&quot;;</span>
+
+		String token;
+<span class="nc" id="L335">		String inStr = new String(expression);</span>
+<span class="nc" id="L336">		StringBuilder outStr = new StringBuilder();</span>
+
+<span class="nc" id="L338">		int i = inStr.indexOf('@');</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">		while (i != -1)</span>
+		{
+<span class="nc" id="L341">			outStr.append(inStr.substring(0, i));			// up to @</span>
+<span class="nc" id="L342">			inStr = inStr.substring(i+1, inStr.length());	// from first @</span>
+
+<span class="nc" id="L344">			int j = inStr.indexOf('@');						// next @</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">			if (j &lt; 0)</span>
+			{
+<span class="nc" id="L347">				s_log.log(Level.SEVERE, &quot;No second tag: &quot; + inStr);</span>
+<span class="nc" id="L348">				return &quot;&quot;;						//	no second tag</span>
+			}
+
+<span class="nc" id="L351">			token = inStr.substring(0, j);</span>
+
+			//format string
+<span class="nc" id="L354">			String format = &quot;&quot;;</span>
+<span class="nc" id="L355">			int f = token.indexOf('&lt;');</span>
+<span class="nc bnc" id="L356" title="All 4 branches missed.">			if (f &gt; 0 &amp;&amp; token.endsWith(&quot;&gt;&quot;)) {</span>
+<span class="nc" id="L357">				format = token.substring(f+1, token.length()-1);</span>
+<span class="nc" id="L358">				token = token.substring(0, f);</span>
+			}
+
+<span class="nc" id="L361">			String v = evaluatee.get_ValueAsString(token);</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">			if (!Util.isEmpty(v)) {</span>
+<span class="nc bnc" id="L363" title="All 4 branches missed.">				if (format != null &amp;&amp; format.length() &gt; 0) {</span>
+<span class="nc" id="L364">					MessageFormat mf = new MessageFormat(format);</span>
+<span class="nc" id="L365">					outStr.append(mf.format(v));</span>
+<span class="nc" id="L366">				} else {</span>
+<span class="nc" id="L367">					outStr.append(v.toString());</span>
+				}
+<span class="nc bnc" id="L369" title="All 2 branches missed.">			} else if (!ignoreUnparseable) {</span>
+<span class="nc" id="L370">				return &quot;&quot;;				</span>
+			}
+
+<span class="nc" id="L373">			inStr = inStr.substring(j+1, inStr.length());	// from second @</span>
+<span class="nc" id="L374">			i = inStr.indexOf('@');</span>
+		}
+<span class="nc" id="L376">		outStr.append(inStr);						// add the rest of the string</span>
+
+<span class="nc" id="L378">		return outStr.toString();</span>
+	}
+	
+	/**
+	 * 	Get Zoom Column Name.&lt;br/&gt;
+	 * 	Convert well known synonyms like SalesRep_ID to AD_User_ID.
+	 *	@param columnName column name
+	 *	@return zoom column name
+	 */
+	public static String getZoomColumnName (String columnName)
+	{
+<span class="nc bnc" id="L389" title="All 2 branches missed.">		if (columnName == null)</span>
+<span class="nc" id="L390">			return null;</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">		if (columnName.equals(&quot;SalesRep_ID&quot;))</span>
+<span class="nc" id="L392">			return &quot;AD_User_ID&quot;;</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">		if (columnName.equals(&quot;C_DocTypeTarget_ID&quot;))</span>
+<span class="nc" id="L394">			return &quot;C_DocType_ID&quot;;</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">		if (columnName.equals(&quot;Bill_BPartner_ID&quot;))</span>
+<span class="nc" id="L396">			return &quot;C_BPartner_ID&quot;;</span>
+<span class="nc bnc" id="L397" title="All 4 branches missed.">		if (columnName.equals(&quot;Bill_Location_ID&quot;) || columnName.equals(&quot;BillTo_ID&quot;))</span>
+<span class="nc" id="L398">			return &quot;C_BPartner_Location_ID&quot;;</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">		if (columnName.equals(&quot;Account_ID&quot;))</span>
+<span class="nc" id="L400">			return &quot;C_ElementValue_ID&quot;;</span>
+<span class="nc bnc" id="L401" title="All 6 branches missed.">		if (columnName.equals(&quot;C_LocFrom_ID&quot;) || columnName.equals(&quot;C_LocTo_ID&quot;) || columnName.equals(&quot;BP_Location_ID&quot;))</span>
+<span class="nc" id="L402">			return &quot;C_Location_ID&quot;;</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">		if (columnName.equals(&quot;C_UOM_To_ID&quot;))</span>
+<span class="nc" id="L404">			return &quot;C_UOM_ID&quot;;</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">		if (columnName.equals(&quot;M_AttributeSetInstanceTo_ID&quot;))</span>
+<span class="nc" id="L406">			return &quot;M_AttributeSetInstance_ID&quot;;</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">		if (columnName.equals(&quot;M_LocatorTo_ID&quot;))</span>
+<span class="nc" id="L408">			return &quot;M_Locator_ID&quot;;</span>
+<span class="nc bnc" id="L409" title="All 6 branches missed.">		if (columnName.equals(&quot;AD_OrgBP_ID&quot;) || columnName.equals(&quot;AD_OrgTrx_ID&quot;) || columnName.equals(&quot;AD_OrgTo_ID&quot;))</span>
+<span class="nc" id="L410">			return &quot;AD_Org_ID&quot;;</span>
+		//	See also GridTab.validateQuery
+<span class="nc" id="L412">		return columnName;</span>
+	}	//	getZoomColumnName
+	
+	/**
+	 * 	Derive Zoom Table Name from column name (drop _ID or _UU).
+	 *	@param columnName  column name
+	 *	@return table name
+	 */
+	public static String getZoomTableName (String columnName)
+	{
+<span class="nc" id="L422">		String tableName = getZoomColumnName(columnName);</span>
+<span class="nc" id="L423">		int index = tableName.lastIndexOf(&quot;_ID&quot;);</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">		if (index != -1)</span>
+<span class="nc" id="L425">			return tableName.substring(0, index);</span>
+<span class="nc" id="L426">		index = tableName.lastIndexOf(&quot;_UU&quot;);</span>
+<span class="nc bnc" id="L427" title="All 2 branches missed.">		if (index != -1)</span>
+<span class="nc" id="L428">			return tableName.substring(0, index);</span>
+<span class="nc" id="L429">		return tableName;</span>
+	}	//	getZoomTableName
+	
+	/**
+	 * 	Create simple Equal Query.&lt;br/&gt;
+	 *  Create restriction of columnName=value or columnName='value'
+	 * 	@param columnName columnName
+	 * 	@param value value
+	 * 	@return query
+	 */
+	public static MQuery getEqualQuery (String columnName, Object value)
+	{
+<span class="nc" id="L441">		MQuery query = new MQuery();</span>
+<span class="nc" id="L442">		query.addRestriction(columnName, EQUAL, value);</span>
+<span class="nc" id="L443">		query.setRecordCount(1);	//	guess</span>
+<span class="nc" id="L444">		return query;</span>
+	}	//	getEqualQuery
+
+	/**
+	 * 	Create simple Equal Query.
+	 *  Create restriction of columnName=value.
+	 * 	@param columnName columnName
+	 * 	@param value value
+	 * 	@return query
+	 */
+	public static MQuery getEqualQuery (String columnName, int value)
+	{
+<span class="nc" id="L456">		MQuery query = new MQuery();</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">		if (columnName.endsWith(&quot;_ID&quot;))</span>
+<span class="nc" id="L458">			query.setTableName(columnName.substring(0, columnName.length()-3));</span>
+<span class="nc" id="L459">		query.addRestriction(columnName, EQUAL, Integer.valueOf(value));</span>
+<span class="nc" id="L460">		query.setRecordCount(1);	//	guess</span>
+<span class="nc" id="L461">		return query;</span>
+	}	//	getEqualQuery
+
+	/**
+	 * 	Create No Record query.
+	 * 	@param tableName table name
+	 * 	@param newRecord new Record Indicator. if true, add restriction of &quot;2=3&quot;, otherwise add restriction of &quot;1-2&quot; 
+	 * 	@return query
+	 */
+	public static MQuery getNoRecordQuery (String tableName, boolean newRecord)
+	{
+<span class="nc" id="L472">		MQuery query = new MQuery(tableName);</span>
+<span class="nc bnc" id="L473" title="All 2 branches missed.">		if (newRecord)</span>
+<span class="nc" id="L474">			query.addRestriction(NEWRECORD);</span>
+		else
+<span class="nc" id="L476">			query.addRestriction(&quot;1=2&quot;);</span>
+<span class="nc" id="L477">		query.setRecordCount(0);</span>
+<span class="nc" id="L478">		return query;</span>
+	}	//	getNoRecordQuery
+	
+	/**	Static Logger	*/
+<span class="nc" id="L482">	private static CLogger	s_log	= CLogger.getCLogger (MQuery.class);</span>
+		
+	/**
+	 *	Constructor w/o table name
+	 */
+<span class="nc" id="L487">	public MQuery ()</span>
+	{
+<span class="nc" id="L489">	}	//	MQuery</span>
+
+	/**
+	 *	Constructor
+	 *  @param TableName Table Name
+	 */
+<span class="nc" id="L495">	public MQuery (String TableName)</span>
+	{
+<span class="nc" id="L497">		m_TableName = TableName;</span>
+<span class="nc" id="L498">	}	//	MQuery</span>
+
+	/**
+	 * 	Constructor get TableName from table id
+	 * 	@param AD_Table_ID
+	 */
+<span class="nc" id="L504">	public MQuery (int AD_Table_ID)</span>
+	{	//	Use Client Context as r/o
+<span class="nc" id="L506">		m_TableName = MTable.getTableName (Env.getCtx(), AD_Table_ID);</span>
+<span class="nc" id="L507">	}	//	MQuery</span>
+
+	/**	Table Name					*/
+<span class="nc" id="L510">	private String		m_TableName = &quot;&quot;;</span>
+	/** PInstance					*/
+<span class="nc" id="L512">	private int m_AD_PInstance_ID = 0;</span>
+	/**	List of Restrictions		*/
+<span class="nc" id="L514">	private ArrayList&lt;Restriction&gt;	m_list = new ArrayList&lt;Restriction&gt;();</span>
+	/**	Record Count				*/
+<span class="nc" id="L516">	private int			m_recordCount = 999999;</span>
+	/** New Record Query			*/
+<span class="nc" id="L518">	private boolean		m_newRecord = false;</span>
+	/** New Record String			*/
+	private static final String	NEWRECORD = &quot;2=3&quot;;
+	
+	private String m_zoomTable;
+	
+	private String m_zoomColumn;
+	
+	private Object m_zoomValue;
+
+	private int m_zoomWindow_ID;
+
+	private MQuery m_reportProcessQuery;
+
+	/**
+	 * @return zoom AD_Window_ID
+	 */
+	public int getZoomWindowID() {
+<span class="nc" id="L536">		return m_zoomWindow_ID;</span>
+	}
+
+	/**
+	 * @param m_zoomWindow_ID AD_Window_ID for zoom
+	 */
+	public void setZoomWindowID(int m_zoomWindow_ID) {
+<span class="nc" id="L543">		this.m_zoomWindow_ID = m_zoomWindow_ID;</span>
+<span class="nc" id="L544">	}</span>
+
+	/**
+	 * 	Get Record Count
+	 *	@return count - default 999999
+	 */
+	public int getRecordCount()
+	{
+<span class="nc" id="L552">		return m_recordCount;</span>
+	}	//	getRecordCount
+	
+	/**
+	 * 	Set Record Count
+	 *	@param count count
+	 */
+	public void setRecordCount(int count)
+	{
+<span class="nc" id="L561">		m_recordCount = count;</span>
+<span class="nc" id="L562">	}	//	setRecordCount</span>
+		
+	/** Equal 			*/
+	public static final String	EQUAL = &quot;=&quot;;
+	public static final String	MSG_EQUAL = &quot;OPERATOR_EQUAL&quot;;
+	/** Equal - 0		*/
+	public static final int		EQUAL_INDEX = 0;
+	/** Not Equal		*/
+	public static final String	NOT_EQUAL = &quot;!=&quot;;
+	public static final String	MSG_NOT_EQUAL = &quot;OPERATOR_NOT_EQUAL&quot;;
+	/** Not Equal - 1		*/
+	public static final int		NOT_EQUAL_INDEX = 1;
+	/** Non Case Sensitive Like*/
+	public static final String	ILIKE = &quot; ILIKE &quot;;
+	public static final String	MSG_ILIKE = &quot;OPERATOR_ILIKE&quot;;
+	/** Like			*/
+	public static final String	LIKE = &quot; LIKE &quot;;
+	public static final String	MSG_LIKE = &quot;OPERATOR_LIKE&quot;;
+	/** Not Like		*/
+	public static final String	NOT_LIKE = &quot; NOT LIKE &quot;;
+	public static final String	MSG_NOT_LIKE = &quot;OPERATOR_NOT_LIKE&quot;;
+	/** Greater			*/
+	public static final String	GREATER = &quot;&gt;&quot;;
+	public static final String	MSG_GREATER = &quot;OPERATOR_GREATER&quot;;
+	/** Greater Equal	*/
+	public static final String	GREATER_EQUAL = &quot;&gt;=&quot;;
+	public static final String	MSG_GREATER_EQUAL = &quot;OPERATOR_GREATER_EQUAL&quot;;
+	/** Less			*/
+	public static final String	LESS = &quot;&lt;&quot;;
+	public static final String	MSG_LESS = &quot;OPERATOR_LESS&quot;;
+	/** Less Equal		*/
+	public static final String	LESS_EQUAL = &quot;&lt;=&quot;;
+	public static final String	MSG_LESS_EQUAL = &quot;OPERATOR_LESS_EQUAL&quot;;
+	/** Between			*/
+	public static final String	BETWEEN = &quot; BETWEEN &quot;;
+	public static final String	MSG_BETWEEN = &quot;OPERATOR_BETWEEN&quot;;
+	/** Between - 9		*/
+	public static final int		BETWEEN_INDEX = 9;
+	/** For IDEMPIERE-377	*/
+	public static final String 	NOT_NULL = &quot; IS NOT NULL &quot;;
+	public static final String 	MSG_NOT_NULL = &quot;OPERATOR_NOT_NULL&quot;;
+	/** For IDEMPIERE-377	*/
+	public static final String 	NULL = &quot; IS NULL &quot;;
+	public static final String 	MSG_NULL = &quot;OPERATOR_NULL&quot;;
+
+	/** NOTE: Value is the SQL operator, and Name is the message that appears in find window and reports */
+	/**	All the Operators			*/
+	/** WARNING: adding operators can change the _INDEX variables */
+<span class="nc" id="L610">	public static final ValueNamePair[]	OPERATORS = new ValueNamePair[] {</span>
+<span class="nc" id="L611">		new ValueNamePair (EQUAL,			MSG_EQUAL),		//	0 - EQUAL_INDEX</span>
+<span class="nc" id="L612">		new ValueNamePair (NOT_EQUAL,		MSG_NOT_EQUAL),	//  1 - NOT_EQUAL_INDEX</span>
+<span class="nc" id="L613">		new ValueNamePair (ILIKE,			MSG_ILIKE),</span>
+<span class="nc" id="L614">		new ValueNamePair (LIKE,			MSG_LIKE),</span>
+<span class="nc" id="L615">		new ValueNamePair (NOT_LIKE,		MSG_NOT_LIKE),</span>
+<span class="nc" id="L616">		new ValueNamePair (GREATER,			MSG_GREATER),</span>
+<span class="nc" id="L617">		new ValueNamePair (GREATER_EQUAL,	MSG_GREATER_EQUAL),</span>
+<span class="nc" id="L618">		new ValueNamePair (LESS,			MSG_LESS),</span>
+<span class="nc" id="L619">		new ValueNamePair (LESS_EQUAL,		MSG_LESS_EQUAL),</span>
+<span class="nc" id="L620">		new ValueNamePair (BETWEEN,			MSG_BETWEEN),	//	9 - BETWEEN_INDEX</span>
+<span class="nc" id="L621">		new ValueNamePair (NULL,			MSG_NULL),</span>
+<span class="nc" id="L622">		new ValueNamePair (NOT_NULL,		MSG_NOT_NULL)</span>
+	};
+	/**	Operators for Strings				*/
+<span class="nc" id="L625">	public static final ValueNamePair[]	OPERATORS_STRINGS = new ValueNamePair[] {</span>
+<span class="nc" id="L626">		new ValueNamePair (EQUAL,			MSG_EQUAL),</span>
+<span class="nc" id="L627">		new ValueNamePair (NOT_EQUAL,		MSG_NOT_EQUAL),</span>
+<span class="nc" id="L628">		new ValueNamePair (ILIKE,			MSG_ILIKE),</span>
+<span class="nc" id="L629">		new ValueNamePair (LIKE,			MSG_LIKE),</span>
+<span class="nc" id="L630">		new ValueNamePair (NOT_LIKE,		MSG_NOT_LIKE),</span>
+<span class="nc" id="L631">		new ValueNamePair (GREATER,			MSG_GREATER),</span>
+<span class="nc" id="L632">		new ValueNamePair (GREATER_EQUAL,	MSG_GREATER_EQUAL),</span>
+<span class="nc" id="L633">		new ValueNamePair (LESS,			MSG_LESS),</span>
+<span class="nc" id="L634">		new ValueNamePair (LESS_EQUAL,		MSG_LESS_EQUAL),</span>
+<span class="nc" id="L635">		new ValueNamePair (BETWEEN,			MSG_BETWEEN),</span>
+<span class="nc" id="L636">		new ValueNamePair (NULL,			MSG_NULL),</span>
+<span class="nc" id="L637">		new ValueNamePair (NOT_NULL,		MSG_NOT_NULL)</span>
+	};
+	/**	Operators for Lookups and Lists	(including Y/N)				*/
+<span class="nc" id="L640">	public static final ValueNamePair[]	OPERATORS_LOOKUP = new ValueNamePair[] {</span>
+<span class="nc" id="L641">		new ValueNamePair (EQUAL,			MSG_EQUAL),</span>
+<span class="nc" id="L642">		new ValueNamePair (NOT_EQUAL,		MSG_NOT_EQUAL),</span>
+<span class="nc" id="L643">		new ValueNamePair (NULL,			MSG_NULL),</span>
+<span class="nc" id="L644">		new ValueNamePair (NOT_NULL,		MSG_NOT_NULL)</span>
+	};
+	/**	Operators for encrypted fields								*/
+<span class="nc" id="L647">	public static final ValueNamePair[]	OPERATORS_ENCRYPTED = new ValueNamePair[] {</span>
+<span class="nc" id="L648">		new ValueNamePair (NULL,			MSG_NULL),</span>
+<span class="nc" id="L649">		new ValueNamePair (NOT_NULL,		MSG_NOT_NULL)</span>
+	};
+
+	/**	Operators for Numbers, Integers	*/
+<span class="nc" id="L653">	public static final ValueNamePair[]	OPERATORS_NUMBERS = new ValueNamePair[] {</span>
+<span class="nc" id="L654">		new ValueNamePair (EQUAL,			MSG_EQUAL),</span>
+<span class="nc" id="L655">		new ValueNamePair (NOT_EQUAL,		MSG_NOT_EQUAL),</span>
+<span class="nc" id="L656">		new ValueNamePair (GREATER,			MSG_GREATER),</span>
+<span class="nc" id="L657">		new ValueNamePair (GREATER_EQUAL,	MSG_GREATER_EQUAL),</span>
+<span class="nc" id="L658">		new ValueNamePair (LESS,			MSG_LESS),</span>
+<span class="nc" id="L659">		new ValueNamePair (LESS_EQUAL,		MSG_LESS_EQUAL),</span>
+<span class="nc" id="L660">		new ValueNamePair (BETWEEN,			MSG_BETWEEN),</span>
+<span class="nc" id="L661">		new ValueNamePair (NULL,			MSG_NULL),</span>
+<span class="nc" id="L662">		new ValueNamePair (NOT_NULL,		MSG_NOT_NULL)</span>
+	};
+	
+	/**	Operators for Dates	*/
+<span class="nc" id="L666">	public static final ValueNamePair[]	OPERATORS_DATES = new ValueNamePair[] {</span>
+<span class="nc" id="L667">		new ValueNamePair (EQUAL,			MSG_EQUAL),</span>
+<span class="nc" id="L668">		new ValueNamePair (NOT_EQUAL,		MSG_NOT_EQUAL),</span>
+<span class="nc" id="L669">		new ValueNamePair (GREATER,			MSG_GREATER),</span>
+<span class="nc" id="L670">		new ValueNamePair (GREATER_EQUAL,	MSG_GREATER_EQUAL),</span>
+<span class="nc" id="L671">		new ValueNamePair (LESS,			MSG_LESS),</span>
+<span class="nc" id="L672">		new ValueNamePair (LESS_EQUAL,		MSG_LESS_EQUAL),</span>
+<span class="nc" id="L673">		new ValueNamePair (BETWEEN,			MSG_BETWEEN),</span>
+<span class="nc" id="L674">		new ValueNamePair (NULL,			MSG_NULL),</span>
+<span class="nc" id="L675">		new ValueNamePair (NOT_NULL,		MSG_NOT_NULL)</span>
+<span class="nc" id="L676">	};</span>
+
+	/**
+	 * 	Add Restriction
+	 * 	@param ColumnName ColumnName
+	 * 	@param Operator Operator, e.g. = != ..
+	 * 	@param Code query value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 *  @param andCondition true=and, false=or
+	 *  @param depth number of parenthesis
+	 */
+	public void addRestriction (String ColumnName, String Operator,
+		Object Code, String InfoName, String InfoDisplay, boolean andCondition, int depth)
+	{
+<span class="nc" id="L691">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L692">			Code, InfoName, InfoDisplay, andCondition, false, depth);</span>
+<span class="nc" id="L693">		m_list.add(r);</span>
+<span class="nc" id="L694">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param ColumnName ColumnName
+	 * 	@param Operator Operator, e.g. = != ..
+	 * 	@param Code query value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 *  @param andCondition true=and, false=or
+	 *  @param notCondition true=not
+	 *  @param depth number of parenthesis
+	 */
+	public void addRestriction (String ColumnName, String Operator,
+		Object Code, String InfoName, String InfoDisplay, boolean andCondition, boolean notCondition, int depth)
+	{
+<span class="nc" id="L710">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L711">			Code, InfoName, InfoDisplay, andCondition, notCondition, depth);</span>
+<span class="nc" id="L712">		m_list.add(r);</span>
+<span class="nc" id="L713">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Range Restriction (BETWEEN)
+	 * 	@param ColumnName ColumnName
+	 * 	@param Code from value, e.g 0, All%
+	 * 	@param Code_to to value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 * 	@param InfoDisplay_to Display of Code_to (Lookup)
+	 *  @param andCondition true=and, false=or
+	 *  @param notCondition true=not
+	 *  @param depth number of parenthesis
+	 */
+	public void addRangeRestriction (String ColumnName,
+		Object Code, Object Code_to,
+		String InfoName, String InfoDisplay, String InfoDisplay_to, boolean andCondition, boolean notCondition, int depth)
+	{
+<span class="nc" id="L731">		Restriction r = new Restriction (ColumnName, Code, Code_to,</span>
+<span class="nc" id="L732">			InfoName, InfoDisplay, InfoDisplay_to, andCondition, notCondition, depth);</span>
+<span class="nc" id="L733">		m_list.add(r);</span>
+<span class="nc" id="L734">	}</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param ColumnName ColumnName
+	 * 	@param Operator Operator, e.g. = != ..
+	 * 	@param Code query value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 * 	@param andOrCondition AND/OR/AND NOT/OR NOT - concatenation of parenthesis
+	 *  @param depth number of parenthesis
+	 */
+	public void addRestriction (String ColumnName, String Operator,
+		Object Code, String InfoName, String InfoDisplay, String andOrCondition, int depth)
+	{
+<span class="nc" id="L749">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L750">			Code, InfoName, InfoDisplay, andOrCondition, depth);</span>
+<span class="nc" id="L751">		m_list.add(r);</span>
+<span class="nc" id="L752">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param ColumnName ColumnName
+	 * 	@param Operator Operator, e.g. = != ..
+	 * 	@param Code query value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 */
+	public void addRestriction (String ColumnName, String Operator,
+		Object Code, String InfoName, String InfoDisplay)
+	{
+<span class="nc" id="L765">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L766">			Code, InfoName, InfoDisplay, true, 0);</span>
+<span class="nc" id="L767">		m_list.add(r);</span>
+<span class="nc" id="L768">	}	//	addRestriction</span>
+
+	/**
+	 * 	Add Restriction
+	 * 	@param ColumnName ColumnName
+	 * 	@param Operator Operator, e.g. = != ..
+	 * 	@param Code query value, e.g 0, All%
+	 */
+	public void addRestriction (String ColumnName, String Operator,
+		Object Code)
+	{
+<span class="nc" id="L779">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L780">			Code, null, null, true, 0);</span>
+<span class="nc" id="L781">		m_list.add(r);</span>
+<span class="nc" id="L782">	}	//	addRestriction</span>
+
+	/**
+	 * 	Add Restriction
+	 * 	@param ColumnName ColumnName
+	 * 	@param Operator Operator, e.g. = != ..
+	 * 	@param Code query value, e.g 0
+	 */
+	public void addRestriction (String ColumnName, String Operator,
+		int Code)
+	{
+<span class="nc" id="L793">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L794">			Integer.valueOf(Code), null, null, true, 0);</span>
+<span class="nc" id="L795">		m_list.add(r);</span>
+<span class="nc" id="L796">	}	//	addRestriction</span>
+
+	/**
+	 * 	Add Range Restriction (BETWEEN)
+	 * 	@param ColumnName ColumnName
+	 * 	@param Code from value, e.g 0, All%
+	 * 	@param Code_to to value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 * 	@param InfoDisplay_to Display of Code_to (Lookup)
+	 *  @param andCondition true=and, false=or
+	 *  @param depth number of parenthesis
+	 */
+	public void addRangeRestriction (String ColumnName,
+		Object Code, Object Code_to,
+		String InfoName, String InfoDisplay, String InfoDisplay_to, boolean andCondition, int depth)
+	{
+<span class="nc" id="L813">		addRangeRestriction(ColumnName,</span>
+<span class="nc" id="L814">				Code, Code_to,</span>
+<span class="nc bnc" id="L815" title="All 2 branches missed.">				InfoName, InfoDisplay, InfoDisplay_to, andCondition ? &quot;AND&quot; : &quot;OR&quot;, depth);</span>
+<span class="nc" id="L816">	}</span>
+
+	/**
+	 * 	Add Range Restriction (BETWEEN)
+	 * 	@param ColumnName ColumnName
+	 * 	@param Code from value, e.g 0, All%
+	 * 	@param Code_to to value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 * 	@param InfoDisplay_to Display of Code_to (Lookup)
+	 * 	@param andOrCondition AND/OR/AND NOT/OR NOT - concatenation of parenthesis
+	 *  @param depth number of parenthesis
+	 */
+	public void addRangeRestriction (String ColumnName,
+		Object Code, Object Code_to,
+		String InfoName, String InfoDisplay, String InfoDisplay_to, String andOrCondition, int depth)
+	{
+<span class="nc" id="L833">		Restriction r = new Restriction (ColumnName, Code, Code_to,</span>
+<span class="nc" id="L834">			InfoName, InfoDisplay, InfoDisplay_to, andOrCondition, depth);</span>
+<span class="nc" id="L835">		m_list.add(r);</span>
+<span class="nc" id="L836">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Range Restriction (BETWEEN)
+	 * 	@param ColumnName ColumnName
+	 * 	@param Code from value, e.g 0, All%
+	 * 	@param Code_to to value, e.g 0, All%
+	 *  @param InfoName Display Name
+	 * 	@param InfoDisplay Display of Code (Lookup)
+	 * 	@param InfoDisplay_to Display of Code_to (Lookup)
+	 */
+	public void addRangeRestriction (String ColumnName,
+		Object Code, Object Code_to,
+		String InfoName, String InfoDisplay, String InfoDisplay_to)
+	{
+<span class="nc" id="L851">		Restriction r = new Restriction (ColumnName, Code, Code_to,</span>
+<span class="nc" id="L852">			InfoName, InfoDisplay, InfoDisplay_to, true, 0);</span>
+<span class="nc" id="L853">		m_list.add(r);</span>
+<span class="nc" id="L854">	}	//	addRestriction</span>
+
+	/**
+	 * 	Add Range Restriction (BETWEEN)
+	 * 	@param ColumnName ColumnName
+	 * 	@param Code from value, e.g 0, All%
+	 * 	@param Code_to to value, e.g 0, All%
+	 */
+	public void addRangeRestriction (String ColumnName,
+		Object Code, Object Code_to)
+	{
+<span class="nc" id="L865">		Restriction r = new Restriction (ColumnName, Code, Code_to,</span>
+<span class="nc" id="L866">			null, null, null, true, 0);</span>
+<span class="nc" id="L867">		m_list.add(r);</span>
+<span class="nc" id="L868">	}	//	addRestriction</span>
+
+	/**
+	 * 	Add Restriction
+	 * 	@param r Restriction
+	 */
+	protected void addRestriction (Restriction r)
+	{
+<span class="nc" id="L876">		m_list.add(r);</span>
+<span class="nc" id="L877">	}	//	addRestriction</span>
+
+	/**
+	 * 	Add Restriction
+	 * 	@param whereClause SQL WHERE clause
+	 *  @param andCondition true=and, false=or
+	 *  @param joinDepth number of parenthesis
+	 *  @deprecated Use addRestriction (SQLFragment sqlFilter, boolean andCondition, int joinDepth)
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public void addRestriction (String whereClause, boolean andCondition, int joinDepth)
+	{
+<span class="nc bnc" id="L889" title="All 4 branches missed.">		if (whereClause == null || whereClause.trim().length() == 0)</span>
+<span class="nc" id="L890">			return;</span>
+		@SuppressWarnings(&quot;removal&quot;)
+<span class="nc" id="L892">		Restriction r = new Restriction (whereClause, andCondition, false, false, joinDepth);</span>
+<span class="nc" id="L893">		m_list.add(r);</span>
+<span class="nc" id="L894">		m_newRecord = whereClause.equals(NEWRECORD);</span>
+<span class="nc" id="L895">	}	//	addRestriction</span>
+	
+	/**
+	 * @param sqlFilter
+	 * @param andCondition
+	 * @param joinDepth
+	 */
+	public void addRestriction (SQLFragment sqlFilter, boolean andCondition, int joinDepth)
+	{
+<span class="nc bnc" id="L904" title="All 2 branches missed.">		if (sqlFilter == null)</span>
+<span class="nc" id="L905">			throw new IllegalArgumentException(&quot;WhereClause is null&quot;);</span>
+<span class="nc" id="L906">		Restriction r = new Restriction (sqlFilter, andCondition, false, false, joinDepth);</span>
+<span class="nc" id="L907">		m_list.add(r);</span>
+<span class="nc" id="L908">		m_newRecord = sqlFilter.sqlClause().equals(NEWRECORD);</span>
+<span class="nc" id="L909">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param whereClause SQL WHERE clause
+	 *  @param andCondition true=and, false=or
+	 *  @param notCondition true=not
+	 *  @param joinDepth number of parenthesis
+	 *  @deprecated Use addRestriction (SQLFragment sqlFilter, boolean andCondition, boolean notCondition, int joinDepth)
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public void addRestriction (String whereClause, boolean andCondition, boolean notCondition, int joinDepth)
+	{
+<span class="nc bnc" id="L922" title="All 4 branches missed.">		if (whereClause == null || whereClause.trim().length() == 0)</span>
+<span class="nc" id="L923">			return;</span>
+		@SuppressWarnings(&quot;removal&quot;)
+<span class="nc" id="L925">		Restriction r = new Restriction (whereClause, andCondition, notCondition, false, joinDepth);</span>
+<span class="nc" id="L926">		m_list.add(r);</span>
+<span class="nc" id="L927">		m_newRecord = whereClause.equals(NEWRECORD);</span>
+<span class="nc" id="L928">	}	//	addRestriction</span>
+
+	/** 	
+	 *  Add Restriction
+	 * 	@param sqlFilter SQL WHERE clause
+	 *  @param andCondition true=and, false=or
+	 *  @param notCondition true=not
+	 *  @param joinDepth number of parenthesis
+	 */
+	public void addRestriction (SQLFragment sqlFilter, boolean andCondition, boolean notCondition, int joinDepth)
+	{
+<span class="nc" id="L939">		addRestriction(sqlFilter, andCondition, notCondition, false, joinDepth);</span>
+<span class="nc" id="L940">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param whereClause SQL WHERE clause
+	 *  @param andCondition true=and, false=or
+	 *  @param notCondition true=not
+	 *  @param existsCondition true=exists
+	 *  @param joinDepth number of parenthesis
+	 *  @deprecated Use addRestriction (SQLFragment sqlFilter, boolean andCondition, boolean notCondition, boolean existsCondition, int joinDepth)
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public void addRestriction (String whereClause, boolean andCondition, boolean notCondition, boolean existsCondition, int joinDepth)
+	{
+<span class="nc bnc" id="L954" title="All 4 branches missed.">		if (whereClause == null || whereClause.trim().length() == 0)</span>
+<span class="nc" id="L955">			return;</span>
+		@SuppressWarnings(&quot;removal&quot;)
+<span class="nc" id="L957">		Restriction r = new Restriction (whereClause, andCondition, notCondition, existsCondition, joinDepth);</span>
+<span class="nc" id="L958">		m_list.add(r);</span>
+<span class="nc" id="L959">		m_newRecord = whereClause.equals(NEWRECORD);</span>
+<span class="nc" id="L960">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param sqlFilter SQL WHERE clause
+	 *  @param andCondition true=and, false=or
+	 *  @param notCondition true=not
+	 *  @param existsCondition true=exists
+	 *  @param joinDepth number of parenthesis
+	 */
+	public void addRestriction (SQLFragment sqlFilter, boolean andCondition, boolean notCondition, boolean existsCondition, int joinDepth)
+	{
+<span class="nc bnc" id="L972" title="All 2 branches missed.">		if (sqlFilter == null)</span>
+<span class="nc" id="L973">			throw new IllegalArgumentException(&quot;WhereClause is null&quot;);</span>
+<span class="nc" id="L974">		Restriction r = new Restriction (sqlFilter, andCondition, notCondition, existsCondition, joinDepth);</span>
+<span class="nc" id="L975">		m_list.add(r);</span>
+<span class="nc" id="L976">		m_newRecord = sqlFilter.sqlClause().equals(NEWRECORD);</span>
+<span class="nc" id="L977">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param whereClause SQL WHERE clause
+	 *  @param joinDepth number of parenthesis
+	 *  @param andOrCondition
+	 *  @deprecated Use addRestriction (SQLFilter sqlFilter, int joinDepth, String andOrCondition)
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public void addRestriction (String whereClause, int joinDepth, String andOrCondition)
+	{
+<span class="nc bnc" id="L989" title="All 4 branches missed.">		if (whereClause == null || whereClause.trim().length() == 0)</span>
+<span class="nc" id="L990">			return;</span>
+		@SuppressWarnings(&quot;removal&quot;)
+<span class="nc" id="L992">		Restriction r = new Restriction (whereClause, andOrCondition, joinDepth);</span>
+<span class="nc" id="L993">		m_list.add(r);</span>
+<span class="nc" id="L994">		m_newRecord = whereClause.equals(NEWRECORD);</span>
+<span class="nc" id="L995">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param sqlFilter SQL WHERE clause
+	 *  @param joinDepth number of parenthesis
+	 *  @param andOrCondition
+	 */
+	public void addRestriction (SQLFragment sqlFilter, int joinDepth, String andOrCondition)
+	{
+<span class="nc bnc" id="L1005" title="All 2 branches missed.">		if (sqlFilter == null)</span>
+<span class="nc" id="L1006">			throw new IllegalArgumentException(&quot;WhereClause is null&quot;);</span>
+<span class="nc" id="L1007">		Restriction r = new Restriction (sqlFilter, andOrCondition, joinDepth);</span>
+<span class="nc" id="L1008">		m_list.add(r);</span>
+<span class="nc" id="L1009">		m_newRecord = sqlFilter.sqlClause().equals(NEWRECORD);</span>
+<span class="nc" id="L1010">	}	//	addRestriction</span>
+	
+	/**
+	 * 	Add Restriction
+	 * 	@param whereClause SQL WHERE clause
+	 *  @deprecated Use addRestriction (SQLFilter sqlFilter)
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public void addRestriction (String whereClause)
+	{
+<span class="nc bnc" id="L1020" title="All 4 branches missed.">		if (whereClause == null || whereClause.trim().length() == 0)</span>
+<span class="nc" id="L1021">			return;</span>
+		@SuppressWarnings(&quot;removal&quot;)
+<span class="nc" id="L1023">		Restriction r = new Restriction (whereClause, true, 0);</span>
+<span class="nc" id="L1024">		m_list.add(r);</span>
+<span class="nc" id="L1025">		m_newRecord = whereClause.equals(NEWRECORD);</span>
+<span class="nc" id="L1026">	}	//	addRestriction</span>
+
+	/**
+	 * Add Restriction
+	 * @param sqlFilter
+	 */
+	public void addRestriction (SQLFragment sqlFilter)
+	{
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">		if (sqlFilter == null)</span>
+<span class="nc" id="L1035">			throw new IllegalArgumentException(&quot;WhereClause is null&quot;);</span>
+<span class="nc" id="L1036">		Restriction r = new Restriction (sqlFilter, true, 0);</span>
+<span class="nc" id="L1037">		m_list.add(r);</span>
+<span class="nc" id="L1038">		m_newRecord = sqlFilter.sqlClause().equals(NEWRECORD);</span>
+<span class="nc" id="L1039">	}	//	addRestriction</span>
+	
+	/**
+	 * Add restriction 
+	 * @param whereClause
+	 * @param Operator
+	 * @param InfoName
+	 * @param InfoDisplay
+	 * @deprecated Use addRestriction (SQLFilter sqlFilter, String Operator, String InfoName, String InfoDisplay)
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public void addRestriction (String whereClause, String Operator, String InfoName, String InfoDisplay)
+	{
+<span class="nc bnc" id="L1052" title="All 4 branches missed.">		if (whereClause == null || whereClause.trim().length() == 0)</span>
+<span class="nc" id="L1053">			return;</span>
+		@SuppressWarnings(&quot;removal&quot;)
+<span class="nc" id="L1055">		Restriction r = new Restriction (whereClause, true, 0);</span>
+<span class="nc" id="L1056">		r.Operator = Operator;</span>
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">		if (InfoName != null)</span>
+<span class="nc" id="L1058">			r.InfoName = InfoName;</span>
+<span class="nc bnc" id="L1059" title="All 2 branches missed.">		if (InfoDisplay != null)</span>
+<span class="nc" id="L1060">			r.InfoDisplay = InfoDisplay.trim();</span>
+<span class="nc" id="L1061">		m_list.add(r);</span>
+<span class="nc" id="L1062">		m_newRecord = whereClause.equals(NEWRECORD);</span>
+<span class="nc" id="L1063">	}</span>
+	
+	/**
+	 * Add restriction 
+	 * @param sqlFilter
+	 * @param Operator
+	 * @param InfoName
+	 * @param InfoDisplay
+	 */
+	public void addRestriction (SQLFragment sqlFilter, String Operator, String InfoName, String InfoDisplay)
+	{
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">		if (sqlFilter == null)</span>
+<span class="nc" id="L1075">			throw new IllegalArgumentException(&quot;WhereClause is null&quot;);</span>
+<span class="nc" id="L1076">		Restriction r = new Restriction (sqlFilter, true, 0);</span>
+<span class="nc" id="L1077">		r.Operator = Operator;</span>
+<span class="nc bnc" id="L1078" title="All 2 branches missed.">		if (InfoName != null)</span>
+<span class="nc" id="L1079">			r.InfoName = InfoName;</span>
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">		if (InfoDisplay != null)</span>
+<span class="nc" id="L1081">			r.InfoDisplay = InfoDisplay.trim();</span>
+<span class="nc" id="L1082">		m_list.add(r);</span>
+<span class="nc" id="L1083">		m_newRecord = sqlFilter.sqlClause().equals(NEWRECORD);</span>
+<span class="nc" id="L1084">	}</span>
+	
+	/**
+	 * 	New Record Query
+	 *	@return true if new record query
+	 */
+	public boolean isNewRecordQuery()
+	{
+<span class="nc" id="L1092">		return m_newRecord;</span>
+	}	//	isNewRecord
+	
+	/**
+	 * 	Create the resulting Query WHERE Clause
+	 * 	@return Where Clause
+	 *  @deprecated Use getSQLFilter()
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public String getWhereClause ()
+	{
+<span class="nc" id="L1103">		return getWhereClause(false);</span>
+	}	//	getWhereClause
+
+	/**
+	 * 	Create the resulting Query WHERE Clause
+	 * 	@param fullyQualified fully qualified Table.ColumnName
+	 * 	@return Where Clause
+	 *  @deprecated Use getSQLFilter(boolean fullyQualified)
+	 */
+	@SuppressWarnings(&quot;removal&quot;)
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public String getWhereClause (boolean fullyQualified)
+	{
+
+<span class="nc" id="L1117">		int currentDepth = 0;</span>
+<span class="nc" id="L1118">		boolean qualified = fullyQualified;</span>
+<span class="nc bnc" id="L1119" title="All 6 branches missed.">		if (qualified &amp;&amp; (m_TableName == null || m_TableName.length() == 0))</span>
+<span class="nc" id="L1120">			qualified = false;</span>
+		//
+<span class="nc" id="L1122">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L1123" title="All 2 branches missed.">		if (! isActive())</span>
+<span class="nc" id="L1124">			return sb.toString();</span>
+		
+<span class="nc" id="L1126">		sb.append('(');</span>
+<span class="nc bnc" id="L1127" title="All 2 branches missed.">		for (int i = 0; i &lt; m_list.size(); i++)</span>
+		{
+<span class="nc" id="L1129">			Restriction r = (Restriction)m_list.get(i);</span>
+<span class="nc bnc" id="L1130" title="All 2 branches missed.">			if (i != 0)</span>
+<span class="nc" id="L1131">				sb.append(&quot; &quot;).append(r.andOrCondition).append(&quot; &quot;);</span>
+			
+			//NOT
+<span class="nc bnc" id="L1134" title="All 2 branches missed.">			sb.append(r.notCondition ? &quot; NOT &quot; : &quot;&quot;);</span>
+			//EXISTS 
+<span class="nc bnc" id="L1136" title="All 2 branches missed.">			sb.append(r.existsCondition ? &quot; EXISTS &quot; : &quot;&quot;);</span>
+			
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">			for ( ; currentDepth &lt; r.joinDepth; currentDepth++ )</span>
+			{
+<span class="nc" id="L1140">				sb.append('(');</span>
+			}
+<span class="nc bnc" id="L1142" title="All 2 branches missed.">			if (qualified)</span>
+<span class="nc" id="L1143">				sb.append(r.getSQL(m_TableName));</span>
+			else
+<span class="nc" id="L1145">				sb.append(r.getSQL(null));</span>
+			
+<span class="nc bnc" id="L1147" title="All 2 branches missed.">			for ( ; currentDepth &gt; r.joinDepth; currentDepth-- )</span>
+			{
+<span class="nc" id="L1149">				sb.append(')');</span>
+			}
+		}
+		
+		// close brackets
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">		for ( ; currentDepth &gt; 0; currentDepth-- )</span>
+		{
+<span class="nc" id="L1156">			sb.append(')');</span>
+		}
+<span class="nc" id="L1158">		sb.append(')');</span>
+<span class="nc" id="L1159">		return sb.toString();	</span>
+	}	//	getWhereClause
+
+	/**
+	 * Create the resulting Query WHERE Clause
+	 * 
+	 * @return WhereClause record with where clause and parameters
+	 */
+	public SQLFragment getSQLFilter() {
+<span class="nc" id="L1168">		return getSQLFilter(false);</span>
+	} // getWhereClause
+
+	/**
+	 * Create the resulting Query WHERE Clause
+	 * 
+	 * @param fullyQualified fully qualified Table.ColumnName
+	 * @return WhereClause record with where clause and parameters
+	 */
+	public SQLFragment getSQLFilter(boolean fullyQualified) {
+<span class="nc" id="L1178">		List&lt;Object&gt; parameters = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1179">		int currentDepth = 0;</span>
+<span class="nc" id="L1180">		boolean qualified = fullyQualified;</span>
+<span class="nc bnc" id="L1181" title="All 6 branches missed.">		if (qualified &amp;&amp; (m_TableName == null || m_TableName.length() == 0))</span>
+<span class="nc" id="L1182">			qualified = false;</span>
+		//
+<span class="nc" id="L1184">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L1185" title="All 2 branches missed.">		if (!isActive())</span>
+<span class="nc" id="L1186">			return new SQLFragment(sb.toString(), parameters);</span>
+
+<span class="nc" id="L1188">		sb.append('(');</span>
+<span class="nc bnc" id="L1189" title="All 2 branches missed.">		for (int i = 0; i &lt; m_list.size(); i++) {</span>
+<span class="nc" id="L1190">			Restriction r = (Restriction) m_list.get(i);</span>
+<span class="nc bnc" id="L1191" title="All 2 branches missed.">			if (i != 0)</span>
+<span class="nc" id="L1192">				sb.append(&quot; &quot;).append(r.andOrCondition).append(&quot; &quot;);</span>
+
+			// NOT
+<span class="nc bnc" id="L1195" title="All 2 branches missed.">			sb.append(r.notCondition ? &quot; NOT &quot; : &quot;&quot;);</span>
+			// EXISTS
+<span class="nc bnc" id="L1197" title="All 2 branches missed.">			sb.append(r.existsCondition ? &quot; EXISTS &quot; : &quot;&quot;);</span>
+
+<span class="nc bnc" id="L1199" title="All 2 branches missed.">			for (; currentDepth &lt; r.joinDepth; currentDepth++) {</span>
+<span class="nc" id="L1200">				sb.append('(');</span>
+			}
+<span class="nc bnc" id="L1202" title="All 2 branches missed.">			SQLFragment rFilter = r.getSQLFilter(qualified ? m_TableName : null);</span>
+<span class="nc" id="L1203">			sb.append(rFilter.sqlClause());</span>
+<span class="nc" id="L1204">			parameters.addAll(rFilter.parameters());</span>
+
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">			for (; currentDepth &gt; r.joinDepth; currentDepth--) {</span>
+<span class="nc" id="L1207">				sb.append(')');</span>
+			}
+		}
+
+		// close brackets
+<span class="nc bnc" id="L1212" title="All 2 branches missed.">		for (; currentDepth &gt; 0; currentDepth--) {</span>
+<span class="nc" id="L1213">			sb.append(')');</span>
+		}
+<span class="nc" id="L1215">		sb.append(')');</span>
+<span class="nc" id="L1216">		return new SQLFragment(sb.toString(), parameters);</span>
+	} // getWhereClause
+	
+	/**
+	 * 	Get printable Query Info
+	 *	@return info
+	 */
+	public String getInfo ()
+	{
+<span class="nc" id="L1225">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L1226">		int currentDepth = 0;</span>
+<span class="nc bnc" id="L1227" title="All 2 branches missed.">		if (m_TableName != null)</span>
+<span class="nc" id="L1228">			sb.append(m_TableName).append(&quot;: &quot;);</span>
+		//
+<span class="nc bnc" id="L1230" title="All 2 branches missed.">		for (int i = 0; i &lt; m_list.size(); i++)</span>
+		{
+<span class="nc" id="L1232">			Restriction r = (Restriction)m_list.get(i);</span>
+<span class="nc bnc" id="L1233" title="All 2 branches missed.">			for ( ; currentDepth &lt; r.joinDepth; currentDepth++ )</span>
+			{
+<span class="nc" id="L1235">				sb.append('(');</span>
+			}
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">			for ( ; currentDepth &gt; r.joinDepth; currentDepth-- )</span>
+			{
+<span class="nc" id="L1239">				sb.append(')');</span>
+			}
+<span class="nc bnc" id="L1241" title="All 2 branches missed.">			if (i != 0)</span>
+<span class="nc" id="L1242">				sb.append(&quot; &quot;).append(r.andOrCondition).append(&quot; &quot;);</span>
+			//NOT
+<span class="nc bnc" id="L1244" title="All 2 branches missed.">			sb.append(r.notCondition ? &quot; NOT &quot; : &quot;&quot;);		</span>
+			//EXISTS
+<span class="nc bnc" id="L1246" title="All 2 branches missed.">			sb.append(r.existsCondition ? &quot; EXISTS &quot; : &quot;&quot;);	</span>
+			
+			//
+<span class="nc" id="L1249">			sb.append(r.getInfoName())</span>
+<span class="nc" id="L1250">				.append(r.getInfoOperator())</span>
+<span class="nc" id="L1251">				.append(r.getInfoDisplayAll());</span>
+		}
+		// close brackets
+<span class="nc bnc" id="L1254" title="All 2 branches missed.">		for ( ; currentDepth &gt; 0; currentDepth-- )</span>
+		{
+<span class="nc" id="L1256">			sb.append(')');</span>
+		}
+<span class="nc" id="L1258">		return sb.toString();</span>
+	}	//	getInfo
+
+	
+	/**
+	 * 	Create Query WHERE Clause.
+	 *  Not fully qualified.
+	 * 	@param index restriction index
+	 * 	@return Where Clause or &quot;&quot; if not valid
+	 *  @deprecated Use getSQLFilter(int index)
+	 */
+	@SuppressWarnings(&quot;removal&quot;)
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public String getWhereClause (int index)
+	{
+<span class="nc" id="L1273">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L1274" title="All 4 branches missed.">		if (index &gt;= 0 &amp;&amp; index &lt; m_list.size())</span>
+		{
+<span class="nc" id="L1276">			Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1277">			sb.append(r.getSQL(null));</span>
+		}
+<span class="nc" id="L1279">		return sb.toString();</span>
+	}	//	getWhereClause
+
+	/**
+	 * 	Create Query WHERE Clause.
+	 *  Not fully qualified.
+	 * 	@param index restriction index
+	 * 	@return SQLFilter or null if not valid
+	 */
+	public SQLFragment getSQLFilter(int index)
+	{
+<span class="nc" id="L1290">		return getSQLFilter(index, false);</span>
+	}
+	
+	/**
+	 * 	Create Query WHERE Clause.
+	 * 	@param index restriction index
+	 *  @param fullyQualified fully qualified Table.ColumnName
+	 * 	@return SQLFilter or null if not valid
+	 */
+	public SQLFragment getSQLFilter(int index, boolean fullyQualified)
+	{
+<span class="nc bnc" id="L1301" title="All 4 branches missed.">		if (index &gt;= 0 &amp;&amp; index &lt; m_list.size())</span>
+		{
+<span class="nc" id="L1303">			Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc bnc" id="L1304" title="All 2 branches missed.">			return r.getSQLFilter(fullyQualified ? m_TableName : null);</span>
+		}
+<span class="nc" id="L1306">		return null;</span>
+	}	//	getWhereClause
+	
+	/**
+	 * 	Get Restriction Count
+	 * 	@return number of restrictions
+	 */
+	public int getRestrictionCount()
+	{
+<span class="nc" id="L1315">		return m_list.size();</span>
+	}	//	getRestrictionCount
+
+	/**
+	 * 	Is Query Active
+	 * 	@return true if number of restrictions &amp;gt; 0
+	 */
+	public boolean isActive()
+	{
+<span class="nc bnc" id="L1324" title="All 2 branches missed.">		return m_list.size() != 0;</span>
+	}	//	isActive
+
+	/**
+	 * 	Get Table Name
+	 * 	@return Table Name
+	 */
+	public String getTableName ()
+	{
+<span class="nc" id="L1333">		return m_TableName;</span>
+	}	//	getTableName
+
+	/**
+	 * 	Set Table Name
+	 * 	@param TableName Table Name
+	 */
+	public void setTableName (String TableName)
+	{
+<span class="nc" id="L1342">		m_TableName = TableName;</span>
+<span class="nc" id="L1343">	}	//	setTableName</span>
+	
+	/**
+	 * 	Get ColumnName of index
+	 * 	@param index index
+	 * 	@return ColumnName or null
+	 */
+	public String getColumnName (int index)
+	{
+<span class="nc bnc" id="L1352" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1353">			return null;</span>
+<span class="nc" id="L1354">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1355">		return r.ColumnName;</span>
+	}	//	getColumnName
+
+	/**
+	 * 	Set ColumnName of index
+	 * 	@param index index
+	 *  @param ColumnName new column name
+	 */
+	protected void setColumnName (int index, String ColumnName)
+	{
+<span class="nc bnc" id="L1365" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1366">			return;</span>
+<span class="nc" id="L1367">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1368">		r.ColumnName = ColumnName;</span>
+<span class="nc" id="L1369">	}	//	setColumnName</span>
+
+	/**
+	 * 	Get Operator of index
+	 * 	@param index index
+	 * 	@return Operator or null
+	 */
+	public String getOperator (int index)
+	{
+<span class="nc bnc" id="L1378" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1379">			return null;</span>
+<span class="nc" id="L1380">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1381">		return r.Operator;</span>
+	}	//	getOperator
+
+	/**
+	 * 	Get Operator of index
+	 * 	@param index index
+	 * 	@return Operator or null
+	 */
+	public Object getCode (int index)
+	{
+<span class="nc bnc" id="L1391" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1392">			return null;</span>
+<span class="nc" id="L1393">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1394">		return r.Code;</span>
+	}	//	getCode
+
+	/**
+	 * 	Get Operator of index
+	 * 	@param index index
+	 * 	@return Operator or null
+	 */
+	public Object getCode_to (int index)
+	{
+<span class="nc bnc" id="L1404" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1405">			return null;</span>
+<span class="nc" id="L1406">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1407">		return r.Code_to;</span>
+	}	//	getCode
+	
+	/**
+	 * 	Get display text of index
+	 * 	@param index index
+	 * 	@return Display Text
+	 */
+	public String getInfoDisplay (int index)
+	{
+<span class="nc bnc" id="L1417" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1418">			return null;</span>
+<span class="nc" id="L1419">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1420">		return r.InfoDisplay;</span>
+	}	//	getOperator
+
+	/**
+	 * 	Get display text of to restriction
+	 * 	@param index index of restriction
+	 * 	@return Display Text
+	 */
+	public String getInfoDisplay_to (int index)
+	{
+<span class="nc bnc" id="L1430" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1431">			return null;</span>
+<span class="nc" id="L1432">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1433">		return r.InfoDisplay_to;</span>
+	}	//	getOperator
+
+	/**
+	 * 	Get Info Name
+	 * 	@param index index
+	 * 	@return Info Name
+	 */
+	public String getInfoName(int index)
+	{
+<span class="nc bnc" id="L1443" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1444">			return null;</span>
+<span class="nc" id="L1445">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1446">		return r.InfoName;</span>
+	}	//	getInfoName
+
+	/**
+	 * 	Get Info Operator
+	 * 	@param index index
+	 * 	@return info Operator
+	 */
+	public String getInfoOperator(int index)
+	{
+<span class="nc bnc" id="L1456" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1457">			return null;</span>
+<span class="nc" id="L1458">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1459">		return r.getInfoOperator();</span>
+	}	//	getInfoOperator
+
+	/**
+	 * 	Get Display with optional To
+	 * 	@param index index
+	 * 	@return info display
+	 */
+	public String getInfoDisplayAll (int index)
+	{
+<span class="nc bnc" id="L1469" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_list.size())</span>
+<span class="nc" id="L1470">			return null;</span>
+<span class="nc" id="L1471">		Restriction r = (Restriction)m_list.get(index);</span>
+<span class="nc" id="L1472">		return r.getInfoDisplayAll();</span>
+	}	//	getInfoDisplay
+
+	/**
+	 * 	String representation
+	 * 	@return info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc bnc" id="L1482" title="All 2 branches missed.">		if (isActive())</span>
+<span class="nc" id="L1483">			return getSQLFilter(true).toString();</span>
+<span class="nc" id="L1484">		return &quot;MQuery[&quot; + m_TableName + &quot;,Restrictions=0]&quot;;</span>
+	}	//	toString
+	
+	/**
+	 * 	Get Display Name
+	 *	@param ctx context
+	 *	@return display Name
+	 */
+	public String getDisplayName(Properties ctx)
+	{
+<span class="nc" id="L1494">		String keyColumn = null;</span>
+<span class="nc bnc" id="L1495" title="All 2 branches missed.">		if (m_TableName != null)</span>
+<span class="nc" id="L1496">			keyColumn = m_TableName + &quot;_ID&quot;;</span>
+		else
+<span class="nc" id="L1498">			keyColumn = getColumnName(0);</span>
+<span class="nc" id="L1499">		String retValue = Msg.translate(ctx, keyColumn);</span>
+<span class="nc bnc" id="L1500" title="All 4 branches missed.">		if (retValue != null &amp;&amp; retValue.length() &gt; 0)</span>
+<span class="nc" id="L1501">			return retValue;</span>
+<span class="nc" id="L1502">		return m_TableName;</span>
+	}	//	getDisplayName
+
+	/**
+	 * 	Clone Query
+	 * 	@return Query
+	 */
+	public MQuery deepCopy()
+	{
+<span class="nc" id="L1511">		MQuery newQuery = new MQuery(m_TableName);</span>
+<span class="nc bnc" id="L1512" title="All 2 branches missed.">		for (int i = 0; i &lt; m_list.size(); i++)</span>
+<span class="nc" id="L1513">			newQuery.addRestriction((Restriction)m_list.get(i));</span>
+<span class="nc" id="L1514">		return newQuery;</span>
+	}	//	clone
+
+	/**
+	 * @return AD_PInstance_ID; this value is set if you created this query by using {@link #get(Properties, int, String)}  
+	 */
+	public int getAD_PInstance_ID() {
+<span class="nc" id="L1521">		return m_AD_PInstance_ID;</span>
+	}
+
+	/**
+	 * @param tableName
+	 */
+	public void setZoomTableName(String tableName) {
+<span class="nc" id="L1528">		m_zoomTable = tableName;</span>
+<span class="nc" id="L1529">	}</span>
+	
+	/**
+	 * @return zoom table name
+	 */
+	public String getZoomTableName() {
+<span class="nc" id="L1535">		return m_zoomTable;</span>
+	}
+
+	/**
+	 * @param column
+	 */
+	public void setZoomColumnName(String column) {
+<span class="nc" id="L1542">		m_zoomColumn = column;</span>
+<span class="nc" id="L1543">	}</span>
+	
+	/**
+	 * @return zoom column name
+	 */
+	public String getZoomColumnName() {
+<span class="nc" id="L1549">		return m_zoomColumn;</span>
+	}
+
+	/**
+	 * @param value
+	 */
+	public void setZoomValue(Object value) {
+<span class="nc" id="L1556">		m_zoomValue = value;</span>
+<span class="nc" id="L1557">	}</span>
+	
+	/**
+	 * @return zoom value, usually an integer
+	 */
+	public Object getZoomValue() {
+<span class="nc" id="L1563">		return m_zoomValue;</span>
+	}
+	
+	/**
+	 * @param query
+	 */
+	public void setReportProcessQuery(MQuery query) {
+<span class="nc" id="L1570">		m_reportProcessQuery = query;</span>
+<span class="nc" id="L1571">	}</span>
+	
+	/**
+	 * @return query
+	 */
+	public MQuery getReportProcessQuery() {
+<span class="nc" id="L1577">		return m_reportProcessQuery;</span>
+	}
+	
+	/**
+	 * @param ColumnName
+	 * @param Operator
+	 * @param Code query value
+	 * @param InfoName
+	 * @param InfoDisplay display text of code
+	 * @param andCondition true=and, false=or
+	 * @param depth number of parenthesis
+	 * @return SQL
+	 */
+	@SuppressWarnings(&quot;removal&quot;)
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static String getRestrictionSQL (String ColumnName, String Operator,
+			Object Code, String InfoName, String InfoDisplay, boolean andCondition, int depth)
+	{
+<span class="nc" id="L1595">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L1596">				Code, InfoName, InfoDisplay, andCondition, depth);</span>
+<span class="nc" id="L1597">		return r.getSQL(null);</span>
+	}	//	getRestrictionSQL
+
+	/**
+	 * @param ColumnName
+	 * @param Operator
+	 * @param Code
+	 * @param InfoName
+	 * @param InfoDisplay
+	 * @param andCondition
+	 * @param depth
+	 * @return sql filter and parameters
+	 */
+	public static SQLFragment getRestrictionSQLFilter (String ColumnName, String Operator,
+			Object Code, String InfoName, String InfoDisplay, boolean andCondition, int depth)
+	{
+<span class="nc" id="L1613">		Restriction r = new Restriction (ColumnName, Operator,</span>
+<span class="nc" id="L1614">				Code, InfoName, InfoDisplay, andCondition, depth);</span>
+<span class="nc" id="L1615">		return r.getSQLFilter(null);</span>
+	}	//	getRestrictionWhereClause
+	
+	/**
+	 * @param ColumnName
+	 * @param Code from value
+	 * @param Code_To to value
+	 * @param InfoName
+	 * @param InfoDisplay display text of from value
+	 * @param InfoDisplay_To display text of to value
+	 * @param andCondition true=and, false=or
+	 * @param depth number of parenthesis
+	 * @return SQL
+	 */
+	@SuppressWarnings(&quot;removal&quot;)
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static String getRestrictionSQL (String ColumnName, 
+			Object Code, Object Code_To, String InfoName, String InfoDisplay, String InfoDisplay_To, boolean andCondition, int depth)
+	{
+<span class="nc" id="L1634">		Restriction r = new Restriction(ColumnName, Code, Code_To, InfoName, </span>
+<span class="nc" id="L1635">					InfoDisplay, InfoDisplay_To, andCondition, false, depth);</span>
+<span class="nc" id="L1636">		return r.getSQL(null);</span>
+	}
+	
+	public static SQLFragment getRestrictionSQLFilter (String ColumnName, 
+			Object Code, Object Code_To, String InfoName, String InfoDisplay, String InfoDisplay_To, boolean andCondition, int depth)
+	{
+<span class="nc" id="L1642">		Restriction r = new Restriction(ColumnName, Code, Code_To, InfoName, </span>
+<span class="nc" id="L1643">					InfoDisplay, InfoDisplay_To, andCondition, false, depth);</span>
+<span class="nc" id="L1644">		return r.getSQLFilter(null);</span>
+	}
+	
+	@Override
+	public MQuery clone() {
+		try {
+<span class="nc" id="L1650">			MQuery clone = (MQuery) super.clone();</span>
+<span class="nc" id="L1651">			clone.m_recordCount = 999999;</span>
+<span class="nc bnc" id="L1652" title="All 2 branches missed.">			if (m_list != null) {</span>
+<span class="nc" id="L1653">				clone.m_list = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1654" title="All 2 branches missed.">				for (Restriction r : m_list) {</span>
+<span class="nc" id="L1655">					clone.m_list.add(r); // Shallow copy - restrictions typically not modified after creation</span>
+				}
+			}
+<span class="nc bnc" id="L1658" title="All 2 branches missed.">			if (m_reportProcessQuery != null)</span>
+<span class="nc" id="L1659">				clone.m_reportProcessQuery = m_reportProcessQuery.clone();</span>
+<span class="nc" id="L1660">			return clone;</span>
+<span class="nc" id="L1661">		} catch (CloneNotSupportedException e) {</span>
+<span class="nc" id="L1662">			throw new RuntimeException(e);</span>
+		}
+	}
+}	//	MQuery
+
+/**
+ *	Query Restriction
+ */
+class Restriction  implements Serializable
+{
+	/**
+	 * generated serial id 
+	 */
+	private static final long serialVersionUID = -4521978087587321243L;
+
+	/**
+	 * 	Restriction
+	 * 	@param columnName ColumnName
+	 * 	@param operator Operator, e.g. = != ..
+	 * 	@param code query value, e.g 0, All%
+	 *  @param infoName Display Name
+	 * 	@param infoDisplay Display of Code (Lookup)
+	 * 	@param andCondition true-&gt;AND false-&gt;OR
+	 *  @param depth number of parenthesis
+	 */
+	Restriction (String columnName, String operator,
+		Object code, String infoName, String infoDisplay, boolean andCondition, int depth)
+	{
+<span class="nc" id="L1690">		this(columnName, operator, code, infoName, infoDisplay,</span>
+<span class="nc bnc" id="L1691" title="All 2 branches missed.">				andCondition ? &quot;AND&quot; : &quot;OR&quot;,</span>
+<span class="nc" id="L1692">				depth);</span>
+<span class="nc" id="L1693">	}</span>
+
+	/**
+	 * 	Restriction
+	 * 	@param columnName ColumnName
+	 * 	@param operator Operator, e.g. = != ..
+	 * 	@param code query value, e.g 0, All%
+	 *  @param infoName Display Name
+	 * 	@param infoDisplay Display of Code (Lookup)
+	 * 	@param andOrCondition AND/OR/AND NOT/OR NOT - concatenation of parenthesis
+	 *  @param depth number of parenthesis
+	 */
+<span class="nc" id="L1705">	Restriction (String columnName, String operator,</span>
+		Object code, String infoName, String infoDisplay, String andOrCondition, int depth)
+	{
+<span class="nc" id="L1708">		this.ColumnName = columnName.trim();</span>
+<span class="nc bnc" id="L1709" title="All 2 branches missed.">		if (infoName != null)</span>
+<span class="nc" id="L1710">			InfoName = infoName;</span>
+		else
+<span class="nc" id="L1712">			InfoName = ColumnName;</span>
+		
+<span class="nc" id="L1714">		this.andOrCondition = andOrCondition;</span>
+<span class="nc bnc" id="L1715" title="All 2 branches missed.">		this.joinDepth = depth &lt; 0 ? 0 : depth;</span>
+		
+		//
+<span class="nc" id="L1718">		this.Operator = operator;</span>
+		//	Boolean
+<span class="nc bnc" id="L1720" title="All 2 branches missed.">		if (code instanceof Boolean)</span>
+<span class="nc bnc" id="L1721" title="All 2 branches missed.">			Code = ((Boolean)code).booleanValue() ? &quot;Y&quot; : &quot;N&quot;;</span>
+<span class="nc bnc" id="L1722" title="All 2 branches missed.">		else if (code instanceof KeyNamePair)</span>
+<span class="nc" id="L1723">			Code = Integer.valueOf(((KeyNamePair)code).getKey());</span>
+<span class="nc bnc" id="L1724" title="All 2 branches missed.">		else if (code instanceof ValueNamePair)</span>
+<span class="nc" id="L1725">			Code = ((ValueNamePair)code).getValue();</span>
+		else
+<span class="nc" id="L1727">			Code = code;</span>
+		//	clean code
+<span class="nc bnc" id="L1729" title="All 2 branches missed.">		if (Code instanceof String)</span>
+		{
+<span class="nc bnc" id="L1731" title="All 4 branches missed.">			if (Code.toString().startsWith(&quot;'&quot;) &amp;&amp; Code.toString().endsWith(&quot;'&quot;)) {</span>
+<span class="nc" id="L1732">				Code = Code.toString().substring(1);</span>
+<span class="nc" id="L1733">				Code = Code.toString().substring(0, Code.toString().length()-2);</span>
+			}
+		}
+<span class="nc bnc" id="L1736" title="All 2 branches missed.">		if (infoDisplay != null)</span>
+<span class="nc" id="L1737">			InfoDisplay = infoDisplay.trim();</span>
+<span class="nc bnc" id="L1738" title="All 2 branches missed.">		else if (code != null)</span>
+<span class="nc" id="L1739">			InfoDisplay = code.toString();</span>
+<span class="nc" id="L1740">	}	//	Restriction</span>
+
+	/**
+	 * Restriction
+	 * @param columnName
+	 * @param operator
+	 * @param code
+	 * @param infoName
+	 * @param infoDisplay
+	 * @param andCondition
+	 * @param notCondition
+	 * @param depth
+	 */
+	Restriction (String columnName, String operator,
+			Object code, String infoName, String infoDisplay, boolean andCondition,boolean notCondition, int depth)
+	{
+<span class="nc" id="L1756">		this (columnName, operator, code, infoName, infoDisplay, andCondition, depth);</span>
+
+<span class="nc" id="L1758">		this.notCondition = notCondition;</span>
+
+<span class="nc" id="L1760">	} 	//	Restriction</span>
+	
+	/**
+	 * 	Range Restriction (BETWEEN)
+	 * 	@param columnName ColumnName
+	 * 	@param code from value, e.g 0, All%
+	 * 	@param code_to to value, e.g 0, All%
+	 *  @param infoName Display Name
+	 * 	@param infoDisplay Display of Code (Lookup)
+	 * 	@param infoDisplay_to Display of Code_To (Lookup)
+	 * 	@param andCondition true-&gt;AND false-&gt;OR
+	 *  @param depth number of parenthesis
+	 */
+	Restriction (String columnName,
+		Object code, Object code_to,
+		String infoName, String infoDisplay, String infoDisplay_to, boolean andCondition, int depth)
+	{
+<span class="nc" id="L1777">		this(columnName, code, code_to,</span>
+<span class="nc bnc" id="L1778" title="All 2 branches missed.">				infoName, infoDisplay, infoDisplay_to, andCondition ? &quot;AND&quot; : &quot;OR&quot;, depth);</span>
+<span class="nc" id="L1779">	}</span>
+
+	/**
+	 * 	Range Restriction (BETWEEN)
+	 * 	@param columnName ColumnName
+	 * 	@param code from value, e.g 0, All%
+	 * 	@param code_to to value, e.g 0, All%
+	 *  @param infoName Display Name
+	 * 	@param infoDisplay Display of Code (Lookup)
+	 * 	@param infoDisplay_to Display of Code_To (Lookup)
+	 * 	@param andOrCondition AND/OR/AND NOT/OR NOT - concatenation of parenthesis
+	 *  @param depth number of parenthesis
+	 */
+	Restriction (String columnName,
+		Object code, Object code_to,
+		String infoName, String infoDisplay, String infoDisplay_to, String andOrCondition, int depth)
+	{
+<span class="nc" id="L1796">		this (columnName, MQuery.BETWEEN, code, infoName, infoDisplay, andOrCondition, depth);</span>
+
+		//	Code_to
+<span class="nc" id="L1799">		Code_to = code_to;</span>
+<span class="nc bnc" id="L1800" title="All 2 branches missed.">		if (Code_to instanceof String)</span>
+		{
+<span class="nc bnc" id="L1802" title="All 2 branches missed.">			if (Code_to.toString().startsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1803">				Code_to = Code_to.toString().substring(1);</span>
+<span class="nc bnc" id="L1804" title="All 2 branches missed.">			if (Code_to.toString().endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1805">				Code_to = Code_to.toString().substring(0, Code_to.toString().length()-2);</span>
+		}
+		//	InfoDisplay_to
+<span class="nc bnc" id="L1808" title="All 2 branches missed.">		if (infoDisplay_to != null)</span>
+<span class="nc" id="L1809">			InfoDisplay_to = infoDisplay_to.trim();</span>
+<span class="nc bnc" id="L1810" title="All 2 branches missed.">		else if (Code_to != null)</span>
+<span class="nc" id="L1811">			InfoDisplay_to = Code_to.toString();</span>
+<span class="nc" id="L1812">	}	//	Restriction</span>
+
+	/**
+	 * 	Range Restriction (BETWEEN)
+	 * 	@param columnName ColumnName
+	 * 	@param code from value, e.g 0, All%
+	 * 	@param code_to to value, e.g 0, All%
+	 *  @param infoName Display Name
+	 * 	@param infoDisplay Display of Code (Lookup)
+	 * 	@param infoDisplay_to Display of Code_To (Lookup)
+	 * 	@param andCondition true=and, false=or
+	 * 	@param notCondition true=not
+	 * 	@param depth number of parenthesis
+	 */
+	Restriction (String columnName,
+		Object code, Object code_to,
+		String infoName, String infoDisplay, String infoDisplay_to, boolean andCondition, boolean notCondition, int depth)
+	{
+<span class="nc" id="L1830">		this (columnName, MQuery.BETWEEN, code, infoName, infoDisplay, andCondition, notCondition, depth);</span>
+
+		//	Code_to
+<span class="nc" id="L1833">		Code_to = code_to;</span>
+<span class="nc bnc" id="L1834" title="All 2 branches missed.">		if (Code_to instanceof String)</span>
+		{
+<span class="nc bnc" id="L1836" title="All 2 branches missed.">			if (Code_to.toString().startsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1837">				Code_to = Code_to.toString().substring(1);</span>
+<span class="nc bnc" id="L1838" title="All 2 branches missed.">			if (Code_to.toString().endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1839">				Code_to = Code_to.toString().substring(0, Code_to.toString().length()-2);</span>
+		}
+		//	InfoDisplay_to
+<span class="nc bnc" id="L1842" title="All 2 branches missed.">		if (infoDisplay_to != null)</span>
+<span class="nc" id="L1843">			InfoDisplay_to = infoDisplay_to.trim();</span>
+<span class="nc bnc" id="L1844" title="All 2 branches missed.">		else if (Code_to != null)</span>
+<span class="nc" id="L1845">			InfoDisplay_to = Code_to.toString();</span>
+<span class="nc" id="L1846">	}	//	Restriction</span>
+	
+	/**
+	 * 	Create Restriction with direct WHERE clause
+	 * 	@param whereClause SQL WHERE Clause
+	 * 	@param andCondition true-&gt;AND false-&gt;OR
+	 *  @param depth number of parenthesis
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	Restriction (String whereClause, boolean andCondition, int depth)
+	{
+<span class="nc bnc" id="L1857" title="All 2 branches missed.">		this(whereClause, andCondition ? &quot;AND&quot; : &quot;OR&quot;, depth);</span>
+<span class="nc" id="L1858">	}</span>
+
+	Restriction (SQLFragment whereClause, boolean andCondition, int depth)
+	{
+<span class="nc bnc" id="L1862" title="All 2 branches missed.">		this(whereClause, andCondition ? &quot;AND&quot; : &quot;OR&quot;, depth);</span>
+<span class="nc" id="L1863">	}</span>
+	
+	/**
+	 * 	Create Restriction with direct WHERE clause
+	 * 	@param whereClause SQL WHERE Clause
+	 * 	@param andOrCondition AND/OR/AND NOT/OR NOT - concatenation of parenthesis
+	 *  @param depth number of parenthesis
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+<span class="nc" id="L1872">	Restriction (String whereClause, String andOrCondition, int depth)</span>
+	{
+<span class="nc" id="L1874">		DirectWhereClauseRecord = new SQLFragment(whereClause);</span>
+<span class="nc" id="L1875">		this.andOrCondition = andOrCondition;</span>
+<span class="nc" id="L1876">		this.notCondition = false;</span>
+<span class="nc" id="L1877">		this.existsCondition = false;</span>
+<span class="nc" id="L1878">		this.joinDepth = depth;</span>
+<span class="nc" id="L1879">	}	//	Restriction</span>
+
+<span class="nc" id="L1881">	Restriction (SQLFragment whereClause, String andOrCondition, int depth)</span>
+	{
+<span class="nc" id="L1883">		DirectWhereClauseRecord = whereClause;</span>
+<span class="nc" id="L1884">		this.andOrCondition = andOrCondition;</span>
+<span class="nc" id="L1885">		this.notCondition = false;</span>
+<span class="nc" id="L1886">		this.existsCondition = false;</span>
+<span class="nc" id="L1887">		this.joinDepth = depth;</span>
+<span class="nc" id="L1888">	}	//	Restriction</span>
+	
+	/**
+	 * 	Create Restriction with direct WHERE clause
+	 * 	@param whereClause SQL WHERE Clause
+	 *  @param andCondition true=and, false=or
+	 *  @param notCondition true=not
+	 *  @param existsCondition true=exists
+	 *  @param depth number of parenthesis
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+<span class="nc" id="L1899">	Restriction (String whereClause, boolean andCondition, boolean notCondition, boolean existsCondition, int depth)</span>
+	{
+<span class="nc" id="L1901">		DirectWhereClauseRecord = new SQLFragment(whereClause);</span>
+<span class="nc bnc" id="L1902" title="All 2 branches missed.">		this.andOrCondition = andCondition ? &quot;AND&quot; : &quot;OR&quot;;</span>
+<span class="nc" id="L1903">		this.notCondition = notCondition;</span>
+<span class="nc" id="L1904">		this.existsCondition = existsCondition;</span>
+<span class="nc" id="L1905">		this.joinDepth = depth;</span>
+<span class="nc" id="L1906">	}	//	Restriction</span>
+
+<span class="nc" id="L1908">	Restriction (SQLFragment whereClause, boolean andCondition, boolean notCondition, boolean existsCondition, int depth)</span>
+	{
+<span class="nc" id="L1910">		DirectWhereClauseRecord = whereClause;</span>
+<span class="nc bnc" id="L1911" title="All 2 branches missed.">		this.andOrCondition = andCondition ? &quot;AND&quot; : &quot;OR&quot;;</span>
+<span class="nc" id="L1912">		this.notCondition = notCondition;</span>
+<span class="nc" id="L1913">		this.existsCondition = existsCondition;</span>
+<span class="nc" id="L1914">		this.joinDepth = depth;</span>
+<span class="nc" id="L1915">	}	//	Restriction</span>
+	
+	/**
+	 * 
+	 * @param ColumnName
+	 * @param ExistsClause
+	 * @param Code query value
+	 */
+<span class="nc" id="L1923">	Restriction (String ExistsClause, Object Code)</span>
+	{
+<span class="nc" id="L1925">		this.ExistsClause = ExistsClause;</span>
+<span class="nc" id="L1926">		this.Code = Code;</span>
+<span class="nc" id="L1927">	}	//	Restriction</span>
+	
+	/**	Direct Where Clause	*/
+<span class="nc" id="L1930">	protected SQLFragment	DirectWhereClauseRecord = null;</span>
+	/**	Exists Clause	*/
+<span class="nc" id="L1932">	protected String	ExistsClause = null;</span>
+	/**	Column Name			*/
+	protected String 	ColumnName;
+	/** Name				*/
+	protected String	InfoName;
+	/** Operator			*/
+	protected String 	Operator;
+	/** SQL Where Code		*/
+	protected Object 	Code;
+	/** Info				*/
+	protected String 	InfoDisplay;
+	/** SQL Where Code To	*/
+	protected Object 	Code_to;
+	/** Info To				*/
+	protected String 	InfoDisplay_to;
+	/** And/Or Condition	*/
+<span class="nc" id="L1948">	protected String	andOrCondition = &quot;AND&quot;;</span>
+	/** And/Or condition nesting depth ( = number of open brackets at and/or) */
+<span class="nc" id="L1950">	protected int		joinDepth = 0;</span>
+	/** Not Condition	*/
+<span class="nc" id="L1952">	protected boolean	notCondition = false;	</span>
+	/** Exists Condition	*/
+<span class="nc" id="L1954">	protected boolean	existsCondition = false;</span>
+
+	/**
+	 * 	Get SQL build from this restriction
+	 *  @param tableName optional table name
+	 * 	@return SQL WHERE clause
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public String getSQL (String tableName)
+	{
+<span class="nc bnc" id="L1964" title="All 2 branches missed.">		if (DirectWhereClauseRecord != null)</span>
+<span class="nc" id="L1965">			return DirectWhereClauseRecord.toSQLWithParameters();</span>
+		
+<span class="nc bnc" id="L1967" title="All 2 branches missed.">		if(ExistsClause != null){</span>
+<span class="nc" id="L1968">			StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L1969">			sb.append(ExistsClause);</span>
+
+<span class="nc bnc" id="L1971" title="All 2 branches missed.">			if (Code instanceof String)</span>
+<span class="nc" id="L1972">				sb = new StringBuilder(sb.toString().replace(&quot;?&quot;, DB.TO_STRING(Code.toString())));</span>
+<span class="nc bnc" id="L1973" title="All 2 branches missed.">			else if (Code instanceof Timestamp)</span>
+<span class="nc" id="L1974">				sb = new StringBuilder(sb.toString().replace(&quot;?&quot;, DB.TO_DATE((Timestamp)Code, false)));</span>
+			else
+<span class="nc" id="L1976">				sb = new StringBuilder(sb.toString().replace(&quot;?&quot;, Code.toString()));</span>
+
+<span class="nc" id="L1978">			return sb.toString();</span>
+		}
+		
+		// verify if is a virtual column, do not prefix tableName if this is a virtualColumn
+<span class="nc" id="L1982">		boolean virtualColumn = false;</span>
+<span class="nc bnc" id="L1983" title="All 4 branches missed.">		if (tableName != null &amp;&amp; tableName.length() &gt; 0) {</span>
+<span class="nc" id="L1984">			MTable table = MTable.get(Env.getCtx(), tableName);</span>
+<span class="nc bnc" id="L1985" title="All 2 branches missed.">			if (table != null) {</span>
+<span class="nc bnc" id="L1986" title="All 2 branches missed.">				for (MColumn col : table.getColumns(false)) {</span>
+<span class="nc" id="L1987">					String colSQL = col.getColumnSQL(true, false);</span>
+<span class="nc bnc" id="L1988" title="All 4 branches missed.">					if (colSQL != null &amp;&amp; colSQL.contains(&quot;@&quot;))</span>
+<span class="nc" id="L1989">						colSQL = Env.parseContext(Env.getCtx(), -1, colSQL, false, true);</span>
+<span class="nc bnc" id="L1990" title="All 4 branches missed.">					if (colSQL != null &amp;&amp; ColumnName.equals(colSQL.trim()))  {</span>
+<span class="nc" id="L1991">						virtualColumn = true;</span>
+<span class="nc" id="L1992">						break;</span>
+					}
+				}
+			}
+		}
+		//
+<span class="nc" id="L1998">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L1999" title="All 6 branches missed.">		if (!virtualColumn &amp;&amp; tableName != null &amp;&amp; tableName.length() &gt; 0)</span>
+		{
+			//	Assumes - REPLACE(INITCAP(variable),'s','X') or UPPER(variable)
+<span class="nc" id="L2002">			int pos = ColumnName.lastIndexOf('(')+1;	//	including (</span>
+<span class="nc" id="L2003">			int end = ColumnName.indexOf(')');</span>
+			//	We have a Function in the ColumnName
+<span class="nc bnc" id="L2005" title="All 8 branches missed.">			if (pos != -1 &amp;&amp; end != -1 &amp;&amp; !(pos-1==ColumnName.indexOf('(') &amp;&amp; ColumnName.trim().startsWith(&quot;(&quot;)))</span>
+<span class="nc" id="L2006">				sb.append(ColumnName.substring(0, pos))</span>
+<span class="nc" id="L2007">					.append(tableName).append(&quot;.&quot;).append(DB.getDatabase().quoteColumnName(ColumnName.substring(pos, end)))</span>
+<span class="nc" id="L2008">					.append(ColumnName.substring(end));</span>
+			else
+			{
+<span class="nc" id="L2011">				int selectIndex = ColumnName.toLowerCase().indexOf(&quot;select &quot;);</span>
+<span class="nc" id="L2012">				int fromIndex = ColumnName.toLowerCase().indexOf(&quot; from &quot;);</span>
+<span class="nc bnc" id="L2013" title="All 4 branches missed.">				if (selectIndex &gt;= 0 &amp;&amp; fromIndex &gt; 0) </span>
+				{
+<span class="nc" id="L2015">					sb.append(ColumnName);</span>
+<span class="nc" id="L2016">				}</span>
+				else
+				{
+<span class="nc" id="L2019">					sb.append(tableName).append(&quot;.&quot;).append(DB.getDatabase().quoteColumnName(ColumnName));</span>
+				}
+			}
+<span class="nc" id="L2022">		}</span>
+		else
+<span class="nc bnc" id="L2024" title="All 2 branches missed.">			sb.append(virtualColumn ? ColumnName : DB.getDatabase().quoteColumnName(ColumnName));</span>
+<span class="nc bnc" id="L2025" title="All 2 branches missed.">		if(MQuery.ILIKE.equals(Operator))</span>
+<span class="nc" id="L2026">			sb.append(MQuery.LIKE);</span>
+		else
+<span class="nc" id="L2028">			sb.append(Operator);</span>
+<span class="nc bnc" id="L2029" title="All 4 branches missed.">		if ( ! (Operator.equals(MQuery.NULL) || Operator.equals(MQuery.NOT_NULL)))</span>
+		{
+<span class="nc bnc" id="L2031" title="All 2 branches missed.">			if (Code instanceof String) {</span>
+<span class="nc bnc" id="L2032" title="All 2 branches missed.">				if (ColumnName.toUpperCase().startsWith(&quot;UPPER(&quot;)) {</span>
+<span class="nc" id="L2033">					sb.append(&quot;UPPER(&quot;+DB.TO_STRING(Code.toString())+&quot;)&quot;);</span>
+<span class="nc" id="L2034">				} else {</span>
+<span class="nc" id="L2035">					sb.append(DB.TO_STRING(Code.toString()));</span>
+				}
+<span class="nc" id="L2037">			}</span>
+<span class="nc bnc" id="L2038" title="All 2 branches missed.">			else if (Code instanceof Timestamp)</span>
+<span class="nc" id="L2039">				sb.append(DB.TO_DATE((Timestamp)Code, false));</span>
+			else
+<span class="nc" id="L2041">				sb.append(Code);</span>
+
+			//	Between
+			//	if (Code_to != null &amp;&amp; InfoDisplay_to != null)
+<span class="nc bnc" id="L2045" title="All 2 branches missed.">			if (MQuery.BETWEEN.equals(Operator))</span>
+			{
+<span class="nc" id="L2047">				sb.append(&quot; AND &quot;);</span>
+<span class="nc bnc" id="L2048" title="All 2 branches missed.">				if (Code_to instanceof String)</span>
+<span class="nc" id="L2049">					sb.append(DB.TO_STRING(Code_to.toString()));</span>
+<span class="nc bnc" id="L2050" title="All 2 branches missed.">				else if (Code_to instanceof Timestamp)</span>
+<span class="nc" id="L2051">					sb.append(DB.TO_DATE((Timestamp)Code_to, false));</span>
+				else
+<span class="nc" id="L2053">					sb.append(Code_to);</span>
+			}
+		}
+<span class="nc" id="L2056">		return sb.toString();</span>
+	}	//	getSQL
+
+	/**
+	 * Get SQL build from this restriction
+	 * 
+	 * @param tableName  optional table name
+	 * @param parameters list to be populated with parameters
+	 * @return SQL WHERE clause
+	 */
+	public SQLFragment getSQLFilter(String tableName) {
+<span class="nc bnc" id="L2067" title="All 2 branches missed.">		if (DirectWhereClauseRecord != null)</span>
+<span class="nc" id="L2068">			return DirectWhereClauseRecord;</span>
+
+<span class="nc" id="L2070">		List&lt;Object&gt; parameters = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L2071" title="All 2 branches missed.">		if (ExistsClause != null) {</span>
+<span class="nc" id="L2072">			StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L2073">			sb.append(ExistsClause);</span>
+
+<span class="nc bnc" id="L2075" title="All 2 branches missed.">			if (Code != null)</span>
+<span class="nc" id="L2076">				parameters.add(Code);</span>
+
+<span class="nc" id="L2078">			return new SQLFragment(sb.toString(), parameters);</span>
+		}
+
+		// verify if is a virtual column, do not prefix tableName if this is a
+		// virtualColumn
+<span class="nc" id="L2083">		boolean virtualColumn = false;</span>
+<span class="nc bnc" id="L2084" title="All 4 branches missed.">		if (tableName != null &amp;&amp; tableName.length() &gt; 0) {</span>
+<span class="nc" id="L2085">			MTable table = MTable.get(Env.getCtx(), tableName);</span>
+<span class="nc bnc" id="L2086" title="All 2 branches missed.">			if (table != null) {</span>
+<span class="nc bnc" id="L2087" title="All 2 branches missed.">				for (MColumn col : table.getColumns(false)) {</span>
+<span class="nc" id="L2088">					String colSQL = col.getColumnSQL(true, false);</span>
+<span class="nc bnc" id="L2089" title="All 4 branches missed.">					if (colSQL != null &amp;&amp; colSQL.contains(&quot;@&quot;))</span>
+<span class="nc" id="L2090">						colSQL = Env.parseContext(Env.getCtx(), -1, colSQL, false, true);</span>
+<span class="nc bnc" id="L2091" title="All 4 branches missed.">					if (colSQL != null &amp;&amp; ColumnName.equals(colSQL.trim())) {</span>
+<span class="nc" id="L2092">						virtualColumn = true;</span>
+<span class="nc" id="L2093">						break;</span>
+					}
+				}
+			}
+		}
+		//
+<span class="nc" id="L2099">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L2100" title="All 6 branches missed.">		if (!virtualColumn &amp;&amp; tableName != null &amp;&amp; tableName.length() &gt; 0) {</span>
+			// Assumes - REPLACE(INITCAP(variable),'s','X') or UPPER(variable)
+<span class="nc" id="L2102">			int pos = ColumnName.lastIndexOf('(') + 1; // including (</span>
+<span class="nc" id="L2103">			int end = ColumnName.indexOf(')');</span>
+			// We have a Function in the ColumnName
+<span class="nc bnc" id="L2105" title="All 8 branches missed.">			if (pos != -1 &amp;&amp; end != -1 &amp;&amp; !(pos - 1 == ColumnName.indexOf('(') &amp;&amp; ColumnName.trim().startsWith(&quot;(&quot;)))</span>
+<span class="nc" id="L2106">				sb.append(ColumnName.substring(0, pos))</span>
+<span class="nc" id="L2107">						.append(tableName).append(&quot;.&quot;)</span>
+<span class="nc" id="L2108">						.append(DB.getDatabase().quoteColumnName(ColumnName.substring(pos, end)))</span>
+<span class="nc" id="L2109">						.append(ColumnName.substring(end));</span>
+			else {
+<span class="nc" id="L2111">				int selectIndex = ColumnName.toLowerCase().indexOf(&quot;select &quot;);</span>
+<span class="nc" id="L2112">				int fromIndex = ColumnName.toLowerCase().indexOf(&quot; from &quot;);</span>
+<span class="nc bnc" id="L2113" title="All 4 branches missed.">				if (selectIndex &gt;= 0 &amp;&amp; fromIndex &gt; 0) {</span>
+<span class="nc" id="L2114">					sb.append(ColumnName);</span>
+<span class="nc" id="L2115">				} else {</span>
+<span class="nc" id="L2116">					sb.append(tableName).append(&quot;.&quot;).append(DB.getDatabase().quoteColumnName(ColumnName));</span>
+				}
+			}
+<span class="nc" id="L2119">		} else</span>
+<span class="nc bnc" id="L2120" title="All 2 branches missed.">			sb.append(virtualColumn ? ColumnName : DB.getDatabase().quoteColumnName(ColumnName));</span>
+<span class="nc bnc" id="L2121" title="All 2 branches missed.">		if (MQuery.ILIKE.equals(Operator))</span>
+<span class="nc" id="L2122">			sb.append(MQuery.LIKE);</span>
+		else
+<span class="nc" id="L2124">			sb.append(Operator);</span>
+<span class="nc bnc" id="L2125" title="All 4 branches missed.">		if (!(Operator.equals(MQuery.NULL) || Operator.equals(MQuery.NOT_NULL))) {</span>
+<span class="nc bnc" id="L2126" title="All 4 branches missed.">			boolean useUpper = (Code instanceof String) &amp;&amp; ColumnName.toUpperCase().startsWith(&quot;UPPER(&quot;);</span>
+<span class="nc bnc" id="L2127" title="All 2 branches missed.">			if (useUpper)</span>
+<span class="nc" id="L2128">				sb.append(&quot;UPPER(&quot;);</span>
+<span class="nc" id="L2129">			sb.append(&quot;?&quot;);</span>
+<span class="nc bnc" id="L2130" title="All 2 branches missed.">			if (useUpper)</span>
+<span class="nc" id="L2131">				sb.append(&quot;)&quot;);</span>
+<span class="nc" id="L2132">			parameters.add(Code);</span>
+
+			// Between
+			// if (Code_to != null &amp;&amp; InfoDisplay_to != null)
+<span class="nc bnc" id="L2136" title="All 2 branches missed.">			if (MQuery.BETWEEN.equals(Operator)) {</span>
+<span class="nc" id="L2137">				sb.append(&quot; AND &quot;);</span>
+<span class="nc" id="L2138">				sb.append(&quot;?&quot;);</span>
+<span class="nc" id="L2139">				parameters.add(Code_to);</span>
+			}
+		}
+<span class="nc" id="L2142">		return new SQLFragment(sb.toString(), parameters);</span>
+	} // getSQLFilter
+	
+	
+	/**
+	 * 	Get String Representation
+	 * 	@return info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L2153">		return getSQL(null);</span>
+	}	//	toString
+
+	/**
+	 * 	Get Info Name
+	 * 	@return Info Name
+	 */
+	public String getInfoName()
+	{
+<span class="nc" id="L2162">		return InfoName;</span>
+	}	//	getInfoName
+
+	/**
+	 * 	Get Info Operator
+	 * 	@return info Operator
+	 */
+	public String getInfoOperator()
+	{
+<span class="nc bnc" id="L2171" title="All 2 branches missed.">		for (int i = 0; i &lt; MQuery.OPERATORS.length; i++)</span>
+		{
+<span class="nc bnc" id="L2173" title="All 2 branches missed.">			if (MQuery.OPERATORS[i].getValue().equals(Operator))</span>
+<span class="nc" id="L2174">				return Msg.getMsg(Env.getCtx(), MQuery.OPERATORS[i].getName());</span>
+		}
+<span class="nc" id="L2176">		return Operator;</span>
+	}	//	getInfoOperator
+
+	/**
+	 * 	Get Display with optional To
+	 * 	@return info display
+	 */
+	public String getInfoDisplayAll()
+	{
+<span class="nc bnc" id="L2185" title="All 2 branches missed.">		if (InfoDisplay_to == null)</span>
+<span class="nc" id="L2186">			return InfoDisplay;</span>
+<span class="nc" id="L2187">		StringBuilder sb = new StringBuilder(InfoDisplay);</span>
+<span class="nc" id="L2188">		sb.append(&quot; - &quot;).append(InfoDisplay_to);</span>
+<span class="nc" id="L2189">		return sb.toString();</span>
+	}	//	getInfoDisplay
+
+}	//	Restriction
+
+class QueryEvaluatee implements Evaluatee {
+	private Map&lt;String, String&gt; parameterMap;
+
+	/**
+	 * @param parameterMap
+	 */
+<span class="nc" id="L2200">	public QueryEvaluatee(Map&lt;String, String&gt; parameterMap) {</span>
+<span class="nc" id="L2201">		this.parameterMap = parameterMap;</span>
+<span class="nc" id="L2202">	}</span>
+
+	/**
+	 * 	Get Variable Value (Evaluatee)
+	 *	@param variableName name
+	 *	@return value
+	 */
+	public String get_ValueAsString (Properties ctx, String variableName)
+	{
+<span class="nc" id="L2211">		DefaultEvaluatee evaluatee = new DefaultEvaluatee(new ParameterDataProvider());</span>
+<span class="nc" id="L2212">		return evaluatee.get_ValueAsString(ctx, variableName);</span>
+	}
+
+	@Override
+	public String get_ValueAsString(String variableName) {
+<span class="nc" id="L2217">		return get_ValueAsString(Env.getCtx(), variableName);</span>
+	}
+
+<span class="nc" id="L2220">	private class ParameterDataProvider implements DefaultEvaluatee.DataProvider {</span>
+
+		@Override
+		public Object getValue(String columnName) {
+<span class="nc" id="L2224">			return parameterMap.get(columnName);</span>
+		}
+
+		@Override
+		public Object getProperty(String propertyName) {
+<span class="nc" id="L2229">			return null;</span>
+		}
+
+		@Override
+		public MColumn getColumn(String columnName) {
+<span class="nc" id="L2234">			return null;</span>
+		}
+
+		@Override
+		public String getTrxName() {
+<span class="nc" id="L2239">			return null;</span>
+		}		
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,787 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>InOutGenerate.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">InOutGenerate.java</span></div><h1>InOutGenerate.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MClient;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInOutLine;
+import org.compiere.model.MLocator;
+import org.compiere.model.MLocatorType;
+import org.compiere.model.MOrder;
+import org.compiere.model.MOrderLine;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MProduct;
+import org.compiere.model.MStorageOnHand;
+import org.compiere.model.Query;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+
+/**
+ *	Generate Shipments.
+ *	Manual or Automatic
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: InOutGenerate.java,v 1.2 2006/07/30 00:51:01 jjanke Exp $
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L54">public class InOutGenerate extends SvrProcess</span>
+{
+	/**	Manual Selection		*/
+<span class="nc" id="L57">	private boolean 	p_Selection = false;</span>
+	/** Warehouse				*/
+<span class="nc" id="L59">	private int			p_M_Warehouse_ID = 0;</span>
+	/** BPartner				*/
+<span class="nc" id="L61">	private int			p_C_BPartner_ID = 0;</span>
+	/** Promise Date			*/
+<span class="nc" id="L63">	private Timestamp	p_DatePromised = null;</span>
+	/** Include Orders w. unconfirmed Shipments	*/
+<span class="nc" id="L65">	private boolean		p_IsUnconfirmedInOut = false;</span>
+	/** Reserve on hand for this inout */
+<span class="nc" id="L67">	private boolean		p_SubtractOnHand = false;</span>
+	/** DocAction				*/
+<span class="nc" id="L69">	private String		p_docAction = DocAction.ACTION_None;</span>
+	/** Consolidate				*/
+<span class="nc" id="L71">	private boolean		p_ConsolidateDocument = true;</span>
+    /** Shipment Date                       */
+<span class="nc" id="L73">	private Timestamp       p_DateShipped = null;</span>
+	
+	/**	The current Shipment	*/
+<span class="nc" id="L76">	private MInOut 		m_shipment = null;</span>
+	/** Number of Shipments	being created	*/
+<span class="nc" id="L78">	private int			m_created = 0;</span>
+	/**	Line Number				*/
+<span class="nc" id="L80">	private int			m_line = 0;</span>
+	/** Movement Date			*/
+<span class="nc" id="L82">	private Timestamp	m_movementDate = null;</span>
+	/**	Last BP Location		*/
+<span class="nc" id="L84">	private int			m_lastC_BPartner_Location_ID = -1;</span>
+
+	/** The Query sql			*/
+<span class="nc" id="L87">	private StringBuffer 		m_sql = null;</span>
+
+	
+	/** Storages temp space				*/
+<span class="nc" id="L91">	private HashMap&lt;SParameter,MStorageOnHand[]&gt; m_map = new HashMap&lt;SParameter,MStorageOnHand[]&gt;();</span>
+	/** Last Parameter					*/
+<span class="nc" id="L93">	private SParameter		m_lastPP = null;</span>
+	/** Last Storage					*/
+<span class="nc" id="L95">	private MStorageOnHand[]		m_lastStorages = null;</span>
+
+	
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L103">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L106">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			if (para[i].getParameter() == null)</span>
+<span class="nc" id="L108">				;</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">			else if (name.equals(&quot;M_Warehouse_ID&quot;))</span>
+<span class="nc" id="L110">				p_M_Warehouse_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">			else if (name.equals(&quot;C_BPartner_ID&quot;))</span>
+<span class="nc" id="L112">				p_C_BPartner_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">			else if (name.equals(&quot;DatePromised&quot;))</span>
+<span class="nc" id="L114">				p_DatePromised = (Timestamp)para[i].getParameter();</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			else if (name.equals(&quot;Selection&quot;))</span>
+<span class="nc" id="L116">				p_Selection = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">			else if (name.equals(&quot;IsUnconfirmedInOut&quot;))</span>
+<span class="nc" id="L118">				p_IsUnconfirmedInOut = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">			else if (name.equals(&quot;SubtractOnHand&quot;))</span>
+<span class="nc" id="L120">				p_SubtractOnHand = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			else if (name.equals(&quot;ConsolidateDocument&quot;))</span>
+<span class="nc" id="L122">				p_ConsolidateDocument = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">			else if (name.equals(&quot;DocAction&quot;))</span>
+<span class="nc" id="L124">				p_docAction = (String)para[i].getParameter();</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			else if (name.equals(&quot;MovementDate&quot;))</span>
+<span class="nc" id="L126">                p_DateShipped = (Timestamp)para[i].getParameter();</span>
+			else
+<span class="nc" id="L128">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+		//  juddm - added ability to specify a shipment date from Generate Shipments
+<span class="nc bnc" id="L131" title="All 2 branches missed.">		if (p_DateShipped == null) {</span>
+<span class="nc" id="L132">			m_movementDate = Env.getContextAsDate(getCtx(), Env.DATE);</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">			if (m_movementDate == null)</span>
+<span class="nc" id="L134">				m_movementDate = new Timestamp(System.currentTimeMillis());</span>
+<span class="nc" id="L135">		} else</span>
+<span class="nc" id="L136">			m_movementDate = p_DateShipped;</span>
+<span class="nc" id="L137">	}	//	prepare</span>
+
+	/**
+	 * 	Generate Shipments
+	 *	@return info
+	 *	@throws Exception
+	 */
+	protected String doIt () throws Exception
+	{
+<span class="nc bnc" id="L146" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Selection=&quot; + p_Selection</span>
+<span class="nc" id="L147">			+ &quot;, M_Warehouse_ID=&quot; + p_M_Warehouse_ID </span>
+<span class="nc" id="L148">			+ &quot;, C_BPartner_ID=&quot; + p_C_BPartner_ID </span>
+<span class="nc" id="L149">			+ &quot;, Consolidate=&quot; + p_ConsolidateDocument</span>
+<span class="nc" id="L150">			+ &quot;, IsUnconfirmed=&quot; + p_IsUnconfirmedInOut</span>
+<span class="nc" id="L151">			+ &quot;, Movement=&quot; + m_movementDate);</span>
+		
+		
+<span class="nc bnc" id="L154" title="All 6 branches missed.">		if ((getProcessInfo().getAD_InfoWindow_ID() &gt; 0) || (getProcessInfo().getAD_InfoWindow_ID()==0 &amp;&amp; p_Selection))</span>
+		{
+<span class="nc" id="L156">			p_Selection = true;</span>
+<span class="nc" id="L157">			m_sql = new StringBuffer(&quot;SELECT C_Order.* FROM C_Order, T_Selection &quot;)</span>
+<span class="nc" id="L158">				.append(&quot;WHERE C_Order.DocStatus='CO' AND C_Order.IsSOTrx='Y' AND C_Order.AD_Client_ID=? &quot;)</span>
+<span class="nc" id="L159">				.append(&quot;AND C_Order.C_Order_ID = T_Selection.T_Selection_ID &quot;) </span>
+<span class="nc" id="L160">				.append(&quot;AND T_Selection.AD_PInstance_ID=? &quot;);</span>
+<span class="nc" id="L161">		}</span>
+		else
+		{
+<span class="nc bnc" id="L164" title="All 2 branches missed.">			if (p_M_Warehouse_ID == 0)</span>
+<span class="nc" id="L165">				throw new AdempiereUserError(&quot;@NotFound@ @M_Warehouse_ID@&quot;);</span>
+
+<span class="nc" id="L167">			m_sql = new StringBuffer(&quot;SELECT o.* FROM m_inout_candidate_v ioc JOIN C_Order o ON o.C_Order_ID = ioc.C_Order_ID&quot;</span>
+					+ &quot; LEFT JOIN M_Shipper ship ON ship.M_Shipper_ID = o.M_Shipper_ID&quot;
+					+ &quot; WHERE DocStatus='CO' AND IsSOTrx='Y' &quot;
+<span class="nc" id="L170">					+ &quot; AND ioc.AD_Client_ID = &quot; + getAD_Client_ID())</span>
+				//	No Offer,POS
+<span class="nc" id="L172">				.append(&quot; AND o.C_DocType_ID IN (SELECT C_DocType_ID FROM C_DocType &quot;)</span>
+<span class="nc" id="L173">					.append(&quot;WHERE DocBaseType='SOO' AND DocSubTypeSO NOT IN ('ON','OB','WR'))&quot;)</span>
+				//	No Manual
+<span class="nc" id="L175">				.append(&quot; AND o.DeliveryRule&lt;&gt;'M'&quot;)</span>
+				//	Open Order Lines with Warehouse
+<span class="nc" id="L177">				.append(&quot; AND EXISTS (SELECT * FROM C_OrderLine ol &quot;)</span>
+<span class="nc" id="L178">					.append(&quot;WHERE ol.M_Warehouse_ID=? AND ioc.DocSource = 'O' &quot;);					//	#1</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">			if (p_DatePromised != null)</span>
+<span class="nc" id="L180">				m_sql.append(&quot; AND TRUNC(ol.DatePromised)&lt;=?&quot;);		//	#2</span>
+<span class="nc" id="L181">			m_sql.append(&quot; AND o.C_Order_ID=ol.C_Order_ID AND ol.QtyOrdered&lt;&gt;ol.QtyDelivered)&quot;);</span>
+			//
+<span class="nc bnc" id="L183" title="All 2 branches missed.">			if (p_C_BPartner_ID != 0)</span>
+<span class="nc" id="L184">				m_sql.append(&quot; AND o.C_BPartner_ID=?&quot;);					//	#3</span>
+		}
+<span class="nc" id="L186">		m_sql.append(&quot; ORDER BY M_Warehouse_ID, PriorityRule, M_Shipper_ID, C_BPartner_ID, C_BPartner_Location_ID, C_Order_ID&quot;);</span>
+
+<span class="nc" id="L188">		PreparedStatement pstmt = null;</span>
+		try
+		{
+<span class="nc" id="L191">			pstmt = DB.prepareStatement (m_sql.toString(), get_TrxName());</span>
+<span class="nc" id="L192">			int index = 1;</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">			if (p_Selection)</span>
+			{
+<span class="nc" id="L195">				pstmt.setInt(index++, Env.getAD_Client_ID(getCtx()));</span>
+<span class="nc" id="L196">				pstmt.setInt(index++, getAD_PInstance_ID());</span>
+<span class="nc" id="L197">			}</span>
+			else	
+			{
+<span class="nc" id="L200">				pstmt.setInt(index++, p_M_Warehouse_ID);</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">				if (p_DatePromised != null)</span>
+<span class="nc" id="L202">					pstmt.setTimestamp(index++, p_DatePromised);</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">				if (p_C_BPartner_ID != 0)</span>
+<span class="nc" id="L204">					pstmt.setInt(index++, p_C_BPartner_ID);</span>
+			}
+<span class="nc" id="L206">		}</span>
+<span class="nc" id="L207">		catch (Exception e)</span>
+		{
+<span class="nc" id="L209">			DB.close(pstmt);</span>
+<span class="nc" id="L210">			throw new AdempiereException(e);</span>
+		}
+<span class="nc" id="L212">		return generate(pstmt);</span>
+	}	//	doIt
+	
+	/**
+	 * 	Generate Shipments
+	 * 	@param pstmt Order Query
+	 *	@return info
+	 */
+	private String generate (PreparedStatement pstmt)
+	{
+
+<span class="nc" id="L223">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L226">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">			while (rs.next ())		//	Order</span>
+			{
+<span class="nc" id="L229">				MOrder order = new MOrder (getCtx(), rs, get_TrxName());</span>
+<span class="nc" id="L230">				statusUpdate(Msg.getMsg(getCtx(), &quot;Processing&quot;) + &quot; &quot; + order.getDocumentInfo());</span>
+				
+<span class="nc bnc" id="L232" title="All 2 branches missed.">				if (MOrder.DELIVERYRULE_AfterPayment.equals(order.getDeliveryRule()))</span>
+				{
+<span class="nc" id="L234">					BigDecimal payment = order.getPaymentAmt();</span>
+<span class="nc bnc" id="L235" title="All 4 branches missed.">					if (payment == null || payment.compareTo(order.getGrandTotal()) &lt; 0)</span>
+<span class="nc" id="L236">						continue;					</span>
+				}
+				
+				//load warehouse
+<span class="nc bnc" id="L240" title="All 2 branches missed.">				if(p_M_Warehouse_ID == 0)</span>
+<span class="nc" id="L241">					p_M_Warehouse_ID = order.getM_Warehouse_ID();</span>
+				
+				//	New Header different Shipper, Shipment Location
+<span class="nc bnc" id="L244" title="All 2 branches missed.">				if (!p_ConsolidateDocument </span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">					|| (m_shipment != null </span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">					&amp;&amp; (m_shipment.getC_BPartner_Location_ID() != order.getC_BPartner_Location_ID()</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">						|| m_shipment.getM_Shipper_ID() != order.getM_Shipper_ID() )))</span>
+<span class="nc" id="L248">					completeShipment();</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;check: &quot; + order + &quot; - DeliveryRule=&quot; + order.getDeliveryRule());</span>
+				//
+<span class="nc" id="L251">				Timestamp minGuaranteeDate = m_movementDate;</span>
+<span class="nc" id="L252">				boolean completeOrder = MOrder.DELIVERYRULE_CompleteOrder.equals(order.getDeliveryRule());</span>
+				//	OrderLine WHERE
+<span class="nc" id="L254">				StringBuilder where = new StringBuilder(&quot; AND M_Warehouse_ID=&quot;).append(p_M_Warehouse_ID);</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">				if (p_DatePromised != null)</span>
+<span class="nc" id="L256">					where.append(&quot; AND (TRUNC(DatePromised)&lt;=&quot;).append(DB.TO_DATE(p_DatePromised, true))</span>
+<span class="nc" id="L257">						.append(&quot; OR DatePromised IS NULL)&quot;);		</span>
+				//	Exclude Auto Delivery if not Force
+<span class="nc bnc" id="L259" title="All 2 branches missed.">				if (!MOrder.DELIVERYRULE_Force.equals(order.getDeliveryRule()))</span>
+<span class="nc" id="L260">					where.append(&quot; AND (C_OrderLine.M_Product_ID IS NULL&quot;)</span>
+<span class="nc" id="L261">						.append(&quot; OR EXISTS (SELECT * FROM M_Product p &quot;)</span>
+<span class="nc" id="L262">						.append(&quot;WHERE C_OrderLine.M_Product_ID=p.M_Product_ID&quot;)</span>
+<span class="nc" id="L263">						.append(&quot; AND IsExcludeAutoDelivery='N'))&quot;);</span>
+				//	Exclude Unconfirmed
+<span class="nc bnc" id="L265" title="All 2 branches missed.">				if (!p_IsUnconfirmedInOut)</span>
+<span class="nc" id="L266">					where.append(&quot; AND NOT EXISTS (SELECT * FROM M_InOutLine iol&quot;)</span>
+<span class="nc" id="L267">							.append(&quot; INNER JOIN M_InOut io ON (iol.M_InOut_ID=io.M_InOut_ID) &quot;)</span>
+<span class="nc" id="L268">								.append(&quot;WHERE iol.C_OrderLine_ID=C_OrderLine.C_OrderLine_ID AND io.DocStatus IN ('DR','IN','IP','WC'))&quot;);</span>
+				//	Deadlock Prevention - Order by M_Product_ID
+<span class="nc" id="L270">				MOrderLine[] lines = order.getLines (where.toString(), &quot;C_BPartner_Location_ID, M_Product_ID, Line&quot;);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">				for (int i = 0; i &lt; lines.length; i++)</span>
+				{
+<span class="nc" id="L273">					MOrderLine line = lines[i];</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">					if (line.getM_Warehouse_ID() != p_M_Warehouse_ID)</span>
+<span class="nc" id="L275">						continue;</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;check: &quot; + line);</span>
+<span class="nc" id="L277">					BigDecimal onHand = Env.ZERO;</span>
+<span class="nc" id="L278">					BigDecimal toDeliver = line.getQtyOrdered()</span>
+<span class="nc" id="L279">						.subtract(line.getQtyDelivered());</span>
+<span class="nc" id="L280">					MProduct product = line.getProduct();</span>
+					//	Nothing to Deliver
+<span class="nc bnc" id="L282" title="All 8 branches missed.">					if (product != null &amp;&amp; (toDeliver.signum() == 0 || (toDeliver.signum() &lt; 0 &amp;&amp; line.getQtyOrdered().signum() &gt; 0)))</span>
+<span class="nc" id="L283">						continue;</span>
+					
+					// or it's a charge - Bug#: 1603966 
+<span class="nc bnc" id="L286" title="All 4 branches missed.">					if (line.getC_Charge_ID()!=0 &amp;&amp; toDeliver.signum() == 0)</span>
+<span class="nc" id="L287">						continue;</span>
+					
+					//	Check / adjust for confirmations
+<span class="nc" id="L290">					BigDecimal unconfirmedShippedQty = Env.ZERO;</span>
+<span class="nc" id="L291">					BigDecimal totalunconfirmedShippedQty = Env.ZERO;</span>
+<span class="nc" id="L292">					StringBuilder logInfo = null;</span>
+<span class="nc bnc" id="L293" title="All 6 branches missed.">					if (p_IsUnconfirmedInOut &amp;&amp; product != null &amp;&amp; toDeliver.signum() != 0)</span>
+					{
+<span class="nc" id="L295">						String where2 = &quot;EXISTS (SELECT * FROM M_InOut io WHERE io.M_InOut_ID=M_InOutLine.M_InOut_ID AND io.DocStatus IN ('DR','IN','IP','WC'))&quot;;</span>
+<span class="nc" id="L296">						MInOutLine[] iols = MInOutLine.getOfOrderLine(getCtx(), </span>
+<span class="nc" id="L297">							line.getC_OrderLine_ID(), where2, null);</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">						for (int j = 0; j &lt; iols.length; j++)</span>
+<span class="nc" id="L299">							unconfirmedShippedQty = unconfirmedShippedQty.add(iols[j].getMovementQty());</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L301">							logInfo = new StringBuilder(&quot;Unconfirmed Qty=&quot;).append(unconfirmedShippedQty)</span>
+<span class="nc" id="L302">								.append(&quot; - ToDeliver=&quot;).append(toDeliver).append(&quot;-&gt;&quot;);</span>
+<span class="nc" id="L303">						toDeliver = toDeliver.subtract(unconfirmedShippedQty);</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L305">							logInfo.append(toDeliver);</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">						if (toDeliver.signum() &lt; 0)</span>
+						{
+<span class="nc" id="L308">							toDeliver = Env.ZERO;</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L310">								logInfo.append(&quot; (set to 0)&quot;);</span>
+						}
+<span class="nc bnc" id="L312" title="All 4 branches missed.">						if (log.isLoggable(Level.FINE) &amp;&amp; logInfo.length() &gt; 0) log.fine(logInfo.toString());</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">						if (toDeliver.signum() == 0) {</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">							if (completeOrder)</span>
+<span class="nc" id="L315">								completeOrder = false;</span>
+<span class="nc" id="L316">							continue;</span>
+						}
+					}
+
+<span class="nc bnc" id="L320" title="All 4 branches missed.">					if (product != null &amp;&amp; toDeliver.signum() != 0) {</span>
+						// Adjust On Hand
+<span class="nc bnc" id="L322" title="All 2 branches missed.">						if(p_SubtractOnHand) {</span>
+<span class="nc" id="L323">							StringBuilder where3 = new StringBuilder (</span>
+<span class="nc" id="L324">									&quot;EXISTS (SELECT * FROM M_InOut io &quot;</span>
+											+ &quot;WHERE io.M_InOut_ID=M_InOutLine.M_InOut_ID &quot;
+											+ &quot;AND io.IsSOTrx = 'Y' &quot;
+											+ &quot;AND io.DocStatus IN ('IP','WC') &quot;
+<span class="nc" id="L328">											+ &quot;AND io.M_Warehouse_ID=&quot;).append(p_M_Warehouse_ID).append (&quot;) &quot;</span>
+<span class="nc" id="L329">													+ &quot;AND M_Product_ID = &quot;).append(line.getM_Product_ID());</span>
+							
+<span class="nc" id="L331">							totalunconfirmedShippedQty =</span>
+<span class="nc" id="L332">									new Query(getCtx(), MInOutLine.Table_Name, where3.toString(), get_TrxName())</span>
+<span class="nc" id="L333">									.aggregate(MInOutLine.COLUMNNAME_MovementQty, Query.AGGREGATE_SUM);</span>
+<span class="nc" id="L334">							onHand = onHand.subtract(totalunconfirmedShippedQty);</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">						} else if (unconfirmedShippedQty.signum() != 0){</span>
+<span class="nc" id="L336">							onHand = onHand.subtract(unconfirmedShippedQty);</span>
+						}
+					}
+
+					//	Comments &amp; lines w/o product &amp; services
+<span class="nc bnc" id="L341" title="All 4 branches missed.">					if ((product == null || !product.isStocked())</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">						&amp;&amp; (line.getQtyOrdered().signum() == 0 	//	comments</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">							|| toDeliver.signum() != 0))		//	lines w/o product</span>
+					{
+<span class="nc bnc" id="L345" title="All 2 branches missed.">						if (!MOrder.DELIVERYRULE_CompleteOrder.equals(order.getDeliveryRule()))	//	printed later</span>
+<span class="nc" id="L346">							createLine (order, line, toDeliver, null, false);</span>
+<span class="nc" id="L347">						continue;</span>
+					}
+<span class="nc bnc" id="L349" title="All 2 branches missed.">					if (product == null)</span>
+					{
+<span class="nc" id="L351">						continue;</span>
+					}
+
+					//	Stored Product
+<span class="nc" id="L355">					String MMPolicy = product.getMMPolicy();</span>
+
+<span class="nc" id="L357">					MStorageOnHand[] storages = getStorages(line.getM_Warehouse_ID(),</span>
+<span class="nc" id="L358">							 line.getM_Product_ID(), line.getM_AttributeSetInstance_ID(),</span>
+<span class="nc" id="L359">							 minGuaranteeDate, MClient.MMPOLICY_FiFo.equals(MMPolicy));</span>
+					
+<span class="nc bnc" id="L361" title="All 2 branches missed.">					for (int j = 0; j &lt; storages.length; j++)</span>
+					{
+<span class="nc" id="L363">						MStorageOnHand storage = storages[j];</span>
+<span class="nc" id="L364">						onHand = onHand.add(storage.getQtyOnHand());</span>
+<span class="nc bnc" id="L365" title="All 4 branches missed.">						if (completeOrder &amp;&amp; j == 0) {</span>
+							// CompleteOrder is created at the end, so we need to subtract here to keep track of what is &quot;consumed&quot;
+<span class="nc" id="L367">							storage.setQtyOnHand(storage.getQtyOnHand().subtract(toDeliver));</span>
+						}
+					}
+<span class="nc bnc" id="L370" title="All 6 branches missed.">					boolean autoProduce = product.isBOM() &amp;&amp; product.isVerified() &amp;&amp; product.isAutoProduce();</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">					boolean fullLine = onHand.compareTo(toDeliver) &gt;= 0</span>
+<span class="nc bnc" id="L372" title="All 4 branches missed.">						|| toDeliver.signum() &lt; 0 || autoProduce;</span>
+					
+					//	Complete Order
+<span class="nc bnc" id="L375" title="All 4 branches missed.">					if (completeOrder &amp;&amp; !fullLine)</span>
+					{
+<span class="nc bnc" id="L377" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;Failed CompleteOrder - OnHand=&quot; + onHand </span>
+<span class="nc" id="L378">							+ &quot; (Unconfirmed=&quot; + unconfirmedShippedQty</span>
+<span class="nc" id="L379">							+ &quot;), ToDeliver=&quot; + toDeliver + &quot; - &quot; + line);</span>
+<span class="nc" id="L380">						completeOrder = false;</span>
+<span class="nc" id="L381">						break;</span>
+					}
+					//	Complete Line
+<span class="nc bnc" id="L384" title="All 4 branches missed.">					else if (fullLine &amp;&amp; MOrder.DELIVERYRULE_CompleteLine.equals(order.getDeliveryRule()))</span>
+					{
+<span class="nc bnc" id="L386" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;CompleteLine - OnHand=&quot; + onHand </span>
+<span class="nc" id="L387">							+ &quot; (Unconfirmed=&quot; + unconfirmedShippedQty</span>
+<span class="nc" id="L388">							+ &quot;, ToDeliver=&quot; + toDeliver + &quot; - &quot; + line);</span>
+						//	
+<span class="nc" id="L390">						createLine (order, line, toDeliver, storages, false);</span>
+<span class="nc" id="L391">					}</span>
+					//	Availability
+<span class="nc bnc" id="L393" title="All 4 branches missed.">					else if ((MOrder.DELIVERYRULE_Availability.equals(order.getDeliveryRule()) || MOrder.DELIVERYRULE_AfterPayment.equals(order.getDeliveryRule()))</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">						&amp;&amp; (onHand.signum() &gt; 0</span>
+<span class="nc bnc" id="L395" title="All 4 branches missed.">							|| toDeliver.signum() &lt; 0 || autoProduce))</span>
+					{
+<span class="nc" id="L397">						BigDecimal deliver = toDeliver;</span>
+<span class="nc bnc" id="L398" title="All 4 branches missed.">						if (deliver.compareTo(onHand) &gt; 0 &amp;&amp; !autoProduce)</span>
+<span class="nc" id="L399">							deliver = onHand;</span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;Available - OnHand=&quot; + onHand </span>
+<span class="nc" id="L401">							+ &quot; (Unconfirmed=&quot; + unconfirmedShippedQty</span>
+<span class="nc" id="L402">							+ &quot;), ToDeliver=&quot; + toDeliver </span>
+<span class="nc" id="L403">							+ &quot;, Delivering=&quot; + deliver + &quot; - &quot; + line);</span>
+						//	
+<span class="nc" id="L405">						createLine (order, line, deliver, storages, false);</span>
+<span class="nc" id="L406">					}</span>
+					//	Force
+<span class="nc bnc" id="L408" title="All 2 branches missed.">					else if (MOrder.DELIVERYRULE_Force.equals(order.getDeliveryRule()))</span>
+					{
+<span class="nc" id="L410">						BigDecimal deliver = toDeliver;</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;Force - OnHand=&quot; + onHand </span>
+<span class="nc" id="L412">							+ &quot; (Unconfirmed=&quot; + unconfirmedShippedQty</span>
+<span class="nc" id="L413">							+ &quot;), ToDeliver=&quot; + toDeliver </span>
+<span class="nc" id="L414">							+ &quot;, Delivering=&quot; + deliver + &quot; - &quot; + line);</span>
+						//	
+<span class="nc" id="L416">						createLine (order, line, deliver, storages, true);</span>
+<span class="nc" id="L417">					}</span>
+					//	Manual
+<span class="nc bnc" id="L419" title="All 2 branches missed.">					else if (MOrder.DELIVERYRULE_Manual.equals(order.getDeliveryRule())) {</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;Manual - OnHand=&quot; + onHand </span>
+<span class="nc" id="L421">							+ &quot; (Unconfirmed=&quot; + unconfirmedShippedQty</span>
+<span class="nc" id="L422">							+ &quot;) - &quot; + line);</span>
+<span class="nc" id="L423">					} else {</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;Failed: &quot; + order.getDeliveryRule() + &quot; - OnHand=&quot; + onHand </span>
+<span class="nc" id="L425">								+ &quot; (Unconfirmed=&quot; + unconfirmedShippedQty</span>
+<span class="nc" id="L426">								+ &quot;), ToDeliver=&quot; + toDeliver + &quot; - &quot; + line);</span>
+					}
+				}	//	for all order lines
+				
+				//	Complete Order successful
+<span class="nc bnc" id="L431" title="All 4 branches missed.">				if (completeOrder &amp;&amp; MOrder.DELIVERYRULE_CompleteOrder.equals(order.getDeliveryRule()))</span>
+				{
+					// reset storage cache - it was updated in memory above
+<span class="nc" id="L434">					resetStorageCache();</span>
+
+<span class="nc bnc" id="L436" title="All 2 branches missed.">					for (int i = 0; i &lt; lines.length; i++)</span>
+					{
+<span class="nc" id="L438">						MOrderLine line = lines[i];</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">						if (line.getM_Warehouse_ID() != p_M_Warehouse_ID)</span>
+<span class="nc" id="L440">							continue;</span>
+<span class="nc" id="L441">						MProduct product = line.getProduct();</span>
+<span class="nc" id="L442">						BigDecimal toDeliver = line.getQtyOrdered().subtract(line.getQtyDelivered());</span>
+						//
+<span class="nc" id="L444">						MStorageOnHand[] storages = null;</span>
+<span class="nc bnc" id="L445" title="All 4 branches missed.">						if (product != null &amp;&amp; product.isStocked())</span>
+						{
+<span class="nc" id="L447">							String MMPolicy = product.getMMPolicy();</span>
+<span class="nc" id="L448">							storages = getStorages(line.getM_Warehouse_ID(), </span>
+<span class="nc" id="L449">								line.getM_Product_ID(), line.getM_AttributeSetInstance_ID(),</span>
+<span class="nc" id="L450">								minGuaranteeDate, MClient.MMPOLICY_FiFo.equals(MMPolicy));</span>
+						}
+						//	
+<span class="nc" id="L453">						createLine (order, line, toDeliver, storages, false);</span>
+					}
+				}
+<span class="nc" id="L456">				m_line += 1000;</span>
+			}	//	while order
+<span class="nc" id="L458">		}</span>
+<span class="nc" id="L459">		catch (Exception e)</span>
+		{
+<span class="nc" id="L461">			throw new AdempiereException(e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L465">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L466">			rs = null;</span>
+<span class="nc" id="L467">			pstmt = null;</span>
+		}
+<span class="nc" id="L469">		completeShipment();</span>
+<span class="nc" id="L470">		StringBuilder msgreturn = new StringBuilder(&quot;@Created@ = &quot;).append(m_created);</span>
+<span class="nc" id="L471">		return msgreturn.toString();</span>
+	}	//	generate
+	
+	
+	
+	/**************************************************************************
+	 * 	Create Line
+	 *	@param order order
+	 *	@param orderLine line
+	 *	@param qty qty
+	 *	@param storages storage info
+	 *	@param force force delivery
+	 */
+	private void createLine (MOrder order, MOrderLine orderLine, BigDecimal qty, 
+		MStorageOnHand[] storages, boolean force)
+	{
+		//	Complete last Shipment - can have multiple shipments
+<span class="nc bnc" id="L488" title="All 2 branches missed.">		if (m_lastC_BPartner_Location_ID != orderLine.getC_BPartner_Location_ID() )</span>
+<span class="nc" id="L489">			completeShipment();</span>
+<span class="nc" id="L490">		m_lastC_BPartner_Location_ID = orderLine.getC_BPartner_Location_ID();</span>
+		//	Create New Shipment
+<span class="nc bnc" id="L492" title="All 2 branches missed.">		if (m_shipment == null)</span>
+		{
+<span class="nc" id="L494">			m_shipment = new MInOut (order, 0, m_movementDate);</span>
+<span class="nc" id="L495">			m_shipment.setM_Warehouse_ID(orderLine.getM_Warehouse_ID());	//	sets Org too</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">			if (order.getC_BPartner_ID() != orderLine.getC_BPartner_ID())</span>
+<span class="nc" id="L497">				m_shipment.setC_BPartner_ID(orderLine.getC_BPartner_ID());</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">			if (order.getC_BPartner_Location_ID() != orderLine.getC_BPartner_Location_ID())</span>
+<span class="nc" id="L499">				m_shipment.setC_BPartner_Location_ID(orderLine.getC_BPartner_Location_ID());</span>
+<span class="nc bnc" id="L500" title="All 2 branches missed.">			if (!m_shipment.save())</span>
+<span class="nc" id="L501">				throw new IllegalStateException(&quot;Could not create Shipment&quot;);</span>
+		}
+		//	Non Inventory Lines
+<span class="nc bnc" id="L504" title="All 2 branches missed.">		if (storages == null)</span>
+		{
+<span class="nc" id="L506">			MInOutLine line = new MInOutLine (m_shipment);</span>
+<span class="nc" id="L507">			line.setOrderLine(orderLine, 0, Env.ZERO);</span>
+<span class="nc" id="L508">			line.setQty(qty);	//	Correct UOM</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">			if (orderLine.getQtyEntered().compareTo(orderLine.getQtyOrdered()) != 0)</span>
+<span class="nc" id="L510">				line.setQtyEntered(qty</span>
+<span class="nc" id="L511">					.multiply(orderLine.getQtyEntered())</span>
+<span class="nc" id="L512">					.divide(orderLine.getQtyOrdered(), 12, RoundingMode.HALF_UP));</span>
+<span class="nc" id="L513">			line.setLine(m_line + orderLine.getLine());</span>
+<span class="nc bnc" id="L514" title="All 2 branches missed.">			if (!line.save())</span>
+<span class="nc" id="L515">				throw new IllegalStateException(&quot;Could not create Shipment Line&quot;);</span>
+<span class="nc bnc" id="L516" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(line.toString());</span>
+<span class="nc" id="L517">			return;</span>
+		}
+		
+	
+		//	Inventory Lines
+<span class="nc" id="L522">		ArrayList&lt;MInOutLine&gt; list = new ArrayList&lt;MInOutLine&gt;();</span>
+<span class="nc" id="L523">		BigDecimal toDeliver = qty;</span>
+<span class="nc bnc" id="L524" title="All 2 branches missed.">		for (int i = 0; i &lt; storages.length; i++)</span>
+		{
+<span class="nc" id="L526">			MStorageOnHand storage = storages[i];</span>
+<span class="nc" id="L527">			BigDecimal deliver = toDeliver;</span>
+			//skip negative storage record
+<span class="nc bnc" id="L529" title="All 2 branches missed.">			if (storage.getQtyOnHand().signum() &lt; 0) </span>
+<span class="nc" id="L530">				continue;</span>
+			
+			//	Not enough On Hand
+<span class="nc bnc" id="L533" title="All 2 branches missed.">			if (deliver.compareTo(storage.getQtyOnHand()) &gt; 0 </span>
+<span class="nc bnc" id="L534" title="All 2 branches missed.">				&amp;&amp; storage.getQtyOnHand().signum() &gt;= 0)		//	positive storage</span>
+			{
+<span class="nc bnc" id="L536" title="All 2 branches missed.">				if (!force	//	Adjust to OnHand Qty  </span>
+<span class="nc bnc" id="L537" title="All 4 branches missed.">					|| (force &amp;&amp; i+1 != storages.length))	//	if force not on last location</span>
+<span class="nc" id="L538">					deliver = storage.getQtyOnHand();</span>
+			}
+<span class="nc bnc" id="L540" title="All 2 branches missed.">			if (deliver.signum() == 0)	//	zero deliver</span>
+<span class="nc" id="L541">				continue;</span>
+<span class="nc" id="L542">			int M_Locator_ID = storage.getM_Locator_ID();</span>
+			//
+<span class="nc" id="L544">			MInOutLine line = null;</span>
+<span class="nc" id="L545">			int olAsiID = orderLine.getM_AttributeSetInstance_ID();</span>
+<span class="nc bnc" id="L546" title="All 2 branches missed.">			for (int ll = 0; ll &lt; list.size(); ll++)</span>
+			{
+<span class="nc" id="L548">				MInOutLine test = (MInOutLine)list.get(ll);</span>
+<span class="nc bnc" id="L549" title="All 4 branches missed.">				if (test.getM_Locator_ID() == M_Locator_ID &amp;&amp; test.getM_AttributeSetInstance_ID() == olAsiID)</span>
+				{
+<span class="nc" id="L551">					line = test;</span>
+<span class="nc" id="L552">					break;</span>
+				}
+			}
+<span class="nc bnc" id="L555" title="All 2 branches missed.">			if (line == null)	//	new line</span>
+			{
+<span class="nc" id="L557">				line = new MInOutLine (m_shipment);</span>
+<span class="nc bnc" id="L558" title="All 2 branches missed.">				line.setOrderLine(orderLine, M_Locator_ID, order.isSOTrx() ? deliver : Env.ZERO);</span>
+<span class="nc" id="L559">				line.setQty(deliver);</span>
+<span class="nc" id="L560">				list.add(line);</span>
+<span class="nc" id="L561">			}</span>
+			else				//	existing line
+<span class="nc" id="L563">				line.setQty(line.getMovementQty().add(deliver));</span>
+<span class="nc bnc" id="L564" title="All 2 branches missed.">			if (orderLine.getQtyEntered().compareTo(orderLine.getQtyOrdered()) != 0)</span>
+<span class="nc" id="L565">				line.setQtyEntered(line.getMovementQty().multiply(orderLine.getQtyEntered())</span>
+<span class="nc" id="L566">					.divide(orderLine.getQtyOrdered(), 12, RoundingMode.HALF_UP));</span>
+<span class="nc" id="L567">			line.setLine(m_line + orderLine.getLine());</span>
+<span class="nc bnc" id="L568" title="All 2 branches missed.">			if (!line.save())</span>
+<span class="nc" id="L569">				throw new IllegalStateException(&quot;Could not create Shipment Line&quot;);</span>
+<span class="nc bnc" id="L570" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;ToDeliver=&quot; + qty + &quot;/&quot; + deliver + &quot; - &quot; + line);</span>
+<span class="nc" id="L571">			toDeliver = toDeliver.subtract(deliver);</span>
+			//      Temp adjustment, actual update happen in MInOut.completeIt - just in memory - not saved
+<span class="nc" id="L573">			storage.setQtyOnHand(storage.getQtyOnHand().subtract(deliver));</span>
+			//
+<span class="nc bnc" id="L575" title="All 2 branches missed.">			if (toDeliver.signum() == 0)</span>
+<span class="nc" id="L576">				break;</span>
+		}		
+<span class="nc bnc" id="L578" title="All 2 branches missed.">		if (toDeliver.signum() != 0)</span>
+		{	
+<span class="nc" id="L580">			MProduct product = MProduct.get(orderLine.getM_Product_ID());</span>
+<span class="nc bnc" id="L581" title="All 6 branches missed.">			boolean autoProduce = product.isBOM() &amp;&amp; product.isVerified() &amp;&amp; product.isAutoProduce();</span>
+<span class="nc bnc" id="L582" title="All 6 branches missed.">			if (!force &amp;&amp; toDeliver.signum() &gt; 0 &amp;&amp; !autoProduce)</span>
+			{
+<span class="nc" id="L584">				throw new IllegalStateException(&quot;Not All Delivered - Remainder=&quot; + toDeliver);</span>
+			}
+			else 
+			{
+				
+<span class="nc" id="L589">				 MInOutLine line = new MInOutLine (m_shipment);</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">				 line.setOrderLine(orderLine, 0, order.isSOTrx() ? toDeliver : Env.ZERO);</span>
+<span class="nc" id="L591">				 line.setQty(toDeliver);</span>
+<span class="nc bnc" id="L592" title="All 2 branches missed.">				 if (orderLine.getQtyEntered().compareTo(orderLine.getQtyOrdered()) != 0)</span>
+<span class="nc" id="L593">					 line.setQtyEntered(line.getMovementQty().multiply(orderLine.getQtyEntered())</span>
+<span class="nc" id="L594">						 .divide(orderLine.getQtyOrdered(), 12, RoundingMode.HALF_UP));</span>
+<span class="nc" id="L595">				 line.setLine(m_line + orderLine.getLine());</span>
+<span class="nc bnc" id="L596" title="All 2 branches missed.">			     if (!line.save())</span>
+<span class="nc" id="L597">					 throw new IllegalStateException(&quot;Could not create Shipment Line&quot;);</span>
+					 
+
+			}
+		}	
+<span class="nc" id="L602">	}	//	createLine</span>
+
+	
+	/**
+	 * 	Get Storages
+	 *	@param M_Warehouse_ID
+	 *	@param M_Product_ID
+	 *	@param M_AttributeSetInstance_ID
+	 *	@param minGuaranteeDate
+	 *	@param FiFo
+	 *	@return storages
+	 */
+	private MStorageOnHand[] getStorages(int M_Warehouse_ID, 
+			 int M_Product_ID, int M_AttributeSetInstance_ID,
+			  Timestamp minGuaranteeDate, boolean FiFo)
+	{
+<span class="nc" id="L618">		m_lastPP = new SParameter(M_Warehouse_ID, </span>
+<span class="nc" id="L619">		M_Product_ID, M_AttributeSetInstance_ID,</span>
+<span class="nc" id="L620">			minGuaranteeDate, FiFo);</span>
+		//
+<span class="nc" id="L622">		m_lastStorages = m_map.get(m_lastPP); </span>
+		
+<span class="nc bnc" id="L624" title="All 2 branches missed.">		if (m_lastStorages == null)</span>
+		{
+<span class="nc" id="L626">			MStorageOnHand[] tmpStorages = MStorageOnHand.getWarehouse(getCtx(), </span>
+<span class="nc" id="L627">				M_Warehouse_ID, M_Product_ID, M_AttributeSetInstance_ID,</span>
+<span class="nc" id="L628">				minGuaranteeDate, FiFo,false, 0, get_TrxName());</span>
+
+			/* IDEMPIERE-2668 - filter just locators enabled for shipping */
+<span class="nc" id="L631">			List&lt;MStorageOnHand&gt; m_storagesForShipping = new ArrayList&lt;MStorageOnHand&gt;();</span>
+<span class="nc bnc" id="L632" title="All 2 branches missed.">			for (MStorageOnHand soh : tmpStorages) {</span>
+<span class="nc" id="L633">				MLocator loc = MLocator.get(getCtx(), soh.getM_Locator_ID());</span>
+<span class="nc" id="L634">				MLocatorType lt = null;</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">				if (loc.getM_LocatorType_ID() &gt; 0)</span>
+<span class="nc" id="L636">					lt = MLocatorType.get(getCtx(), loc.getM_LocatorType_ID());</span>
+<span class="nc bnc" id="L637" title="All 4 branches missed.">				if (lt == null || lt.isAvailableForShipping())</span>
+<span class="nc" id="L638">					m_storagesForShipping.add(soh);</span>
+			}
+<span class="nc" id="L640">			m_lastStorages = new MStorageOnHand[m_storagesForShipping.size()];</span>
+<span class="nc" id="L641">			m_storagesForShipping.toArray(m_lastStorages);</span>
+
+<span class="nc" id="L643">			m_map.put(m_lastPP, m_lastStorages);</span>
+		}
+<span class="nc" id="L645">		return m_lastStorages;</span>
+	}	//	getStorages
+
+	/**
+	 * Reset in memory map, array and parameters 
+	 */
+	public void resetStorageCache()
+	{
+<span class="nc" id="L653">		m_map = new HashMap&lt;SParameter,MStorageOnHand[]&gt;();</span>
+<span class="nc" id="L654">		m_lastPP = null;</span>
+<span class="nc" id="L655">		m_lastStorages = null;</span>
+<span class="nc" id="L656">	}</span>
+
+	/**
+	 * 	Complete Shipment
+	 */
+	private void completeShipment()
+	{
+<span class="nc bnc" id="L663" title="All 2 branches missed.">		if (m_shipment != null)</span>
+		{
+<span class="nc bnc" id="L665" title="All 2 branches missed.">			if (!DocAction.ACTION_None.equals(p_docAction))</span>
+			{
+				//	Fails if there is a confirmation
+<span class="nc bnc" id="L668" title="All 2 branches missed.">				if (!m_shipment.processIt(p_docAction)) {</span>
+<span class="nc" id="L669">					log.warning(&quot;Failed: &quot; + m_shipment);</span>
+<span class="nc" id="L670">					throw new IllegalStateException(&quot;Shipment Process Failed: &quot; + m_shipment + &quot; - &quot; + m_shipment.getProcessMsg());</span>
+				}
+			}
+<span class="nc" id="L673">			m_shipment.saveEx();</span>
+<span class="nc" id="L674">			String message = Msg.parseTranslation(getCtx(), &quot;@ShipmentProcessed@ &quot; + m_shipment.getDocumentNo());</span>
+<span class="nc" id="L675">			addBufferLog(m_shipment.getM_InOut_ID(), m_shipment.getMovementDate(), null, message, m_shipment.get_Table_ID(),m_shipment.getM_InOut_ID());</span>
+<span class="nc" id="L676">			m_created++;</span>
+
+			//reset storage cache as MInOut.completeIt will update m_storage
+<span class="nc" id="L679">			resetStorageCache();</span>
+		}
+<span class="nc" id="L681">		m_shipment = null;</span>
+<span class="nc" id="L682">		m_line = 0;</span>
+<span class="nc" id="L683">	}	//	completeOrder</span>
+	
+	/**
+	 * 	InOutGenerate Parameter
+	 */
+	static class SParameter
+	{
+		/**
+		 * 	Parameter
+		 *	@param p_Warehouse_ID warehouse
+		 *	@param p_Product_ID 
+		 *	@param p_AttributeSetInstance_ID 
+		 *	@param p_minGuaranteeDate
+		 *	@param p_FiFo
+		 */
+<span class="nc" id="L698">		protected SParameter (int p_Warehouse_ID, </span>
+			int p_Product_ID, int p_AttributeSetInstance_ID, 
+			Timestamp p_minGuaranteeDate,boolean p_FiFo)
+		{
+<span class="nc" id="L702">			this.M_Warehouse_ID = p_Warehouse_ID;</span>
+<span class="nc" id="L703">			this.M_Product_ID = p_Product_ID;</span>
+<span class="nc" id="L704">			this.M_AttributeSetInstance_ID = p_AttributeSetInstance_ID; </span>
+<span class="nc" id="L705">			this.minGuaranteeDate = p_minGuaranteeDate;</span>
+<span class="nc" id="L706">			this.FiFo = p_FiFo;	</span>
+<span class="nc" id="L707">		}</span>
+		/** Warehouse		*/
+		public int M_Warehouse_ID;
+		/** Product			*/
+		public int M_Product_ID;
+		/** ASI				*/
+		public int M_AttributeSetInstance_ID;
+		/** AS				*/
+		public int M_AttributeSet_ID;
+		/** All instances	*/
+		public boolean allAttributeInstances;
+		/** Mon Guarantee Date	*/
+		public Timestamp minGuaranteeDate;
+		/** FiFo			*/
+		public boolean FiFo;
+
+		/**
+		 * 	Equals
+		 *	@param obj
+		 *	@return true if equal
+		 */
+		public boolean equals (Object obj)
+		{
+<span class="nc bnc" id="L730" title="All 4 branches missed.">			if (obj != null &amp;&amp; obj instanceof SParameter)</span>
+			{
+<span class="nc" id="L732">				SParameter cmp = (SParameter)obj;</span>
+<span class="nc bnc" id="L733" title="All 2 branches missed.">				boolean eq = cmp.M_Warehouse_ID == M_Warehouse_ID</span>
+<span class="nc bnc" id="L734" title="All 2 branches missed.">					&amp;&amp; cmp.M_Product_ID == M_Product_ID</span>
+<span class="nc bnc" id="L735" title="All 2 branches missed.">					&amp;&amp; cmp.M_AttributeSetInstance_ID == M_AttributeSetInstance_ID</span>
+<span class="nc bnc" id="L736" title="All 2 branches missed.">					&amp;&amp; cmp.M_AttributeSet_ID == M_AttributeSet_ID</span>
+<span class="nc bnc" id="L737" title="All 2 branches missed.">					&amp;&amp; cmp.allAttributeInstances == allAttributeInstances</span>
+<span class="nc bnc" id="L738" title="All 2 branches missed.">					&amp;&amp; cmp.FiFo == FiFo;</span>
+<span class="nc bnc" id="L739" title="All 2 branches missed.">				if (eq)</span>
+				{
+<span class="nc bnc" id="L741" title="All 4 branches missed.">					if (cmp.minGuaranteeDate == null &amp;&amp; minGuaranteeDate == null)</span>
+<span class="nc" id="L742">						;</span>
+<span class="nc bnc" id="L743" title="All 4 branches missed.">					else if (cmp.minGuaranteeDate != null &amp;&amp; minGuaranteeDate != null</span>
+<span class="nc bnc" id="L744" title="All 2 branches missed.">						&amp;&amp; cmp.minGuaranteeDate.equals(minGuaranteeDate))</span>
+<span class="nc" id="L745">						;</span>
+					else
+<span class="nc" id="L747">						eq = false;</span>
+				}
+<span class="nc" id="L749">				return eq;</span>
+			}
+<span class="nc" id="L751">			return false;</span>
+		}	//	equals
+		
+		/**
+		 * 	hashCode
+		 *	@return hash code
+		 */
+		public int hashCode ()
+		{
+<span class="nc" id="L760">			long hash = M_Warehouse_ID</span>
+<span class="nc" id="L761">				+ (M_Product_ID * 2)</span>
+<span class="nc" id="L762">				+ (M_AttributeSetInstance_ID * 3)</span>
+<span class="nc" id="L763">				+ (M_AttributeSet_ID * 4);</span>
+
+<span class="nc bnc" id="L765" title="All 2 branches missed.">			if (allAttributeInstances)</span>
+<span class="nc" id="L766">				hash *= -1;</span>
+<span class="nc bnc" id="L767" title="All 2 branches missed.">			if (FiFo)	</span>
+<span class="nc" id="L768">				hash *= -2;</span>
+<span class="nc bnc" id="L769" title="All 2 branches missed.">			if (hash &lt; 0)</span>
+<span class="nc" id="L770">				hash = -hash + 7;</span>
+<span class="nc bnc" id="L771" title="All 2 branches missed.">			while (hash &gt; Integer.MAX_VALUE)</span>
+<span class="nc" id="L772">				hash -= Integer.MAX_VALUE;</span>
+			//
+<span class="nc bnc" id="L774" title="All 2 branches missed.">			if (minGuaranteeDate != null)</span>
+			{
+<span class="nc" id="L776">				hash += minGuaranteeDate.hashCode();</span>
+<span class="nc bnc" id="L777" title="All 2 branches missed.">				while (hash &gt; Integer.MAX_VALUE)</span>
+<span class="nc" id="L778">					hash -= Integer.MAX_VALUE;</span>
+			}
+				
+<span class="nc" id="L781">			return (int)hash;</span>
+		}	//	hashCode
+		
+	}	//	Parameter
+	
+}	//	InOutGenerate
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

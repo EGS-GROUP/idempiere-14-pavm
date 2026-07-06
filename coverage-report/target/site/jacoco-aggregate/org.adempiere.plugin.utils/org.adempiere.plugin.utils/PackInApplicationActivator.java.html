@@ -1,0 +1,396 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PackInApplicationActivator.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.plugin.utils</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.plugin.utils</a> &gt; <span class="el_source">PackInApplicationActivator.java</span></div><h1>PackInApplicationActivator.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2017 Diego Ruiz                                              *
+ * Copyright (C) 2017 Trek Global                 							  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.plugin.utils;
+
+import java.io.File;
+import java.io.FileFilter;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Properties;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.logging.Level;
+
+import org.adempiere.util.ServerContext;
+import org.compiere.Adempiere;
+import org.compiere.model.MClient;
+import org.compiere.model.MPackageImp;
+import org.compiere.model.MSession;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.Query;
+import org.compiere.model.ServerStateChangeEvent;
+import org.compiere.model.ServerStateChangeListener;
+import org.compiere.model.SystemIDs;
+import org.compiere.model.X_AD_Package_Imp;
+import org.compiere.model.X_AD_Package_Imp_Proc;
+import org.compiere.util.AdempiereSystemError;
+import org.compiere.util.CLogger;
+import org.compiere.util.CacheMgt;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+
+<span class="nc" id="L47">public class PackInApplicationActivator extends AbstractActivator{</span>
+
+<span class="nc" id="L49">	protected final static CLogger logger = CLogger.getCLogger(PackInApplicationActivator.class.getName());</span>
+<span class="nc" id="L50">	private List&lt;File&gt; filesToProcess = new ArrayList&lt;&gt;();</span>
+	private File currentFile;
+
+	public void automaticPackin(int timeout, String folders, boolean fromService) {
+<span class="nc bnc" id="L54" title="All 2 branches missed.">		if (fromService) {</span>
+			//Initial delay - starting from service
+<span class="nc" id="L56">			Timer t = new Timer();</span>
+<span class="nc" id="L57">			t.schedule(new TimerTask() {</span>
+				@Override
+				public void run() {
+<span class="nc bnc" id="L60" title="All 2 branches missed.">				  if (! &quot;Y&quot;.equals(Env.getContext(Env.getCtx(), &quot;org.adempiere.base.PackInFolderApplication&quot;))) {</span>
+<span class="nc" id="L61">					ClassLoader cl = Thread.currentThread().getContextClassLoader();</span>
+					try {
+<span class="nc" id="L63">						Thread.currentThread().setContextClassLoader(PackInApplicationActivator.class.getClassLoader());</span>
+<span class="nc" id="L64">						setupPackInContext();</span>
+<span class="nc" id="L65">						installPackages(folders);</span>
+<span class="nc" id="L66">					} finally {</span>
+<span class="nc" id="L67">						ServerContext.dispose();</span>
+<span class="nc" id="L68">						service = null;</span>
+<span class="nc" id="L69">						Thread.currentThread().setContextClassLoader(cl);</span>
+					}
+				  }
+<span class="nc" id="L72">				  t.cancel();</span>
+<span class="nc" id="L73">				}</span>
+<span class="nc" id="L74">			}, timeout);</span>
+<span class="nc" id="L75">		} else {</span>
+			// No delay - starting from process
+<span class="nc" id="L77">			ClassLoader cl = Thread.currentThread().getContextClassLoader();</span>
+			try {
+<span class="nc" id="L79">				Thread.currentThread().setContextClassLoader(PackInApplicationActivator.class.getClassLoader());</span>
+<span class="nc" id="L80">				setupPackInContext();</span>
+<span class="nc" id="L81">				installPackages(folders);</span>
+<span class="nc" id="L82">			} finally {</span>
+<span class="nc" id="L83">				ServerContext.dispose();</span>
+<span class="nc" id="L84">				Thread.currentThread().setContextClassLoader(cl);</span>
+			}
+		}
+<span class="nc" id="L87">	}</span>
+	
+	private void installPackages(String folders) {
+<span class="nc bnc" id="L90" title="All 2 branches missed.">		if (Util.isEmpty(folders, true)) {</span>
+<span class="nc" id="L91">			setSummary(Level.INFO, &quot;Not specified folders for automatic packin&quot;);</span>
+<span class="nc" id="L92">			return;</span>
+		}
+		
+<span class="nc" id="L95">		File[] fileArray = getFilesToProcess(folders);</span>
+		
+<span class="nc bnc" id="L97" title="All 2 branches missed.">		if (fileArray.length &lt;= 0) {</span>
+<span class="nc" id="L98">			setSummary(Level.INFO, &quot;No zip files to process&quot;);</span>
+<span class="nc" id="L99">			return;</span>
+		}
+
+<span class="nc" id="L102">		boolean cacheReset = false;</span>
+<span class="nc" id="L103">		MSession localSession = null;</span>
+		try {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">			if (getDBLock()) {</span>
+				//Create Session to be able to create records in AD_ChangeLog
+<span class="nc bnc" id="L107" title="All 2 branches missed.">				if (Env.getContextAsInt(Env.getCtx(), Env.AD_SESSION_ID) &lt;= 0) {</span>
+<span class="nc" id="L108">					localSession = MSession.get(Env.getCtx());</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">					if(localSession == null) {</span>
+<span class="nc" id="L110">						localSession = MSession.create(Env.getCtx());</span>
+<span class="nc" id="L111">					} else {</span>
+<span class="nc" id="L112">						localSession = new MSession(Env.getCtx(), localSession.getAD_Session_ID(), null);</span>
+					}
+<span class="nc" id="L114">					localSession.setWebSession(&quot;PackInApplicationActivator&quot;);</span>
+<span class="nc" id="L115">					localSession.saveEx();</span>
+				}
+<span class="nc bnc" id="L117" title="All 2 branches missed.">				for(File zipFile : fileArray) {</span>
+<span class="nc" id="L118">					currentFile = zipFile;</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">					if (!packIn(zipFile)) {</span>
+						// stop processing further packages if one fail
+<span class="nc" id="L121">						String msg = &quot;Failed application of &quot; + zipFile;</span>
+<span class="nc" id="L122">						addLog(Level.WARNING, msg);</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">						if (getProcessInfo() != null) {</span>
+<span class="nc" id="L124">							getProcessInfo().setError(true);</span>
+<span class="nc" id="L125">							getProcessInfo().setSummary(&quot;@Error@ &quot; + msg);</span>
+						}
+<span class="nc" id="L127">						break;</span>
+					}
+<span class="nc" id="L129">					addLog(Level.INFO, &quot;Successful application of &quot; + zipFile);</span>
+<span class="nc" id="L130">					filesToProcess.remove(zipFile);</span>
+<span class="nc" id="L131">					cacheReset = true;</span>
+				}
+<span class="nc" id="L133">			} else {</span>
+<span class="nc" id="L134">				addLog(Level.WARNING, &quot;Could not acquire the DB lock to automatically install the packins&quot;);</span>
+<span class="nc" id="L135">				return;</span>
+			}
+<span class="nc" id="L137">		} catch (AdempiereSystemError e) {</span>
+<span class="nc" id="L138">			e.printStackTrace();</span>
+<span class="nc" id="L139">			addLog(Level.WARNING, e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L141">			releaseLock();</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">			if (localSession != null)</span>
+<span class="nc" id="L143">				localSession.logout();</span>
+		}
+<span class="nc" id="L145">		logger.log(Level.INFO, &quot;Cache Reset: &quot; + cacheReset);</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">		if (cacheReset)</span>
+<span class="nc" id="L147">			CacheMgt.get().reset();</span>
+
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (filesToProcess.size() &gt; 0) {</span>
+<span class="nc" id="L150">			StringBuilder pending = new StringBuilder(&quot;The following packages were not applied: &quot;);</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">			for (File file : filesToProcess) {</span>
+<span class="nc" id="L152">				pending.append(&quot;\n&quot;).append(file.getName());</span>
+			}
+<span class="nc" id="L154">			addLog(Level.WARNING, pending.toString());</span>
+		}
+<span class="nc" id="L156">	}</span>
+	
+	private boolean packIn(File packinFile) {
+<span class="nc bnc" id="L159" title="All 2 branches missed.">		if (packinFile != null) {</span>
+<span class="nc" id="L160">			String fileName = packinFile.getName();</span>
+			// The convention for package names is: yyyymmddHHMM_ClientValue_InformationalDescription.zip
+<span class="nc" id="L162">			String [] parts = fileName.split(&quot;_&quot;);</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">			if (parts.length &lt; 2) {</span>
+<span class="nc" id="L164">				logger.warning(&quot;Wrong name, ignored &quot; + fileName);</span>
+<span class="nc" id="L165">				return false;</span>
+			}
+<span class="nc" id="L167">			logger.warning(&quot;Installing &quot; + fileName + &quot; ...&quot;);</span>
+<span class="nc" id="L168">			String clientValue = parts[1];</span>
+<span class="nc" id="L169">			boolean allClients = clientValue.startsWith(&quot;ALL-CLIENTS&quot;);</span>
+			
+			int[] clientIDs;
+<span class="nc bnc" id="L172" title="All 2 branches missed.">			if (allClients) {</span>
+<span class="nc" id="L173">				int[] seedClientIDs = new int[0];</span>
+<span class="nc" id="L174">				String seedClientValue = &quot;&quot;;</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">				if (clientValue.startsWith(&quot;ALL-CLIENTS-&quot;)) {</span>
+<span class="nc" id="L176">					seedClientValue = clientValue.split(&quot;-&quot;)[2];</span>
+<span class="nc" id="L177">					seedClientIDs = getClientIDs(seedClientValue);				</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">					if (seedClientIDs.length == 0) {</span>
+<span class="nc" id="L179">						logger.log(Level.WARNING, &quot;Seed tenant does not exist: &quot; + seedClientValue);</span>
+<span class="nc" id="L180">						return false;</span>
+					}
+				}
+<span class="nc" id="L183">				int[] allClientIDs = new Query(Env.getCtx(), MClient.Table_Name, &quot;AD_Client_ID&gt;0 AND Value!=?&quot;, null)</span>
+<span class="nc" id="L184">						.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L185">						.setParameters(seedClientValue)</span>
+<span class="nc" id="L186">						.setOrderBy(&quot;AD_Client_ID&quot;)</span>
+<span class="nc" id="L187">						.getIDs();</span>
+				// Process first the seed client, put seed in front of the array
+<span class="nc" id="L189">				int shift = 0;</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">				if (seedClientIDs.length &gt; 0)</span>
+<span class="nc" id="L191">					shift = 1;</span>
+<span class="nc" id="L192">				clientIDs = new int[allClientIDs.length + shift];</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">				if (seedClientIDs.length &gt; 0)</span>
+<span class="nc" id="L194">					clientIDs[0] = seedClientIDs[0];</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">				for (int i = 0; i &lt; allClientIDs.length; i++) {</span>
+<span class="nc" id="L196">					clientIDs[i+shift] = allClientIDs[i];</span>
+				}
+<span class="nc" id="L198">			} else {</span>
+<span class="nc" id="L199">				clientIDs = getClientIDs(clientValue);</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">				if (clientIDs.length == 0) {</span>
+<span class="nc" id="L201">					logger.log(Level.WARNING, &quot;Tenant does not exist: &quot; + clientValue);</span>
+<span class="nc" id="L202">					return false;</span>
+				}
+			}
+
+<span class="nc bnc" id="L206" title="All 2 branches missed.">			for (int clientID : clientIDs) {</span>
+<span class="nc" id="L207">				MClient client = MClient.get(Env.getCtx(), clientID);</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">				if  (allClients) {</span>
+<span class="nc" id="L209">					String message = &quot;Installing &quot; + fileName + &quot; in tenant &quot; + client.getValue() + &quot;/&quot; + client.getName();</span>
+<span class="nc" id="L210">					statusUpdate(message);</span>
+				}
+<span class="nc" id="L212">				Env.setContext(Env.getCtx(), Env.AD_CLIENT_ID, client.getAD_Client_ID());</span>
+<span class="nc" id="L213">				Env.setContext(Env.getCtx(), Env.AD_ROLE_ID, SystemIDs.ROLE_SYSTEM);</span>
+<span class="nc" id="L214">				Env.setContext(Env.getCtx(), Env.AD_USER_ID, SystemIDs.USER_SYSTEM);</span>
+				try {
+				    // call 2pack
+<span class="nc bnc" id="L217" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">						if (!merge(packinFile, null)) {</span>
+<span class="nc" id="L219">							return false;</span>
+						}
+					} else {
+<span class="nc bnc" id="L222" title="All 2 branches missed.">						if (!directMerge(packinFile, null)) {</span>
+<span class="nc" id="L223">							return false;</span>
+						}
+					}
+<span class="nc" id="L226">				} catch (Throwable e) {</span>
+<span class="nc" id="L227">					logger.log(Level.WARNING, &quot;Pack in failed.&quot;, e);</span>
+<span class="nc" id="L228">					return false;</span>
+				} finally {
+<span class="nc" id="L230">					Env.setContext(Env.getCtx(), Env.AD_CLIENT_ID, 0);</span>
+<span class="nc" id="L231">					Env.setContext(Env.getCtx(), Env.AD_ROLE_ID, (String)null);</span>
+<span class="nc" id="L232">					Env.setContext(Env.getCtx(), Env.AD_USER_ID, (String)null);</span>
+				}
+<span class="nc" id="L234">				logger.warning(packinFile.getPath() + &quot; installed&quot;);</span>
+			}
+<span class="nc bnc" id="L236" title="All 2 branches missed.">			if (allClients ) {</span>
+				// when arriving here it means an ALL-CLIENTS 2pack was processed successfully
+				// register a record on System to avoid future reprocesses of the same file
+<span class="nc" id="L239">				X_AD_Package_Imp_Proc pimpr = new X_AD_Package_Imp_Proc(Env.getCtx(), 0, null);</span>
+<span class="nc" id="L240">				pimpr.setName(fileName);</span>
+<span class="nc" id="L241">				pimpr.setDateProcessed(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L242">				pimpr.setP_Msg(&quot;This ALL-CLIENT 2Pack was applied successfully in all tenants&quot;);</span>
+<span class="nc" id="L243">				pimpr.setAD_Package_Source_Type(X_AD_Package_Imp_Proc.AD_PACKAGE_SOURCE_TYPE_File);</span>
+<span class="nc" id="L244">				pimpr.saveEx();</span>
+<span class="nc" id="L245">				X_AD_Package_Imp pimp = new X_AD_Package_Imp(Env.getCtx(), 0, null);</span>
+<span class="nc" id="L246">				pimp.setAD_Package_Imp_Proc_ID(pimpr.getAD_Package_Imp_Proc_ID());</span>
+<span class="nc" id="L247">				pimp.setName(fileName);</span>
+<span class="nc" id="L248">				pimp.setPK_Status(MPackageImp.PACKAGE_STATUS_COMPLETED);</span>
+<span class="nc" id="L249">				pimp.setDescription(&quot;This ALL-CLIENT 2Pack was applied successfully in all tenants&quot;);</span>
+<span class="nc" id="L250">				pimp.setProcessed(true);</span>
+<span class="nc" id="L251">				pimp.saveEx();</span>
+			}
+		}
+
+<span class="nc" id="L255">		return true;</span>
+	}
+	
+	private File[] getFilesToProcess(String folders) {
+<span class="nc" id="L259">		String filePaths[] = null;</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		if (folders.indexOf(&quot;;&quot;) &gt; 0) {</span>
+<span class="nc" id="L261">			filePaths = folders.split(&quot;[;]&quot;);</span>
+<span class="nc" id="L262">		} else {</span>
+<span class="nc" id="L263">			filePaths = new String[]{folders};</span>
+		}
+		
+		//Add files to the array
+<span class="nc bnc" id="L267" title="All 2 branches missed.">		for (String filePath : filePaths) {</span>
+<span class="nc" id="L268">			File toProcess = new File(filePath.trim());</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">			if (!toProcess.exists()) {</span>
+<span class="nc" id="L270">				addLog(Level.WARNING, filePath + &quot; does not exist&quot;);</span>
+<span class="nc" id="L271">				continue;</span>
+			}
+			
+<span class="nc" id="L274">			logger.warning(&quot;Processing &quot; + filePath);</span>
+<span class="nc" id="L275">			processFilePath(toProcess);</span>
+		}
+		
+		//Verify installed packages and remove those that were installed previously
+<span class="nc" id="L279">		verifyInstalledPackages();</span>
+		
+<span class="nc" id="L281">		File[] fileArray = filesToProcess.toArray(new File[filesToProcess.size()]);</span>
+		// Sort files by name
+<span class="nc" id="L283">		Arrays.sort(fileArray, new Comparator&lt;File&gt;() {</span>
+			@Override
+			public int compare(File f1, File f2) {
+<span class="nc" id="L286">				return f1.getName().compareTo(f2.getName());</span>
+			}
+		});
+
+<span class="nc" id="L290">		return fileArray;</span>
+	}
+	
+	private void processFilePath(File toProcess) {
+<span class="nc bnc" id="L294" title="All 4 branches missed.">		if (toProcess.isFile() &amp;&amp; toProcess.canRead()) {</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">			if (toProcess.getName().toLowerCase().endsWith(&quot;.zip&quot;))</span>
+<span class="nc" id="L296">				filesToProcess.add(toProcess);</span>
+			else {
+<span class="nc" id="L298">				logger.log(Level.WARNING, toProcess.getName() + &quot; is not a valid .zip file&quot;);</span>
+<span class="nc" id="L299">				return;</span>
+			}
+<span class="nc bnc" id="L301" title="All 4 branches missed.">		} else if (toProcess.isDirectory() &amp;&amp; toProcess.canRead()) {</span>
+<span class="nc" id="L302">			FileFilter filter = new FileFilter() {</span>
+				public boolean accept(File file) {
+<span class="nc bnc" id="L304" title="All 4 branches missed.">					if (file.getName().toUpperCase().endsWith(&quot;.ZIP&quot;) || file.isDirectory())</span>
+<span class="nc" id="L305">						return true;</span>
+					else
+<span class="nc" id="L307">						return false;</span>
+				}
+			};
+<span class="nc" id="L310">			boolean found = false;</span>
+<span class="nc bnc" id="L311" title="All 2 branches missed.">			for (File fileToProcess : toProcess.listFiles(filter)) {</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">				if (!found) {</span>
+<span class="nc" id="L313">					logger.info(&quot;*** Creating list from folder &quot; + toProcess.toString());</span>
+<span class="nc" id="L314">					found = true;</span>
+				}
+<span class="nc bnc" id="L316" title="All 2 branches missed.">				if (fileToProcess.isDirectory()) {</span>
+<span class="nc" id="L317">					processFilePath(fileToProcess);</span>
+<span class="nc" id="L318">				} else {</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">					if (fileToProcess.canRead()) {</span>
+<span class="nc" id="L320">						filesToProcess.add(fileToProcess);</span>
+<span class="nc" id="L321">					} else {</span>
+<span class="nc" id="L322">						addLog(Level.WARNING, fileToProcess.getName() + &quot; not readable&quot;);</span>
+					}
+				}
+			}
+<span class="nc bnc" id="L326" title="All 2 branches missed.">			if (!found) {</span>
+<span class="nc" id="L327">				logger.log(Level.FINE, toProcess.getName() + &quot; does not have .zip files or subfolders&quot;);</span>
+<span class="nc" id="L328">				return;</span>
+			}
+		} else {
+<span class="nc" id="L331">			addLog(Level.WARNING, toProcess.getName() + &quot; not a file or folder or not readable&quot;);</span>
+		}
+<span class="nc" id="L333">	}</span>
+	
+	private void verifyInstalledPackages() {
+<span class="nc" id="L336">		Iterator&lt;File&gt; iterator = filesToProcess.iterator();</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		while(iterator.hasNext()){</span>
+<span class="nc" id="L338">			currentFile = iterator.next();</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">			if (installedPackage(null)) {</span>
+<span class="nc" id="L340">				logger.log(Level.INFO, currentFile.getName() + &quot; already installed. Removing it from the list...&quot;);</span>
+<span class="nc" id="L341">				iterator.remove();</span>
+			}
+		}
+<span class="nc" id="L344">	}</span>
+	
+	private int[] getClientIDs(String clientValue) {
+<span class="nc" id="L347">		String where = &quot;Value = ?&quot;;</span>
+<span class="nc" id="L348">		Query q = new Query(Env.getCtx(), MClient.Table_Name, where, null)</span>
+<span class="nc" id="L349">				.setParameters(clientValue)</span>
+<span class="nc" id="L350">				.setOnlyActiveRecords(true);</span>
+<span class="nc" id="L351">		return q.getIDs();</span>
+	}
+
+	@Override
+	public String getName() {
+<span class="nc bnc" id="L356" title="All 2 branches missed.">		if (currentFile != null)</span>
+<span class="nc" id="L357">			return currentFile.getName();</span>
+		else
+<span class="nc" id="L359">			return &quot;&quot;;</span>
+	}
+	
+	protected void setupPackInContext() {
+<span class="nc" id="L363">		Properties serverContext = new Properties();</span>
+<span class="nc" id="L364">		serverContext.setProperty(Env.AD_CLIENT_ID, &quot;0&quot;);</span>
+<span class="nc" id="L365">		ServerContext.setCurrentInstance(serverContext);</span>
+<span class="nc" id="L366">	}</span>
+
+	@Override
+	protected void frameworkStarted() {
+<span class="nc bnc" id="L370" title="All 2 branches missed.">		if (service != null) {</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">			if (Adempiere.isStarted()) {</span>
+<span class="nc" id="L372">				Adempiere.getThreadPoolExecutor().execute(new Runnable() {			</span>
+					@Override
+					public void run() {
+<span class="nc" id="L375">						int timeout = MSysConfig.getIntValue(MSysConfig.AUTOMATIC_PACKIN_INITIAL_DELAY, 120) * 1000;</span>
+<span class="nc" id="L376">						String folders = MSysConfig.getValue(MSysConfig.AUTOMATIC_PACKIN_FOLDERS);</span>
+<span class="nc" id="L377">						automaticPackin(timeout, folders, true);</span>
+<span class="nc" id="L378">					}</span>
+				});
+<span class="nc" id="L380">			} else {</span>
+<span class="nc" id="L381">				Adempiere.addServerStateChangeListener(new ServerStateChangeListener() {				</span>
+					@Override
+					public void stateChange(ServerStateChangeEvent event) {
+<span class="nc bnc" id="L384" title="All 4 branches missed.">						if (event.getEventType() == ServerStateChangeEvent.SERVER_START &amp;&amp; service != null) {</span>
+<span class="nc" id="L385">							int timeout = MSysConfig.getIntValue(MSysConfig.AUTOMATIC_PACKIN_INITIAL_DELAY, 120) * 1000;</span>
+<span class="nc" id="L386">							String folders = MSysConfig.getValue(MSysConfig.AUTOMATIC_PACKIN_FOLDERS);</span>
+<span class="nc" id="L387">							automaticPackin(timeout, folders, true);</span>
+						}					
+<span class="nc" id="L389">					}</span>
+				});
+			}
+		}
+<span class="nc" id="L393">	};</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

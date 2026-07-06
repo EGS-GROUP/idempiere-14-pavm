@@ -1,0 +1,344 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ArchiveFileSystem.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">ArchiveFileSystem.java</span></div><h1>ArchiveFileSystem.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2012 Trek Global                                             *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+
+package org.compiere.model;
+
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.logging.Level;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.Source;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.Result;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.stream.StreamResult;
+
+import org.compiere.util.CLogger;
+import org.compiere.util.Util;
+import org.w3c.dom.Document;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+import org.w3c.dom.Element;
+
+/**
+ * File system backed implementation of {@link IArchiveStore}
+ * @author juliana
+ */
+<span class="nc" id="L51">public class ArchiveFileSystem implements IArchiveStore {</span>
+	
+<span class="nc" id="L53">	private  String ARCHIVE_FOLDER_PLACEHOLDER = &quot;%ARCHIVE_FOLDER%&quot;;</span>
+	
+<span class="nc" id="L55">	private static final CLogger log = CLogger.getCLogger(ArchiveFileSystem.class);</span>
+
+	//temporary buffer when AD_Archive_ID=0;
+	private byte[] buffer;
+	private InputStream bufferInputStream;
+
+	/**
+	 * Parse XML data to get the file path
+	 * @param archivePathRoot
+	 * @param data xml data
+	 * @return File object or null if not found
+	 */
+	protected File parseXML(String archivePathRoot, byte[] data) {
+<span class="nc" id="L68">		final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();</span>
+
+		try {
+<span class="nc" id="L71">			final DocumentBuilder builder = factory.newDocumentBuilder();</span>
+<span class="nc" id="L72">			final Document document = builder.parse(new ByteArrayInputStream(data));</span>
+<span class="nc" id="L73">			final NodeList entries = document.getElementsByTagName(&quot;entry&quot;);</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">			if(entries.getLength()!=1){</span>
+<span class="nc" id="L75">				log.severe(&quot;no archive entry found&quot;);</span>
+			}
+<span class="nc" id="L77">			final Node entryNode = entries.item(0);</span>
+<span class="nc" id="L78">			final NamedNodeMap attributes = entryNode.getAttributes();</span>
+<span class="nc" id="L79">			final Node	 fileNode = attributes.getNamedItem(&quot;file&quot;);</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">			if(fileNode==null ){</span>
+<span class="nc" id="L81">				log.severe(&quot;no filename for entry&quot;);</span>
+<span class="nc" id="L82">				return null;</span>
+			}
+<span class="nc" id="L84">			String filePath = fileNode.getNodeValue();</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;filePath: &quot; + filePath);</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">			if(filePath!=null){</span>
+<span class="nc" id="L87">				filePath = filePath.replaceFirst(ARCHIVE_FOLDER_PLACEHOLDER, archivePathRoot.replaceAll(&quot;\\\\&quot;,&quot;\\\\\\\\&quot;));</span>
+				//just to be sure...
+<span class="nc" id="L89">				String replaceSeparator = File.separator;</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">				if(!replaceSeparator.equals(&quot;/&quot;)){</span>
+<span class="nc" id="L91">					replaceSeparator = &quot;\\\\&quot;;</span>
+				}
+<span class="nc" id="L93">				filePath = filePath.replaceAll(&quot;/&quot;, replaceSeparator);</span>
+<span class="nc" id="L94">				filePath = filePath.replaceAll(&quot;\\\\&quot;, replaceSeparator);</span>
+			}
+<span class="nc bnc" id="L96" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;filePath: &quot; + filePath);</span>
+<span class="nc" id="L97">			final File file = new File(filePath);</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">			if (file.exists()) {</span>
+<span class="nc" id="L99">				return file;</span>
+			} else {
+<span class="nc" id="L101">				log.severe(&quot;file not found: &quot; + file.getAbsolutePath());</span>
+<span class="nc" id="L102">				return null;</span>
+			}
+<span class="nc" id="L104">		} catch (SAXException sxe) {</span>
+			// Error generated during parsing)
+<span class="nc" id="L106">			Exception x = sxe;</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			if (sxe.getException() != null)</span>
+<span class="nc" id="L108">				x = sxe.getException();</span>
+<span class="nc" id="L109">			log.log(Level.SEVERE, x.getMessage(), x);</span>
+
+<span class="nc" id="L111">		} catch (ParserConfigurationException pce) {</span>
+			// Parser with specified options can't be built
+<span class="nc" id="L113">			log.log(Level.SEVERE, pce.getMessage(), pce);</span>
+<span class="nc" id="L114">			log.severe(pce.getMessage());</span>
+
+<span class="nc" id="L116">		} catch (IOException ioe) {</span>
+			// I/O error
+<span class="nc" id="L118">			log.log(Level.SEVERE, ioe.getMessage(), ioe);</span>
+		}
+<span class="nc" id="L120">		return null;</span>
+	}
+	
+	/* (non-Javadoc)
+	 * @see org.compiere.model.IArchiveStore#loadLOBData(org.compiere.model.MArchive, org.compiere.model.MStorageProvider)
+	 */
+	@Override
+	public byte[] loadLOBData(MArchive archive, MStorageProvider prov) {
+<span class="nc" id="L128">		String archivePathRoot = getArchivePathRoot(prov);</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">		if (&quot;&quot;.equals(archivePathRoot)) {</span>
+<span class="nc" id="L130">			throw new IllegalArgumentException(&quot;no attachmentPath defined&quot;);</span>
+		}
+<span class="nc" id="L132">		buffer = null;</span>
+<span class="nc" id="L133">		bufferInputStream = null;</span>
+<span class="nc" id="L134">		byte[] data = archive.getByteData();</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">		if (data == null) {</span>
+<span class="nc" id="L136">			return null;</span>
+		}
+
+<span class="nc" id="L139">		File file = parseXML(archivePathRoot, data);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (file != null) {</span>
+			// read files into byte[]
+<span class="nc" id="L142">			final byte[] dataEntry = new byte[(int) file.length()];</span>
+<span class="nc" id="L143">			try (FileInputStream fileInputStream = new FileInputStream(file)) {</span>
+<span class="nc" id="L144">				fileInputStream.read(dataEntry);</span>
+<span class="nc" id="L145">				return dataEntry;</span>
+<span class="nc" id="L146">			} catch (FileNotFoundException e) {</span>
+<span class="nc" id="L147">				log.severe(&quot;File Not Found.&quot;);</span>
+<span class="nc" id="L148">				e.printStackTrace();</span>
+<span class="nc" id="L149">			} catch (IOException e1) {</span>
+<span class="nc" id="L150">				log.severe(&quot;Error Reading The File.&quot;);</span>
+<span class="nc" id="L151">				e1.printStackTrace();</span>
+			}
+		}
+<span class="nc" id="L154">		return null;</span>
+	}
+	
+	@Override
+	public InputStream loadLOBDataAsStream(MArchive archive, MStorageProvider prov) {
+<span class="nc" id="L159">		String archivePathRoot = getArchivePathRoot(prov);</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		if (&quot;&quot;.equals(archivePathRoot)) {</span>
+<span class="nc" id="L161">			throw new IllegalArgumentException(&quot;no attachmentPath defined&quot;);</span>
+		}
+<span class="nc" id="L163">		buffer = null;</span>
+<span class="nc" id="L164">		bufferInputStream = null;</span>
+<span class="nc" id="L165">		byte[] data = archive.getByteData();</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">		if (data == null) {</span>
+<span class="nc" id="L167">			return null;</span>
+		}
+
+<span class="nc" id="L170">		File file = parseXML(archivePathRoot, data);		</span>
+		try {
+<span class="nc bnc" id="L172" title="All 2 branches missed.">			return file != null ? new FileInputStream(file) : null;</span>
+<span class="nc" id="L173">		} catch (FileNotFoundException e) {</span>
+<span class="nc" id="L174">			log.log(Level.SEVERE, &quot;File Not Found.&quot;, e);</span>
+		}	
+<span class="nc" id="L176">		return null;</span>
+	}
+
+	/* (non-Javadoc)
+	 * @see org.compiere.model.IArchiveStore#save(org.compiere.model.MArchive, org.compiere.model.MStorageProvider)
+	 */
+	@Override
+	public void save(MArchive archive, MStorageProvider prov,byte[] inflatedData) {		
+<span class="nc bnc" id="L184" title="All 4 branches missed.">		if (inflatedData == null || inflatedData.length == 0) {</span>
+<span class="nc" id="L185">			throw new IllegalArgumentException(&quot;InflatedData is NULL&quot;);</span>
+		}
+<span class="nc bnc" id="L187" title="All 2 branches missed.">		if(archive.get_ID()==0){</span>
+			//set binary data otherwise save will fail
+<span class="nc" id="L189">			archive.setByteData(new byte[]{'0'});</span>
+<span class="nc" id="L190">			buffer = inflatedData;</span>
+<span class="nc" id="L191">			bufferInputStream = null;</span>
+<span class="nc" id="L192">		} else {		</span>
+<span class="nc" id="L193">			write(archive, prov, inflatedData, null);			</span>
+		}
+<span class="nc" id="L195">	}</span>
+
+	@Override
+	public void save(MArchive archive, MStorageProvider prov, InputStream inputStream) {
+<span class="nc bnc" id="L199" title="All 2 branches missed.">		if (inputStream == null) {</span>
+<span class="nc" id="L200">			throw new IllegalArgumentException(&quot;inputStream is NULL&quot;);</span>
+		}
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if(archive.get_ID()==0){</span>
+			//set binary data otherwise save will fail
+<span class="nc" id="L204">			archive.setByteData(new byte[]{'0'});</span>
+<span class="nc" id="L205">			bufferInputStream = inputStream;</span>
+<span class="nc" id="L206">			buffer = null;</span>
+<span class="nc" id="L207">		} else {		</span>
+<span class="nc" id="L208">			write(archive, prov, null, inputStream);			</span>
+		}
+<span class="nc" id="L210">	}</span>
+
+	/**
+	 * Write archive data to file
+	 * @param archive
+	 * @param prov
+	 * @param inflatedData archive data
+	 * @param inputStream input stream to read data from
+	 */
+	private void write(MArchive archive, MStorageProvider prov,
+			byte[] inflatedData, InputStream inputStream) {		
+<span class="nc" id="L221">		BufferedOutputStream out = null;</span>
+		try {
+<span class="nc" id="L223">			final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();</span>
+			
+<span class="nc" id="L225">			String archivePathRoot = getArchivePathRoot(prov);</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">			if (&quot;&quot;.equals(archivePathRoot)) {</span>
+<span class="nc" id="L227">				throw new IllegalArgumentException(&quot;no attachmentPath defined&quot;);</span>
+			}
+			// create destination folder
+<span class="nc" id="L230">			StringBuilder msgfile = new StringBuilder().append(archivePathRoot)</span>
+<span class="nc" id="L231">					.append(archive.getArchivePathSnippet());</span>
+<span class="nc" id="L232">			final File destFolder = new File(msgfile.toString());</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">			if (!destFolder.exists()) {</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">				if (!destFolder.mkdirs()) {</span>
+<span class="nc" id="L235">					log.warning(&quot;unable to create folder: &quot; + destFolder.getPath());</span>
+				}
+			}
+			// write to pdf
+<span class="nc" id="L239">			msgfile = new StringBuilder().append(archivePathRoot).append(File.separator)</span>
+<span class="nc" id="L240">					.append(archive.getArchivePathSnippet()).append(archive.get_ID()).append(&quot;.pdf&quot;);</span>
+<span class="nc" id="L241">			final File destFile = new File(msgfile.toString());</span>
+
+<span class="nc" id="L243">			out = new BufferedOutputStream(new FileOutputStream(destFile));</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">			if (inflatedData != null) {</span>
+<span class="nc" id="L245">				out.write(inflatedData);</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">			} else if (inputStream != null) {</span>
+<span class="nc" id="L247">				byte[] buffer = new byte[8192];</span>
+<span class="nc" id="L248">				int length = -1;</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">				while((length = inputStream.read(buffer)) != -1) {</span>
+<span class="nc" id="L250">					out.write(buffer, 0, length);</span>
+				}
+			}
+<span class="nc" id="L253">			out.flush();</span>
+
+			//create xml entry
+<span class="nc" id="L256">			final DocumentBuilder builder = factory.newDocumentBuilder();</span>
+<span class="nc" id="L257">			final Document document = builder.newDocument();</span>
+<span class="nc" id="L258">			final Element root = document.createElement(&quot;archive&quot;);</span>
+<span class="nc" id="L259">			document.appendChild(root);</span>
+<span class="nc" id="L260">			document.setXmlStandalone(true);</span>
+<span class="nc" id="L261">			final Element entry = document.createElement(&quot;entry&quot;);</span>
+<span class="nc" id="L262">			StringBuilder msgsat = new StringBuilder(ARCHIVE_FOLDER_PLACEHOLDER).append(archive.getArchivePathSnippet()).append(archive.get_ID()).append(&quot;.pdf&quot;);</span>
+<span class="nc" id="L263">			entry.setAttribute(&quot;file&quot;, msgsat.toString());</span>
+<span class="nc" id="L264">			root.appendChild(entry);</span>
+<span class="nc" id="L265">			final Source source = new DOMSource(document);</span>
+<span class="nc" id="L266">			final ByteArrayOutputStream bos = new ByteArrayOutputStream();</span>
+<span class="nc" id="L267">			final Result result = new StreamResult(bos);</span>
+<span class="nc" id="L268">			final Transformer xformer = TransformerFactory.newInstance().newTransformer();</span>
+<span class="nc" id="L269">			xformer.transform(source, result);</span>
+<span class="nc" id="L270">			final byte[] xmlData = bos.toByteArray();</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(bos.toString());</span>
+			//store xml in db
+<span class="nc" id="L273">			archive.setByteData(xmlData);</span>
+
+<span class="nc" id="L275">		} catch (Exception e) {</span>
+<span class="nc" id="L276">			log.log(Level.SEVERE, &quot;saveLOBData&quot;, e);</span>
+<span class="nc" id="L277">			archive.setByteData(null);</span>
+<span class="nc" id="L278">			throw new RuntimeException(e);</span>
+		} finally {
+<span class="nc bnc" id="L280" title="All 2 branches missed.">			if(out != null){</span>
+				try {
+<span class="nc" id="L282">					out.close();</span>
+<span class="nc" id="L283">				} catch (Exception e) {	}</span>
+			}
+		}
+<span class="nc" id="L286">	}</span>
+
+	/**
+	 * @param prov
+	 * @return root path
+	 */
+	private String getArchivePathRoot(MStorageProvider prov) {
+<span class="nc" id="L293">		String archivePathRoot = prov.getFolder();</span>
+<span class="nc bnc" id="L294" title="All 2 branches missed.">		if (archivePathRoot == null)</span>
+<span class="nc" id="L295">			archivePathRoot = &quot;&quot;;</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		if (Util.isEmpty(archivePathRoot)) {</span>
+<span class="nc" id="L297">			log.severe(&quot;no archivePath defined&quot;);</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">		} else if (!archivePathRoot.endsWith(File.separator)){</span>
+<span class="nc" id="L299">			archivePathRoot = archivePathRoot + File.separator;</span>
+<span class="nc" id="L300">			log.fine(archivePathRoot);</span>
+		}
+<span class="nc" id="L302">		return archivePathRoot;</span>
+	}
+
+	@Override
+	public boolean deleteArchive(MArchive archive, MStorageProvider prov) {
+<span class="nc" id="L307">		String archivePathRoot = getArchivePathRoot(prov);</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">		if (&quot;&quot;.equals(archivePathRoot)) {</span>
+<span class="nc" id="L309">			throw new IllegalArgumentException(&quot;no attachmentPath defined&quot;);</span>
+		}
+<span class="nc" id="L311">		StringBuilder msgfile = new StringBuilder().append(archivePathRoot)</span>
+<span class="nc" id="L312">				.append(archive.getArchivePathSnippet()).append(archive.getAD_Archive_ID()).append(&quot;.pdf&quot;);</span>
+		
+<span class="nc" id="L314">		File file=new File(msgfile.toString());</span>
+<span class="nc bnc" id="L315" title="All 4 branches missed.">		if (file !=null &amp;&amp; file.exists()) {</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">			if (!file.delete()) {</span>
+<span class="nc" id="L317">				log.warning(&quot;unable to delete &quot; + file.getAbsolutePath());</span>
+<span class="nc" id="L318">				return false;</span>
+			}
+		}
+<span class="nc" id="L321">		return true;</span>
+	}
+
+	@Override
+	public boolean isPendingFlush() {
+<span class="nc bnc" id="L326" title="All 6 branches missed.">		return (buffer != null &amp;&amp; buffer.length &gt; 0) || bufferInputStream != null;</span>
+	}
+
+	@Override
+	public void flush(MArchive archive, MStorageProvider prov) {
+		try {
+<span class="nc bnc" id="L332" title="All 6 branches missed.">			if ((buffer != null &amp;&amp; buffer.length &gt; 0) || bufferInputStream != null) {</span>
+<span class="nc" id="L333">				write(archive, prov, buffer, bufferInputStream);</span>
+			}
+<span class="nc" id="L335">		} catch (Exception e) {</span>
+<span class="nc" id="L336">			throw new RuntimeException(e);</span>
+		} finally {
+<span class="nc" id="L338">			buffer = null;</span>
+<span class="nc" id="L339">			bufferInputStream = null;</span>
+		}
+<span class="nc" id="L341">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

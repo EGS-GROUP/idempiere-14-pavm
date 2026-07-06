@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>GenericPaymentExport.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">GenericPaymentExport.java</span></div><h1>GenericPaymentExport.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.text.SimpleDateFormat;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.DBException;
+import org.compiere.model.MCurrency;
+import org.compiere.model.MPaySelectionCheck;
+import org.compiere.model.MPaySelectionLine;
+
+/**
+ * 	Generic Payment Export.&lt;br/&gt;
+ *  Sample implementation of Payment Export Interface - brought here from MPaySelectionCheck
+ *	
+ * 	@author 	Jorg Janke
+ * 
+ *  Contributors:
+ *    Carlos Ruiz - GlobalQSS - FR 3132033 - Make payment export class configurable per bank
+ */
+<span class="nc" id="L41">public class GenericPaymentExport implements PaymentExport</span>
+{
+	/** Logger								*/
+<span class="nc" id="L44">	static private CLogger	s_log = CLogger.getCLogger (GenericPaymentExport.class);</span>
+
+	/** BPartner Info Index for Value       */
+	private static final int     BP_VALUE = 0;
+	/** BPartner Info Index for Name        */
+	private static final int     BP_NAME = 1;
+	/** BPartner Info Index for Contact Name    */
+	private static final int     BP_CONTACT = 2;
+	/** BPartner Info Index for Address 1   */
+	private static final int     BP_ADDR1 = 3;
+	/** BPartner Info Index for Address 2   */
+	private static final int     BP_ADDR2 = 4;
+	/** BPartner Info Index for City        */
+	private static final int     BP_CITY = 5;
+	/** BPartner Info Index for Region      */
+	private static final int     BP_REGION = 6;
+	/** BPartner Info Index for Postal Code */
+	private static final int     BP_POSTAL = 7;
+	/** BPartner Info Index for Country     */
+	private static final int     BP_COUNTRY = 8;
+	/** BPartner Info Index for Reference No    */
+<span class="nc" id="L65">	private static final int     BP_REFNO = 9;</span>
+
+	/**
+	 *  Export to File
+	 *  @param checks array of checks
+	 *  @param depositBatch book the payments as single position
+	 *  @param paymentRule selected payment rule
+	 *  @param file file to export checks
+	 *  @return number of lines
+	 */
+	public int exportToFile(MPaySelectionCheck[] checks, boolean depositBatch, String paymentRule, File file,
+			StringBuffer err) {
+<span class="nc bnc" id="L77" title="All 4 branches missed.">		if (checks == null || checks.length == 0)</span>
+<span class="nc" id="L78">			return 0;</span>
+		//  Must be a file
+<span class="nc bnc" id="L80" title="All 2 branches missed.">		if (file.isDirectory())</span>
+		{
+<span class="nc" id="L82">			err.append(&quot;No se puede escribir, el archivo seleccionado es un directorio - &quot; + file.getAbsolutePath());</span>
+<span class="nc" id="L83">			s_log.log(Level.SEVERE, err.toString());</span>
+<span class="nc" id="L84">			return -1;</span>
+		}
+		//  delete if exists
+		try
+		{
+<span class="nc bnc" id="L89" title="All 2 branches missed.">			if (file.exists())</span>
+<span class="nc" id="L90">				file.delete();</span>
+<span class="nc" id="L91">		}</span>
+<span class="nc" id="L92">		catch (Exception e)</span>
+		{
+<span class="nc" id="L94">			s_log.log(Level.WARNING, &quot;Could not delete - &quot; + file.getAbsolutePath(), e);</span>
+		}
+
+<span class="nc" id="L97">		char x = '&quot;';      //  ease</span>
+<span class="nc" id="L98">		int noLines = 0;</span>
+<span class="nc" id="L99">		StringBuilder line = null;</span>
+<span class="nc" id="L100">		try (FileWriter fw = new FileWriter(file);)</span>
+		{			
+			//  write header
+<span class="nc" id="L103">			line = new StringBuilder();</span>
+<span class="nc" id="L104">			line.append(x).append(&quot;Value&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L105">				.append(x).append(&quot;Name&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L106">				.append(x).append(&quot;Contact&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L107">				.append(x).append(&quot;Addr1&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L108">				.append(x).append(&quot;Addr2&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L109">				.append(x).append(&quot;City&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L110">				.append(x).append(&quot;State&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L111">				.append(x).append(&quot;ZIP&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L112">				.append(x).append(&quot;Country&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L113">				.append(x).append(&quot;ReferenceNo&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L114">				.append(x).append(&quot;DocumentNo&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L115">				.append(x).append(&quot;PayDate&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L116">				.append(x).append(&quot;Currency&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L117">				.append(x).append(&quot;PayAmount&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L118">				.append(x).append(&quot;DepositBatch&quot;).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L119">				.append(x).append(&quot;Comment&quot;).append(x)</span>
+<span class="nc" id="L120">				.append(Env.NL);</span>
+<span class="nc" id="L121">			fw.write(line.toString());</span>
+<span class="nc" id="L122">			noLines++;</span>
+
+			//  write lines
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			for (int i = 0; i &lt; checks.length; i++)</span>
+			{
+<span class="nc" id="L127">				MPaySelectionCheck mpp = checks[i];</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">				if (mpp == null)</span>
+<span class="nc" id="L129">					continue;</span>
+				//  BPartner Info
+<span class="nc" id="L131">				String bp[] = getBPartnerInfo(mpp.getC_BPartner_ID());</span>
+
+				//  Comment - list of invoice document no
+<span class="nc" id="L134">				StringBuilder comment = new StringBuilder();</span>
+<span class="nc" id="L135">				MPaySelectionLine[] psls = mpp.getPaySelectionLines(false);</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">				for (int l = 0; l &lt; psls.length; l++)</span>
+				{
+<span class="nc bnc" id="L138" title="All 2 branches missed.">					if (l &gt; 0)</span>
+<span class="nc" id="L139">						comment.append(&quot;, &quot;);</span>
+<span class="nc" id="L140">					comment.append(psls[l].getInvoice().getDocumentNo());</span>
+				}
+<span class="nc" id="L142">				line = new StringBuilder();</span>
+<span class="nc" id="L143">				line.append(x).append(bp[BP_VALUE]).append(x).append(&quot;,&quot;)   // Value</span>
+<span class="nc" id="L144">					.append(x).append(bp[BP_NAME]).append(x).append(&quot;,&quot;)    // Name</span>
+<span class="nc" id="L145">					.append(x).append(bp[BP_CONTACT]).append(x).append(&quot;,&quot;) // Contact</span>
+<span class="nc" id="L146">					.append(x).append(bp[BP_ADDR1]).append(x).append(&quot;,&quot;)   // Addr1</span>
+<span class="nc" id="L147">					.append(x).append(bp[BP_ADDR2]).append(x).append(&quot;,&quot;)   // Addr2</span>
+<span class="nc" id="L148">					.append(x).append(bp[BP_CITY]).append(x).append(&quot;,&quot;)    // City</span>
+<span class="nc" id="L149">					.append(x).append(bp[BP_REGION]).append(x).append(&quot;,&quot;)  // State</span>
+<span class="nc" id="L150">					.append(x).append(bp[BP_POSTAL]).append(x).append(&quot;,&quot;)  // ZIP</span>
+<span class="nc" id="L151">					.append(x).append(bp[BP_COUNTRY]).append(x).append(&quot;,&quot;) // Country</span>
+<span class="nc" id="L152">					.append(x).append(bp[BP_REFNO]).append(x).append(&quot;,&quot;)   // ReferenceNo</span>
+					//  Payment Info
+<span class="nc" id="L154">					.append(x).append(mpp.getDocumentNo()).append(x).append(&quot;,&quot;)    // DocumentNo</span>
+<span class="nc" id="L155">					.append(mpp.getParent().getPayDate()).append(&quot;,&quot;)               // PayDate</span>
+<span class="nc" id="L156">					.append(x).append(MCurrency.getISO_Code(Env.getCtx(), mpp.getParent().getC_Currency_ID())).append(x).append(&quot;,&quot;)    // Currency</span>
+<span class="nc" id="L157">					.append(mpp.getPayAmt()).append(&quot;,&quot;)                // PayAmount</span>
+<span class="nc" id="L158">					.append(x).append(depositBatch).append(x).append(&quot;,&quot;)</span>
+<span class="nc" id="L159">					.append(x).append(comment.toString()).append(x)     // Comment</span>
+<span class="nc" id="L160">					.append(Env.NL);</span>
+<span class="nc" id="L161">				fw.write(line.toString());</span>
+<span class="nc" id="L162">				noLines++;</span>
+			}   //  write line
+
+<span class="nc" id="L165">			fw.flush();</span>
+		}
+<span class="nc" id="L167">		catch (Exception e)</span>
+		{
+<span class="nc" id="L169">			err.append(e.toString());</span>
+<span class="nc" id="L170">			s_log.log(Level.SEVERE, &quot;&quot;, e);</span>
+<span class="nc" id="L171">			return -1;</span>
+		}
+
+<span class="nc" id="L174">		return noLines;</span>
+	}   //  exportToFile
+
+	/**
+	 *  Get Customer/Vendor Info.&lt;br/&gt;
+	 *  Based on BP_ static variables.
+	 *  @param C_BPartner_ID BPartner
+	 *  @return info array
+	 */
+	private String[] getBPartnerInfo (int C_BPartner_ID)
+	{
+<span class="nc" id="L185">		String[] bp = new String[10];</span>
+
+<span class="nc" id="L187">		String sql = &quot;SELECT bp.Value, bp.Name, c.Name AS Contact, &quot;</span>
+			+ &quot;a.Address1, a.Address2, a.City, r.Name AS Region, a.Postal, &quot;
+			+ &quot;cc.Name AS Country, bp.ReferenceNo &quot;
+			+ &quot;FROM C_BPartner bp &quot;
+			+ &quot;LEFT OUTER JOIN AD_User c ON (bp.C_BPartner_ID=c.C_BPartner_ID) &quot;
+			+ &quot;INNER JOIN C_BPartner_Location l ON (bp.C_BPartner_ID=l.C_BPartner_ID) &quot;
+			+ &quot;INNER JOIN C_Location a ON (l.C_Location_ID=a.C_Location_ID) &quot;
+			+ &quot;LEFT OUTER JOIN C_Region r ON (a.C_Region_ID=r.C_Region_ID) &quot;
+			+ &quot;INNER JOIN C_Country cc ON (a.C_Country_ID=cc.C_Country_ID) &quot;
+			+ &quot;WHERE bp.C_BPartner_ID=? &quot;        // #1
+			+ &quot;ORDER BY l.IsBillTo DESC&quot;;
+<span class="nc" id="L198">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L199">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L202">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L203">			pstmt.setInt(1, C_BPartner_ID);</span>
+<span class="nc" id="L204">			rs = pstmt.executeQuery();</span>
+			//
+<span class="nc bnc" id="L206" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L208">				bp[BP_VALUE] = rs.getString(1);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">				if (bp[BP_VALUE] == null)</span>
+<span class="nc" id="L210">					bp[BP_VALUE] = &quot;&quot;;</span>
+<span class="nc" id="L211">				bp[BP_NAME] = rs.getString(2);</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">				if (bp[BP_NAME] == null)</span>
+<span class="nc" id="L213">					bp[BP_NAME] = &quot;&quot;;</span>
+<span class="nc" id="L214">				bp[BP_CONTACT] = rs.getString(3);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">				if (bp[BP_CONTACT] == null)</span>
+<span class="nc" id="L216">					bp[BP_CONTACT] = &quot;&quot;;</span>
+<span class="nc" id="L217">				bp[BP_ADDR1] = rs.getString(4);</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">				if (bp[BP_ADDR1] == null)</span>
+<span class="nc" id="L219">					bp[BP_ADDR1] = &quot;&quot;;</span>
+<span class="nc" id="L220">				bp[BP_ADDR2] = rs.getString(5);</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">				if (bp[BP_ADDR2] == null)</span>
+<span class="nc" id="L222">					bp[BP_ADDR2] = &quot;&quot;;</span>
+<span class="nc" id="L223">				bp[BP_CITY] = rs.getString(6);</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">				if (bp[BP_CITY] == null)</span>
+<span class="nc" id="L225">					bp[BP_CITY] = &quot;&quot;;</span>
+<span class="nc" id="L226">				bp[BP_REGION] = rs.getString(7);</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">				if (bp[BP_REGION] == null)</span>
+<span class="nc" id="L228">					bp[BP_REGION] = &quot;&quot;;</span>
+<span class="nc" id="L229">				bp[BP_POSTAL] = rs.getString(8);</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">				if (bp[BP_POSTAL] == null)</span>
+<span class="nc" id="L231">					bp[BP_POSTAL] = &quot;&quot;;</span>
+<span class="nc" id="L232">				bp[BP_COUNTRY] = rs.getString(9);</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">				if (bp[BP_COUNTRY] == null)</span>
+<span class="nc" id="L234">					bp[BP_COUNTRY] = &quot;&quot;;</span>
+<span class="nc" id="L235">				bp[BP_REFNO] = rs.getString(10);</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">				if (bp[BP_REFNO] == null)</span>
+<span class="nc" id="L237">					bp[BP_REFNO] = &quot;&quot;;</span>
+			}
+<span class="nc" id="L239">		}</span>
+<span class="nc" id="L240">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L242">			throw new DBException(e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L246">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L247">			rs = null;</span>
+<span class="nc" id="L248">			pstmt = null;</span>
+		}
+<span class="nc" id="L250">		return bp;</span>
+	}   //  getBPartnerInfo
+
+	@Override
+	public String getFilenamePrefix() {
+<span class="nc" id="L255">		String creationDate = new SimpleDateFormat(&quot;yyyy-MM-dd-HH-mm-ss&quot;).format(System.currentTimeMillis()) ;</span>
+<span class="nc" id="L256">		return &quot;payments-&quot; + creationDate ;</span>
+	}
+
+	@Override
+	public String getFilenameSuffix() {
+<span class="nc" id="L261">		return &quot;.csv&quot;;</span>
+	}
+
+	@Override
+	public String getContentType() {
+<span class="nc" id="L266">		return &quot;text/csv&quot;;</span>
+	}
+
+	@Override
+	public boolean supportsDepositBatch() {
+<span class="nc" id="L271">		return true;</span>
+	}
+
+	@Override
+	public boolean supportsSeparateBooking() {
+<span class="nc" id="L276">		return true;</span>
+	}
+
+	@Override
+	public boolean getDefaultDepositBatch() {
+<span class="nc" id="L281">		return false;</span>
+	}
+	
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

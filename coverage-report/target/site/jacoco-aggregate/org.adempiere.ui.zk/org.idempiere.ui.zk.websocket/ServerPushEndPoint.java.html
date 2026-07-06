@@ -1,0 +1,413 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ServerPushEndPoint.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.idempiere.ui.zk.websocket</a> &gt; <span class="el_source">ServerPushEndPoint.java</span></div><h1>ServerPushEndPoint.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - hengsin                         								   *
+ **********************************************************************/
+package org.idempiere.ui.zk.websocket;
+
+import java.io.IOException;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+
+import javax.net.ssl.SSLContext;
+import javax.servlet.http.HttpSession;
+import javax.websocket.EndpointConfig;
+import javax.websocket.OnClose;
+import javax.websocket.OnError;
+import javax.websocket.OnMessage;
+import javax.websocket.OnOpen;
+import javax.websocket.Session;
+import javax.websocket.server.HandshakeRequest;
+import javax.websocket.server.PathParam;
+import javax.websocket.server.ServerEndpoint;
+
+import org.apache.hc.client5.http.classic.methods.HttpPost;
+import org.apache.hc.client5.http.cookie.BasicCookieStore;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.cookie.BasicClientCookie;
+import org.apache.hc.client5.http.impl.io.BasicHttpClientConnectionManager;
+import org.apache.hc.client5.http.socket.ConnectionSocketFactory;
+import org.apache.hc.client5.http.socket.PlainConnectionSocketFactory;
+import org.apache.hc.client5.http.ssl.NoopHostnameVerifier;
+import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
+import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactoryBuilder;
+import org.apache.hc.client5.http.ssl.TrustAllStrategy;
+import org.apache.hc.client5.http.utils.DateUtils;
+import org.apache.hc.core5.http.Header;
+import org.apache.hc.core5.http.config.RegistryBuilder;
+import org.apache.hc.core5.http.io.entity.EntityUtils;
+import org.apache.hc.core5.ssl.SSLContextBuilder;
+import org.apache.hc.core5.util.Timeout;
+import org.compiere.util.CLogger;
+import org.compiere.util.Util;
+import org.zkoss.json.JSONObject;
+import org.zkoss.json.parser.JSONParser;
+
+/**
+ * web socket end point for server push
+ * @author hengsin
+ */
+@ServerEndpoint(value=&quot;/serverpush/{dtid}&quot;, configurator = EndpointConfigurator.class)
+public class ServerPushEndPoint {
+
+	private Session session;
+	private String dtid;
+	private HttpSession httpSession;
+	private String baseUrl;
+	private Map&lt;String, List&lt;String&gt;&gt; requestHeaders;
+	private BasicCookieStore cookieStore;
+
+<span class="nc" id="L90">	private static final ExecutorService executorService = Executors.newCachedThreadPool();</span>
+
+	/**
+	 * default constructor
+	 */
+<span class="nc" id="L95">	public ServerPushEndPoint() {</span>
+<span class="nc" id="L96">	}</span>
+	
+	@OnClose
+	public void onClose(Session sess) throws IOException {
+<span class="nc bnc" id="L100" title="All 2 branches missed.">		if (this.session != null) {</span>
+<span class="nc" id="L101">			this.session = null;</span>
+<span class="nc" id="L102">			WebSocketServerPush.unregisterEndPoint(dtid);</span>
+		}
+<span class="nc" id="L104">	}</span>
+
+	@OnOpen
+	public void onOpen(Session sess, EndpointConfig config, @PathParam(&quot;dtid&quot;) String dtid) throws IOException {
+<span class="nc bnc" id="L108" title="All 4 branches missed.">		if (!Util.isEmpty(dtid, true) &amp;&amp; WebSocketServerPush.isValidDesktopId(dtid)) {			</span>
+<span class="nc" id="L109">			session = sess;</span>
+<span class="nc" id="L110">			this.dtid = dtid;</span>
+<span class="nc" id="L111">			this.httpSession = (HttpSession) config.getUserProperties().get(HttpSession.class.getName());</span>
+<span class="nc" id="L112">			WebSocketServerPush.registerEndPoint(dtid, this);</span>
+<span class="nc" id="L113">			this.cookieStore = (BasicCookieStore) config.getUserProperties().get(BasicCookieStore.class.getName());</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">			if (this.cookieStore == null) {</span>
+<span class="nc" id="L115">				this.cookieStore = new BasicCookieStore();</span>
+			}
+			
+<span class="nc" id="L118">			HandshakeRequest handshakeRequest = (HandshakeRequest) config.getUserProperties().get(HandshakeRequest.class.getName());</span>
+
+			// Build the Base URL dynamically
+<span class="nc bnc" id="L121" title="All 2 branches missed.">	        if (handshakeRequest != null) {</span>
+<span class="nc" id="L122">	            URI requestUri = handshakeRequest.getRequestURI();</span>
+
+	            // Map ws -&gt; http and wss -&gt; https
+<span class="nc bnc" id="L125" title="All 4 branches missed.">	            String scheme = &quot;wss&quot;.equalsIgnoreCase(requestUri.getScheme()) || &quot;https&quot;.equalsIgnoreCase(requestUri.getScheme()) ? &quot;https&quot; : &quot;http&quot;;</span>
+<span class="nc" id="L126">	            String host = &quot;localhost&quot;;</span>
+<span class="nc" id="L127">	            int port = requestUri.getPort();</span>
+
+	            // Construct the base URL, handling default ports
+<span class="nc" id="L130">	            StringBuilder urlBuilder = new StringBuilder();</span>
+<span class="nc" id="L131">	            urlBuilder.append(scheme).append(&quot;://&quot;).append(host);</span>
+<span class="nc bnc" id="L132" title="All 10 branches missed.">	            if (port != -1 &amp;&amp; !((scheme.equals(&quot;http&quot;) &amp;&amp; port == 80) || (scheme.equals(&quot;https&quot;) &amp;&amp; port == 443))) {</span>
+<span class="nc" id="L133">	                urlBuilder.append(&quot;:&quot;).append(port);</span>
+	            }
+<span class="nc" id="L135">	            this.baseUrl = urlBuilder.toString();</span>
+<span class="nc" id="L136">	            this.requestHeaders = handshakeRequest.getHeaders();</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">	            if (!this.requestHeaders.containsKey(&quot;X-Forwarded-For&quot;)) {</span>
+<span class="nc" id="L138">	            	Object ipAttr = config.getUserProperties().get(WebSocketServerPush.WS_CLIENT_IP);</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">	            	if (ipAttr != null) {</span>
+<span class="nc" id="L140">	            		String clientIp = ipAttr.toString();</span>
+	            		// handshakeRequest.getHeaders() might return unmodifiable map
+<span class="nc" id="L142">	            		this.requestHeaders = new HashMap&lt;&gt;(this.requestHeaders);</span>
+<span class="nc" id="L143">	            		this.requestHeaders.put(&quot;X-Forwarded-For&quot;, List.of(clientIp));</span>
+	            	}
+	            }
+	        }
+		}
+<span class="nc" id="L148">	}</span>
+
+	@OnError
+	public void onError(Session sess, Throwable throwable) {
+<span class="nc" id="L152">		CLogger.getCLogger(getClass()).log(Level.WARNING, throwable.getMessage(), throwable);	</span>
+<span class="nc" id="L153">	}</span>
+
+	// Track the &quot;tail&quot; of the execution chain. Start with a completed future.
+<span class="nc" id="L156">	private CompletableFuture&lt;Void&gt; executionChain = CompletableFuture.completedFuture(null);</span>
+	// Lock to protect the chain update (very short duration)
+<span class="nc" id="L158">	private final Object chainLock = new Object();</span>
+		
+	/**
+	 * Handle ping from client
+	 * @param session
+	 * @param message
+	 */
+	@OnMessage
+	public void onMessage(Session session, String message) { 
+<span class="nc bnc" id="L167" title="All 4 branches missed.">		if (session == this.session &amp;&amp; !Util.isEmpty(message)) {</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">			if (message.equals(&quot;__ping__&quot;)) {</span>
+				try {
+<span class="nc" id="L170">					session.getBasicRemote().sendText(&quot;__pong__&quot;);</span>
+<span class="nc" id="L171">				} catch (IllegalArgumentException | IOException e) {</span>
+<span class="nc" id="L172">					CLogger.getCLogger(getClass()).log(Level.WARNING, e.getMessage(), e);</span>
+				}
+<span class="nc bnc" id="L174" title="All 2 branches missed.">			} else if (message.startsWith(&quot;zkau;&quot;)) {</span>
+<span class="nc" id="L175">				String jsonMessage = message.substring(5);</span>
+<span class="nc" id="L176">				JSONParser parser = new JSONParser();</span>
+<span class="nc" id="L177">				JSONObject jsonRequest = (JSONObject) parser.parse(jsonMessage);</span>
+<span class="nc" id="L178">				String sid = jsonRequest.get(&quot;sid&quot;).toString();</span>
+<span class="nc" id="L179">				String uri = (String) jsonRequest.get(&quot;uri&quot;);</span>
+<span class="nc" id="L180">				String content = (String) jsonRequest.get(&quot;content&quot;);</span>
+<span class="nc" id="L181">				String dtid = jsonRequest.get(&quot;dt&quot;).toString();</span>
+<span class="nc bnc" id="L182" title="All 4 branches missed.">				if (dtid == null || !dtid.equals(this.dtid)) {</span>
+					try {
+<span class="nc" id="L184">						session.getBasicRemote().sendText(errorResponse(&quot;Error: Invalid desktop id&quot;));</span>
+<span class="nc" id="L185">					} catch (IOException e) {</span>
+<span class="nc" id="L186">						CLogger.getCLogger(getClass()).log(Level.WARNING, e.getMessage(), e);</span>
+					}
+<span class="nc" id="L188">					return;</span>
+				}
+<span class="nc" id="L190">				setMessageIndicator();</span>
+				
+<span class="nc" id="L192">				StringBuilder fullUrl = new StringBuilder(this.baseUrl)</span>
+<span class="nc" id="L193">		        		.append(uri)</span>
+<span class="nc" id="L194">		        		.append(&quot;?&quot;)</span>
+<span class="nc" id="L195">		        		.append(content);</span>
+
+<span class="nc" id="L197">				String sessionId = null;</span>
+		        try {
+<span class="nc" id="L199">					sessionId = httpSession.getId();</span>
+<span class="nc" id="L200">				} catch (IllegalStateException e) {</span>
+<span class="nc" id="L201">					CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;HTTP Session already invalidated&quot;, e);</span>
+					try {
+<span class="nc" id="L203">						session.getBasicRemote().sendText(errorResponse(&quot;Error: Session invalidated&quot;));</span>
+<span class="nc" id="L204">					} catch (IOException ioe) {</span>
+<span class="nc" id="L205">						CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;Error sending response to client&quot;, ioe);</span>
+					}
+<span class="nc" id="L207">					return;</span>
+				}
+	
+<span class="nc" id="L210">		        synchronized (chainLock) {</span>
+			        try {
+				        // Create POST request
+<span class="nc" id="L213">				        HttpPost httpPost = new HttpPost(fullUrl.toString());</span>
+<span class="nc" id="L214">				        httpPost.setHeader(&quot;Content-Type&quot;, &quot;application/json&quot;);</span>
+<span class="nc" id="L215">				        httpPost.setHeader(&quot;ZK-SID&quot;, sid);</span>
+<span class="nc" id="L216">				        httpPost.setHeader(&quot;Pragma&quot;, &quot;no-cache&quot;);</span>
+<span class="nc" id="L217">				        httpPost.setHeader(&quot;Cache-Control&quot;, &quot;no-cache&quot;);</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">				        if (cookieStore != null) {</span>
+<span class="nc" id="L219">				        	BasicClientCookie cookie = new BasicClientCookie(&quot;JSESSIONID&quot;, sessionId);</span>
+<span class="nc" id="L220">							cookie.setDomain(&quot;localhost&quot;);</span>
+<span class="nc" id="L221">				        	cookieStore.addCookie(cookie);</span>
+				        }
+<span class="nc" id="L223">				        requestHeaders.forEach((key, values) -&gt; {</span>
+				        	// Forward selected headers
+<span class="nc bnc" id="L225" title="All 4 branches missed.">				        	if (&quot;User-Agent&quot;.equalsIgnoreCase(key) || &quot;Accept-Language&quot;.equalsIgnoreCase(key) </span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">				        		|| &quot;Accept-Encoding&quot;.equalsIgnoreCase(key)</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">				        		|| key.startsWith(&quot;X-&quot;)</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">				        		|| &quot;Origin&quot;.equalsIgnoreCase(key)) {</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">				        		for (String value : values) {</span>
+<span class="nc" id="L230">				        			httpPost.addHeader(key, value);</span>
+				        		}
+				        	}
+<span class="nc" id="L233">				        });</span>
+<span class="nc" id="L234">				        httpPost.setConfig(org.apache.hc.client5.http.config.RequestConfig.custom()</span>
+<span class="nc" id="L235">				            .setResponseTimeout(Timeout.ofSeconds(0))</span>
+<span class="nc" id="L236">				            .build());</span>
+		
+				        // Execute request asynchronously
+<span class="nc" id="L239">				        executionChain = executionChain.thenRunAsync(() -&gt; {</span>
+<span class="nc" id="L240">				        	try (var httpClient = createHttpClient(); CloseableHttpResponse response = httpClient.execute(httpPost)) {</span>
+<span class="nc" id="L241">					            String servletResponse = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);</span>
+					            
+<span class="nc" id="L243">								BasicCookieStore responseCookieStore = null;</span>
+					            // Send servletResponse back to the client
+<span class="nc bnc" id="L245" title="All 4 branches missed.">								if (servletResponse != null &amp;&amp; !servletResponse.isEmpty()) {</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">									if (response.getCode() &gt;= 400) {</span>
+<span class="nc" id="L247">										CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;Bad Request to /zkau: &quot; + servletResponse);</span>
+									}
+<span class="nc" id="L249">									Map&lt;String, String&gt; headersMap = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">									for (Header header : response.getHeaders()) {</span>
+<span class="nc" id="L251">										String name = header.getName();</span>
+<span class="nc" id="L252">										String value = header.getValue();</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">										if (&quot;Set-Cookie&quot;.equalsIgnoreCase(name)) {</span>
+<span class="nc" id="L254">											String[] cookieElements = value.split(&quot;;&quot;);</span>
+<span class="nc" id="L255">											String[] pair = cookieElements[0].split(&quot;=&quot;, 2);</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">											if (pair.length == 2) {</span>
+												//localhost for internal request, no domain for browser cookie
+<span class="nc" id="L258">												BasicClientCookie cookie = new BasicClientCookie(pair[0].trim(), pair[1].trim());</span>
+<span class="nc" id="L259">												cookie.setDomain(&quot;localhost&quot;);</span>
+												
+<span class="nc bnc" id="L261" title="All 2 branches missed.">												if (responseCookieStore == null) {</span>
+<span class="nc" id="L262">													responseCookieStore = new BasicCookieStore();</span>
+												}
+<span class="nc" id="L264">												BasicClientCookie responseCookie = new BasicClientCookie(pair[0].trim(), pair[1].trim());</span>
+												
+<span class="nc" id="L266">												Date expiryDate = null;</span>
+												// process max-age and other attributes
+<span class="nc bnc" id="L268" title="All 2 branches missed.">												for (int i = 1; i &lt; cookieElements.length; i++) {</span>
+<span class="nc" id="L269">													String attr = cookieElements[i].trim();</span>
+<span class="nc" id="L270">													String lowerAttr = attr.toLowerCase();</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">													if (lowerAttr.startsWith(&quot;max-age=&quot;)) {</span>
+														try {
+<span class="nc" id="L273">															long maxAge = Long.parseLong(attr.substring(8));</span>
+<span class="nc" id="L274">															expiryDate = new Date(System.currentTimeMillis() + maxAge * 1000L);</span>
+<span class="nc" id="L275">														} catch (Exception e) {}</span>
+<span class="nc bnc" id="L276" title="All 4 branches missed.">													} else if (lowerAttr.startsWith(&quot;expires=&quot;) &amp;&amp; expiryDate == null) {</span>
+														try {
+<span class="nc" id="L278">															String expiresValue = attr.substring(8);</span>
+<span class="nc" id="L279">															expiryDate = DateUtils.parseDate(expiresValue);</span>
+<span class="nc" id="L280">														} catch (Exception e) {}</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">													} else if (lowerAttr.startsWith(&quot;path=&quot;)) {</span>
+<span class="nc" id="L282">														String path = attr.substring(5);</span>
+<span class="nc" id="L283">														cookie.setPath(path);</span>
+<span class="nc" id="L284">														responseCookie.setPath(path);</span>
+													}
+												}
+<span class="nc bnc" id="L287" title="All 2 branches missed.">												if (expiryDate != null) {</span>
+<span class="nc" id="L288">													cookie.setExpiryDate(expiryDate);</span>
+<span class="nc" id="L289">													responseCookie.setExpiryDate(expiryDate);</span>
+												}
+												
+<span class="nc" id="L292">												cookieStore.addCookie(cookie);</span>
+<span class="nc" id="L293">												responseCookieStore.addCookie(responseCookie);</span>
+											}
+										}
+<span class="nc" id="L296">										headersMap.merge(name, value, (existing, replacement) -&gt; existing + &quot;, &quot; + replacement);										</span>
+									}
+<span class="nc" id="L298">									JSONObject jsonResponse = new JSONObject();</span>
+<span class="nc" id="L299">									jsonResponse.put(&quot;headers&quot;, headersMap);</span>
+<span class="nc" id="L300">									jsonResponse.put(&quot;status&quot;, response.getCode());</span>
+<span class="nc" id="L301">									jsonResponse.put(&quot;responseText&quot;, servletResponse);</span>
+<span class="nc" id="L302">									jsonResponse.put(&quot;ajaxReqInf&quot;, jsonRequest);</span>
+									try {
+<span class="nc" id="L304">										session.getBasicRemote().sendText(jsonResponse.toString());</span>
+										//store cookie in http session for piggyback event in WebSocketServerPush
+<span class="nc bnc" id="L306" title="All 4 branches missed.">										if (responseCookieStore != null &amp;&amp; httpSession != null) {</span>
+<span class="nc" id="L307">											synchronized (httpSession) {</span>
+<span class="nc" id="L308">												Object existing = httpSession.getAttribute(WebSocketServerPush.WEBSOCKET_EVENT_COOKIE_STORE);</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">												if (existing instanceof BasicCookieStore existingStore) {</span>
+<span class="nc" id="L310">													responseCookieStore.getCookies().forEach(existingStore::addCookie);</span>
+<span class="nc" id="L311">												} else {</span>
+<span class="nc" id="L312">													httpSession.setAttribute(WebSocketServerPush.WEBSOCKET_EVENT_COOKIE_STORE, responseCookieStore);</span>
+												}
+											}
+										}
+<span class="nc" id="L316">									} catch (IOException e) {</span>
+<span class="nc" id="L317">										CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;Error sending response to client&quot;, e);</span>
+									}
+<span class="nc" id="L319">								} else {</span>
+									try {
+<span class="nc" id="L321">										session.getBasicRemote().sendText(errorResponse(&quot;Error: No response from /zkau&quot;));</span>
+<span class="nc" id="L322">									} catch (IOException e) {</span>
+<span class="nc" id="L323">										CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;Error sending response to client&quot;, e);</span>
+									}
+								}
+<span class="nc" id="L326">					        } catch (Throwable e) {</span>
+<span class="nc" id="L327">					        	CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;Error processing /zkau request&quot;, e);</span>
+					        	//notify client about the error
+								try {
+<span class="nc" id="L330">									session.getBasicRemote().sendText(errorResponse(&quot;Error processing /zkau request&quot;));</span>
+<span class="nc" id="L331">								} catch (Throwable e1) {</span>
+<span class="nc" id="L332">									CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;Error sending response to client&quot;, e1);</span>
+								}
+					        }
+<span class="nc" id="L335">				        }, executorService);</span>
+<span class="nc" id="L336">			        } catch (Throwable e) {</span>
+<span class="nc" id="L337">			        	CLogger.getCLogger(getClass()).log(Level.WARNING, &quot;Error processing /zkau request&quot;, e);</span>
+			        }
+		        }
+			}
+		}
+<span class="nc" id="L342">	}</span>
+
+	private String errorResponse(String text) {
+<span class="nc" id="L345">		JSONObject jsonResponse = new JSONObject();</span>
+<span class="nc" id="L346">		jsonResponse.put(&quot;status&quot;, 500);</span>
+<span class="nc" id="L347">		jsonResponse.put(&quot;statusText&quot;, text);</span>
+<span class="nc" id="L348">		return jsonResponse.toString();</span>
+	}
+
+	// Disable SSL verification and host name verification for internal request
+<span class="nc" id="L352">	private static final SSLContext sslContext = createSSLContext();</span>
+
+	private static SSLContext createSSLContext() {
+		try {
+<span class="nc" id="L356">			return SSLContextBuilder.create()</span>
+<span class="nc" id="L357">					.loadTrustMaterial(TrustAllStrategy.INSTANCE)</span>
+<span class="nc" id="L358">					.build();</span>
+<span class="nc" id="L359">		} catch (Exception e) {</span>
+<span class="nc" id="L360">			CLogger.getCLogger(ServerPushEndPoint.class).log(Level.SEVERE, &quot;Failed to create SSLContext&quot;, e);</span>
+<span class="nc" id="L361">			return null;</span>
+		}
+	}
+	
+<span class="nc" id="L365">	private static final SSLConnectionSocketFactory sslSocketFactory = createSSLSocketFactory();</span>
+	private static SSLConnectionSocketFactory createSSLSocketFactory() {
+<span class="nc" id="L367">		return SSLConnectionSocketFactoryBuilder.create()</span>
+<span class="nc" id="L368">				.setSslContext(sslContext)</span>
+<span class="nc" id="L369">				.setHostnameVerifier(NoopHostnameVerifier.INSTANCE)</span>
+<span class="nc" id="L370">				.build();</span>
+	}
+	
+	private CloseableHttpClient createHttpClient() {
+		try {
+			//use basic instead of pooling connection manager to avoid connection leak, as http client instance is created per each au request
+<span class="nc" id="L376">			BasicHttpClientConnectionManager connectionManager = new BasicHttpClientConnectionManager(</span>
+<span class="nc" id="L377">					RegistryBuilder.&lt;ConnectionSocketFactory&gt;create()</span>
+<span class="nc" id="L378">							.register(&quot;http&quot;, PlainConnectionSocketFactory.getSocketFactory())</span>
+<span class="nc" id="L379">							.register(&quot;https&quot;, sslSocketFactory)</span>
+<span class="nc" id="L380">							.build());</span>
+
+<span class="nc" id="L382">			return HttpClients.custom()</span>
+<span class="nc" id="L383">					.setConnectionManager(connectionManager)</span>
+<span class="nc" id="L384">					.setDefaultCookieStore(cookieStore)</span>
+<span class="nc" id="L385">					.build();</span>
+<span class="nc" id="L386">		} catch (Exception e) {</span>
+<span class="nc" id="L387">			throw new RuntimeException(&quot;Failed to initialize ServerPushEndPoint HttpClient&quot;, e);</span>
+		}
+	}
+	/**
+	 * Message client to send echo event to server
+	 */
+	public void echo() {
+<span class="nc bnc" id="L394" title="All 2 branches missed.">		if (session != null) {</span>
+			try {				
+<span class="nc" id="L396">				session.getBasicRemote().sendText(&quot;echo&quot;);</span>
+<span class="nc" id="L397">			} catch (IOException e) {</span>
+<span class="nc" id="L398">				CLogger.getCLogger(getClass()).log(Level.WARNING, e.getMessage(), e);</span>
+			}
+		}
+<span class="nc" id="L401">	}</span>
+
+<span class="nc" id="L403">    private final AtomicBoolean messageIndicator = new AtomicBoolean(false);</span>
+
+    private void setMessageIndicator() {
+<span class="nc" id="L406">		messageIndicator.set(true);</span>
+<span class="nc" id="L407">	}</span>
+
+	public boolean getAndResetMessageIndicator() {
+<span class="nc" id="L410">		return messageIndicator.getAndSet(false);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

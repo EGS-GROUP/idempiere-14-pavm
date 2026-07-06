@@ -1,0 +1,655 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>GridTabCSVExporter.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.impexp</a> &gt; <span class="el_source">GridTabCSVExporter.java</span></div><h1>GridTabCSVExporter.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2012 Carlos Ruiz                                             *
+ * Copyright (C) 2012 Trek Global                                             *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.impexp;
+
+import static org.compiere.model.SystemIDs.REFERENCE_PAYMENTRULE;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+
+import org.adempiere.base.IGridTabExporter;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.model.MTabCustomization;
+import org.compiere.model.GridField;
+import org.compiere.model.GridTab;
+import org.compiere.model.GridTable;
+import org.compiere.model.GridWindow;
+import org.compiere.model.GridWindowVO;
+import org.compiere.model.I_AD_EntityType;
+import org.compiere.model.MColumn;
+import org.compiere.model.MLocation;
+import org.compiere.model.MQuery;
+import org.compiere.model.MRefList;
+import org.compiere.model.MTab;
+import org.compiere.model.MTable;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Evaluator;
+import org.compiere.util.Ini;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.supercsv.cellprocessor.FmtBool;
+import org.supercsv.cellprocessor.FmtDate;
+import org.supercsv.cellprocessor.FmtNumber;
+import org.supercsv.cellprocessor.Optional;
+import org.supercsv.cellprocessor.ift.CellProcessor;
+import org.supercsv.io.CsvMapWriter;
+import org.supercsv.io.ICsvMapWriter;
+import org.supercsv.prefs.CsvPreference;
+
+/**
+ * CSV Exporter for GridTab
+ * @author Carlos Ruiz
+ * @author Juan David Arboleda 
+ */
+<span class="nc" id="L70">public class GridTabCSVExporter implements IGridTabExporter</span>
+{
+	/**	Logger			*/
+<span class="nc" id="L73">	private static final CLogger log = CLogger.getCLogger(GridTabCSVExporter.class);</span>
+
+	@Override
+	public void export(GridTab gridTab, List&lt;GridTab&gt; childs, boolean currentRowOnly, File file,int indxDetailSelected) {
+
+<span class="nc" id="L78">		ICsvMapWriter mapWriter = null;</span>
+<span class="nc" id="L79">		Map&lt;GridTab,GridField[]&gt; tabMapDetails = new HashMap&lt;GridTab, GridField[]&gt;();</span>
+<span class="nc" id="L80">		MTable table= null;</span>
+<span class="nc" id="L81">		MTable tableDetail = null;</span>
+		try {
+<span class="nc" id="L83">			FileOutputStream fileOut = new FileOutputStream (file); 			</span>
+<span class="nc" id="L84">			OutputStreamWriter oStrW = new OutputStreamWriter(fileOut, Ini.getCharset());</span>
+<span class="nc" id="L85">			BufferedWriter bw = new BufferedWriter(oStrW); </span>
+<span class="nc" id="L86">			mapWriter = new CsvMapWriter(bw, CsvPreference.STANDARD_PREFERENCE);</span>
+<span class="nc" id="L87">			String isValidTab = isValidTabToExport(gridTab);</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">			if(isValidTab!=null){</span>
+<span class="nc" id="L89">			   throw new AdempiereException(isValidTab);</span>
+			}
+<span class="nc" id="L91">			GridTable gt = gridTab.getTableModel();</span>
+<span class="nc" id="L92">			GridField[] gridFields = getFields(gridTab);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">			if(gridFields.length==0) </span>
+<span class="nc" id="L94">			   throw new AdempiereException(gridTab.getName()+&quot;: Did not find any available field to be exported.&quot;);</span>
+			
+<span class="nc" id="L96">			List&lt;String&gt; headArray = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L97">			List&lt;CellProcessor&gt; procArray = new ArrayList&lt;CellProcessor&gt;();</span>
+<span class="nc" id="L98">			table = MTable.get(Env.getCtx(), gridTab.getTableName());</span>
+<span class="nc" id="L99">			int specialHDispayType = 0; </span>
+			//master tab
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			for (int idxfld = 0; idxfld &lt; gridFields.length; idxfld++) {</span>
+<span class="nc" id="L102">				GridField field = gridFields[idxfld];</span>
+<span class="nc" id="L103">				MColumn column = MColumn.get(Env.getCtx(), field.getAD_Column_ID());		</span>
+				//Special Columns 
+<span class="nc bnc" id="L105" title="All 2 branches missed.">				if(DisplayType.Location == field.getDisplayType()){</span>
+<span class="nc" id="L106">				   specialHDispayType = DisplayType.Location;</span>
+<span class="nc" id="L107">				   continue;</span>
+<span class="nc bnc" id="L108" title="All 4 branches missed.">				} else if (! (field.isDisplayed() || field.isDisplayedGrid())) {</span>
+<span class="nc" id="L109">				   continue;</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">				} else if (DisplayType.Binary == field.getDisplayType()) {</span>
+<span class="nc" id="L111">				   continue;	</span>
+				}
+<span class="nc" id="L113">				String headName = resolveColumnName(table, column);</span>
+<span class="nc" id="L114">				headArray.add(headName);</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">				if (DisplayType.Date == field.getDisplayType()) {</span>
+<span class="nc" id="L116">					procArray.add(new Optional(new FmtDate(DisplayType.DEFAULT_DATE_FORMAT)));</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">				} else if (DisplayType.DateTime == field.getDisplayType()) {</span>
+<span class="nc" id="L118">					procArray.add(new Optional(new FmtDate(DisplayType.DEFAULT_TIMESTAMP_FORMAT)));</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">				} else if (DisplayType.Time == field.getDisplayType()) {</span>
+<span class="nc" id="L120">					procArray.add(new Optional(new FmtDate(DisplayType.DEFAULT_TIME_FORMAT)));</span>
+<span class="nc bnc" id="L121" title="All 4 branches missed.">				} else if (DisplayType.Integer == field.getDisplayType() || DisplayType.isNumeric(field.getDisplayType())) {</span>
+<span class="nc" id="L122">					DecimalFormat nf = DisplayType.getNumberFormat(field.getDisplayType());</span>
+<span class="nc" id="L123">					nf.setGroupingUsed(false);</span>
+<span class="nc" id="L124">					procArray.add(new Optional(new FmtNumber(nf)));</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">				} else if (DisplayType.YesNo == field.getDisplayType()) {</span>
+<span class="nc" id="L126">					procArray.add(new Optional(new FmtBool(&quot;Y&quot;, &quot;N&quot;)));</span>
+<span class="nc" id="L127">				} else { // lookups and text</span>
+<span class="nc" id="L128">					procArray.add(new SanitizeSuperCsvCell(new Optional()));</span>
+				}
+			}
+			
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			if(specialHDispayType &gt; 0){</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">			   for(String specialHeader:resolveSpecialColumnName(specialHDispayType)){</span>
+<span class="nc" id="L134">				   headArray.add(gridTab.getTableName()+&quot;&gt;&quot;+specialHeader);</span>
+<span class="nc" id="L135">				   procArray.add(null);</span>
+			   }	
+			}
+			//Details up to tab level 1 
+<span class="nc bnc" id="L139" title="All 2 branches missed.">			if(childs.size() &gt; 0){		</span>
+<span class="nc" id="L140">			  int specialDetDispayType = 0; </span>
+
+<span class="nc bnc" id="L142" title="All 2 branches missed.">			  for(GridTab detail: childs){</span>
+				 
+<span class="nc bnc" id="L144" title="All 2 branches missed.">				 if(!detail.isDisplayed())</span>
+<span class="nc" id="L145">					continue;</span>
+				 
+<span class="nc bnc" id="L147" title="All 2 branches missed.">				 if(detail.getDisplayLogic()!=null){</span>
+					//TODO: it's need? DisplayLogic is evaluated when call detail.isDisplayed() 
+<span class="nc bnc" id="L149" title="All 4 branches missed.">				    if(currentRowOnly &amp;&amp; !Evaluator.evaluateLogic(detail,detail.getDisplayLogic()))</span>
+<span class="nc" id="L150">					   continue;</span>
+				 }
+		 		 
+<span class="nc bnc" id="L153" title="All 2 branches missed.">				 if(detail.getTabLevel()&gt;1) </span>
+<span class="nc" id="L154">	 			    continue; </span>
+				  
+<span class="nc" id="L156">				 isValidTab = isValidTabToExport(detail);</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">				 if (isValidTab!=null){</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">					 if (log.isLoggable(Level.INFO)) log.info(isValidTab);</span>
+<span class="nc" id="L159">					 continue;</span>
+				 }	
+<span class="nc" id="L161">				 tableDetail = MTable.get(Env.getCtx(), detail.getTableName());	 </span>
+<span class="nc" id="L162">				 gridFields = getFields(detail);</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">				 for(GridField field : gridFields){</span>
+<span class="nc" id="L164">					 MColumn columnDetail  = MColumn.get(Env.getCtx(), field.getAD_Column_ID());</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">					 if(DisplayType.Location == field.getDisplayType()){</span>
+<span class="nc" id="L166">						specialDetDispayType = DisplayType.Location;</span>
+<span class="nc" id="L167">						continue;</span>
+					 }
+<span class="nc" id="L169">					 String  headNameDetail= detail.getTableName()+&quot;&gt;&quot;+resolveColumnName(tableDetail, columnDetail);</span>
+<span class="nc" id="L170">					 headArray.add(headNameDetail); </span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">					 if (DisplayType.Date == field.getDisplayType()) {</span>
+<span class="nc" id="L172">						 procArray.add(new Optional(new FmtDate(DisplayType.DEFAULT_DATE_FORMAT)));</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">					 } else if (DisplayType.DateTime == field.getDisplayType()) {</span>
+<span class="nc" id="L174">						 procArray.add(new Optional(new FmtDate(DisplayType.DEFAULT_TIMESTAMP_FORMAT)));</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">					 } else if (DisplayType.Time == field.getDisplayType()) {</span>
+<span class="nc" id="L176">						 procArray.add(new Optional(new FmtDate(DisplayType.DEFAULT_TIME_FORMAT)));</span>
+<span class="nc bnc" id="L177" title="All 4 branches missed.">					 } else if (DisplayType.Integer == field.getDisplayType() || DisplayType.isNumeric(field.getDisplayType())) {</span>
+<span class="nc" id="L178">						 DecimalFormat nf = DisplayType.getNumberFormat(field.getDisplayType());</span>
+<span class="nc" id="L179">						 nf.setGroupingUsed(false);</span>
+<span class="nc" id="L180">						 procArray.add(new Optional(new FmtNumber(nf)));</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">					 } else if (DisplayType.YesNo == field.getDisplayType()) {</span>
+<span class="nc" id="L182">						 procArray.add(new Optional(new FmtBool(&quot;Y&quot;, &quot;N&quot;)));</span>
+<span class="nc" id="L183">					 } else { // lookups and text</span>
+<span class="nc" id="L184">						 procArray.add(new SanitizeSuperCsvCell(new Optional()));</span>
+					 }
+				} 
+<span class="nc bnc" id="L187" title="All 2 branches missed.">			    if(specialDetDispayType &gt; 0){</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">				   for(String specialHeader:resolveSpecialColumnName(specialDetDispayType)){</span>
+<span class="nc" id="L189">					   headArray.add(detail.getTableName()+&quot;&gt;&quot;+specialHeader);</span>
+<span class="nc" id="L190">					   procArray.add(null);</span>
+				   }
+<span class="nc" id="L192">				   specialDetDispayType = 0;</span>
+			    }				 
+<span class="nc" id="L194">			    tabMapDetails.put(detail,gridFields); </span>
+			}
+<span class="nc" id="L196">				gridFields = null;</span>
+		   }
+				
+			// the header elements are used to map the bean values to each column (names must match)
+<span class="nc" id="L200">			String[] header = headArray.toArray(new String[headArray.size()]);</span>
+<span class="nc" id="L201">			CellProcessor[] processors = procArray.toArray(new CellProcessor[procArray.size()]);</span>
+			// write the header
+<span class="nc" id="L203">			mapWriter.writeHeader(header);</span>
+			// write the beans
+<span class="nc" id="L205">			int start = 0;</span>
+<span class="nc" id="L206">			int end = 0;</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">			if (currentRowOnly) {</span>
+<span class="nc" id="L208">				start = gridTab.getCurrentRow();</span>
+<span class="nc" id="L209">				end = start + 1;</span>
+<span class="nc" id="L210">			} else {</span>
+<span class="nc" id="L211">				end = gt.getRowCount();</span>
+			}
+<span class="nc bnc" id="L213" title="All 2 branches missed.">			for (int idxrow = start; idxrow &lt; end; idxrow++) {</span>
+<span class="nc" id="L214">				Map&lt;String, Object&gt; row = new HashMap&lt;String, Object&gt;();</span>
+<span class="nc" id="L215">				int idxfld = 0;	</span>
+<span class="nc" id="L216">				int index =0;</span>
+<span class="nc" id="L217">				int rowDetail=0;  </span>
+<span class="nc" id="L218">				int record_Id = 0;</span>
+
+<span class="nc" id="L220">				gridTab.setCurrentRow(idxrow);</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">				for(GridField field : getFields(gridTab)){   </span>
+<span class="nc" id="L222">					MColumn column = MColumn.get(Env.getCtx(), field.getAD_Column_ID());</span>
+<span class="nc" id="L223">					Object value = null;</span>
+<span class="nc" id="L224">					String headName = header[idxfld];</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">					if(DisplayType.Location == field.getDisplayType()){</span>
+<span class="nc" id="L226">					   Object fResolved =resolveValue(gridTab, table, column, idxrow, column.getColumnName());  </span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">					   if (fResolved!=null)  		   </span>
+<span class="nc" id="L228">						   record_Id= Integer.parseInt(fResolved.toString());</span>
+					   
+<span class="nc" id="L230">					   continue;</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">					}else if (DisplayType.Payment == field.getDisplayType()){</span>
+<span class="nc" id="L232">					   value = MRefList.getListName(Env.getCtx(),REFERENCE_PAYMENTRULE, gridTab.getValue(idxrow, header[idxfld]).toString()); 		 </span>
+<span class="nc" id="L233">					}else{	</span>
+<span class="nc" id="L234">					   value = resolveValue(gridTab, table, column, idxrow, headName);</span>
+					}
+<span class="nc" id="L236">					row.put(headName,value);</span>
+<span class="nc" id="L237">					idxfld++;</span>
+<span class="nc" id="L238">					index++;</span>
+				} 
+			    	
+<span class="nc bnc" id="L241" title="All 4 branches missed.">				if(specialHDispayType &gt; 0 &amp;&amp; record_Id &gt; 0){</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">				   switch(specialHDispayType) {</span>
+			         case DisplayType.Location:  
+<span class="nc" id="L244">			              MLocation address = new MLocation (Env.getCtx(),record_Id,null);  </span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">						  for(String specialHeader:resolveSpecialColumnName(specialHDispayType)){</span>
+<span class="nc" id="L246">							  String columnName = specialHeader.substring(specialHeader.indexOf(&quot;&gt;&quot;)+1,specialHeader.length());		</span>
+<span class="nc" id="L247">							  Object sValue = null; </span>
+<span class="nc bnc" id="L248" title="All 4 branches missed.">							  if (columnName.indexOf(&quot;[&quot;) &gt;= 0 &amp;&amp; columnName .endsWith(&quot;]&quot;)){ </span>
+<span class="nc" id="L249">								  int indx = columnName.indexOf(&quot;[&quot;); </span>
+<span class="nc" id="L250">								  String columnRef= columnName.substring(indx+1,columnName.length()-1);	</span>
+<span class="nc" id="L251">								  String tableRef = columnName.substring(0,indx);</span>
+<span class="nc" id="L252">								  Object record_id= address.get_Value(tableRef); </span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">								  if (record_id!=null)</span>
+<span class="nc" id="L254">								      sValue = queryExecute(columnRef,tableRef,record_id);</span>
+<span class="nc" id="L255">							  }else{</span>
+<span class="nc" id="L256">								  sValue = address.get_Value(columnName);	</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">								  if (DisplayType.YesNo == MColumn.get(Env.getCtx(), MLocation.Table_Name, columnName).getAD_Reference_ID()) {</span>
+<span class="nc bnc" id="L258" title="All 4 branches missed.">									  if (sValue != null &amp;&amp; (Boolean) sValue)</span>
+<span class="nc" id="L259">										  sValue = &quot;Y&quot;;</span>
+<span class="nc bnc" id="L260" title="All 4 branches missed.">									  else if (sValue != null &amp;&amp; ! (Boolean) sValue)</span>
+<span class="nc" id="L261">										  sValue = &quot;N&quot;;</span>
+								  }
+							  }						
+<span class="nc" id="L264">							  row.put(gridTab.getTableName()+&quot;&gt;&quot;+specialHeader,sValue);</span>
+<span class="nc" id="L265">							  idxfld++;</span>
+<span class="nc" id="L266">							  index++;</span>
+						 }
+			             break;
+			         }	
+				}
+
+<span class="nc bnc" id="L272" title="All 2 branches missed.">				if(childs.size()&gt;0){</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">					for (GridTab childTab:childs){</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">						if (!childTab.isLoadComplete()){</span>
+<span class="nc" id="L275">							childTab.initTab(false);</span>
+						}
+						
+<span class="nc" id="L278">						childTab.query(false, 0, 0);</span>
+					}
+					
+<span class="nc" id="L281">					while(true){</span>
+<span class="nc" id="L282">						 Map&lt;String, Object&gt; tmpRow = resolveMasterDetailRow(rowDetail,tabMapDetails,headArray,index); 					  </span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">						 if(tmpRow!= null){   							</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">						   for(Map.Entry&lt;String, Object&gt; details : tmpRow.entrySet()) {	</span>
+<span class="nc" id="L285">							   String detailColumn = details.getKey();</span>
+<span class="nc" id="L286">							   Object value =details.getValue();</span>
+<span class="nc" id="L287">							   row.put(detailColumn , value);</span>
+						   }
+<span class="nc" id="L289">						   rowDetail++;</span>
+<span class="nc" id="L290">						   mapWriter.write(row, header,processors);</span>
+						}else{
+						   break;
+						}
+					 
+			    	}  	
+				}
+				
+<span class="nc bnc" id="L298" title="All 2 branches missed.">				if(rowDetail==0)</span>
+<span class="nc" id="L299">				    mapWriter.write(row, header,processors);</span>
+				
+<span class="nc" id="L301">				idxfld=0;</span>
+			}
+<span class="nc" id="L303">		} catch (IOException e) {</span>
+<span class="nc" id="L304">			throw new AdempiereException(e);</span>
+		} finally {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">			if (mapWriter != null) {</span>
+				try {
+<span class="nc" id="L308">					mapWriter.close();</span>
+<span class="nc" id="L309">				} catch (IOException e) {</span>
+<span class="nc" id="L310">					e.printStackTrace();</span>
+				}
+			}
+		}
+<span class="nc" id="L314">	}</span>
+	
+	/**
+	 * @param gridTab
+	 * @return error message or null
+	 */
+	private String isValidTabToExport(GridTab gridTab){
+<span class="nc" id="L321">	    String result=null;</span>
+	    
+<span class="nc" id="L323">	    MTab tab = MTab.get(gridTab.getAD_Tab_ID());</span>
+
+<span class="nc bnc" id="L325" title="All 2 branches missed.">		if (tab.isReadOnly())</span>
+<span class="nc" id="L326">		   result = Msg.getMsg(Env.getCtx(),&quot;FieldIsReadOnly&quot;, new Object[] {gridTab.getName()});</span>
+		
+<span class="nc" id="L328">		return result;</span>
+	}
+	
+	/**
+	 * @param currentDetRow current detail row number
+	 * @param tabMapDetails
+	 * @param headArray column headers
+	 * @param idxfld
+	 * @return Detail Row(Map{Column Header, Value})
+	 */
+	private Map&lt;String, Object&gt; resolveMasterDetailRow(int currentDetRow,Map&lt;GridTab,GridField[]&gt; tabMapDetails,List&lt;String&gt;headArray,int idxfld){
+<span class="nc" id="L339">		Map&lt;String,Object&gt; activeRow = new HashMap&lt;String,Object&gt;();</span>
+<span class="nc" id="L340">		Object value = null;</span>
+<span class="nc" id="L341">		boolean hasDetails = false;</span>
+<span class="nc" id="L342">		int specialDetDispayType = 0; </span>
+		
+<span class="nc bnc" id="L344" title="All 2 branches missed.">		if (currentDetRow &gt; 0 )</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">		   for(int j =0;j&lt;idxfld;j++)</span>
+<span class="nc" id="L346">			   activeRow.put(headArray.get(j), null);	</span>
+		
+<span class="nc bnc" id="L348" title="All 2 branches missed.">		for(Map.Entry&lt;GridTab, GridField[]&gt; childTabDetail : tabMapDetails.entrySet()) {		</span>
+<span class="nc" id="L349">		    GridTab childTab = childTabDetail.getKey();</span>
+<span class="nc" id="L350">			Map&lt;String,Object&gt; row = new HashMap&lt;String,Object&gt;();</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">		    if (childTab.getRowCount() &gt; 0) {</span>
+<span class="nc" id="L352">		    	int specialRecordId = 0;</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">		    	for(GridField field : childTabDetail.getValue()){</span>
+<span class="nc" id="L354">				    MColumn column = MColumn.get(Env.getCtx(), field.getAD_Column_ID());</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">					if(DisplayType.Location == column.getAD_Reference_ID()){</span>
+<span class="nc" id="L356">					   specialDetDispayType = DisplayType.Location;</span>
+<span class="nc" id="L357">					   Object fResolved = resolveValue(childTab, MTable.get(Env.getCtx(),childTab.getTableName()), column, currentDetRow,column.getColumnName());</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">					   if(fResolved!=null)</span>
+<span class="nc" id="L359">					      specialRecordId = Integer.parseInt(fResolved.toString());</span>
+				       
+<span class="nc" id="L361">					   continue;</span>
+				    }
+<span class="nc" id="L363">				    MTable tableDetail = MTable.get(Env.getCtx(), childTab.getTableName());</span>
+<span class="nc" id="L364">				    String headName = headArray.get(headArray.indexOf(childTab.getTableName()+&quot;&gt;&quot;+resolveColumnName(tableDetail,column))); </span>
+<span class="nc" id="L365">				    value = resolveValue(childTab, MTable.get(Env.getCtx(),childTab.getTableName()), column, currentDetRow, headName.substring(headName.indexOf(&quot;&gt;&quot;)+ 1,headName.length()));</span>
+				    
+<span class="nc bnc" id="L367" title="All 4 branches missed.">				    if(DisplayType.Payment == field.getDisplayType() &amp;&amp; value != null)</span>
+<span class="nc" id="L368">					   value = MRefList.getListName(Env.getCtx(),REFERENCE_PAYMENTRULE, value.toString()); </span>
+					   
+<span class="nc" id="L370">				    row.put(headName,value);</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">				    if(value!=null)</span>
+<span class="nc" id="L372">				       hasDetails = true;</span>
+			    }	
+<span class="nc bnc" id="L374" title="All 4 branches missed.">				if(specialDetDispayType &gt; 0 &amp;&amp; specialRecordId &gt; 0){</span>
+<span class="nc" id="L375">					MLocation address = new MLocation (Env.getCtx(),specialRecordId,null);  </span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">					for(String specialHeader:resolveSpecialColumnName(specialDetDispayType)){</span>
+<span class="nc" id="L377">						String columnName = specialHeader.substring(specialHeader.indexOf(&quot;&gt;&quot;)+1,specialHeader.length());		</span>
+<span class="nc" id="L378">						Object sValue = null; </span>
+<span class="nc bnc" id="L379" title="All 4 branches missed.">						if (columnName.indexOf(&quot;[&quot;) &gt;= 0 &amp;&amp; columnName .endsWith(&quot;]&quot;)){ </span>
+<span class="nc" id="L380">							int indx = columnName.indexOf(&quot;[&quot;); </span>
+<span class="nc" id="L381">							String columnRef= columnName.substring(indx+1,columnName.length()-1);	</span>
+<span class="nc" id="L382">							String tableRef = columnName.substring(0,indx);</span>
+<span class="nc" id="L383">							Object record_id= address.get_Value(tableRef); </span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">							if(record_id!=null)</span>
+<span class="nc" id="L385">							   sValue = queryExecute(columnRef,tableRef,record_id);</span>
+<span class="nc" id="L386">						}else{</span>
+<span class="nc" id="L387">							sValue = address.get_Value(columnName);	</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">							if (DisplayType.YesNo == MColumn.get(Env.getCtx(), MLocation.Table_Name, columnName).getAD_Reference_ID()) {</span>
+<span class="nc bnc" id="L389" title="All 4 branches missed.">								if (sValue != null &amp;&amp; (Boolean) sValue)</span>
+<span class="nc" id="L390">									sValue = &quot;Y&quot;;</span>
+<span class="nc bnc" id="L391" title="All 4 branches missed.">								else if (sValue != null &amp;&amp; ! (Boolean) sValue)</span>
+<span class="nc" id="L392">									sValue = &quot;N&quot;;</span>
+							}
+						}						
+<span class="nc" id="L395">						row.put(childTab.getTableName()+&quot;&gt;&quot;+specialHeader,sValue);</span>
+					}	
+				}
+		    }
+<span class="nc" id="L399">	       activeRow.putAll(row);</span>
+		}
+<span class="nc bnc" id="L401" title="All 2 branches missed.">		if (hasDetails)</span>
+<span class="nc" id="L402">			return activeRow;</span>
+		else
+<span class="nc" id="L404">		    return null;</span>
+	}
+	
+	/**
+	 * @param childTab
+	 * @param parentGrid
+	 * @param currentParentIndex
+	 * @return
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true) // don't use any where, relate IDEMPIERE-2788
+	public String getWhereClause (GridTab childTab, GridTab parentGrid, int currentParentIndex){
+<span class="nc" id="L415">		String whereClau = null; </span>
+<span class="nc" id="L416">		String linkColumn = childTab.getLinkColumnName();</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">		if (parentGrid.getKeyColumnName().equals(linkColumn)){</span>
+<span class="nc" id="L418">	    	whereClau= linkColumn+MQuery.EQUAL + parentGrid.getKeyID(currentParentIndex);</span>
+<span class="nc" id="L419">		}else{</span>
+<span class="nc" id="L420">			whereClau= parentGrid.getKeyColumnName() + MQuery.EQUAL + parentGrid.getValue(currentParentIndex, parentGrid.getKeyColumnName());</span>
+		}
+<span class="nc" id="L422">	    return whereClau; </span>
+	}
+	
+	/**
+	 * @param gridTab
+	 * @param table
+	 * @param column
+	 * @param i row index
+	 * @param headName
+	 * @return column value
+	 */
+	private Object resolveValue(GridTab gridTab, MTable table, MColumn column, int i, String headName) {
+<span class="nc" id="L434">		Object value = null;</span>
+<span class="nc bnc" id="L435" title="All 4 branches missed.">		if (headName.indexOf(&quot;[&quot;) &gt;= 0 &amp;&amp; headName.endsWith(&quot;]&quot;)) {</span>
+<span class="nc" id="L436">			String foreignTable = column.getReferenceTableName();</span>
+<span class="nc" id="L437">			Object idO = gridTab.getValue(i, column.getColumnName());</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">			if (idO != null) {</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">				if (foreignTable.equals(&quot;AD_Ref_List&quot;)) {</span>
+<span class="nc" id="L440">					String ref = (String) idO;</span>
+<span class="nc" id="L441">					value = MRefList.getListName(Env.getCtx(), column.getAD_Reference_Value_ID(), ref);</span>
+<span class="nc" id="L442">				} else {</span>
+<span class="nc" id="L443">					MTable forTab = MTable.get(Env.getCtx(), foreignTable);</span>
+<span class="nc" id="L444">					String foreignKeyCol = forTab.getKeyColumns()[0];</span>
+<span class="nc" id="L445">					int start = headName.indexOf(&quot;[&quot;)+1;</span>
+<span class="nc" id="L446">					int end = headName.length()-1;</span>
+<span class="nc" id="L447">					String foreignColumn = headName.substring(start, end);</span>
+<span class="nc" id="L448">					StringBuilder select = new StringBuilder(&quot;SELECT &quot;)</span>
+<span class="nc" id="L449">							.append(foreignColumn).append(&quot; FROM &quot;)</span>
+<span class="nc" id="L450">							.append(foreignTable).append(&quot; WHERE &quot;)</span>
+<span class="nc" id="L451">							.append(foreignKeyCol).append(&quot;=?&quot;);</span>
+<span class="nc" id="L452">					value = DB.getSQLValueStringEx(null, select.toString(), idO);</span>
+				}
+			}
+<span class="nc" id="L455">		} else {</span>
+<span class="nc" id="L456">			value = gridTab.getValue(i, headName);</span>
+		}
+<span class="nc" id="L458">		return value;</span>
+	}
+	
+	/**
+	 * @param selectColumn
+	 * @param tableName
+	 * @param record_id
+	 * @return value of selectColumn
+	 */
+	private Object queryExecute(String selectColumn,String tableName,Object record_id){		
+		
+<span class="nc" id="L469">		StringBuilder select = new StringBuilder(&quot;SELECT &quot;)</span>
+<span class="nc" id="L470">		   					   .append(selectColumn).append(&quot; FROM &quot;)</span>
+<span class="nc" id="L471">		   					   .append(tableName.substring(0,tableName.length()-3)).append(&quot; WHERE &quot;)</span>
+<span class="nc" id="L472">		   					   .append(tableName).append(&quot;=?&quot;);</span>
+		
+<span class="nc" id="L474">	    return DB.getSQLValueStringEx(null, select.toString(),record_id);</span>
+	}
+	
+	/**
+	 * @param table
+	 * @param column
+	 * @return column header name
+	 */
+	private String resolveColumnName(MTable table, MColumn column) {
+<span class="nc" id="L483">		StringBuilder name = new StringBuilder(column.getColumnName());</span>
+<span class="nc bnc" id="L484" title="All 4 branches missed.">		if (DisplayType.isLookup(column.getAD_Reference_ID()) &amp;&amp; !DisplayType.isMultiID(column.getAD_Reference_ID())) {</span>
+			// resolve to identifier - search for value first, if not search for name - if not use the ID
+<span class="nc" id="L486">			String foreignTable = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L487" title="All 4 branches missed.">			if (&quot;AD_EntityType&quot;.equals(foreignTable) &amp;&amp; I_AD_EntityType.COLUMNNAME_AD_EntityType_ID.equals(column.getColumnName())){</span>
+<span class="nc" id="L488">				name.append(&quot;[EntityType]&quot;); // ColumnName is unique value IDEMPIERE-3375</span>
+<span class="nc bnc" id="L489" title="All 6 branches missed.">			}else if ( ! (&quot;AD_Language&quot;.equals(foreignTable) || &quot;AD_EntityType&quot;.equals(foreignTable) || &quot;AD_Ref_List&quot;.equals(foreignTable))) {</span>
+<span class="nc" id="L490">				MTable fTable = MTable.get(Env.getCtx(), foreignTable);</span>
+				// Hardcoded / do not check for Value on AD_Org, AD_User and AD_Ref_List, must use name for these two tables
+<span class="nc bnc" id="L492" title="All 2 branches missed.">				if (&quot;AD_Element&quot;.equals(foreignTable)){</span>
+<span class="nc" id="L493">					name.append(&quot;[ColumnName]&quot;); // ColumnName is unique value IDEMPIERE-3375</span>
+<span class="nc bnc" id="L494" title="All 6 branches missed.">				}else if (! (&quot;AD_Org&quot;.equals(foreignTable) || &quot;AD_User&quot;.equals(foreignTable)) &amp;&amp; fTable.getColumn(&quot;Value&quot;) != null) {</span>
+<span class="nc" id="L495">					name.append(&quot;[Value]&quot;); // fully qualified</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">				} else if (fTable.getColumn(&quot;Name&quot;) != null) {</span>
+<span class="nc" id="L497">					name.append(&quot;[Name]&quot;);</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">				} else if (fTable.getColumn(&quot;DocumentNo&quot;) != null) {</span>
+<span class="nc" id="L499">					name.append(&quot;[DocumentNo]&quot;);</span>
+				}
+			}
+<span class="nc bnc" id="L502" title="All 2 branches missed.">		} else if (DisplayType.Account == column.getAD_Reference_ID()) {</span>
+<span class="nc" id="L503">			name.append(&quot;[Combination]&quot;);</span>
+		}
+<span class="nc" id="L505">		return name.toString();</span>
+	}
+	
+	/**
+	 * Resolve extra columns for displayType. Implemented for DisplayType.Location.   
+	 * @param displayType
+	 * @return list of extra columns to export
+	 */
+	private ArrayList&lt;String&gt; resolveSpecialColumnName(int displayType){
+		
+<span class="nc" id="L515">		ArrayList&lt;String&gt; specialColumnNames = new ArrayList&lt;String&gt;();</span>
+<span class="nc bnc" id="L516" title="All 2 branches missed.">		if (DisplayType.Location == displayType ){</span>
+<span class="nc" id="L517">			GridWindowVO gWindowVO = Env.getMWindowVO(0,121,0); </span>
+<span class="nc" id="L518">			GridWindow m_mWindow = new GridWindow (gWindowVO);</span>
+<span class="nc" id="L519">			GridTab m_mTab = m_mWindow.getTab(0);</span>
+<span class="nc" id="L520">			m_mWindow.initTab(0);</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">			for(GridField locField:m_mTab.getFields()){</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">				if(&quot;AD_Client_ID&quot;.equals(locField.getColumnName()))</span>
+<span class="nc" id="L523">					continue;</span>
+<span class="nc bnc" id="L524" title="All 2 branches missed.">				if(&quot;AD_Org_ID&quot;.equals(locField.getColumnName()))</span>
+<span class="nc" id="L525">					continue;</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">				if(&quot;IsActive&quot;.equals(locField.getColumnName()))</span>
+<span class="nc" id="L527">					continue;</span>
+<span class="nc bnc" id="L528" title="All 2 branches missed.">				if(!locField.isDisplayed())</span>
+<span class="nc" id="L529">					continue;</span>
+				
+<span class="nc" id="L531">				String fName = resolveColumnName(MTable.get(Env.getCtx(), m_mTab.getTableName()),MColumn.get(Env.getCtx(), locField.getAD_Column_ID()));</span>
+<span class="nc" id="L532">				specialColumnNames.add(m_mTab.getTableName()+&quot;&gt;&quot;+ fName);	</span>
+			}	
+		}
+		
+<span class="nc" id="L536">		return specialColumnNames;</span>
+	}
+	
+	@Override
+	public String getFileExtension() {
+<span class="nc" id="L541">		return &quot;csv&quot;;</span>
+	}
+
+	@Override
+	public String getFileExtensionLabel() {
+<span class="nc" id="L546">		return Msg.getMsg(Env.getCtx(), &quot;FileCSV&quot;);</span>
+	}
+
+	@Override
+	public String getContentType() {
+<span class="nc" id="L551">		return &quot;application/csv&quot;;</span>
+	}
+
+	/**
+	 * Get fields for export.
+	 * @param gridTab
+	 * @return fields for gridTab
+	 */
+	private GridField[] getFields (GridTab gridTab) {
+<span class="nc" id="L560">		GridTable tableModel = gridTab.getTableModel();</span>
+<span class="nc" id="L561">		GridField[] tmpFields = tableModel.getFields();</span>
+<span class="nc" id="L562">		MTabCustomization tabCustomization = MTabCustomization.get(Env.getCtx(), Env.getAD_User_ID(Env.getCtx()), gridTab.getAD_Tab_ID(), null);</span>
+<span class="nc" id="L563">		GridField[] gridFields = null;</span>
+<span class="nc bnc" id="L564" title="All 2 branches missed.">		if (tabCustomization != null </span>
+<span class="nc bnc" id="L565" title="All 2 branches missed.">			&amp;&amp; tabCustomization.getAD_Tab_Customization_ID() &gt; 0 </span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">			&amp;&amp; !Util.isEmpty(tabCustomization.getCustom(), true)) </span>
+		{
+<span class="nc" id="L568">			String custom = tabCustomization.getCustom().trim();</span>
+<span class="nc" id="L569">			String[] customComponent = custom.split(&quot;;&quot;);</span>
+<span class="nc" id="L570">			String[] fieldIds = customComponent[0].split(&quot;[,]&quot;);</span>
+<span class="nc" id="L571">			List&lt;GridField&gt; fieldList = new ArrayList&lt;GridField&gt;();</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">			for (String fieldIdStr : fieldIds) </span>
+			{
+<span class="nc" id="L574">				fieldIdStr = fieldIdStr.trim();</span>
+<span class="nc bnc" id="L575" title="All 2 branches missed.">				if (fieldIdStr.length() == 0) continue;</span>
+<span class="nc" id="L576">				int AD_Field_ID = Integer.parseInt(fieldIdStr);</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">				for (GridField gridField : tmpFields) </span>
+				{
+<span class="nc bnc" id="L579" title="All 2 branches missed.">					if (gridField.getAD_Field_ID() == AD_Field_ID) {</span>
+<span class="nc bnc" id="L580" title="All 2 branches missed.">						if (   gridField.isVirtualColumn()</span>
+<span class="nc bnc" id="L581" title="All 2 branches missed.">							|| gridField.isEncrypted()</span>
+<span class="nc bnc" id="L582" title="All 2 branches missed.">							|| gridField.isEncryptedColumn()</span>
+<span class="nc bnc" id="L583" title="All 4 branches missed.">							|| !(gridField.isDisplayed() || gridField.isDisplayedGrid())</span>
+<span class="nc bnc" id="L584" title="All 2 branches missed.">							|| gridField.isReadOnly()</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">							|| DisplayType.Button == gridField.getDisplayType()</span>
+<span class="nc bnc" id="L586" title="All 2 branches missed.">							|| DisplayType.Binary == gridField.getDisplayType()</span>
+						   )
+<span class="nc" id="L588">							continue;</span>
+
+<span class="nc" id="L590">						fieldList.add(gridField);</span>
+<span class="nc" id="L591">						break;</span>
+					}
+				}
+			}
+<span class="nc" id="L595">			gridFields = fieldList.toArray(new GridField[0]);</span>
+<span class="nc" id="L596">		} </span>
+		else 
+		{
+<span class="nc" id="L599">			ArrayList&lt;GridField&gt; gridFieldList = new ArrayList&lt;GridField&gt;();</span>
+			
+<span class="nc bnc" id="L601" title="All 2 branches missed.">			for (GridField field:tmpFields)</span>
+			{
+<span class="nc bnc" id="L603" title="All 2 branches missed.">				if (&quot;AD_Client_ID&quot;.equals(field.getColumnName()))</span>
+<span class="nc" id="L604">					continue;</span>
+<span class="nc bnc" id="L605" title="All 2 branches missed.">				if (   DisplayType.Button == field.getDisplayType()</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">					|| DisplayType.Binary == field.getDisplayType())</span>
+<span class="nc" id="L607">					continue;</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">				if (   field.isVirtualColumn()</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">						|| field.isEncrypted()</span>
+<span class="nc bnc" id="L610" title="All 2 branches missed.">						|| field.isEncryptedColumn()</span>
+<span class="nc bnc" id="L611" title="All 4 branches missed.">						|| !(field.isDisplayed() || field.isDisplayedGrid()))</span>
+<span class="nc" id="L612">						continue;</span>
+<span class="nc bnc" id="L613" title="All 8 branches missed.">				if (field.isParentValue() || (!field.isReadOnly() &amp;&amp; field.isDisplayedGrid()) || field.isParentColumn())</span>
+<span class="nc" id="L614">					gridFieldList.add(field);</span>
+			}
+			
+<span class="nc" id="L617">			Collections.sort(gridFieldList, new Comparator&lt;GridField&gt;() {</span>
+				@Override
+				public int compare(GridField o1, GridField o2) {
+<span class="nc" id="L620">					return o1.getSeqNoGrid()-o2.getSeqNoGrid();</span>
+				}
+			});
+			
+<span class="nc" id="L624">			gridFields = new GridField[gridFieldList.size()];</span>
+<span class="nc" id="L625">			gridFieldList.toArray(gridFields);</span>
+		}
+<span class="nc" id="L627">		return gridFields;</span>
+	}
+
+	@Override
+	public String getSuggestedFileName(GridTab gridTab) {
+<span class="nc" id="L632">		return &quot;Export_&quot; + gridTab.getTableName() + &quot;.&quot; + getFileExtension();</span>
+	}
+
+	/**
+	 * {@inheritDoc}
+	 * just export display tab, one level deep, not read only and not account tab
+	 */
+	@Override
+	public boolean isExportableTab(GridTab detail) {
+<span class="nc bnc" id="L641" title="All 2 branches missed.">		if(!detail.isDisplayed())</span>
+<span class="nc" id="L642">			return false;</span>
+		
+<span class="nc bnc" id="L644" title="All 2 branches missed.">		 if(detail.getTabLevel()&gt;1) </span>
+<span class="nc" id="L645">			    return false; </span>
+		  
+<span class="nc bnc" id="L647" title="All 2 branches missed.">		 if (isValidTabToExport(detail) != null){</span>
+<span class="nc" id="L648">			 return false;</span>
+		 }
+		 
+<span class="nc" id="L651">		 return true;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

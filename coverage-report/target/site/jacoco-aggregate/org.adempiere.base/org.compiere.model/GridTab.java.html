@@ -1,0 +1,3736 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>GridTab.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">GridTab.java</span></div><h1>GridTab.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ * @contributor Victor Perez , e-Evolution.SC FR [ 1757088 ]                  *
+ *              Teo Sarca, www.arhipac.ro                                     *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.beans.PropertyChangeListener;
+import java.beans.PropertyChangeSupport;
+import java.io.Serializable;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.MessageFormat;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.StringTokenizer;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
+import java.util.logging.Level;
+
+import javax.script.Bindings;
+import javax.script.CompiledScript;
+import javax.script.ScriptEngine;
+import javax.swing.event.EventListenerList;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.GeneratedCodeCoverageExclusion;
+import org.adempiere.base.IColumnCallout;
+import org.adempiere.base.IColumnCalloutFactory;
+import org.adempiere.model.MTabCustomization;
+import org.adempiere.util.ContextRunnable;
+import org.adempiere.util.ICalloutUI;
+import org.compiere.Adempiere;
+import org.compiere.util.CLogMgt;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DefaultEvaluatee;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Evaluatee;
+import org.compiere.util.Evaluator;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ *	Tab Model.
+ *  - a combination of AD_Tab (the display attributes) and AD_Table information.
+ *  &lt;p&gt;
+ *  The Tab owns also it's Table model
+ *  and listens to data changes to update the Field values.
+ *
+ *  &lt;p&gt;
+ *  The Tab maintains the bound property: CurrentRow
+ *
+ *  &lt;pre&gt;
+ *  Event Hierarchies:
+ *      - dataChanged (from GridTable)
+ *          - setCurrentRow
+ *              - Update all Field Values
+ *
+ *      - setValue
+ *          - Update Field Value
+ *          - Callout
+ *  &lt;/pre&gt;
+ *  @author 	Jorg Janke
+ *  @version 	$Id: GridTab.java,v 1.10 2006/10/02 05:18:39 jjanke Exp $
+ *
+ *  @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ *  			&lt;li&gt;BF [ 1742159 ] Editable number field for inactive record
+ *  			&lt;li&gt;BF [ 1968598 ] Callout is not called if tab is processed
+ *  			&lt;li&gt;BF [ 2104022 ] GridTab.processCallout: throws NPE if callout returns null
+ *  			&lt;li&gt;FR [ 2846871 ] Add method org.compiere.model.GridTab.getIncludedTabs
+ *  				https://sourceforge.net/p/adempiere/feature-requests/805/
+ *  @author Teo Sarca, teo.sarca@gmail.com
+ *  			&lt;li&gt;BF [ 2873323 ] ABP: Do not concatenate strings in SQL queries
+ *  				https://sourceforge.net/p/adempiere/feature-requests/845/
+ *  			&lt;li&gt;BF [ 2874109 ] Tab ORDER BY clause is not supporting context variables
+ *  				https://sourceforge.net/p/adempiere/bugs/2162/
+ *  			&lt;li&gt;BF [ 2905287 ] GridTab query is not build correctly
+ *  				https://sourceforge.net/p/adempiere/bugs/2242/
+ *  			&lt;li&gt;BF [ 3007342 ] Included tab context conflict issue
+ *  				https://sourceforge.net/p/adempiere/bugs/2409/
+ *  @author Victor Perez , e-Evolution.SC
+ *  		&lt;li&gt;FR [1877902] Implement JSR 223 Scripting APIs to Callout
+ *  		&lt;li&gt;BF [ 2910358 ] Error in context when a field is found in different tabs.
+ *  			https://sourceforge.net/p/adempiere/bugs/2255/
+ *     		&lt;li&gt;BF [ 2910368 ] Error in context when IsActive field is found in different
+ *  			https://sourceforge.net/p/adempiere/bugs/2256/
+ *  @author Carlos Ruiz, qss FR [1877902]
+ *  @see  https://sourceforge.net/p/adempiere/feature-requests/318/ to FR [1877902]
+ *  @author Cristina Ghita, www.arhipac.ro FR [2870645] Set null value for an ID
+ *  @see  https://sourceforge.net/p/adempiere/feature-requests/835/
+ *  @author Paul Bowden, phib BF 2900767 Zoom to child tab - inefficient queries
+ *  @see https://sourceforge.net/p/adempiere/bugs/2222/
+ */
+public class GridTab implements DataStatusListener, Evaluatee, Serializable
+{
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -3682316929715061899L;
+
+	public static final String DEFAULT_STATUS_MESSAGE = &quot;NavigateOrUpdate&quot;;
+
+	/**
+	 *	Create Tab (Model) from Value Object.
+	 *  &lt;p&gt;
+	 *  MTab provides a property listener for changed rows and a
+	 *  DataStatusListener for communicating changes of the underlying data
+	 *  @param vo Value Object
+	 *  @param w
+	 */
+	public GridTab(GridTabVO vo, GridWindow w)
+	{
+<span class="nc" id="L137">		this(vo, w, false);</span>
+<span class="nc" id="L138">	}</span>
+
+	/**
+	 *	Create Tab Model from Value Object.
+	 *  &lt;p&gt;
+	 *  GridTab provides a property listener for changed rows and a
+	 *  DataStatusListener for communicating changes of the underlying data.
+	 *  @param vo Value Object
+	 *  @param w
+	 *  @param virtual
+	 */
+<span class="nc" id="L149">	public GridTab(GridTabVO vo, GridWindow w, boolean virtual)</span>
+	{
+<span class="nc" id="L151">		m_window = w;</span>
+<span class="nc" id="L152">		m_vo = vo;</span>
+		//  Create MTable
+<span class="nc" id="L154">		m_mTable = new GridTable (m_vo.ctx, m_vo.AD_Table_ID, m_vo.TableName, m_vo.WindowNo, m_vo.TabNo, true, virtual);</span>
+<span class="nc bnc" id="L155" title="All 4 branches missed.">		m_mTable.setReadOnly(m_vo.IsReadOnly || m_vo.IsView);</span>
+<span class="nc" id="L156">		m_mTable.setDeleteable(m_vo.IsDeleteable);</span>
+		
+<span class="nc" id="L158">		selection = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc" id="L159">	}	//	GridTab</span>
+	
+	/** ICalloutUI*/
+	private ICalloutUI calloutUI;
+
+	/** Value Object                    */
+	private GridTabVO          	m_vo;
+
+	// The window of this tab
+	private GridWindow			m_window;
+
+	/** The Table Model for Query   */
+<span class="nc" id="L171">	private GridTable          	m_mTable = null;</span>
+
+<span class="nc" id="L173">	private String 				m_keyColumnName = &quot;&quot;;</span>
+<span class="nc" id="L174">	private String 				m_uuidColumnName = &quot;&quot;;</span>
+<span class="nc" id="L175">	private String 				m_linkColumnName = &quot;&quot;;</span>
+
+<span class="nc" id="L177">	private String m_parentColumnName = &quot;&quot;;</span>
+	/** Full where clause (including parent link for detail tab) **/
+	private SQLFragment			m_extendedFilter;
+	/** Locks		        */
+<span class="nc" id="L181">	private ArrayList&lt;Integer&gt;	m_Lock = null;</span>
+
+	/** Current Row         */
+<span class="nc" id="L184">	private int					m_currentRow = -1;</span>
+
+	/** Property Change     */
+<span class="nc" id="L187">	private PropertyChangeSupport m_propertyChangeSupport = new PropertyChangeSupport(this);</span>
+	/** Property Change Type    */
+	public static final String  PROPERTY = &quot;CurrentRow&quot;;
+    /** A list of event listeners for this component.	*/
+<span class="nc" id="L191">    protected EventListenerList m_listenerList = new EventListenerList();</span>
+	/**	Query							*/
+<span class="nc" id="L193">	private MQuery 				m_query = new MQuery();</span>
+<span class="nc" id="L194">	private SQLFragment 		m_oldQuery = new SQLFragment(&quot;0=9&quot;);</span>
+<span class="nc" id="L195">	private String 				m_linkValue = &quot;999999&quot;;</span>
+
+	/** Order By Array if SortNo 1..3   */
+<span class="nc" id="L198">	private String[]	    	m_OrderBys = new String[3];</span>
+	/** List of Key Parents     */
+<span class="nc" id="L200">	private ArrayList&lt;String&gt;	m_parents = new ArrayList&lt;String&gt;(2);</span>
+
+	/** Map of ColumnName of source field (key) and the dependent field (value) */
+<span class="nc" id="L203">	private MultiMap&lt;String,GridField&gt;	m_depOnField = new MultiMap&lt;String,GridField&gt;();</span>
+
+	/** Async Loader            */
+<span class="nc" id="L206">	private Loader              m_loader = null;</span>
+<span class="nc" id="L207">	private Future&lt;?&gt;			 m_loaderFuture = null;</span>
+	/** Async Loading complete  */
+<span class="nc" id="L209">	private volatile boolean    m_loadComplete = false;</span>
+	/** Is Tab Included in other Tab  */
+<span class="nc" id="L211">	private boolean    			m_included = false;</span>
+<span class="nc" id="L212">	private boolean    			m_includedAlreadyCalc = false;</span>
+	
+	/**	Logger			*/
+<span class="nc" id="L215">	protected CLogger	log = CLogger.getCLogger(getClass());</span>
+
+<span class="nc" id="L217">	private boolean m_parentNeedSave = false;</span>
+
+<span class="nc" id="L219">	private record DataStatusEventRecord(DataStatusEvent dataStatusEvent, long dataStatusEventTime) {};</span>
+	
+<span class="nc" id="L221">	private AtomicReference&lt;DataStatusEventRecord&gt; m_lastDataStatusEventReference = new AtomicReference&lt;&gt;();</span>
+	
+	//Contains currently selected rows
+<span class="nc" id="L224">	private ArrayList&lt;Integer&gt; selection = null;</span>
+<span class="nc" id="L225">	public boolean isQuickForm = false;</span>
+	
+	// Context property names for Tab Info:
+	public static final String CTX_KeyColumnName = &quot;_TabInfo_KeyColumnName&quot;;
+	public static final String CTX_UUIDColumnName = &quot;_TabInfo_UUIDColumnName&quot;;
+	public static final String CTX_LinkColumnName = &quot;_TabInfo_LinkColumnName&quot;;
+	public static final String CTX_TabLevel = &quot;_TabInfo_TabLevel&quot;;
+	public static final String CTX_AccessLevel = &quot;_TabInfo_AccessLevel&quot;;
+	public static final String CTX_AD_Tab_ID = &quot;_TabInfo_AD_Tab_ID&quot;;
+	public static final String CTX_AD_Tab_UU = &quot;_TabInfo_AD_Tab_UU&quot;;
+	public static final String CTX_Name = &quot;_TabInfo_Name&quot;;
+	public static final String CTX_AD_Table_ID = &quot;_TabInfo_AD_Table_ID&quot;;
+	public static final String CTX_AD_Table_UU = &quot;_TabInfo_AD_Table_UU&quot;;
+	public static final String CTX_FindSQL = &quot;_TabInfo_FindSQL&quot;;
+	public static final String CTX_SQL = &quot;_TabInfo_SQL&quot;;
+	public static final String CTX_IsSortTab = &quot;_TabInfo_IsSortTab&quot;;
+	public static final String CTX_Record_ID = &quot;_TabInfo_Record_ID&quot;;
+	public static final String CTX_IsLookupOnlySelection = &quot;_TabInfo_IsLookupOnlySelection&quot;;
+	public static final String CTX_IsAllowAdvancedLookup = &quot;_TabInfo_IsAllowAdvancedLookup&quot;;
+
+	public static final int DEFAULT_GLOBAL_MAX_QUERY_RECORDS = 100000;
+
+	/**
+	 *  Tab loader for Tabs &gt; 0
+	 */
+<span class="nc" id="L250">	protected class Loader extends ContextRunnable</span>
+	{
+		/**
+		 *  Async Loading of Tab &gt; 0
+		 */
+		protected void doRun()
+		{
+<span class="nc" id="L257">			loadTab();</span>
+<span class="nc" id="L258">		}   //  run</span>
+	}   //  Loader
+
+	/**
+	 *  Wait until loading is complete
+	 */
+	public void waitLoadComplete()
+	{
+<span class="nc bnc" id="L266" title="All 4 branches missed.">		if (m_loaderFuture == null || m_loadComplete)</span>
+<span class="nc" id="L267">			return;</span>
+		//
+<span class="nc" id="L269">		log.config (&quot;&quot;);</span>
+		try {
+<span class="nc" id="L271">			m_loaderFuture.get();</span>
+<span class="nc" id="L272">		} catch (InterruptedException e) {</span>
+<span class="nc" id="L273">			m_loaderFuture = null;</span>
+<span class="nc" id="L274">			log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L275">		} catch (ExecutionException e) {</span>
+<span class="nc" id="L276">			m_loaderFuture = null;</span>
+<span class="nc" id="L277">			log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+		}
+<span class="nc" id="L279">		log.config (&quot;fini&quot;);</span>
+<span class="nc" id="L280">	}   //  waitLoadComplete</span>
+
+	/**
+	 * @return true if GridTab loaded.
+	 */
+	public boolean isLoadComplete()
+	{
+<span class="nc" id="L287">		return m_loadComplete;</span>
+	}
+
+	/**
+	 *	Initialize Tab with data from AD_Tab_v
+	 *  @param async asynchronous
+	 *	@return true, if correctly initialized (ignored)
+	 */
+	public boolean initTab (boolean async)
+	{
+<span class="nc bnc" id="L297" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - Async=&quot; + async + &quot; - Where=&quot; + m_vo.WhereClause);</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">		if (isLoadComplete()) return true;</span>
+
+<span class="nc bnc" id="L300" title="All 4 branches missed.">		if (m_loaderFuture != null &amp;&amp; !m_loaderFuture.isDone())</span>
+		{
+<span class="nc" id="L302">			waitLoadComplete();</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">			if (isLoadComplete())</span>
+<span class="nc" id="L304">				return true;</span>
+		}
+
+<span class="nc bnc" id="L307" title="All 2 branches missed.">		if (async)</span>
+		{
+<span class="nc" id="L309">			m_loader = new Loader();</span>
+<span class="nc" id="L310">			m_loaderFuture = Adempiere.getThreadPoolExecutor().submit(m_loader);</span>
+<span class="nc" id="L311">			return false;</span>
+		}
+		else
+		{
+<span class="nc" id="L315">			m_loaderFuture = null;</span>
+<span class="nc" id="L316">			return loadTab();</span>
+		}
+	}	//	initTab
+
+	/**
+	 * @return true if loaded
+	 */
+	protected boolean loadTab()
+	{
+<span class="nc" id="L325">		m_extendedFilter = new SQLFragment(m_vo.WhereClause);</span>
+
+		//	Get Field Data
+<span class="nc bnc" id="L328" title="All 2 branches missed.">		if (!loadFields())</span>
+		{
+<span class="nc" id="L330">			m_loadComplete = true;</span>
+<span class="nc" id="L331">			return false;</span>
+		}
+
+		//  Order By
+<span class="nc" id="L335">		m_mTable.setOrderClause(getOrderByClause(m_vo.onlyCurrentRows));</span>
+
+<span class="nc" id="L337">		m_loadComplete = true;</span>
+<span class="nc" id="L338">		return true;</span>
+	}
+
+	/**
+	 *	Dispose - clean up resources
+	 */
+	protected void dispose()
+	{
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo);</span>
+<span class="nc" id="L347">		m_OrderBys = null;</span>
+		//
+<span class="nc" id="L349">		m_parents.clear();</span>
+<span class="nc" id="L350">		m_parents = null;</span>
+		//
+<span class="nc" id="L352">		m_mTable.close (true);  //  also disposes Fields</span>
+<span class="nc" id="L353">		m_mTable = null;</span>
+		//
+<span class="nc" id="L355">		m_depOnField.clear();</span>
+<span class="nc" id="L356">		m_depOnField = null;</span>
+		//
+<span class="nc bnc" id="L358" title="All 2 branches missed.">		if (m_vo.isInitFields())</span>
+<span class="nc" id="L359">			m_vo.getFields().clear();</span>
+<span class="nc" id="L360">		m_vo = null;</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">		if (m_loader != null)</span>
+		{
+<span class="nc bnc" id="L363" title="All 4 branches missed.">			if (m_loaderFuture != null &amp;&amp; !m_loaderFuture.isDone()) </span>
+<span class="nc" id="L364">				m_loaderFuture.cancel(true);</span>
+			
+<span class="nc" id="L366">			m_loader = null;</span>
+<span class="nc" id="L367">			m_loaderFuture = null;</span>
+		}
+<span class="nc" id="L369">	}	//	dispose</span>
+
+	/**
+	 *	Get Field data and add to GridTable, if it's required or displayed.
+	 *  Required fields are keys, parents, or standard columns.
+	 *  @return true if fields loaded
+	 */
+	private boolean loadFields()
+	{
+<span class="nc bnc" id="L378" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo);</span>
+
+<span class="nc bnc" id="L380" title="All 2 branches missed.">		if (m_vo.getFields() == null)</span>
+<span class="nc" id="L381">			return false;</span>
+
+<span class="nc" id="L383">		String uuidExpectedCol = PO.getUUIDColumnName(getTableName());</span>
+		//  Add Fields
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		for (int f = 0; f &lt; m_vo.getFields().size(); f++)</span>
+		{
+<span class="nc" id="L387">			GridFieldVO voF = (GridFieldVO)m_vo.getFields().get(f);</span>
+			//	Add Fields to Table
+<span class="nc bnc" id="L389" title="All 2 branches missed.">			if (voF != null)</span>
+			{
+<span class="nc" id="L391">				GridField field = new GridField (voF);</span>
+<span class="nc" id="L392">				field.setGridTab(this);</span>
+<span class="nc" id="L393">				String columnName = field.getColumnName();</span>
+				//	Record Info
+<span class="nc bnc" id="L395" title="All 2 branches missed.">				if (field.isKey())</span>
+<span class="nc" id="L396">					setKeyColumnName(columnName);</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">				if (uuidExpectedCol.equals(columnName))</span>
+<span class="nc" id="L398">					setUUIDColumnName(columnName);</span>
+				//	Parent Column(s)
+<span class="nc bnc" id="L400" title="All 2 branches missed.">				if (field.isParentColumn())</span>
+<span class="nc" id="L401">					m_parents.add(columnName);</span>
+				//	Order By
+<span class="nc" id="L403">				int sortNo = field.getSortNo();</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">				if (sortNo == 0)</span>
+<span class="nc" id="L405">					;</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">				else if (Math.abs(sortNo) == 1)</span>
+				{
+<span class="nc" id="L408">					m_OrderBys[0] = columnName;</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">					if (sortNo &lt; 0)</span>
+<span class="nc" id="L410">						m_OrderBys[0] += &quot; DESC&quot;;</span>
+<span class="nc" id="L411">				}</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">				else if (Math.abs(sortNo) == 2)</span>
+				{
+<span class="nc" id="L414">					m_OrderBys[1] = columnName;</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">					if (sortNo &lt; 0)</span>
+<span class="nc" id="L416">						m_OrderBys[1] += &quot; DESC&quot;;</span>
+<span class="nc" id="L417">				}</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">				else if (Math.abs(sortNo) == 3)</span>
+				{
+<span class="nc" id="L420">					m_OrderBys[2] = columnName;</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">					if (sortNo &lt; 0)</span>
+<span class="nc" id="L422">						m_OrderBys[2] += &quot; DESC&quot;;</span>
+				}
+				//  Add field
+<span class="nc" id="L425">				m_mTable.addField(field);</span>
+
+				//  List of ColumnNames, this field is dependent on
+<span class="nc" id="L428">				ArrayList&lt;String&gt; list = field.getDependentOn();</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">				for (int i = 0; i &lt; list.size(); i++)</span>
+<span class="nc" id="L430">					m_depOnField.put(list.get(i), field);   //  ColumnName, Field</span>
+				//  Add fields all fields are dependent on
+<span class="nc bnc" id="L432" title="All 2 branches missed.">				if (columnName.equals(&quot;IsActive&quot;)</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">					|| columnName.equals(&quot;Processed&quot;)</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">					|| columnName.equals(&quot;Processing&quot;))</span>
+<span class="nc" id="L435">					m_depOnField.put(columnName, null);</span>
+			}
+		}   //  for all fields
+
+<span class="nc bnc" id="L439" title="All 6 branches missed.">		if (Util.isEmpty(getKeyColumnName()) &amp;&amp; getParentColumnNames().size() == 0 &amp;&amp; getUUIDColumnName() != null)</span>
+<span class="nc" id="L440">			setKeyColumnName(getUUIDColumnName());</span>
+
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		if (! m_mTable.getTableName().equals(X_AD_PInstance_Log.Table_Name)) { // globalqss, bug 1662433</span>
+			//  Add Standard Fields
+<span class="nc bnc" id="L444" title="All 2 branches missed.">			if (m_mTable.getField(&quot;Created&quot;) == null)</span>
+			{
+<span class="nc" id="L446">				GridField created = new GridField (GridFieldVO.createStdField(m_vo.ctx,</span>
+<span class="nc" id="L447">					m_vo.WindowNo, m_vo.TabNo,</span>
+<span class="nc" id="L448">					m_vo.AD_Window_ID, m_vo.AD_Tab_ID, false, true, true));</span>
+<span class="nc" id="L449">				m_mTable.addField(created);</span>
+			}
+<span class="nc bnc" id="L451" title="All 2 branches missed.">			if (m_mTable.getField(&quot;CreatedBy&quot;) == null)</span>
+			{
+<span class="nc" id="L453">				GridField createdBy = new GridField (GridFieldVO.createStdField(m_vo.ctx,</span>
+<span class="nc" id="L454">					m_vo.WindowNo, m_vo.TabNo,</span>
+<span class="nc" id="L455">					m_vo.AD_Window_ID, m_vo.AD_Tab_ID, false, true, false));</span>
+<span class="nc" id="L456">				m_mTable.addField(createdBy);</span>
+			}
+<span class="nc bnc" id="L458" title="All 2 branches missed.">			if (m_mTable.getField(&quot;Updated&quot;) == null)</span>
+			{
+<span class="nc" id="L460">				GridField updated = new GridField (GridFieldVO.createStdField(m_vo.ctx,</span>
+<span class="nc" id="L461">					m_vo.WindowNo, m_vo.TabNo,</span>
+<span class="nc" id="L462">					m_vo.AD_Window_ID, m_vo.AD_Tab_ID, false, false, true));</span>
+<span class="nc" id="L463">				m_mTable.addField(updated);</span>
+			}
+<span class="nc bnc" id="L465" title="All 2 branches missed.">			if (m_mTable.getField(&quot;UpdatedBy&quot;) == null)</span>
+			{
+<span class="nc" id="L467">				GridField updatedBy = new GridField (GridFieldVO.createStdField(m_vo.ctx,</span>
+<span class="nc" id="L468">					m_vo.WindowNo, m_vo.TabNo,</span>
+<span class="nc" id="L469">					m_vo.AD_Window_ID, m_vo.AD_Tab_ID, false, false, false));</span>
+<span class="nc" id="L470">				m_mTable.addField(updatedBy);</span>
+			}
+		}
+<span class="nc" id="L473">		return true;</span>
+	}	//	loadFields
+
+	/**
+	 *  Get a list of variables that this tab is dependent on:&lt;br/&gt;
+	 *  - for display logic
+	 *  @return ArrayList
+	 */
+	public ArrayList&lt;String&gt; getDependentOn()
+	{
+<span class="nc" id="L483">		ArrayList&lt;String&gt; list = new ArrayList&lt;String&gt;();</span>
+		//  Display
+<span class="nc" id="L485">		Evaluator.parseDepends(list, m_vo.DisplayLogic);</span>
+		//
+<span class="nc bnc" id="L487" title="All 4 branches missed.">		if (list.size() &gt; 0 &amp;&amp; CLogMgt.isLevelFiner())</span>
+		{
+<span class="nc" id="L489">			StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">			for (int i = 0; i &lt; list.size(); i++)</span>
+<span class="nc" id="L491">				sb.append(list.get(i)).append(&quot; &quot;);</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">			if (log.isLoggable(Level.FINER)) log.finer(&quot;(&quot; + m_vo.Name + &quot;) &quot; + sb.toString());</span>
+		}
+<span class="nc" id="L494">		return list;</span>
+	}   //  getDependentOn
+
+	/**
+	 * 	Get Display Logic
+	 *	@return display logic
+	 */
+	public String getDisplayLogic()
+	{
+<span class="nc" id="L503">		return m_vo.DisplayLogic;</span>
+	}	//	getDisplayLogic
+
+	/**
+	 * Get EntityType
+	 * @return Window Entity Type
+	 */
+	public String getEntityType()
+	{
+<span class="nc" id="L512">		return m_vo.EntityType;</span>
+	}
+
+	/**
+	 *  Get TableModel.
+	 *  &lt;B&gt;Do not directly communicate with the table model,
+	 *  but through the methods of this class.&lt;/B&gt;
+	 *  @return Table Model
+	 */
+	public GridTable getTableModel()
+	{
+<span class="nc bnc" id="L523" title="All 2 branches missed.">		if (!m_loadComplete) initTab(false);</span>
+<span class="nc" id="L524">		return m_mTable;</span>
+	}   //  getTableModel
+
+	/**
+	 *  Get Tab Icon
+	 *  @return Icon
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	@GeneratedCodeCoverageExclusion
+	public javax.swing.Icon getIcon()
+	{
+		if (m_vo.AD_Image_ID == 0)
+			return null;
+		//
+		MImage mImage = MImage.get(m_vo.ctx, m_vo.AD_Image_ID);
+		return mImage.getIcon();
+	}   //  getIcon
+
+	/**
+	 *  Has this field dependents ?
+	 *  @param columnName column name
+	 *  @return true if column has dependent
+	 */
+	public boolean hasDependants (String columnName)
+	{
+	//	m_depOnField.printToLog();
+<span class="nc" id="L550">		return m_depOnField.containsKey(columnName);</span>
+	}   //  isDependentOn
+
+	/**
+	 *  Get dependents fields of columnName
+	 *  @param columnName column name
+	 *  @return ArrayList with GridFields dependent on columnName
+	 */
+	public ArrayList&lt;GridField&gt; getDependantFields (String columnName)
+	{
+<span class="nc" id="L560">		return m_depOnField.getValues(columnName);</span>
+	}   //  getDependentFields
+
+	/**
+	 *	Set Query
+	 *  @param query query
+	 */
+	public void setQuery(MQuery query)
+	{
+<span class="nc bnc" id="L569" title="All 2 branches missed.">		if (query == null)</span>
+<span class="nc" id="L570">			m_query = new MQuery();</span>
+		else
+<span class="nc" id="L572">			m_query = query;</span>
+<span class="nc" id="L573">	}	//	setQuery</span>
+
+	/**
+	 *	Get Query
+	 *  @return query
+	 */
+	public MQuery getQuery()
+	{
+<span class="nc" id="L581">		return m_query;</span>
+	}	//	getQuery
+
+	/**
+	 *	Is Query Active
+	 *  @return true if query active
+	 */
+	public boolean isQueryActive()
+	{
+<span class="nc bnc" id="L590" title="All 2 branches missed.">		if (m_query != null)</span>
+<span class="nc" id="L591">			return m_query.isActive();</span>
+<span class="nc" id="L592">		return false;</span>
+	}	//	isQueryActive
+
+	/**
+	 *	Is Query New Record
+	 *  @return true if query is to create new record 
+	 */
+	public boolean isQueryNewRecord()
+	{
+<span class="nc bnc" id="L601" title="All 2 branches missed.">		if (m_query != null)</span>
+<span class="nc" id="L602">			return m_query.isNewRecordQuery();</span>
+<span class="nc" id="L603">		return false;</span>
+	}	//	isQueryNewRecord
+
+	/**
+	 *  Enable Events - listen to events from GridTable.
+	 */
+	public void enableEvents()
+	{
+		//  Setup Events
+<span class="nc" id="L612">		m_mTable.addDataStatusListener(this);</span>
+<span class="nc" id="L613">	}   //  enableEvents</span>
+
+	/**
+	 * get Tab Type
+	 * @return String
+	 */
+	public String getTabType()
+	{
+<span class="nc" id="L621">		return m_vo.AD_TabType;</span>
+	} // getTabType
+
+	/**
+	 *	Assemble whereClause and query GridTable and position to row 0.
+	 *  &lt;pre&gt;
+	 *		Scenarios:
+	 *		- Never opened                  (full query)
+	 *		- query changed                 (full query)
+	 *		- Detail link value changed     (full query)
+	 *		- otherwise                     (refreshAll)
+	 *  &lt;/pre&gt;
+	 *  @param onlyCurrentRows only current rows (1 day)
+	 */
+	public void query (boolean onlyCurrentRows)
+	{
+<span class="nc" id="L637">		query (onlyCurrentRows, 0, 0);</span>
+<span class="nc" id="L638">	}	//	query</span>
+
+	/**
+	 *	Assemble whereClause and query GridTable and position to row 0.
+	 *  &lt;pre&gt;
+	 *		Scenarios:
+	 *		- Never opened                  (full query)
+	 *		- query changed                 (full query)
+	 *		- Detail link value changed     (full query)
+	 *		- otherwise                     (refreshAll)
+	 *  &lt;/pre&gt;
+	 *  @param onlyCurrentRows only current rows
+	 *  @param onlyCurrentDays if only current row, how many days back
+	 *  @param maxRows maximum rows or 0 for all
+	 */
+	public void query (boolean onlyCurrentRows, int onlyCurrentDays, int maxRows)
+	{
+<span class="nc bnc" id="L655" title="All 2 branches missed.">		if (!m_loadComplete) initTab(false);</span>
+
+<span class="nc" id="L657">		Env.clearTabContext(m_vo.ctx, m_vo.WindowNo, m_vo.TabNo);</span>
+		
+<span class="nc" id="L659">		selection.clear();</span>
+		
+<span class="nc bnc" id="L661" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo</span>
+<span class="nc" id="L662">			+ &quot; - Only Current Rows=&quot; + onlyCurrentRows</span>
+<span class="nc" id="L663">			+ &quot;, Days=&quot; + onlyCurrentDays + &quot;, Detail=&quot; + isDetail());</span>
+<span class="nc" id="L664">		m_oldQuery = m_query.getSQLFilter();</span>
+<span class="nc" id="L665">		m_vo.onlyCurrentRows = onlyCurrentRows;</span>
+<span class="nc" id="L666">		m_vo.onlyCurrentDays = onlyCurrentDays;</span>
+
+		/**
+		 *	Set Where Clause
+		 */
+		//	Tab Where Clause
+<span class="nc" id="L672">		List&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L673">		StringBuilder where = new StringBuilder(m_vo.WhereClause);</span>
+<span class="nc bnc" id="L674" title="All 2 branches missed.">		if (m_vo.onlyCurrentDays &gt; 0)</span>
+		{
+<span class="nc bnc" id="L676" title="All 2 branches missed.">			if (where.length() &gt; 0)</span>
+<span class="nc" id="L677">				where.append(&quot; AND &quot;);			</span>
+<span class="nc" id="L678">			where.append(&quot;Created &gt;= &quot;).append(&quot;getDate()-?&quot;);</span>
+<span class="nc" id="L679">			params.add(m_vo.onlyCurrentDays);</span>
+		}
+		//	Detail Query
+<span class="nc bnc" id="L682" title="All 2 branches missed.">		if (isDetail())</span>
+		{
+<span class="nc" id="L684">			m_parentNeedSave = false;</span>
+<span class="nc" id="L685">			String lc = getLinkColumnName();</span>
+<span class="nc bnc" id="L686" title="All 2 branches missed.">			if (lc.equals(&quot;&quot;)) {</span>
+<span class="nc" id="L687">				log.warning (&quot;No link column&quot;);</span>
+<span class="nc" id="L688">				where.append (&quot; 2=3&quot;);</span>
+<span class="nc" id="L689">			}</span>
+			else
+			{
+<span class="nc" id="L692">				String value = null;</span>
+<span class="nc" id="L693">				String effectiveLinkColumnName = lc;</span>
+<span class="nc bnc" id="L694" title="All 2 branches missed.">				if ( m_parentColumnName.length() &gt; 0 )</span>
+				{
+					// explicit parent link defined
+<span class="nc" id="L697">					effectiveLinkColumnName = m_parentColumnName;</span>
+<span class="nc" id="L698">					value = Env.getContext(m_vo.ctx, m_vo.WindowNo, getParentTabNo(), m_parentColumnName, true);</span>
+<span class="nc bnc" id="L699" title="All 4 branches missed.">					if (value == null || value.length() == 0)</span>
+<span class="nc" id="L700">						value = Env.getContext(m_vo.ctx, m_vo.WindowNo, m_parentColumnName, true); // back compatibility</span>
+<span class="nc" id="L701">				} else {</span>
+<span class="nc" id="L702">					value = Env.getContext(m_vo.ctx, m_vo.WindowNo, getParentTabNo(), lc, true);</span>
+<span class="nc bnc" id="L703" title="All 4 branches missed.">					if (value == null || value.length() == 0)</span>
+<span class="nc" id="L704">						value = Env.getContext(m_vo.ctx, m_vo.WindowNo, lc, true); // back compatibility</span>
+				}
+
+				//	Same link value?
+<span class="nc bnc" id="L708" title="All 2 branches missed.">				if (! m_linkValue.equals(value))</span>
+<span class="nc" id="L709">					setQuery(null);</span>
+<span class="nc" id="L710">				m_linkValue = value;</span>
+				//	Check validity
+<span class="nc bnc" id="L712" title="All 6 branches missed.">				if (value.length() == 0 || (effectiveLinkColumnName.endsWith(&quot;_ID&quot;) &amp;&amp; &quot;0&quot;.equals(value)</span>
+<span class="nc bnc" id="L713" title="All 4 branches missed.">					&amp;&amp; getParentTab() != null &amp;&amp; getParentTab().isNew()))</span>
+				{
+					//parent is new, can't retrieve detail
+<span class="nc" id="L716">					m_parentNeedSave = true;</span>
+<span class="nc bnc" id="L717" title="All 2 branches missed.">					if (where.length() != 0)</span>
+<span class="nc" id="L718">						where.append(&quot; AND &quot;);</span>
+<span class="nc" id="L719">					where.append (&quot; 2=3&quot;);</span>
+<span class="nc" id="L720">				}</span>
+				else
+				{
+					//	we have column and value
+<span class="nc bnc" id="L724" title="All 2 branches missed.">					if (where.length() != 0)</span>
+<span class="nc" id="L725">						where.append(&quot; AND &quot;);</span>
+					
+<span class="nc" id="L727">					where.append(getTableName()).append(&quot;.&quot;).append(lc).append(&quot;=?&quot;);</span>
+<span class="nc bnc" id="L728" title="All 2 branches missed.">					if (lc.endsWith(&quot;_ID&quot;))</span>
+<span class="nc" id="L729">						params.add(Integer.valueOf(value.trim()));</span>
+					else
+<span class="nc" id="L731">						params.add(value);					</span>
+				}
+			}
+		}	//	isDetail
+
+<span class="nc" id="L736">		m_extendedFilter = new SQLFragment(where.toString(), params);</span>
+		
+		//	Final Query
+<span class="nc bnc" id="L739" title="All 2 branches missed.">		if (m_query.isActive())</span>
+		{
+<span class="nc" id="L741">			SQLFragment q = validateQuery(m_query);</span>
+<span class="nc bnc" id="L742" title="All 2 branches missed.">			if (q != null)</span>
+			{
+<span class="nc bnc" id="L744" title="All 2 branches missed.">				if (where.length() &gt; 0 )</span>
+<span class="nc" id="L745">					where.append(&quot; AND &quot;);</span>
+<span class="nc" id="L746">				where.append(&quot; (&quot;).append(q.sqlClause()).append(&quot;)&quot;);</span>
+<span class="nc" id="L747">				params.addAll(q.parameters());</span>
+			}
+		}
+
+<span class="nc" id="L751">		m_currentRow = -1;</span>
+		/**
+		 *	Query
+		 */
+<span class="nc bnc" id="L755" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - &quot; + where);</span>
+<span class="nc bnc" id="L756" title="All 2 branches missed.">		if (m_mTable.isOpen())</span>
+		{
+<span class="nc bnc" id="L758" title="All 4 branches missed.">			m_mTable.dataRequery(new SQLFragment(where.toString(), params), m_vo.onlyCurrentRows &amp;&amp; !isDetail(), onlyCurrentDays);</span>
+<span class="nc" id="L759">		}</span>
+		else
+		{
+<span class="nc bnc" id="L762" title="All 4 branches missed.">			m_mTable.setSQLFilter(new SQLFragment(where.toString(), params), m_vo.onlyCurrentRows &amp;&amp; !isDetail(), onlyCurrentDays);</span>
+<span class="nc" id="L763">			m_mTable.open(maxRows);</span>
+		}
+		//  Go to Record 0
+<span class="nc" id="L766">		setCurrentRow(0, true);</span>
+		
+<span class="nc" id="L768">		fireStateChangeEvent(new StateChangeEvent(this, StateChangeEvent.DATA_QUERY));</span>
+<span class="nc" id="L769">	}	//	query</span>
+
+	/**
+	 * Reset detail GridTab when parent tab current record is new and not saved yet
+	 */
+	public void resetDetailForNewParentRecord() {
+<span class="nc bnc" id="L775" title="All 2 branches missed.">		if (m_mTable.isOpen())</span>
+		{
+<span class="nc" id="L777">			SQLFragment where = new SQLFragment(&quot;2=3&quot;);</span>
+<span class="nc" id="L778">			m_extendedFilter = where;</span>
+<span class="nc" id="L779">			m_oldQuery = where;</span>
+<span class="nc" id="L780">			m_parentNeedSave = true;</span>
+			
+<span class="nc" id="L782">			m_currentRow = -1;</span>
+			/**
+			 *	Query
+			 */
+<span class="nc bnc" id="L786" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - &quot; + where);		</span>
+<span class="nc bnc" id="L787" title="All 4 branches missed.">			m_mTable.dataRequery(where, m_vo.onlyCurrentRows &amp;&amp; !isDetail(), 0);</span>
+			
+			// Go to Record 0
+<span class="nc" id="L790">			setCurrentRow(0, true);</span>
+		}
+<span class="nc" id="L792">	}</span>
+	
+	/**
+	 * 	Validate Query.
+	 *  If query column is not a tab column, create EXISTS query.
+	 * 	@param query query
+	 * 	@return where clause
+	 */
+	private SQLFragment validateQuery (MQuery query)
+	{
+<span class="nc bnc" id="L802" title="All 4 branches missed.">		if (query == null || query.getRestrictionCount() == 0)</span>
+<span class="nc" id="L803">			return null;</span>
+
+		//	Check: only one restriction
+<span class="nc bnc" id="L806" title="All 2 branches missed.">		if (query.getRestrictionCount() != 1)</span>
+		{
+<span class="nc bnc" id="L808" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Ignored(More than 1 Restriction): &quot; + query);</span>
+<span class="nc" id="L809">			return query.getSQLFilter(true);</span>
+		}
+
+<span class="nc" id="L812">		String colName = query.getColumnName(0);</span>
+<span class="nc bnc" id="L813" title="All 2 branches missed.">		if (colName == null)</span>
+		{
+<span class="nc bnc" id="L815" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Ignored(No Column): &quot; + query);</span>
+<span class="nc" id="L816">			return query.getSQLFilter(true);</span>
+		}
+		//	a '(' in the name = function - don't try to resolve
+<span class="nc bnc" id="L819" title="All 2 branches missed.">		if (colName.indexOf('(') != -1)</span>
+		{
+<span class="nc bnc" id="L821" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Ignored(Function): &quot; + colName);</span>
+<span class="nc" id="L822">			return query.getSQLFilter(true);</span>
+		}
+		//	OK - Query is valid
+
+		//	Simple Query.
+<span class="nc bnc" id="L827" title="All 2 branches missed.">		if (getField(colName) != null)</span>
+		{
+<span class="nc bnc" id="L829" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Field Found: &quot; + colName);</span>
+<span class="nc" id="L830">			return query.getSQLFilter(true);</span>
+		}
+
+		//	Find Reference Column e.g. Bill_Location_ID -&gt; C_BPartner_Location_ID
+<span class="nc" id="L834">		final String sql1 = &quot;SELECT cc.ColumnName &quot;</span>
+			+ &quot;FROM AD_Column c&quot;
+			+ &quot; INNER JOIN AD_Ref_Table r ON (c.AD_Reference_Value_ID=r.AD_Reference_ID)&quot;
+			+ &quot; INNER JOIN AD_Column cc ON (r.AD_Key=cc.AD_Column_ID) &quot;
+			+ &quot;WHERE c.AD_Reference_ID IN (?,?,?,?)&quot;
+			+ &quot; AND c.ColumnName=?&quot;;
+<span class="nc" id="L840">		String refColName = DB.getSQLValueStringEx(null, sql1, DisplayType.Table, DisplayType.Search, DisplayType.TableUU, DisplayType.SearchUU, colName);</span>
+		//	Reference Column found
+<span class="nc bnc" id="L842" title="All 2 branches missed.">		if (refColName != null)</span>
+		{
+<span class="nc" id="L844">			query.setColumnName(0, refColName);</span>
+<span class="nc bnc" id="L845" title="All 2 branches missed.">			if (getField(refColName) != null)</span>
+			{
+<span class="nc bnc" id="L847" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Column &quot; + colName + &quot; replaced with &quot; + refColName);</span>
+<span class="nc" id="L848">				return query.getSQLFilter(true);</span>
+			}
+<span class="nc" id="L850">			colName = refColName;</span>
+		}
+
+		//	Column NOT exists in this Tab - assume it is in detail tab and try to create IN sub-query for detail tab
+<span class="nc" id="L854">		String tabKeyColumn = getKeyColumnName();</span>
+<span class="nc" id="L855">		final String sql2 = &quot;SELECT t.TableName &quot;</span>
+			+ &quot;FROM AD_Column c&quot;
+			+ &quot; INNER JOIN AD_Table t ON (c.AD_Table_ID=t.AD_Table_ID) &quot;
+			+ &quot;WHERE c.ColumnName=? AND IsKey='Y'&quot;		//	#1 Detail/Child tab key Column
+			+ &quot; AND EXISTS (SELECT * FROM AD_Column cc&quot;
+			+ &quot; WHERE cc.AD_Table_ID=t.AD_Table_ID AND cc.ColumnName=?)&quot;;	//	#2 Tab Key Column
+<span class="nc" id="L861">		String tableName = DB.getSQLValueStringEx(null, sql2, colName, tabKeyColumn);</span>
+
+		//	Causes could be functions in query
+		//	e.g. Column=UPPER(Name), Key=AD_Element_ID, Query=UPPER(AD_Element.Name) LIKE '%CUSTOMER%'
+<span class="nc bnc" id="L865" title="All 2 branches missed.">		if (tableName == null)</span>
+		{
+<span class="nc bnc" id="L867" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info (&quot;Not successful - Column=&quot;</span>
+<span class="nc" id="L868">				+ colName + &quot;, Key=&quot; + tabKeyColumn</span>
+<span class="nc" id="L869">				+ &quot;, Query=&quot; + query);</span>
+<span class="nc" id="L870">			return query.getSQLFilter(true);</span>
+		}
+
+<span class="nc" id="L873">		query.setTableName(&quot;xx&quot;);</span>
+		// use IN instead of EXISTS as subquery should be highly selective
+<span class="nc" id="L875">		SQLFragment sqlFilter = query.getSQLFilter(true);</span>
+<span class="nc" id="L876">		StringBuilder result = new StringBuilder (getTableName()).append(&quot;.&quot;).append(tabKeyColumn)</span>
+<span class="nc" id="L877">			.append(&quot; IN (SELECT xx.&quot;).append(tabKeyColumn)</span>
+<span class="nc" id="L878">			.append(&quot; FROM &quot;)</span>
+<span class="nc" id="L879">			.append(tableName).append(&quot; xx WHERE &quot;)</span>
+<span class="nc" id="L880">			.append(sqlFilter.sqlClause())</span>
+<span class="nc" id="L881">			.append(&quot;)&quot;);</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(result.toString());</span>
+<span class="nc" id="L883">		return new SQLFragment(result.toString(), sqlFilter.parameters());</span>
+	}	//	validateQuery
+
+	/**
+	 *  Refresh all data
+	 */
+	public void dataRefreshAll ()
+	{
+<span class="nc" id="L891">		dataRefreshAll(true);</span>
+<span class="nc" id="L892">	}</span>
+
+	/**
+	 *  Refresh all data
+	 *  @param fireEvent
+	 */
+	public void dataRefreshAll (boolean fireEvent)
+	{
+<span class="nc" id="L900">		dataRefreshAll(fireEvent, false);</span>
+<span class="nc" id="L901">	}</span>
+
+	/**
+	 *  Refresh all data
+	 *  @param fireEvent
+	 *  @param retainedCurrentRow
+	 */
+	public void dataRefreshAll (boolean fireEvent, boolean retainedCurrentRow)
+	{
+<span class="nc bnc" id="L910" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo);</span>
+<span class="nc" id="L911">		selection.clear();</span>
+<span class="nc" id="L912">		int keyNo = m_mTable.getKeyID(m_currentRow);</span>
+<span class="nc" id="L913">		UUID uuid = null;</span>
+<span class="nc bnc" id="L914" title="All 2 branches missed.">		if (keyNo == -1) {</span>
+<span class="nc" id="L915">			uuid = m_mTable.getUUID(m_currentRow);</span>
+		}
+<span class="nc bnc" id="L917" title="All 2 branches missed.">		m_mTable.dataRefreshAll(fireEvent, retainedCurrentRow ? m_currentRow : -1);</span>
+<span class="nc bnc" id="L918" title="All 4 branches missed.">		if (keyNo != -1 || uuid != null)</span>
+		{
+<span class="nc bnc" id="L920" title="All 4 branches missed.">			if (   ( keyNo != -1 &amp;&amp; keyNo != m_mTable.getKeyID(m_currentRow) ) </span>
+<span class="nc bnc" id="L921" title="All 8 branches missed.">				|| (uuid != null &amp;&amp; m_mTable.getUUID(m_currentRow) == null) || ( uuid != null &amp;&amp; uuid.compareTo(m_mTable.getUUID(m_currentRow)) != 0) )   //  something changed</span>
+			{
+<span class="nc" id="L923">				int size = getRowCount();</span>
+<span class="nc bnc" id="L924" title="All 2 branches missed.">				for (int i = 0; i &lt; size; i++)</span>
+				{
+<span class="nc bnc" id="L926" title="All 4 branches missed.">					if (   ( keyNo != -1 &amp;&amp; keyNo == m_mTable.getKeyID(i) )</span>
+<span class="nc bnc" id="L927" title="All 6 branches missed.">						|| ( uuid != null &amp;&amp; m_mTable.getUUID(i) != null &amp;&amp; uuid.compareTo(m_mTable.getUUID(i)) == 0) )</span>
+					{
+<span class="nc" id="L929">						m_currentRow = i;</span>
+<span class="nc" id="L930">						break;</span>
+					}
+				}
+			}
+		}
+<span class="nc" id="L935">		setCurrentRow(m_currentRow, fireEvent);</span>
+<span class="nc bnc" id="L936" title="All 2 branches missed.">		if (fireEvent)</span>
+<span class="nc" id="L937">			fireStateChangeEvent(new StateChangeEvent(this, StateChangeEvent.DATA_REFRESH_ALL));</span>
+<span class="nc" id="L938">	}   //  dataRefreshAll</span>
+
+	/**
+	 *  Refresh current row data
+	 */
+	public void dataRefresh ()
+	{
+<span class="nc" id="L945">		dataRefresh(true);</span>
+<span class="nc" id="L946">	}</span>
+
+	/**
+	 *  Refresh current row data
+	 *  @param fireEvent
+	 */
+	public void dataRefresh (boolean fireEvent)
+	{
+<span class="nc" id="L954">		dataRefresh (m_currentRow, fireEvent);</span>
+<span class="nc" id="L955">	}   //  dataRefresh</span>
+
+	/**
+	 *  Refresh row data
+	 *  @param row index
+	 */
+	public void dataRefresh (int row)
+	{
+<span class="nc" id="L963">		dataRefresh(row, true);</span>
+<span class="nc" id="L964">	}</span>
+
+	/**
+	 *  Refresh row data
+	 *  @param row index
+	 *  @param fireEvent
+	 */
+	public void dataRefresh (int row, boolean fireEvent)
+	{
+<span class="nc bnc" id="L973" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - row=&quot; + row);</span>
+<span class="nc" id="L974">		m_mTable.dataRefresh(row, fireEvent);</span>
+<span class="nc" id="L975">		setCurrentRow(row, fireEvent);</span>
+<span class="nc bnc" id="L976" title="All 2 branches missed.">		if (fireEvent)</span>
+<span class="nc" id="L977">			fireStateChangeEvent(new StateChangeEvent(this, StateChangeEvent.DATA_REFRESH));</span>
+<span class="nc" id="L978">	}   //  dataRefresh</span>
+
+	/**
+	 *  Save data
+	 *  @param manualCmd if true, no vetoable PropertyChange event will be fired for save confirmation from GridTable
+	 *  @return true if save complete (or not required)
+	 */
+	public boolean dataSave(boolean manualCmd)
+	{
+<span class="nc bnc" id="L987" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - row=&quot; + m_currentRow);</span>
+		try
+		{
+<span class="nc bnc" id="L990" title="All 2 branches missed.">			if (hasChangedCurrentTabAndParents())</span>
+<span class="nc" id="L991">				return false;</span>
+
+<span class="nc bnc" id="L993" title="All 2 branches missed.">			boolean retValue = (m_mTable.dataSave(manualCmd) == GridTable.SAVE_OK);</span>
+<span class="nc bnc" id="L994" title="All 2 branches missed.">			if (manualCmd)</span>
+			{
+<span class="nc" id="L996">				setCurrentRow(m_currentRow, false);</span>
+<span class="nc" id="L997">				DataStatusEventRecord dseRecord = m_lastDataStatusEventReference.get();</span>
+<span class="nc bnc" id="L998" title="All 2 branches missed.">				DataStatusEvent lastDataStatusEvent = dseRecord != null ? dseRecord.dataStatusEvent() : null;</span>
+<span class="nc bnc" id="L999" title="All 4 branches missed.">				if (lastDataStatusEvent != null &amp;&amp; lastDataStatusEvent.getCurrentRow() == m_currentRow</span>
+<span class="nc bnc" id="L1000" title="All 4 branches missed.">					&amp;&amp; ((lastDataStatusEvent.Record_ID != null &amp;&amp; lastDataStatusEvent.Record_ID instanceof Integer</span>
+<span class="nc bnc" id="L1001" title="All 4 branches missed.">					&amp;&amp; (Integer) lastDataStatusEvent.Record_ID == 0) || lastDataStatusEvent.Record_ID == null))</span>
+				{
+<span class="nc" id="L1003">					updateDataStatusEventProperties(lastDataStatusEvent);</span>
+				}
+			}
+<span class="nc" id="L1006">			fireStateChangeEvent(new StateChangeEvent(this, StateChangeEvent.DATA_SAVE));</span>
+
+<span class="nc" id="L1008">			return retValue;</span>
+		}
+<span class="nc" id="L1010">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1012">			log.log(Level.SEVERE, &quot;#&quot; + m_vo.TabNo + &quot; - row=&quot; + m_currentRow, e);</span>
+		}
+<span class="nc" id="L1014">		return false;</span>
+	}   //  dataSave
+
+	/**
+	 * 
+	 * @return true if need save and all mandatory field has value
+	 */
+	public boolean isNeedSaveAndMandatoryFill()
+	{
+<span class="nc" id="L1023">		return m_mTable.isNeedSaveAndMandatoryFill();</span>
+	}
+	
+	/**
+	 * Validate if current tab or parent tab record has changed in database 
+	 * @return true if there are changes
+	 */
+	public boolean hasChangedCurrentTabAndParents() {
+<span class="nc" id="L1031">		String msg = null;</span>
+		// Carlos Ruiz / globalqss - [ adempiere-Bugs-1985481 ] Processed documents can be edited
+		// Validate that current record has not changed and validate that every parent above has not changed
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">		if (m_mTable.hasChanged(m_currentRow)) {</span>
+			// return error stating that current record has changed and it cannot be saved
+<span class="nc" id="L1036">			msg = Msg.getMsg(Env.getCtx(), &quot;CurrentRecordModified&quot;);</span>
+<span class="nc" id="L1037">			log.saveError(&quot;CurrentRecordModified&quot;, msg, false);</span>
+<span class="nc" id="L1038">			return true;</span>
+		}
+<span class="nc bnc" id="L1040" title="All 2 branches missed.">		if (isDetail()) {</span>
+			// get parent tab
+			// the parent tab is the first tab above with level = this_tab_level-1
+<span class="nc" id="L1043">			int level = m_vo.TabLevel;</span>
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">			for (int i = m_window.getTabIndex(this) - 1; i &gt;= 0; i--) {</span>
+<span class="nc" id="L1045">				GridTab parentTab = m_window.getTab(i);</span>
+<span class="nc bnc" id="L1046" title="All 2 branches missed.">				if (parentTab.m_vo.TabLevel == level-1) {</span>
+					// this is parent tab
+<span class="nc bnc" id="L1048" title="All 2 branches missed.">					if (parentTab.m_mTable.hasChanged(parentTab.m_currentRow)) {</span>
+						// return error stating that current record has changed and it cannot be saved
+<span class="nc" id="L1050">						msg = Msg.getMsg(Env.getCtx(), &quot;ParentRecordModified&quot;) + &quot;: &quot; + parentTab.getName();</span>
+<span class="nc" id="L1051">						log.saveError(&quot;ParentRecordModified&quot;, msg, false);</span>
+<span class="nc" id="L1052">						return true;</span>
+					} else {
+						// search for the next parent
+<span class="nc bnc" id="L1055" title="All 2 branches missed.">						if (parentTab.isDetail()) {</span>
+<span class="nc" id="L1056">							level = parentTab.m_vo.TabLevel;</span>
+						} else {
+							break;
+						}
+					}
+				}
+			}
+		}
+<span class="nc" id="L1064">		return false;</span>
+	}
+	
+	/**
+	 * refresh current row of parent tabs
+	 */
+	public void refreshParentTabs() {
+<span class="nc" id="L1071">		refreshParentTabs(false);</span>
+<span class="nc" id="L1072">	}</span>
+
+
+	/**
+	 * refresh current row of parent tabs
+	 * @param fireParentEvent
+	 */
+	public void refreshParentTabs(boolean fireParentEvent) {
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">		if (isDetail()) {</span>
+			// get parent tab
+			// the parent tab is the first tab above with level = this_tab_level-1
+<span class="nc" id="L1083">			int level = m_vo.TabLevel;</span>
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">			for (int i = m_window.getTabIndex(this) - 1; i &gt;= 0; i--) {</span>
+<span class="nc" id="L1085">				GridTab parentTab = m_window.getTab(i);</span>
+<span class="nc bnc" id="L1086" title="All 2 branches missed.">				if (parentTab.m_vo.TabLevel == level-1) {</span>
+					// this is parent tab
+<span class="nc" id="L1088">					parentTab.dataRefresh(fireParentEvent);</span>
+					// search for the next parent
+<span class="nc bnc" id="L1090" title="All 2 branches missed.">					if (parentTab.isDetail()) {</span>
+<span class="nc" id="L1091">						level = parentTab.m_vo.TabLevel;</span>
+					} else {
+						break;
+					}
+				}
+			}
+		}
+<span class="nc" id="L1098">	}</span>
+	
+	/**
+	 *  Return true for one of the following conditions:
+	 *  &lt;li&gt;rowChange is true and current row has changes&lt;/li&gt;
+	 *  &lt;li&gt;rowChange is false and onlyRealChange is false and current row is new and has no changes and setChanged(true) was called&lt;/li&gt;
+	 *  &lt;br/&gt;
+	 *  Return false for one of the following conditions:
+	 *  &lt;li&gt;current row has no changes and setChanged(true) was not called&lt;/li&gt;
+	 *  &lt;li&gt;rowChange is false and onlyRealChange is true and current row is new and has no changes and setChanged(true) was called&lt;/li&gt;
+	 *  &lt;li&gt;rowChange is false and onlyRealChange is false and current row has changes&lt;/li&gt;
+	 *  &lt;li&gt;rowChange is true and current row has no changes&lt;/li&gt;
+	 *  @param rowChange if true, return true if current row has changes
+	 *  @param  onlyRealChange if rowChange is false and onlyRealChange is false, return true if setChanged(true) was called and no real changes were made
+	 *	@return true if conditions met the parameters passed
+	 */
+	public boolean needSave (boolean rowChange, boolean onlyRealChange)
+	{
+<span class="nc bnc" id="L1116" title="All 2 branches missed.">		if (rowChange)</span>
+		{
+<span class="nc" id="L1118">			return m_mTable.needSave(-2, true);</span>
+		}
+		else
+		{
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">			return m_mTable.needSave(m_mTable.getRowChanged()==-1 ? -2 : m_mTable.getRowChanged(), onlyRealChange);</span>
+		}
+	}   //  isDataChanged
+
+	/**
+	 *  Ignore/undo data changes
+	 */
+	public void dataIgnore()
+	{
+<span class="nc bnc" id="L1131" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo);</span>
+<span class="nc bnc" id="L1132" title="All 2 branches missed.">		if (!m_mTable.isOpen())</span>
+<span class="nc" id="L1133">			return;</span>
+		
+<span class="nc bnc" id="L1135" title="All 2 branches missed.">		if (m_mTable.isInserting()) </span>
+		{
+<span class="nc" id="L1137">			m_currentRow--;</span>
+		}
+<span class="nc" id="L1139">		m_mTable.dataIgnore();</span>
+<span class="nc" id="L1140">		setCurrentRow(m_currentRow, false);    //  re-load data</span>
+
+<span class="nc" id="L1142">		fireStateChangeEvent(new StateChangeEvent(this, StateChangeEvent.DATA_IGNORE));</span>
+<span class="nc bnc" id="L1143" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot;- fini&quot;);</span>
+<span class="nc" id="L1144">	}   //  dataIgnore</span>
+
+	/**
+	 *  Create (copy) new Row and process Callouts.
+	 *  @param copy copy
+	 *  @return true if copied/new
+	 */
+	public boolean dataNew (boolean copy)
+	{
+<span class="nc bnc" id="L1153" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo);</span>
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">		if (!isInsertRecord())</span>
+		{
+<span class="nc" id="L1156">			log.warning (&quot;Insert Not allowed in TabNo=&quot; + m_vo.TabNo);</span>
+<span class="nc" id="L1157">			return false;</span>
+		}
+
+		//hengsin, don't create new when parent is empty
+<span class="nc bnc" id="L1161" title="All 4 branches missed.">		if (isDetail() &amp;&amp; m_parentNeedSave)</span>
+<span class="nc" id="L1162">			return false;</span>
+
+<span class="nc bnc" id="L1164" title="All 2 branches missed.">		if (!selection.isEmpty())</span>
+<span class="nc" id="L1165">			clearSelection();</span>
+		
+		/**
+		 * temporary set currentrow to point to the new row to ensure even cause by m_mTable.dataNew
+		 * is handle properly.
+		 */
+<span class="nc" id="L1171">		int oldCurrentRow = m_currentRow;</span>
+<span class="nc" id="L1172">		m_currentRow = m_currentRow + 1;</span>
+<span class="nc" id="L1173">		boolean retValue = m_mTable.dataNew (oldCurrentRow, copy);</span>
+<span class="nc" id="L1174">		m_currentRow = oldCurrentRow;</span>
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">		if (!retValue)</span>
+<span class="nc" id="L1176">			return retValue;</span>
+<span class="nc" id="L1177">		setCurrentRow(m_currentRow + 1, true);</span>
+
+		//  process all Callouts (no dependency check - assumed that settings are valid)
+<span class="nc bnc" id="L1180" title="All 2 branches missed.">		for (int i = 0; i &lt; getFieldCount(); i++)</span>
+<span class="nc" id="L1181">			processCallout(getField(i));</span>
+<span class="nc" id="L1182">		m_mTable.setChanged(false);		</span>
+
+<span class="nc bnc" id="L1184" title="All 4 branches missed.">		if (getField(&quot;EntityType&quot;) != null &amp;&amp; Env.getCtx().getProperty(&quot;EntityType&quot;) != null) {</span>
+<span class="nc" id="L1185">			setValue(&quot;EntityType&quot;, new MEntityType(Env.getCtx(),Integer.parseInt(Env.getCtx().getProperty(&quot;EntityType&quot;)), null).get_Value(&quot;EntityType&quot;));</span>
+		}
+
+<span class="nc" id="L1188">		fireStateChangeEvent(new StateChangeEvent(this, StateChangeEvent.DATA_NEW));</span>
+<span class="nc" id="L1189">		return retValue;</span>
+	}   //  dataNew
+
+	/**
+	 *  Delete current Row
+	 *  @return true if deleted
+	 */
+	public boolean dataDelete()
+	{
+<span class="nc bnc" id="L1198" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - row=&quot; + m_currentRow);</span>
+<span class="nc" id="L1199">		boolean retValue = m_mTable.dataDelete(m_currentRow);</span>
+<span class="nc" id="L1200">		setCurrentRow(m_currentRow, true);</span>
+<span class="nc" id="L1201">		fireStateChangeEvent(new StateChangeEvent(this, StateChangeEvent.DATA_DELETE));</span>
+<span class="nc" id="L1202">		return retValue;</span>
+	}   //  dataDelete
+
+
+	/**
+	 *	Get Name of Tab
+	 *  @return name
+	 */
+	public String getName()
+	{
+<span class="nc" id="L1212">		return m_vo.Name;</span>
+	}	//	getName
+
+	/**
+	 *	Get Description of Tab
+	 *  @return description
+	 */
+	public String getDescription()
+	{
+<span class="nc" id="L1221">		return m_vo.Description;</span>
+	}	//	getDescription
+
+	/**
+	 *	Get Help of Tab
+	 *  @return help
+	 */
+	public String getHelp()
+	{
+<span class="nc" id="L1230">		return m_vo.Help;</span>
+	}	//	getHelp
+
+	/**
+	 *  Get Tab Level
+	 *  @return tab level
+	 */
+	public int getTabLevel()
+	{
+<span class="nc" id="L1239">		return m_vo.TabLevel;</span>
+	}   //  getTabLevel
+
+	/**
+	 *  Get commit/save Warning
+	 *  @return commit/save warning
+	 */
+	public String getCommitWarning()
+	{
+<span class="nc" id="L1248">		return m_vo.CommitWarning;</span>
+	}   //  getCommitWarning
+
+	/**
+	 *	Return Table Model
+	 *  @return GridTable
+	 */
+	protected GridTable getMTable()
+	{
+<span class="nc" id="L1257">		return m_mTable;</span>
+	}	//	getMTable
+
+	/**
+	 *	Return the name of the key column - may be &quot;&quot;
+	 *  @return key column name
+	 */
+	public String getKeyColumnName()
+	{
+<span class="nc" id="L1266">		return m_keyColumnName;</span>
+	}	//	getKeyColumnName
+	
+	/**
+	 *	Return the name of the UUID column - may be &quot;&quot;
+	 *  @return UUID column name
+	 */
+	public String getUUIDColumnName()
+	{
+<span class="nc" id="L1275">		return m_uuidColumnName;</span>
+	}	//	getUUIDColumnName
+	
+	/**
+	 * @return key column index
+	 */
+	public int getKeyColumnIndex()
+	{
+<span class="nc" id="L1283">		return m_mTable.getKeyColumnIndex();</span>
+	}
+
+	/**
+	 * Set Name of the Key Column
+	 * @param keyColumnName
+	 */
+	private void setKeyColumnName(String keyColumnName) {
+<span class="nc" id="L1291">		this.m_keyColumnName = keyColumnName;</span>
+<span class="nc" id="L1292">		Env.setContext(m_vo.ctx, m_vo.WindowNo, m_vo.TabNo, CTX_KeyColumnName, m_keyColumnName);</span>
+<span class="nc" id="L1293">	}</span>
+
+	/**
+	 * Set Name of the UUID Column
+	 * @param uuidColumnName
+	 */
+	private void setUUIDColumnName(String uuidColumnName) {
+<span class="nc" id="L1300">		this.m_uuidColumnName = uuidColumnName;</span>
+<span class="nc" id="L1301">		Env.setContext(m_vo.ctx, m_vo.WindowNo, m_vo.TabNo, CTX_UUIDColumnName, m_uuidColumnName);</span>
+<span class="nc" id="L1302">	}</span>
+
+	/**
+	 *  @return link column name
+	 */
+	public String getLinkColumnName()
+	{
+<span class="nc" id="L1309">		return m_linkColumnName;</span>
+	}	//	getLinkColumnName
+
+	/**
+	 *	Set Name of link column.
+	 * 	Set from GridWindow.loadTabData.
+	 *	@param linkColumnName	name of column - or sets name to AD_Column_ID, if exists
+	 */
+	public void setLinkColumnName (String linkColumnName)
+	{
+		// set parent column name
+<span class="nc bnc" id="L1320" title="All 2 branches missed.">		if (m_vo.Parent_Column_ID &gt; 0)</span>
+<span class="nc" id="L1321">			m_parentColumnName = MColumn.getColumnName(m_vo.ctx, m_vo.Parent_Column_ID);</span>
+<span class="nc bnc" id="L1322" title="All 2 branches missed.">		if ( m_parentColumnName == null )</span>
+<span class="nc" id="L1323">			m_parentColumnName = &quot;&quot;;</span>
+
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">		if (linkColumnName != null)</span>
+<span class="nc" id="L1326">			m_linkColumnName = linkColumnName;</span>
+		else
+		{
+<span class="nc bnc" id="L1329" title="All 2 branches missed.">			if (m_vo.AD_Column_ID == 0)</span>
+<span class="nc" id="L1330">				return;</span>
+			//	we have a link column identified (primary parent column)
+			else
+			{
+<span class="nc" id="L1334">				m_linkColumnName = MColumn.getColumnName(m_vo.ctx, m_vo.AD_Column_ID);		//	Parent Link Column</span>
+<span class="nc bnc" id="L1335" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;AD_Column_ID=&quot; + m_vo.AD_Column_ID + &quot; - &quot; + m_linkColumnName);</span>
+			}
+		}
+<span class="nc" id="L1338">		Env.setContext(m_vo.ctx, m_vo.WindowNo, m_vo.TabNo, CTX_LinkColumnName, m_linkColumnName);</span>
+<span class="nc" id="L1339">	}	//	setLinkColumnName</span>
+
+	/**
+	 *	Is the tab current?&lt;br/&gt;
+	 *  This is usually used to determine if a re-query of detail tabs is necessary due to parent tab current row pointer has changed.
+	 *  &lt;pre&gt;
+	 *	Yes     - Table must be open
+	 *	        - Query String is the same
+	 *	        - Not Detail Tab
+	 *	        - Old link column value is same as current one
+	 *  &lt;/pre&gt;
+	 *  @return true if current
+	 */
+	public boolean isCurrent()
+	{
+		//	Open?
+<span class="nc bnc" id="L1355" title="All 2 branches missed.">		if (!m_mTable.isOpen())</span>
+<span class="nc" id="L1356">			return false;</span>
+		//	Same Query
+<span class="nc bnc" id="L1358" title="All 2 branches missed.">		if (!m_oldQuery.equals(m_query.getSQLFilter()))</span>
+<span class="nc" id="L1359">			return false;</span>
+		//	Detail?
+<span class="nc bnc" id="L1361" title="All 2 branches missed.">		if (!isDetail())</span>
+<span class="nc" id="L1362">			return true;</span>
+		//	Same link column value
+		// IDEMPIERE-4799 Fix Check Parent Column name
+<span class="nc bnc" id="L1365" title="All 2 branches missed.">		String columnName = Util.isEmpty(m_parentColumnName) ? getLinkColumnName() : m_parentColumnName;</span>
+<span class="nc" id="L1366">		String value = Env.getContext(m_vo.ctx, m_vo.WindowNo, this.getParentTabNo(), columnName);</span>
+<span class="nc" id="L1367">		return m_linkValue.equals(value);</span>
+	}	//	isCurrent
+
+	/**
+	 *	Is the tab/table currently open
+	 *  @return true if open
+	 */
+	public boolean isOpen()
+	{
+		//	Open?
+<span class="nc bnc" id="L1377" title="All 2 branches missed.">		if (m_mTable != null)</span>
+<span class="nc" id="L1378">			return m_mTable.isOpen();</span>
+<span class="nc" id="L1379">		return false;</span>
+	}	//	isCurrent
+
+	/**
+	 *  Is Tab Included in other Tab
+	 *  @return true if included
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	@GeneratedCodeCoverageExclusion
+	public boolean isIncluded()
+	{
+		if (! m_includedAlreadyCalc) {
+			m_included = false;
+			if (getParentTab() != null) {
+				for (GridTab tab : getParentTab().getIncludedTabs()) {
+					if (tab.equals(this)) {
+						m_included = true;
+						break;
+					}
+				}
+			}
+			m_includedAlreadyCalc = true;
+		}		
+		return m_included;
+	}   //  isIncluded
+
+	/**
+	 *  Is Tab Included in other Tab
+	 *  @param isIncluded true if included
+	 *  @deprecated The method getIncluded now validate against the structure, this method is called nowhere
+	*/
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public void setIncluded(boolean isIncluded)
+	{
+<span class="nc" id="L1414">		m_included = isIncluded;</span>
+<span class="nc" id="L1415">	}   //  setIncluded</span>
+
+	/**
+	 *  Are Only Current Rows displayed
+	 *  @return true if no history
+	 */
+	public boolean isOnlyCurrentRows()
+	{
+<span class="nc" id="L1423">		return m_vo.onlyCurrentRows;</span>
+	}   //  isOnlyCurrentRows
+	
+	/**
+	 *	Return Parent ArrayList
+	 *  @return parent column names
+	 */
+	public ArrayList&lt;String&gt; getParentColumnNames()
+	{
+<span class="nc" id="L1432">		return m_parents;</span>
+	}	//	getParentColumnNames
+
+	/**
+	 *	Returns true if this is a detail tab
+	 *  @return true if not parent tab
+	 */
+	public boolean isDetail()
+	{
+		// First Tab Level is not a detail
+<span class="nc bnc" id="L1442" title="All 2 branches missed.">		if (m_vo.TabLevel == 0)</span>
+<span class="nc" id="L1443">			return false;</span>
+		//	We have IsParent columns and/or a link column
+<span class="nc bnc" id="L1445" title="All 4 branches missed.">		if (m_parents.size() &gt; 0 || m_vo.AD_Column_ID != 0)</span>
+<span class="nc" id="L1446">			return true;</span>
+<span class="nc" id="L1447">		return false;</span>
+	}	//	isDetail
+
+	/**
+	 *	Is Printed (Document can be printed)
+	 *  @return true if printing
+	 */
+	public boolean isPrinted()
+	{
+<span class="nc bnc" id="L1456" title="All 2 branches missed.">		return m_vo.AD_Process_ID != 0;</span>
+	}	//	isPrinted
+
+	/**
+	 *	Get WindowNo
+	 *  @return window no
+	 */
+	public int getWindowNo()
+	{
+<span class="nc" id="L1465">		return m_vo.WindowNo;</span>
+	}	//	getWindowNo
+
+	/**
+	 *	Get TabNo
+	 *  @return tab no
+	 */
+	public int getTabNo()
+	{
+<span class="nc" id="L1474">		return m_vo.TabNo;</span>
+	}	//	getTabNo
+
+	/**
+	 *	Get Process ID
+	 *  @return AD_Process_ID
+	 */
+	public int getAD_Process_ID()
+	{
+<span class="nc" id="L1483">		return m_vo.AD_Process_ID;</span>
+	}	//	getAD_Process_ID
+
+	/**
+	 *	Is High Volume?
+	 *  @return true if high volume table
+	 */
+	public boolean isHighVolume()
+	{
+<span class="nc" id="L1492">		return m_vo.IsHighVolume;</span>
+	}	//	isHighVolume
+
+	/**
+	 * Is Lookup Only By Selection Fields?
+	 * 
+	 * @return true if only selection
+	 */
+	public boolean IsLookupOnlySelection() {
+<span class="nc" id="L1501">		return m_vo.IsLookupOnlySelection;</span>
+	} // IsLookupOnlySelection
+
+	/**
+	 * Is Allow Advanced Lookup panel?
+	 * 
+	 * @return true if allow the use
+	 */
+	public boolean IsAllowAdvancedLookup() {
+<span class="nc" id="L1510">		return m_vo.IsAllowAdvancedLookup;</span>
+	} // IsAllowAdvancedLookup
+	
+	/**
+	 *	Is Read Only?
+	 *  @return true if read only
+	 */
+	public boolean isReadOnly()
+	{
+<span class="nc bnc" id="L1519" title="All 2 branches missed.">		if (m_vo.IsReadOnly)</span>
+<span class="nc" id="L1520">			return true;</span>
+
+		//hengsin, make detail readonly when parent is empty
+<span class="nc bnc" id="L1523" title="All 2 branches missed.">		if (m_parentNeedSave) return true;</span>
+
+		//  no restrictions
+<span class="nc bnc" id="L1526" title="All 4 branches missed.">		if (m_vo.ReadOnlyLogic == null || m_vo.ReadOnlyLogic.equals(&quot;&quot;))</span>
+<span class="nc" id="L1527">			return m_vo.IsReadOnly;</span>
+
+		//  ** dynamic content **  uses get_ValueAsString
+<span class="nc" id="L1530">		boolean retValue = Evaluator.evaluateLogic(this, m_vo.ReadOnlyLogic);</span>
+<span class="nc bnc" id="L1531" title="All 2 branches missed.">		if (log.isLoggable(Level.FINEST)) log.finest(m_vo.Name</span>
+<span class="nc" id="L1532">			+ &quot; (&quot; + m_vo.ReadOnlyLogic + &quot;) =&gt; &quot; + retValue);</span>
+<span class="nc" id="L1533">		return retValue;</span>
+	}	//	isReadOnly
+
+	/**
+	 * 	Tab contains Always Update Field
+	 *	@return true if has field that is always updatable
+	 */
+	public boolean isAlwaysUpdateField()
+	{
+<span class="nc bnc" id="L1542" title="All 2 branches missed.">		for (int i = 0; i &lt; m_mTable.getColumnCount(); i++)</span>
+		{
+<span class="nc" id="L1544">			GridField field = m_mTable.getField(i);</span>
+<span class="nc bnc" id="L1545" title="All 2 branches missed.">			if (field.isAlwaysUpdateable())</span>
+<span class="nc" id="L1546">				return true;</span>
+		}
+<span class="nc" id="L1548">		return false;</span>
+	}	//	isAlwaysUpdateField
+
+	/**
+	 *	Can we Insert Records?
+	 *  @return true if can insert new record
+	 */
+	public boolean isInsertRecord()
+	{
+<span class="nc bnc" id="L1557" title="All 2 branches missed.">		if (isReadOnly())</span>
+<span class="nc" id="L1558">			return false;</span>
+<span class="nc" id="L1559">		return m_vo.IsInsertRecord;</span>
+	}	//	isInsertRecord
+
+	/**
+	 *	Can we Delete Records?
+	 *  @return true if can delete existing record
+	 */
+	public boolean isDeleteRecord()
+	{
+<span class="nc bnc" id="L1568" title="All 2 branches missed.">		if (isReadOnly())</span>
+<span class="nc" id="L1569">			return false;</span>
+<span class="nc" id="L1570">		return m_vo.IsDeleteable;</span>
+	}	//	isDeleteRecord
+
+	/**
+	 *	Is the Tab Visible.
+	 *  @return true, if displayed
+	 */
+	public boolean isDisplayed ()
+	{
+		//  no restrictions
+<span class="nc" id="L1580">		String dl = m_vo.DisplayLogic;</span>
+<span class="nc bnc" id="L1581" title="All 4 branches missed.">		if (dl == null || dl.equals(&quot;&quot;))</span>
+<span class="nc" id="L1582">			return true;</span>
+
+		//  ** dynamic content **
+<span class="nc" id="L1585">		boolean retValue = Evaluator.evaluateLogic(this, dl);</span>
+<span class="nc bnc" id="L1586" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(m_vo.Name + &quot; (&quot; + dl + &quot;) =&gt; &quot; + retValue);</span>
+<span class="nc" id="L1587">		return retValue;</span>
+	}	//	isDisplayed
+
+	/**
+	 * 	Get Variable Value (Evaluatee) as string
+	 *	@param variableName name
+	 *	@return value as string 
+	 */
+	@Override
+	public String get_ValueAsString (String variableName)
+	{
+<span class="nc" id="L1598">		return get_ValueAsString (m_vo.ctx, variableName);</span>
+	}	//	get_ValueAsString
+	
+	/**
+	 * 	Get Variable Value (Evaluatee) as string
+	 *  @param ctx context
+	 *	@param variableName name
+	 *	@return value as string
+	 */
+	public String get_ValueAsString (Properties ctx, String variableName)
+	{
+<span class="nc" id="L1609">		return new DefaultEvaluatee(this, m_vo.WindowNo, m_vo.TabNo).get_ValueAsString(ctx, variableName);</span>
+	}	//	get_ValueAsString
+
+	/**
+	 *  Is Single Row
+	 *  @return true if default to single row (i.e form presentation)
+	 */
+	public boolean isSingleRow()
+	{
+<span class="nc" id="L1618">        MTabCustomization tabcust = MTabCustomization.get(Env.getCtx(), Env.getAD_User_ID(Env.getCtx()), getAD_Tab_ID(), null);</span>
+<span class="nc bnc" id="L1619" title="All 4 branches missed.">        if (tabcust != null &amp;&amp; tabcust.getIsDisplayedGrid() != null)</span>
+<span class="nc" id="L1620">        	return &quot;N&quot;.equals(tabcust.getIsDisplayedGrid());</span>
+<span class="nc" id="L1621">		return m_vo.IsSingleRow;</span>
+	}   //  isSingleRow;
+
+	/**
+	 *  Set Single Row (form presentation)
+	 *  Temporary store of current value
+	 *  @param isSingleRow toggle
+	 */
+	public void setSingleRow (boolean isSingleRow)
+	{
+<span class="nc" id="L1631">		m_vo.IsSingleRow = isSingleRow;</span>
+<span class="nc" id="L1632">	}   //  setSingleRow</span>
+
+
+	/**
+	 *  Has Tree
+	 *  @return true if tree exists
+	 */
+	public boolean isTreeTab()
+	{
+<span class="nc" id="L1641">		return m_vo.HasTree;</span>
+	}   //  isTreeTab
+
+	/**
+	 * Where the tree should be shown
+	 * @return master, detail or both
+	 */
+	public String getTreeDisplayedOn()
+	{
+<span class="nc" id="L1650">		return m_vo.TreeDisplayedOn;</span>
+	}   //  getTreeDisplayedOn
+
+	/**
+	 *	Get Tab ID
+	 *  @return AD_Tab_ID
+	 */
+	public int getAD_Tab_ID()
+	{
+<span class="nc" id="L1659">		return m_vo.AD_Tab_ID;</span>
+	}	//	getAD_Tab_ID
+
+	/**
+	 *	Get Table ID
+	 *  @return AD_Table_ID
+	 */
+	public int getAD_Table_ID()
+	{
+<span class="nc" id="L1668">		return m_vo.AD_Table_ID;</span>
+	}	//	getAD_Table_ID
+
+	/**
+	 *	Get Window ID
+	 *  @return AD_Window_ID
+	 */
+	public int getAD_Window_ID()
+	{
+<span class="nc" id="L1677">		return m_vo.AD_Window_ID;</span>
+	}	//	getAD_Window_ID
+
+	/**
+	 *	Get Included Tab ID
+	 *  @return Included_Tab_ID
+	 *  @deprecated the functionality related to AD_Tab.Included_Tab_ID is deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public int getIncluded_Tab_ID()
+	{
+<span class="nc" id="L1688">		return m_vo.Included_Tab_ID;</span>
+	}	//	getIncluded_Tab_ID
+
+	/**
+	 *	Get TableName
+	 *  @return Table Name
+	 */
+	public String getTableName()
+	{
+<span class="nc" id="L1697">		return m_vo.TableName;</span>
+	}	//	getTableName
+
+	/**
+	 *	Get Tab Where Clause
+	 *  @return where clause
+	 */
+	public String getWhereClause()
+	{
+<span class="nc" id="L1706">		return m_vo.WhereClause;</span>
+	}	//	getWhereClause
+
+	/**
+	 * 	Is Sort Tab
+	 * 	@return true if this is sort tab
+	 */
+	public boolean isSortTab()
+	{
+<span class="nc" id="L1715">		return m_vo.IsSortTab;</span>
+	}	//	isSortTab
+
+	/**
+	 * 	Get Order column for sort tab
+	 * 	@return AD_Column_ID for sorting
+	 */
+	public int getAD_ColumnSortOrder_ID()
+	{
+<span class="nc" id="L1724">		return m_vo.AD_ColumnSortOrder_ID;</span>
+	}	//	getAD_ColumnSortOrder_ID
+
+	/**
+	 * 	Get Yes/No column for sort tab
+	 * 	@return AD_Column_ID for yes/no flag
+	 */
+	public int getAD_ColumnSortYesNo_ID()
+	{
+<span class="nc" id="L1733">		return m_vo.AD_ColumnSortYesNo_ID;</span>
+	}	//	getAD_ColumnSortYesNo_ID
+
+	/**
+	 *	Get extended Where Clause (parent link)
+	 *  @return parent link
+	 *  @deprecated use getExtendedFilter() instead
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public String getWhereExtended()
+	{
+<span class="nc bnc" id="L1744" title="All 2 branches missed.">		return m_extendedFilter != null ? m_extendedFilter.toSQLWithParameters() : &quot;&quot;;</span>
+	}	//	getWhereExtended
+
+	/**
+	 * Get extended SQL Filter (parent link)
+	 * @return parent link
+	 */
+	public SQLFragment getExtendedFilter() {
+<span class="nc" id="L1752">		return m_extendedFilter;</span>
+	}
+	
+	/**
+	 *	Get Order By Clause
+	 *  @param onlyCurrentRows only current rows
+	 *  @return Order By Clause
+	 */
+	private String getOrderByClause(boolean onlyCurrentRows)
+	{
+		//	First Prio: Tab Order By
+<span class="nc bnc" id="L1763" title="All 2 branches missed.">		if (m_vo.OrderByClause.length() &gt; 0)</span>
+		{
+<span class="nc" id="L1765">			String orderBy = Env.parseContext(m_vo.ctx, m_vo.WindowNo, m_vo.OrderByClause, false, false);</span>
+<span class="nc" id="L1766">			return orderBy;</span>
+		}
+
+		//	Second Prio: Fields (save it)
+<span class="nc" id="L1770">		m_vo.OrderByClause = &quot;&quot;;</span>
+<span class="nc bnc" id="L1771" title="All 2 branches missed.">		for (int i = 0; i &lt; 3; i++)</span>
+		{
+<span class="nc" id="L1773">			String order = m_OrderBys[i];</span>
+<span class="nc bnc" id="L1774" title="All 4 branches missed.">			if (order != null &amp;&amp; order.length() &gt; 0)</span>
+			{
+<span class="nc bnc" id="L1776" title="All 2 branches missed.">				if (m_vo.OrderByClause.length() &gt; 0)</span>
+<span class="nc" id="L1777">					m_vo.OrderByClause += &quot;,&quot;;</span>
+<span class="nc" id="L1778">				m_vo.OrderByClause += order;</span>
+			}
+		}
+<span class="nc bnc" id="L1781" title="All 2 branches missed.">		if (m_vo.OrderByClause.length() &gt; 0)</span>
+<span class="nc" id="L1782">			return m_vo.OrderByClause;</span>
+
+		//	Third Prio: onlyCurrentRows
+<span class="nc" id="L1785">		m_vo.OrderByClause = &quot;Created&quot;;</span>
+<span class="nc bnc" id="L1786" title="All 4 branches missed.">		if (onlyCurrentRows &amp;&amp; !isDetail())	//	first tab only</span>
+<span class="nc" id="L1787">			m_vo.OrderByClause += &quot; DESC&quot;;</span>
+<span class="nc" id="L1788">		return m_vo.OrderByClause;</span>
+	}	//	getOrderByClause
+
+	/**
+	 *	Transaction support.
+	 *	Depending on Table returns transaction info
+	 *  @return info
+	 *  @deprecated use getStatusLine and configure Status Line instead
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	@GeneratedCodeCoverageExclusion
+	public String getTrxInfo()
+	{
+		//	InvoiceBatch
+		if (m_vo.TableName.startsWith(&quot;C_InvoiceBatch&quot;))
+		{
+			int Record_ID = Env.getContextAsInt(m_vo.ctx, m_vo.WindowNo, &quot;C_InvoiceBatch_ID&quot;);
+			if (log.isLoggable(Level.FINE)) log.fine(m_vo.TableName + &quot; - &quot; + Record_ID);
+			MessageFormat mf = null;
+			try
+			{
+				mf = new MessageFormat(Msg.getMsg(Env.getAD_Language(m_vo.ctx), &quot;InvoiceBatchSummary&quot;), Env.getLanguage(m_vo.ctx).getLocale());
+			}
+			catch (Exception e)
+			{
+				log.log(Level.SEVERE, &quot;InvoiceBatchSummary=&quot; + Msg.getMsg(Env.getAD_Language(m_vo.ctx), &quot;InvoiceBatchSummary&quot;), e);
+			}
+			if (mf == null)
+				return &quot; &quot;;
+			/**********************************************************************
+			 *	** Message: ExpenseSummary **
+			 *	{0} Line(s) {1,number,#,##0.00}  - Total: {2,number,#,##0.00}
+			 *
+			 *	{0} - Number of lines
+			 *	{1} - Total
+			 *	{2} - Currency
+			 */
+			Object[] arguments = new Object[3];
+			boolean filled = false;
+			//
+			String sql = &quot;SELECT COUNT(*), NVL(SUM(LineNetAmt),0), NVL(SUM(LineTotalAmt),0) &quot;
+				+ &quot;FROM C_InvoiceBatchLine &quot;
+				+ &quot;WHERE C_InvoiceBatch_ID=? AND IsActive='Y'&quot;;
+			//
+			PreparedStatement pstmt = null;
+			ResultSet rs = null;
+			try
+			{
+				pstmt = DB.prepareStatement(sql, null);
+				pstmt.setInt(1, Record_ID);
+				rs = pstmt.executeQuery();
+				if (rs.next())
+				{
+					//	{0} - Number of lines
+					Integer lines = Integer.valueOf(rs.getInt(1));
+					arguments[0] = lines;
+					//	{1} - Line net
+					Double net = Double.valueOf(rs.getDouble(2));
+					arguments[1] = net;
+					//	{2} - Line net
+					Double total = Double.valueOf(rs.getDouble(3));
+					arguments[2] = total;
+					filled = true;
+				}
+			}
+			catch (SQLException e)
+			{
+				log.log(Level.SEVERE, m_vo.TableName + &quot;\nSQL=&quot; + sql, e);
+			}
+			finally
+			{
+				DB.close(rs, pstmt);
+				rs = null;
+				pstmt = null;
+			}
+			if (filled)
+				return mf.format (arguments);
+			return &quot; &quot;;
+		}	//	InvoiceBatch
+
+		//	Order || Invoice
+		else if (m_vo.TableName.startsWith(&quot;C_Order&quot;) || m_vo.TableName.startsWith(&quot;C_Invoice&quot;))
+		{
+			int Record_ID;
+			boolean isOrder = m_vo.TableName.startsWith(&quot;C_Order&quot;);
+			//
+			StringBuilder sql = new StringBuilder(&quot;SELECT COUNT(*) AS Lines,c.ISO_Code,o.TotalLines,o.GrandTotal,&quot;
+				+ &quot;currencyBase(o.GrandTotal,o.C_Currency_ID,o.DateAcct, o.AD_Client_ID,o.AD_Org_ID) AS ConvAmt &quot;);
+			if (isOrder)
+			{
+				Record_ID = Env.getContextAsInt(m_vo.ctx, m_vo.WindowNo, &quot;C_Order_ID&quot;);
+				sql.append(&quot;FROM C_Order o&quot;
+					+ &quot; INNER JOIN C_Currency c ON (o.C_Currency_ID=c.C_Currency_ID)&quot;
+					+ &quot; INNER JOIN C_OrderLine l ON (o.C_Order_ID=l.C_Order_ID) &quot;
+					+ &quot;WHERE o.C_Order_ID=? &quot;);
+			}
+			else
+			{
+				Record_ID = Env.getContextAsInt(m_vo.ctx, m_vo.WindowNo, &quot;C_Invoice_ID&quot;);
+				sql.append(&quot;FROM C_Invoice o&quot;
+					+ &quot; INNER JOIN C_Currency c ON (o.C_Currency_ID=c.C_Currency_ID)&quot;
+					+ &quot; INNER JOIN C_InvoiceLine l ON (o.C_Invoice_ID=l.C_Invoice_ID) &quot;
+					+ &quot;WHERE o.C_Invoice_ID=? &quot;);
+			}
+			sql.append(&quot; GROUP BY o.C_Currency_ID, c.ISO_Code, o.TotalLines, o.GrandTotal, o.DateAcct, o.AD_Client_ID, o.AD_Org_ID&quot;);
+
+			if (log.isLoggable(Level.FINE)) log.fine(m_vo.TableName + &quot; - &quot; + Record_ID);
+			MessageFormat mf = null;
+			try
+			{
+				mf = new MessageFormat(Msg.getMsg(Env.getAD_Language(m_vo.ctx), &quot;OrderSummary&quot;), Env.getLanguage(m_vo.ctx).getLocale());
+			}
+			catch (Exception e)
+			{
+				log.log(Level.SEVERE, &quot;OrderSummary=&quot; + Msg.getMsg(Env.getAD_Language(m_vo.ctx), &quot;OrderSummary&quot;), e);
+			}
+			if (mf == null)
+				return &quot; &quot;;
+			/**********************************************************************
+			 *	** Message: OrderSummary **
+			 *	{0} Line(s) - {1,number,#,##0.00} - Total: {2,number,#,##0.00} {3} = {4,number,#,##0.00}
+			 *
+			 *	{0} - Number of lines
+			 *	{1} - Line total
+			 *	{2} - Grand total (including tax, etc.)
+			 *	{3} - Currency
+			 *	(4) - Grand total converted to local currency
+			 */
+			Object[] arguments = new Object[5];
+			boolean filled = false;
+			PreparedStatement pstmt = null;
+			ResultSet rs = null;
+			//
+			try
+			{
+				pstmt = DB.prepareStatement(sql.toString(), null);
+				pstmt.setInt(1, Record_ID);
+				rs = pstmt.executeQuery();
+				if (rs.next())
+				{
+					//	{0} - Number of lines
+					Integer lines = Integer.valueOf(rs.getInt(1));
+					arguments[0] = lines;
+					//	{1} - Line toral
+					Double lineTotal = Double.valueOf(rs.getDouble(3));
+					arguments[1] = lineTotal;
+					//	{2} - Grand total (including tax, etc.)
+					Double grandTotal = Double.valueOf(rs.getDouble(4));
+					arguments[2] = grandTotal;
+					//	{3} - Currency
+					String currency = rs.getString(2);
+					arguments[3] = currency;
+					//	(4) - Grand total converted to Euro
+					Double grandEuro = Double.valueOf(rs.getDouble(5));
+					arguments[4] = grandEuro;
+					filled = true;
+				}
+			}
+			catch (SQLException e)
+			{
+				log.log(Level.SEVERE, m_vo.TableName + &quot;\nSQL=&quot; + sql, e);
+			}
+			finally
+			{
+				DB.close(rs, pstmt);
+				rs = null; pstmt = null;
+			}
+
+			if (filled)
+				return mf.format (arguments);
+			return &quot; &quot;;
+		}	//	Order || Invoice
+
+		//	Expense Report
+		else if (m_vo.TableName.startsWith(&quot;S_TimeExpense&quot;) &amp;&amp; m_vo.TabNo == 0)
+		{
+			int Record_ID = Env.getContextAsInt(m_vo.ctx, m_vo.WindowNo, &quot;S_TimeExpense_ID&quot;);
+			if (log.isLoggable(Level.FINE)) log.fine(m_vo.TableName + &quot; - &quot; + Record_ID);
+			MessageFormat mf = null;
+			try
+			{
+				mf = new MessageFormat(Msg.getMsg(Env.getAD_Language(m_vo.ctx), &quot;ExpenseSummary&quot;), Env.getLanguage(m_vo.ctx).getLocale());
+			}
+			catch (Exception e)
+			{
+				log.log(Level.SEVERE, &quot;ExpenseSummary=&quot; + Msg.getMsg(Env.getAD_Language(m_vo.ctx), &quot;ExpenseSummary&quot;), e);
+			}
+			if (mf == null)
+				return &quot; &quot;;
+			/**********************************************************************
+			 *	** Message: ExpenseSummary **
+			 *	{0} Line(s) - Total: {1,number,#,##0.00} {2}
+			 *
+			 *	{0} - Number of lines
+			 *	{1} - Total
+			 *	{2} - Currency
+			 */
+			Object[] arguments = new Object[3];
+			boolean filled = false;
+			//
+			String SQL = &quot;SELECT COUNT(*) AS Lines, SUM(ConvertedAmt*Qty) &quot;
+				+ &quot;FROM S_TimeExpenseLine &quot;
+				+ &quot;WHERE S_TimeExpense_ID=?&quot;;
+
+			//
+			PreparedStatement pstmt = null;
+			ResultSet rs = null;
+			try
+			{
+				pstmt = DB.prepareStatement(SQL, null);
+				pstmt.setInt(1, Record_ID);
+				rs = pstmt.executeQuery();
+				if (rs.next())
+				{
+					//	{0} - Number of lines
+					Integer lines = Integer.valueOf(rs.getInt(1));
+					arguments[0] = lines;
+					//	{1} - Line total
+					Double total = Double.valueOf(rs.getDouble(2));
+					arguments[1] = total;
+					//	{3} - Currency
+					arguments[2] = &quot; &quot;;
+					filled = true;
+				}
+			}
+			catch (SQLException e)
+			{
+				log.log(Level.SEVERE, m_vo.TableName + &quot;\nSQL=&quot; + SQL, e);
+			}
+			finally
+			{
+				DB.close(rs, pstmt);
+				rs = null; pstmt = null;
+			}
+
+			if (filled)
+				return mf.format (arguments);
+			return &quot; &quot;;
+		}	//	S_TimeExpense
+
+
+		//	Default - No Trx Info
+		return null;
+	}	//	getTrxInfo
+
+	/**
+	 *  @return status line text
+	 */
+	public String getStatusLine()
+	{
+<span class="nc" id="L2038">		MStatusLine sl = MStatusLine.getSL(getAD_Window_ID(), getAD_Tab_ID(), getAD_Table_ID());</span>
+<span class="nc bnc" id="L2039" title="All 2 branches missed.">		if (sl != null)</span>
+		{
+<span class="nc" id="L2041">			String line = sl.parseLine(getWindowNo());</span>
+<span class="nc" id="L2042">			return line;</span>
+		}
+
+<span class="nc" id="L2045">		return null;</span>
+	}	// getStatusLine
+
+	/**
+	 *	Get status line for this tab
+	 *  @return status line text
+	 */
+	public String getStatusLinesWidget() {
+<span class="nc" id="L2053">		MStatusLine[] wls = MStatusLine.getStatusLinesWidget(getAD_Window_ID(), getAD_Tab_ID(), getAD_Table_ID());</span>
+<span class="nc bnc" id="L2054" title="All 4 branches missed.">		if (wls != null &amp;&amp; wls.length &gt; 0)</span>
+		{
+<span class="nc" id="L2056">			StringBuilder lines = new StringBuilder();</span>
+<span class="nc bnc" id="L2057" title="All 2 branches missed.">			for (MStatusLine wl : wls) {</span>
+<span class="nc" id="L2058">				String line = wl.parseLine(getWindowNo());</span>
+<span class="nc bnc" id="L2059" title="All 2 branches missed.">				if (line != null) {</span>
+<span class="nc bnc" id="L2060" title="All 2 branches missed.">					if (wl.getAD_Style_ID() &gt; 0) {</span>
+<span class="nc" id="L2061">			    		MStyle style = MStyle.get(wl.getAD_Style_ID());</span>
+<span class="nc" id="L2062">						String css = style.buildStyle(Env.getContext(Env.getCtx(), Env.THEME), new DefaultEvaluatee(), false);				</span>
+<span class="nc bnc" id="L2063" title="All 2 branches missed.">						if (!Util.isEmpty(css, true)) {</span>
+<span class="nc" id="L2064">							lines.append(&quot;&lt;div&gt;\n&quot;)</span>
+<span class="nc" id="L2065">								.append(&quot;&lt;style&gt;\n&quot;)</span>
+<span class="nc" id="L2066">								.append(&quot;@scope {\n&quot;)</span>
+<span class="nc" id="L2067">								.append(css)</span>
+<span class="nc" id="L2068">								.append(&quot;\n}\n&quot;)</span>
+<span class="nc" id="L2069">								.append(&quot;&lt;/style&gt;\n&quot;)</span>
+<span class="nc" id="L2070">								.append(line)</span>
+<span class="nc" id="L2071">								.append(&quot;\n&quot;)</span>
+<span class="nc" id="L2072">								.append(&quot;&lt;/div&gt;\n&quot;);</span>
+<span class="nc" id="L2073">						} else {</span>
+<span class="nc" id="L2074">							lines.append(line).append(&quot;&lt;br&gt;&quot;);</span>
+						}
+<span class="nc" id="L2076">		    		} else {</span>
+<span class="nc" id="L2077">		    			lines.append(line).append(&quot;&lt;br&gt;&quot;);</span>
+		    		}
+				}
+			}
+<span class="nc bnc" id="L2081" title="All 2 branches missed.">			if (lines.length() &gt; 0)</span>
+<span class="nc" id="L2082">				return lines.toString();</span>
+		}
+<span class="nc" id="L2084">		return null;</span>
+	} // getWidgetLines
+
+	/**
+	 *  Load Dependent Information
+	 */
+	private void loadDependentInfo()
+	{
+		/**
+		 * Load Order Type from C_DocTypeTarget_ID
+		 */
+<span class="nc bnc" id="L2095" title="All 2 branches missed.">		if (m_vo.TableName.equals(&quot;C_Order&quot;))</span>
+		{
+<span class="nc" id="L2097">			int C_DocTyp_ID = 0;</span>
+<span class="nc" id="L2098">			Integer target = (Integer)getValue(&quot;C_DocTypeTarget_ID&quot;);</span>
+<span class="nc bnc" id="L2099" title="All 2 branches missed.">			if (target != null)</span>
+<span class="nc" id="L2100">				C_DocTyp_ID = target.intValue();</span>
+<span class="nc bnc" id="L2101" title="All 2 branches missed.">			if (C_DocTyp_ID == 0)</span>
+<span class="nc" id="L2102">				return;</span>
+
+<span class="nc" id="L2104">			String sql = &quot;SELECT DocSubTypeSO FROM C_DocType WHERE C_DocType_ID=?&quot;;</span>
+<span class="nc" id="L2105">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2106">			ResultSet rs = null;</span>
+			try
+			{
+<span class="nc" id="L2109">				pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L2110">				pstmt.setInt(1, C_DocTyp_ID);</span>
+<span class="nc" id="L2111">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L2112" title="All 2 branches missed.">				if (rs.next())</span>
+<span class="nc" id="L2113">					Env.setContext(m_vo.ctx, m_vo.WindowNo, &quot;OrderType&quot;, rs.getString(1));</span>
+<span class="nc" id="L2114"> 			}</span>
+<span class="nc" id="L2115">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L2117">				log.log(Level.SEVERE, sql, e);</span>
+			}
+			finally
+			{
+<span class="nc" id="L2121">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L2122">				rs = null; pstmt = null;</span>
+			}
+		}   //  loadOrderInfo
+
+		// Set the Phone Format on BPartnerLocation based on Country
+<span class="nc bnc" id="L2127" title="All 2 branches missed.">		if (m_vo.TableName.equals(&quot;C_BPartner_Location&quot;))</span>
+		{
+<span class="nc" id="L2129">			Integer location_int = (Integer) getValue(X_C_BPartner_Location.COLUMNNAME_C_Location_ID);</span>
+<span class="nc" id="L2130">			String phone_frm = null;</span>
+<span class="nc bnc" id="L2131" title="All 2 branches missed.">			if (location_int != null)</span>
+				// take the phone format from country
+<span class="nc" id="L2133">				phone_frm = DB.getSQLValueString(null, &quot;SELECT ExpressionPhone FROM C_Country c, C_Location l WHERE c.C_Country_ID = l.C_Country_ID AND l.C_location_ID = ?&quot;, location_int);</span>
+<span class="nc" id="L2134">			GridField fPhone = getField(X_C_BPartner_Location.COLUMNNAME_Phone);</span>
+<span class="nc" id="L2135">			MColumn colPhone = null;</span>
+<span class="nc bnc" id="L2136" title="All 2 branches missed.">			if (fPhone != null)</span>
+<span class="nc" id="L2137">				colPhone = MColumn.get(Env.getCtx(), fPhone.getAD_Column_ID());</span>
+<span class="nc" id="L2138">			GridField fPhone2 = getField(X_C_BPartner_Location.COLUMNNAME_Phone2);</span>
+<span class="nc" id="L2139">			MColumn colPhone2 = null;</span>
+<span class="nc bnc" id="L2140" title="All 2 branches missed.">			if (fPhone2 != null)</span>
+<span class="nc" id="L2141">				colPhone2 = MColumn.get(Env.getCtx(), fPhone2.getAD_Column_ID());</span>
+<span class="nc" id="L2142">			GridField fFax = getField(X_C_BPartner_Location.COLUMNNAME_Fax);</span>
+<span class="nc" id="L2143">			MColumn colFax = null;</span>
+<span class="nc bnc" id="L2144" title="All 2 branches missed.">			if (fFax != null)</span>
+<span class="nc" id="L2145">				colFax = MColumn.get(Env.getCtx(), fFax.getAD_Column_ID());</span>
+			// Apply the country format if the column doesn't have format
+<span class="nc bnc" id="L2147" title="All 6 branches missed.">			if (colPhone != null &amp;&amp; (colPhone.getVFormat() == null || colPhone.getVFormat().length() == 0))</span>
+<span class="nc" id="L2148">				fPhone.setVFormat(phone_frm);</span>
+<span class="nc bnc" id="L2149" title="All 6 branches missed.">			if (colPhone2 != null &amp;&amp; (colPhone2.getVFormat() == null || colPhone2.getVFormat().length() == 0))</span>
+<span class="nc" id="L2150">				fPhone2.setVFormat(phone_frm);</span>
+<span class="nc bnc" id="L2151" title="All 6 branches missed.">			if (colFax != null &amp;&amp; (colFax.getVFormat() == null || colFax.getVFormat().length() == 0))</span>
+<span class="nc" id="L2152">				fFax.setVFormat(phone_frm);</span>
+		}
+
+		// Load virtual UI columns
+<span class="nc bnc" id="L2156" title="All 2 branches missed.">		for (GridField field : getFields()) {</span>
+<span class="nc bnc" id="L2157" title="All 2 branches missed.">			if (field.isVirtualUIColumn())</span>
+<span class="nc" id="L2158">				field.processUIVirtualColumn();</span>
+		}
+<span class="nc" id="L2160">	}   //  loadDependentInfo</span>
+
+	/**
+	 *	Can this tab have Attachments?.
+	 *  &lt;p&gt;
+	 *  A tab can have attachment if it has single key column ending with _ID or _UU.
+	 *  @return true if record can have attachment
+	 */
+	public boolean canHaveAttachment()
+	{
+<span class="nc bnc" id="L2170" title="All 6 branches missed.">		if (getKeyColumnName().endsWith(&quot;_ID&quot;) || getKeyColumnName().endsWith(&quot;_UU&quot;) || !Util.isEmpty(getUUIDColumnName()))</span>
+<span class="nc" id="L2171">			return true;</span>
+<span class="nc" id="L2172">		return false;</span>
+	}   //	canHaveAttachment
+
+	/**
+	 *	Returns true, if current row has an Attachment
+	 *  @return true if record has attachment
+	 */
+	public boolean hasAttachment()
+	{
+<span class="nc bnc" id="L2181" title="All 2 branches missed.">		return getAD_AttachmentID() &gt; 0;</span>
+	}	//	hasAttachment
+
+	/**
+	 *	Get Attachment_ID for current record.
+	 *	@return AD_AttachmentID or 0 if no attachment.
+	 */
+	public int getAD_AttachmentID()
+	{
+<span class="nc bnc" id="L2190" title="All 2 branches missed.">		if (!canHaveAttachment())</span>
+<span class="nc" id="L2191">			return 0;</span>
+<span class="nc" id="L2192">		String recordUU = m_mTable.getKeyUUID(m_currentRow);</span>
+<span class="nc" id="L2193">		int recordID = m_mTable.getKeyID(m_currentRow);</span>
+<span class="nc" id="L2194">		return MAttachment.getID(m_vo.AD_Table_ID, recordID, recordUU);</span>
+	}	//	getAttachmentID
+
+	/**
+	 *	Returns true, if current row has chat records.
+	 *  @return true if current row has chat records.
+	 */
+	public boolean hasChat()
+	{
+<span class="nc bnc" id="L2203" title="All 2 branches missed.">		return getCM_ChatID() &gt; 0;</span>
+	}	//	hasChat
+
+	/**
+	 *	Get Chat_ID for this record.
+	 *	@return CM_Chat_ID or 0 if no chat records
+	 */
+	public int getCM_ChatID()
+	{
+<span class="nc bnc" id="L2212" title="All 2 branches missed.">		if (!canHaveAttachment())</span>
+<span class="nc" id="L2213">			return 0;</span>
+<span class="nc" id="L2214">		String recordUU = m_mTable.getKeyUUID(m_currentRow);</span>
+<span class="nc" id="L2215">		int recordID = m_mTable.getKeyID(m_currentRow);</span>
+<span class="nc" id="L2216">		return MChat.getID(m_vo.AD_Table_ID, recordID, recordUU);</span>
+	}	//	getCM_ChatID
+	
+	/**
+	 * @return true if current row has post it note records.
+	 */
+	public boolean hasPostIt()
+	{
+<span class="nc bnc" id="L2224" title="All 2 branches missed.">		return getAD_PostIt_ID() &gt; 0;</span>
+	}	//	hasChat
+
+	/**
+	 *	Get PostItID for this record.
+	 *	@return AD_PostIt_ID or 0 if no post it note records.
+	 */
+	public int getAD_PostIt_ID()
+	{
+<span class="nc bnc" id="L2233" title="All 2 branches missed.">		if (!canHaveAttachment())</span>
+<span class="nc" id="L2234">			return 0;</span>
+<span class="nc" id="L2235">		String recordUU = m_mTable.getKeyUUID(m_currentRow);</span>
+<span class="nc" id="L2236">		int recordID = m_mTable.getKeyID(m_currentRow);</span>
+<span class="nc" id="L2237">		return MPostIt.getID(m_vo.AD_Table_ID, recordID, recordUU);</span>
+	}	//	getAD_PostIt_ID	
+	
+	/**
+	 *  @return true if current row has Label records.
+	 */
+	public boolean hasLabel()
+	{
+<span class="nc bnc" id="L2245" title="All 2 branches missed.">		if (!canHaveAttachment())</span>
+<span class="nc" id="L2246">			return false;</span>
+<span class="nc" id="L2247">		String recordUU = m_mTable.getKeyUUID(m_currentRow);</span>
+<span class="nc" id="L2248">		int recordID = m_mTable.getKeyID(m_currentRow);</span>
+<span class="nc" id="L2249">		return MLabelAssignment.hasAnyAssignment(m_vo.AD_Table_ID, recordID, recordUU);</span>
+	}	//	hasLabel
+
+	/**
+	 *  @return true if this has import templates
+	 */
+	public boolean hasTemplate()
+	{
+<span class="nc bnc" id="L2257" title="All 2 branches missed.">		return MImportTemplate.getTemplates(Env.getAD_Role_ID(Env.getCtx()), getAD_Tab_ID()).size() &gt; 0;</span>
+	}	//	hasChat
+
+	/**
+	 * 	Load Record Locks for Table and User
+	 */
+	public void loadLocks()
+	{
+<span class="nc" id="L2265">		int AD_User_ID = Env.getContextAsInt(Env.getCtx(), Env.AD_USER_ID);</span>
+<span class="nc bnc" id="L2266" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - AD_User_ID=&quot; + AD_User_ID);</span>
+<span class="nc bnc" id="L2267" title="All 2 branches missed.">		if (!canHaveAttachment())</span>
+<span class="nc" id="L2268">			return;</span>
+
+<span class="nc" id="L2270">		String sql = &quot;SELECT Record_ID &quot;</span>
+			+ &quot;FROM AD_Private_Access &quot;
+			+ &quot;WHERE AD_User_ID=? AND AD_Table_ID=? AND IsActive='Y' &quot;
+			+ &quot;ORDER BY Record_ID&quot;;
+<span class="nc" id="L2274">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2275">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc bnc" id="L2278" title="All 2 branches missed.">			if (m_Lock == null)</span>
+<span class="nc" id="L2279">				m_Lock = new ArrayList&lt;Integer&gt;();</span>
+			else
+<span class="nc" id="L2281">				m_Lock.clear();</span>
+<span class="nc" id="L2282">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L2283">			pstmt.setInt(1, AD_User_ID);</span>
+<span class="nc" id="L2284">			pstmt.setInt(2, m_vo.AD_Table_ID);</span>
+<span class="nc" id="L2285">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L2286" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L2288">				Integer key = Integer.valueOf(rs.getInt(1));</span>
+<span class="nc" id="L2289">				m_Lock.add(key);</span>
+			}
+<span class="nc" id="L2291">		}</span>
+<span class="nc" id="L2292">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L2294">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L2298">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L2299">			rs = null;</span>
+<span class="nc" id="L2300">			pstmt = null;</span>
+		}
+<span class="nc bnc" id="L2302" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_Lock.size());</span>
+<span class="nc" id="L2303">	}	//	loadLooks</span>
+
+	/**
+	 * 	@return true if record is locked
+	 */
+	public boolean isLocked()
+	{
+<span class="nc bnc" id="L2310" title="All 2 branches missed.">		if (!MRole.getDefault(m_vo.ctx, false).isPersonalLock())</span>
+<span class="nc" id="L2311">			return false;</span>
+<span class="nc bnc" id="L2312" title="All 2 branches missed.">		if (m_Lock == null)</span>
+<span class="nc" id="L2313">			loadLocks();</span>
+<span class="nc bnc" id="L2314" title="All 4 branches missed.">		if (m_Lock == null || m_Lock.isEmpty())</span>
+<span class="nc" id="L2315">			return false;</span>
+		//
+<span class="nc" id="L2317">		Integer key = Integer.valueOf(m_mTable.getKeyID (m_currentRow));</span>
+<span class="nc" id="L2318">		return m_Lock.contains(key);</span>
+	}	//	isLocked
+
+	/**
+	 * 	Lock or unlock Record
+	 * 	@param ctx context
+	 *	@param Record_ID id
+	 *	@param lock true to lock, false to unlock
+	 */
+	public void lock (Properties ctx, int Record_ID, boolean lock)
+	{
+<span class="nc" id="L2329">		int AD_User_ID = Env.getContextAsInt(ctx, Env.AD_USER_ID);</span>
+<span class="nc bnc" id="L2330" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Lock=&quot; + lock + &quot;, AD_User_ID=&quot; + AD_User_ID</span>
+<span class="nc" id="L2331">			+ &quot;, AD_Table_ID=&quot; + m_vo.AD_Table_ID + &quot;, Record_ID=&quot; + Record_ID);</span>
+<span class="nc" id="L2332">		MPrivateAccess access = MPrivateAccess.get (ctx, AD_User_ID, m_vo.AD_Table_ID, Record_ID);</span>
+<span class="nc bnc" id="L2333" title="All 2 branches missed.">		if (access == null)</span>
+<span class="nc" id="L2334">			access = new MPrivateAccess (ctx, AD_User_ID, m_vo.AD_Table_ID, Record_ID);</span>
+<span class="nc" id="L2335">		access.setIsActive(lock);</span>
+<span class="nc" id="L2336">		access.saveEx();</span>
+		//
+<span class="nc" id="L2338">		loadLocks();</span>
+<span class="nc" id="L2339">	}	//	lock</span>
+
+	/**
+	 *  &lt;pre&gt;
+	 *  Data Status event from GridTable.
+	 *  - get raw info and add current row information
+	 *  - update current row
+	 *  - redistribute (fire) Data Status event
+	 *  &lt;/pre&gt;
+	 *  @param e event
+	 */
+	@Override
+	public void dataStatusChanged (DataStatusEvent e)
+	{		
+<span class="nc bnc" id="L2353" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;#&quot; + m_vo.TabNo + &quot; - &quot; + e.toString());</span>
+<span class="nc" id="L2354">		int oldCurrentRow = e.getCurrentRow();</span>
+<span class="nc" id="L2355">		DataStatusEvent dataStatusEvent = e;          //  save it</span>
+		//  when sorted set current row to 0
+<span class="nc" id="L2357">		String msg = dataStatusEvent.getAD_Message();</span>
+<span class="nc bnc" id="L2358" title="All 4 branches missed.">		if (msg != null &amp;&amp; msg.equals(GridTable.SORTED_DSE_EVENT))</span>
+		{
+<span class="nc" id="L2360">			oldCurrentRow = m_currentRow;</span>
+<span class="nc bnc" id="L2361" title="All 2 branches missed.">			if (e.getCurrentRow() &gt;= 0)</span>
+<span class="nc" id="L2362">				setCurrentRow(e.getCurrentRow());</span>
+			else
+<span class="nc" id="L2364">				setCurrentRow(0, true);</span>
+		}
+		
+<span class="nc" id="L2367">		GridField field = m_mTable.getField(e.getChangedColumn());</span>
+<span class="nc bnc" id="L2368" title="All 2 branches missed.">		Object fieldValue = field!=null?field.getValue():null;</span>
+		
+		//  set current row
+<span class="nc" id="L2371">		dataStatusEvent = e;          //  setCurrentRow clear it, need to save again</span>
+<span class="nc" id="L2372">		dataStatusEvent.setCurrentRow(m_currentRow);</span>
+<span class="nc" id="L2373">		dataStatusEvent.setValue(fieldValue);</span>
+		
+		//  Same row - update value
+<span class="nc bnc" id="L2376" title="All 2 branches missed.">		if (oldCurrentRow == m_currentRow)</span>
+		{
+<span class="nc bnc" id="L2378" title="All 2 branches missed.">			if (field != null)</span>
+			{
+<span class="nc" id="L2380">				Object value = m_mTable.getValueAt(m_currentRow, e.getChangedColumn());</span>
+<span class="nc" id="L2381">				field.setValue(value, m_mTable.isInserting());</span>
+			}
+<span class="nc" id="L2383">		}</span>
+		else    
+		{
+			//  Redistribute Info with current row info
+			//  Avoid firing of duplicate event
+<span class="nc" id="L2388">			boolean fire = true;</span>
+<span class="nc" id="L2389">			DataStatusEventRecord dseRecord = m_lastDataStatusEventReference.get();</span>
+<span class="nc bnc" id="L2390" title="All 2 branches missed.">			DataStatusEvent lastDataStatusEvent = dseRecord != null ? dseRecord.dataStatusEvent : null;</span>
+			
+			// Do not validate event time when different values
+<span class="nc" id="L2393">			boolean skipTimeValidation = !Objects.equals(</span>
+<span class="nc bnc" id="L2394" title="All 2 branches missed.">				    lastDataStatusEvent != null ? lastDataStatusEvent.getValue() : null,</span>
+<span class="nc bnc" id="L2395" title="All 2 branches missed.">				    	    dataStatusEvent != null ? dataStatusEvent.getValue() : null</span>
+<span class="nc bnc" id="L2396" title="All 2 branches missed.">				    	);</span>
+			
+<span class="nc bnc" id="L2398" title="All 4 branches missed.">			if (lastDataStatusEvent != null &amp;&amp; !skipTimeValidation)</span>
+			{
+<span class="nc bnc" id="L2400" title="All 2 branches missed.">				if (System.currentTimeMillis() - dseRecord.dataStatusEventTime() &lt; 200)</span>
+				{
+<span class="nc bnc" id="L2402" title="All 2 branches missed.">					if (lastDataStatusEvent.isEqual(dataStatusEvent))</span>
+					{
+<span class="nc" id="L2404">						fire = false;</span>
+					}
+				}
+			}
+			
+<span class="nc bnc" id="L2409" title="All 2 branches missed.">			if (fire)</span>
+<span class="nc" id="L2410">				fireDataStatusChanged(dataStatusEvent);</span>
+		}
+
+		//reset
+<span class="nc" id="L2414">		m_lastDataStatusEventReference.set(new DataStatusEventRecord(dataStatusEvent, System.currentTimeMillis()));</span>
+<span class="nc" id="L2415">	}	//	dataStatusChanged</span>
+
+	/**
+	 *	Fire data status change event
+	 *  @param e event
+	 */
+	private void fireDataStatusChanged (DataStatusEvent e)
+	{
+<span class="nc bnc" id="L2423" title="All 2 branches missed.">		if (e == null) {</span>
+<span class="nc" id="L2424">			log.warning(&quot;IDEMPIERE-2449 - event must not arrive null here -&gt; &quot; + Thread.currentThread().getStackTrace());</span>
+<span class="nc" id="L2425">			return;  // avoid NPE below</span>
+		}
+<span class="nc" id="L2427">		DataStatusListener[] listeners = m_listenerList.getListeners(DataStatusListener.class);</span>
+<span class="nc bnc" id="L2428" title="All 4 branches missed.">		if (listeners.length == 0 || e == null)</span>
+<span class="nc" id="L2429">			return;</span>
+<span class="nc bnc" id="L2430" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(e.toString());</span>
+		//  WHO Info
+<span class="nc bnc" id="L2432" title="All 2 branches missed.">		if (e.getCurrentRow() &gt;= 0)</span>
+		{
+<span class="nc" id="L2434">			updateDataStatusEventProperties(e);</span>
+		}
+<span class="nc" id="L2436">		e.setInserting(m_mTable.isInserting());</span>
+		//  Distribute/fire it
+<span class="nc bnc" id="L2438" title="All 2 branches missed.">        for (int i = 0; i &lt; listeners.length; i++)</span>
+<span class="nc" id="L2439">        	listeners[i].dataStatusChanged(e);</span>
+<span class="nc" id="L2440">	}	//	fireDataStatusChanged</span>
+
+	/**
+	 * Update {@link DataStatusEvent} properties from gridTab
+	 * @param e
+	 */
+	public void updateDataStatusEventProperties(DataStatusEvent e) {
+<span class="nc" id="L2447">		e.Created = (Timestamp)getValue(&quot;Created&quot;);</span>
+<span class="nc" id="L2448">		e.CreatedBy = (Integer)getValue(&quot;CreatedBy&quot;);</span>
+<span class="nc" id="L2449">		e.Updated = (Timestamp)getValue(&quot;Updated&quot;);</span>
+<span class="nc" id="L2450">		e.UpdatedBy = (Integer)getValue(&quot;UpdatedBy&quot;);</span>
+<span class="nc bnc" id="L2451" title="All 2 branches missed.">		if (   e.AD_Table_ID == I_AD_OrgInfo.Table_ID</span>
+<span class="nc bnc" id="L2452" title="All 2 branches missed.">			|| e.AD_Table_ID == I_AD_ClientInfo.Table_ID</span>
+<span class="nc bnc" id="L2453" title="All 2 branches missed.">			|| e.AD_Table_ID == I_AD_Ref_Table.Table_ID</span>
+<span class="nc bnc" id="L2454" title="All 2 branches missed.">			|| e.AD_Table_ID == I_C_AcctSchema_Default.Table_ID</span>
+<span class="nc bnc" id="L2455" title="All 2 branches missed.">			|| e.AD_Table_ID == I_C_AcctSchema_GL.Table_ID) {</span>
+<span class="nc" id="L2456">			e.Record_ID = getValue(m_parents.get(0));</span>
+<span class="nc" id="L2457">		} else {</span>
+<span class="nc" id="L2458">			e.Record_ID = getValue(m_keyColumnName);</span>
+		}
+		//  Info
+<span class="nc" id="L2461">		StringBuilder info = new StringBuilder(getTableName());</span>
+		
+		//  We have a key column
+<span class="nc bnc" id="L2464" title="All 4 branches missed.">		if (m_keyColumnName != null &amp;&amp; m_keyColumnName.length() &gt; 0)</span>
+		{
+<span class="nc" id="L2466">			info.append(&quot;\n &quot;)</span>
+<span class="nc" id="L2467">				.append(m_keyColumnName).append(&quot;=&quot;).append(e.Record_ID);</span>
+<span class="nc" id="L2468">		}</span>
+		else    //  we have multiple parents
+		{
+<span class="nc bnc" id="L2471" title="All 2 branches missed.">			for (int i = 0; i &lt; m_parents.size(); i++)</span>
+			{
+<span class="nc" id="L2473">				String keyCol = (String)m_parents.get(i);</span>
+<span class="nc bnc" id="L2474" title="All 2 branches missed.">				info.append(i == 0 ? &quot;\n &quot; : &quot; - &quot;)</span>
+<span class="nc" id="L2475">					.append(keyCol).append(&quot;=&quot;).append(getValue(keyCol));</span>
+			}
+		}
+<span class="nc" id="L2478">		e.Info = info.toString();</span>
+<span class="nc" id="L2479">	}</span>
+
+	/**
+	 *  Create and fire Data Status Error Event
+	 *  @param AD_Message message
+	 *  @param info info
+	 *  @param isError true for Error, false for Warning
+	 */
+	public void fireDataStatusEEvent(String AD_Message, String info, boolean isError)
+	{
+<span class="nc" id="L2489">		m_mTable.fireDataStatusEEvent(AD_Message, info, isError);</span>
+<span class="nc" id="L2490">	}   //  fireDataStatusEvent</span>
+
+	/**
+	 *  Create and fire Data Status Error Event (from Error Log)
+	 *  @param errorLog log
+	 */
+	public void fireDataStatusEEvent (ValueNamePair errorLog)
+	{
+<span class="nc bnc" id="L2498" title="All 2 branches missed.">		if (errorLog != null)</span>
+<span class="nc" id="L2499">			m_mTable.fireDataStatusEEvent(errorLog);</span>
+<span class="nc" id="L2500">	}   //  fireDataStatusEvent</span>
+
+	/**
+	 *  Get Current Row
+	 *  @return current row index
+	 */
+	public int getCurrentRow()
+	{
+<span class="nc" id="L2508">		return m_currentRow;</span>
+	}   //  getCurrentRow
+
+	/**
+	 *  @return Key id of current row (for e.g C_Order_ID value)
+	 */
+	public int getRecord_ID()
+	{
+<span class="nc" id="L2516">		return m_mTable.getKeyID(m_currentRow);</span>
+	}   //  getRecord_ID
+
+	/**
+	 *  Get Current Table UUID
+	 *  @return UUID value of current row (for e.g C_Order_UU value)
+	 */
+	public String getRecord_UU()
+	{
+<span class="nc" id="L2525">		UUID uuid = m_mTable.getUUID(m_currentRow);</span>
+<span class="nc bnc" id="L2526" title="All 2 branches missed.">		return (uuid == null ? null : uuid.toString());</span>
+	}   //  getRecord_UU
+
+	/**
+	 *  Get Key ID of row
+	 *  @param  row row number
+	 *  @return The Key ID of the row or -1 if not found
+	 */
+	public int getKeyID (int row)
+	{
+<span class="nc" id="L2536">		return m_mTable.getKeyID (row);</span>
+	}   //  getKeyID
+
+	/**
+	 *  Get Key UUID of row
+	 *  @param  row row number
+	 *  @return The Key UUID of the row or -1 if not found
+	 */
+	public String getKeyUUID (int row)
+	{
+<span class="nc" id="L2546">		return m_mTable.getKeyUUID (row);</span>
+	}   //  getKeyUUID
+
+	/**
+	 *  &lt;pre&gt;
+	 *  Navigate absolute - goto Row - (zero based).
+	 *  - does nothing, if target row = current row
+	 *  - saves current row if required
+	 *  &lt;/pre&gt;
+	 *  @param targetRow target row
+	 *  @return new current row index
+	 */
+	public int navigate (int targetRow)
+	{
+		//  nothing to do
+<span class="nc bnc" id="L2561" title="All 2 branches missed.">		if (targetRow == m_currentRow)</span>
+<span class="nc" id="L2562">			return m_currentRow;</span>
+<span class="nc bnc" id="L2563" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;Row=&quot; + targetRow);</span>
+
+		//  Row range check
+<span class="nc" id="L2566">		int newRow = verifyRow(targetRow);</span>
+
+		//  Check, if we have old uncommitted data
+<span class="nc bnc" id="L2569" title="All 2 branches missed.">		if (m_mTable.dataSave(newRow, false) == false)</span>
+<span class="nc" id="L2570">			return m_currentRow;</span>
+
+		//remove/ignore new and unchange row
+<span class="nc bnc" id="L2573" title="All 2 branches missed.">		if (m_mTable.isInserting())</span>
+		{
+<span class="nc bnc" id="L2575" title="All 2 branches missed.">			if (newRow &gt; m_currentRow)</span>
+<span class="nc" id="L2576">				newRow--;</span>
+<span class="nc" id="L2577">			dataIgnore();</span>
+		}
+
+		//  new position
+<span class="nc" id="L2581">		return setCurrentRow(newRow, true);</span>
+	}   //  navigate
+
+	/**
+	 *  Navigate relatively - i.e. plus/minus from current position
+	 *  @param rowChange offset from current position
+	 *  @return new current row index
+	 */
+	public int navigateRelative (int rowChange)
+	{
+<span class="nc" id="L2591">		return navigate (m_currentRow + rowChange);</span>
+	}   //  navigateRelative
+
+	/**
+	 *  Navigate to current now (reload)
+	 *  @return current row index
+	 */
+	public int navigateCurrent()
+	{
+<span class="nc bnc" id="L2600" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Row=&quot; + m_currentRow);</span>
+<span class="nc" id="L2601">		return setCurrentRow(m_currentRow, true);</span>
+	}   //  navigateCurrent
+
+	/**
+	 *  Row Range check
+	 *  @param targetRow target row index
+	 *  @return checked row index
+	 */
+	private int verifyRow (int targetRow)
+	{
+<span class="nc" id="L2611">		int newRow = targetRow;</span>
+		//  Table Open?
+<span class="nc bnc" id="L2613" title="All 2 branches missed.">		if (!m_mTable.isOpen())</span>
+		{
+<span class="nc bnc" id="L2615" title="All 2 branches missed.">			if (targetRow &gt;= 0)</span>
+<span class="nc" id="L2616">				log.log (Level.SEVERE, &quot;Table not open&quot;, new Exception(&quot;Table not open&quot;));</span>
+			
+<span class="nc" id="L2618">			return -1;</span>
+		}
+		//  Row Count
+<span class="nc" id="L2621">		int rows = getRowCount();</span>
+<span class="nc bnc" id="L2622" title="All 4 branches missed.">		if (rows == 0 &amp;&amp; !m_mTable.isLoading())</span>
+		{
+<span class="nc" id="L2624">			log.fine(&quot;No Rows&quot;);</span>
+<span class="nc" id="L2625">			return -1;</span>
+		}
+<span class="nc bnc" id="L2627" title="All 2 branches missed.">		if (newRow &gt;= rows)</span>
+		{
+<span class="nc bnc" id="L2629" title="All 2 branches missed.">			if (!m_mTable.isLoading())</span>
+			{
+<span class="nc" id="L2631">				newRow = rows-1;</span>
+<span class="nc bnc" id="L2632" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Set to max Row: &quot; + newRow);</span>
+			}
+<span class="nc" id="L2634">		}</span>
+<span class="nc bnc" id="L2635" title="All 2 branches missed.">		else if (newRow &lt; 0)</span>
+		{
+<span class="nc" id="L2637">			newRow = 0;</span>
+<span class="nc bnc" id="L2638" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set to first Row&quot;);</span>
+		}
+		
+<span class="nc" id="L2641">		m_mTable.waitLoadingForRow(newRow);</span>
+<span class="nc" id="L2642">		return newRow;</span>
+	}   //  verifyRow
+
+	/**
+	 *  Set current row and load data into fields.
+	 *  If there is no row - load nulls.
+	 *  @param newCurrentRow new current row
+	 *  @param fireEvents fire events
+	 *  @return current row index
+	 */
+	public int setCurrentRow (int newCurrentRow, boolean fireEvents)
+	{
+<span class="nc bnc" id="L2654" title="All 2 branches missed.">		boolean changingRow = (m_currentRow != newCurrentRow);</span>
+<span class="nc" id="L2655">		int oldCurrentRow = m_currentRow;</span>
+<span class="nc" id="L2656">		m_currentRow = verifyRow (newCurrentRow);</span>
+<span class="nc bnc" id="L2657" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Row=&quot; + m_currentRow + &quot; - fire=&quot; + fireEvents);</span>
+
+		//  Update Field Values
+<span class="nc" id="L2660">		int size = m_mTable.getColumnCount();</span>
+<span class="nc" id="L2661">		GridField keyCalloutDelayed = null;</span>
+<span class="nc bnc" id="L2662" title="All 2 branches missed.">		for (int i = 0; i &lt; size; i++)</span>
+		{
+<span class="nc" id="L2664">			GridField mField = m_mTable.getField(i);</span>
+			//  get Value from Table
+<span class="nc bnc" id="L2666" title="All 2 branches missed.">			if (m_currentRow &gt;= 0)</span>
+			{
+<span class="nc" id="L2668">				Object value = m_mTable.getValueAt(m_currentRow, i);</span>
+<span class="nc" id="L2669">				mField.setValue(value, m_mTable.isInserting());</span>
+<span class="nc bnc" id="L2670" title="All 2 branches missed.">				if (mField.isKey())</span>
+<span class="nc" id="L2671">					keyCalloutDelayed = mField;</span>
+<span class="nc" id="L2672">			}</span>
+			else
+			{   //  no rows - set to a reasonable value - not updateable
+				// CarlosRuiz - globalqss [ 1881480 ] Navigation problem between tabs
+				// the implementation of linking with window context variables is very weak
+				// you must be careful when defining a column in a detail tab with a field
+				// with the same column name as some of the links of the tabs above
+				// this can cause bad behavior of linking
+<span class="nc bnc" id="L2680" title="All 2 branches missed.">				if (mField.isKey())</span>
+<span class="nc" id="L2681">					mField.setValueAndUpdateContext();</span>
+				else
+<span class="nc" id="L2683">					mField.setValue();</span>
+			}
+		}
+<span class="nc bnc" id="L2686" title="All 4 branches missed.">		if (changingRow &amp;&amp; keyCalloutDelayed != null)</span>
+<span class="nc" id="L2687">			processCallout(keyCalloutDelayed);</span>
+		
+		//set isSOTrx context
+<span class="nc bnc" id="L2690" title="All 2 branches missed.">		if (changingRow) {</span>
+<span class="nc" id="L2691">			setIsSOTrxContext();</span>
+		}
+		
+<span class="nc" id="L2694">		loadDependentInfo();</span>
+
+<span class="nc bnc" id="L2696" title="All 2 branches missed.">		if (!fireEvents)    //  prevents informing twice</span>
+<span class="nc" id="L2697">			return m_currentRow;</span>
+
+		//  inform VTable/..    -&gt; rowChanged
+<span class="nc" id="L2700">		m_propertyChangeSupport.firePropertyChange(PROPERTY, oldCurrentRow, m_currentRow);</span>
+
+<span class="nc" id="L2702">		DataStatusEvent dataStatusEvent = null;</span>
+		//check last data status event
+<span class="nc" id="L2704">		DataStatusEventRecord dse = m_lastDataStatusEventReference.get();</span>
+<span class="nc bnc" id="L2705" title="All 2 branches missed.">		if (dse != null) {</span>
+<span class="nc" id="L2706">			long since = System.currentTimeMillis() - dse.dataStatusEventTime;</span>
+<span class="nc bnc" id="L2707" title="All 2 branches missed.">			if (since &lt;= 500)</span>
+			{
+<span class="nc" id="L2709">				dataStatusEvent = dse.dataStatusEvent();</span>
+			}
+		}
+
+		//  inform APanel/..    -&gt; dataStatus with row updated
+<span class="nc bnc" id="L2714" title="All 2 branches missed.">		if (dataStatusEvent == null) {</span>
+<span class="nc" id="L2715">			dataStatusEvent = new DataStatusEvent(this, getRowCount(),</span>
+<span class="nc" id="L2716">				m_mTable.isInserting(),		//	changed</span>
+<span class="nc" id="L2717">				Env.isAutoCommit(Env.getCtx(), m_vo.WindowNo), m_mTable.isInserting());</span>
+<span class="nc" id="L2718">			dataStatusEvent.AD_Table_ID = m_vo.AD_Table_ID;</span>
+		}
+		//
+<span class="nc" id="L2721">		dataStatusEvent.setCurrentRow(m_currentRow);</span>
+<span class="nc" id="L2722">		String status = dataStatusEvent.getAD_Message();</span>
+<span class="nc bnc" id="L2723" title="All 4 branches missed.">		if (status == null || status.length() == 0)</span>
+<span class="nc" id="L2724">			 dataStatusEvent.setInfo(DEFAULT_STATUS_MESSAGE, null, false,false);</span>
+<span class="nc" id="L2725">		fireDataStatusChanged(dataStatusEvent);</span>
+
+<span class="nc" id="L2727">		m_mTable.setCurrentRow(m_currentRow);</span>
+		
+<span class="nc" id="L2729">		return m_currentRow;</span>
+	}   //  setCurrentRow
+
+	/**
+	 * Update window context's IsSOTrx value.
+	 */
+	private void setIsSOTrxContext() {
+<span class="nc" id="L2736">		final String IsSOTrx = &quot;IsSOTrx&quot;;</span>
+<span class="nc" id="L2737">		final String C_DocType_ID = &quot;C_DocType_ID&quot;;</span>
+<span class="nc" id="L2738">		final String C_DocTypeTarget_ID = &quot;C_DocTypeTarget_ID&quot;;</span>
+<span class="nc bnc" id="L2739" title="All 6 branches missed.">		if (getField(IsSOTrx) != null || getField(C_DocType_ID) != null || getField(C_DocTypeTarget_ID) != null) {</span>
+<span class="nc" id="L2740">			String isSOTrx = null;</span>
+<span class="nc" id="L2741">			GridField field = getField(IsSOTrx);</span>
+<span class="nc bnc" id="L2742" title="All 4 branches missed.">			if (field != null &amp;&amp; field.getValue() != null) {</span>
+<span class="nc" id="L2743">				Object value = field.getValue();</span>
+<span class="nc bnc" id="L2744" title="All 2 branches missed.">				if (value instanceof Boolean) {</span>
+<span class="nc bnc" id="L2745" title="All 2 branches missed.">					isSOTrx = ((Boolean) value).booleanValue() ? &quot;Y&quot; : &quot;N&quot;;</span>
+<span class="nc bnc" id="L2746" title="All 2 branches missed.">				} else if (value instanceof String) {</span>
+<span class="nc" id="L2747">					isSOTrx = (String) value;</span>
+				}
+			}
+<span class="nc bnc" id="L2750" title="All 2 branches missed.">			if (isSOTrx == null) {</span>
+<span class="nc" id="L2751">				field = getField(C_DocType_ID);</span>
+<span class="nc bnc" id="L2752" title="All 4 branches missed.">				if (field != null &amp;&amp; field.getValue() != null) {</span>
+<span class="nc" id="L2753">					int docTypeId = ((Number)field.getValue()).intValue();</span>
+<span class="nc bnc" id="L2754" title="All 2 branches missed.">					if (docTypeId &gt; 0) {</span>
+<span class="nc bnc" id="L2755" title="All 2 branches missed.">						isSOTrx = MDocType.get(docTypeId).isSOTrx() ? &quot;Y&quot; : &quot;N&quot;;</span>
+					}
+				}
+			}
+<span class="nc bnc" id="L2759" title="All 2 branches missed.">			if (isSOTrx == null) {</span>
+<span class="nc" id="L2760">				field = getField(C_DocTypeTarget_ID);</span>
+<span class="nc bnc" id="L2761" title="All 4 branches missed.">				if (field != null &amp;&amp; field.getValue() != null) {</span>
+<span class="nc" id="L2762">					int docTypeId = ((Number)field.getValue()).intValue();</span>
+<span class="nc bnc" id="L2763" title="All 2 branches missed.">					if (docTypeId &gt; 0) {</span>
+<span class="nc bnc" id="L2764" title="All 2 branches missed.">						isSOTrx = MDocType.get(docTypeId).isSOTrx() ? &quot;Y&quot; : &quot;N&quot;;</span>
+					}
+				}
+			}
+<span class="nc bnc" id="L2768" title="All 2 branches missed.">			if (isSOTrx != null) {</span>
+<span class="nc" id="L2769">				Env.setContext(Env.getCtx(), getWindowNo(), getTabNo(), IsSOTrx, isSOTrx);</span>
+<span class="nc bnc" id="L2770" title="All 2 branches missed.">				if (m_vo.TabNo == 0) {</span>
+<span class="nc" id="L2771">					Env.setContext(Env.getCtx(), getWindowNo(), IsSOTrx, isSOTrx);</span>
+				}
+			}
+		}
+<span class="nc" id="L2775">	}</span>
+
+	/**
+	 *  Set current row - used for deleteSelection
+	 *  @param row
+	 */
+	public void setCurrentRow(int row){
+<span class="nc" id="L2782">			setCurrentRow(row, false);</span>
+<span class="nc" id="L2783">	}</span>
+
+	/**
+	 *  Get RowCount
+	 *  @return row count
+	 */
+	public int getRowCount()
+	{
+<span class="nc" id="L2791">		int count = m_mTable.getRowCount();</span>
+		//  Wait a bit if currently loading
+<span class="nc bnc" id="L2793" title="All 4 branches missed.">		if (count == 0 &amp;&amp; m_mTable.isLoading())</span>
+		{
+			try
+			{
+<span class="nc" id="L2797">				m_mTable.waitLoading(100);      //  .1 sec</span>
+<span class="nc" id="L2798">			}</span>
+<span class="nc" id="L2799">			catch (Exception e) {}</span>
+<span class="nc" id="L2800">			count = m_mTable.getRowCount();</span>
+		}
+<span class="nc" id="L2802">		return count;</span>
+	}   //  getRowCount
+
+	/**
+	 *  Get Column/Field Count
+	 *  @return field count
+	 */
+	public int getFieldCount()
+	{
+<span class="nc" id="L2811">		return m_mTable.getColumnCount();</span>
+	}   //  getFieldCount
+
+	/**
+	 *  Get Field by index
+	 *  @param index field index
+	 *  @return GridField
+	 */
+	public GridField getField (int index)
+	{
+<span class="nc bnc" id="L2821" title="All 2 branches missed.">		return (index &gt;= 0 ? m_mTable.getField(index) : null);</span>
+	}   //  getField
+
+	/**
+	 *  Get Field by DB column name
+	 *  @param columnName column name
+	 *  @return GridField or null
+	 */
+	public GridField getField (String columnName)
+	{
+<span class="nc" id="L2831">		return m_mTable.getField(columnName);</span>
+	}   //  getField
+
+	/**
+	 *  Get all Fields
+	 *  @return GridFields
+	 */
+	public GridField[] getFields ()
+	{
+<span class="nc" id="L2840">		return m_mTable.getFields();</span>
+	}   //  getField
+
+	/**
+	 *  Set New Value and call Callout
+	 *  @param columnName database column name
+	 *  @param value value
+	 *  @return error message or &quot;&quot;
+	 */
+	public String setValue (String columnName, Object value)
+	{
+<span class="nc bnc" id="L2851" title="All 2 branches missed.">		if (columnName == null)</span>
+<span class="nc" id="L2852">			return &quot;NoColumn&quot;;</span>
+<span class="nc" id="L2853">		return setValue(m_mTable.getField(columnName), value);</span>
+	}   //  setValue
+
+	/**
+	 *  Set New Value and call Callout
+	 *  @param field field
+	 *  @param value value
+	 *  @return error message or &quot;&quot;
+	 */
+	public String setValue (GridField field, Object value)
+	{
+<span class="nc bnc" id="L2864" title="All 2 branches missed.">		if (field == null)</span>
+<span class="nc" id="L2865">			return &quot;NoField&quot;;</span>
+
+<span class="nc bnc" id="L2867" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(field.getColumnName() + &quot;=&quot; + value + &quot; - Row=&quot; + m_currentRow);</span>
+
+<span class="nc bnc" id="L2869" title="All 2 branches missed.">		if (value instanceof Integer) {</span>
+<span class="nc bnc" id="L2870" title="All 4 branches missed.">			if (((Integer)value).intValue() &lt; 0 &amp;&amp; DisplayType.isID(field.getDisplayType())) {</span>
+<span class="nc" id="L2871">				value = null;</span>
+<span class="nc bnc" id="L2872" title="All 4 branches missed.">			} else if (((Integer)value).intValue() == 0 &amp;&amp; field.isLookup()) {</span>
+<span class="nc" id="L2873">				MColumn column = MColumn.get(field.getAD_Column_ID());</span>
+<span class="nc bnc" id="L2874" title="All 2 branches missed.">				if (! MTable.isZeroIDTable(column.getReferenceTableName()))</span>
+<span class="nc" id="L2875">					value = null;</span>
+			}
+		}
+
+<span class="nc" id="L2879">		int col = m_mTable.findColumn(field.getColumnName());</span>
+		//will trigger processFieldChange through data status change event
+<span class="nc" id="L2881">		m_mTable.setValueAt(value, m_currentRow, col, false);</span>
+		//
+<span class="nc" id="L2883">		return &quot;&quot;;</span>
+	}   //  setValue
+
+	/**
+	 * 	Is Processed
+	 *	@return true if current record is processed
+	 */
+	public boolean isProcessed()
+	{
+<span class="nc" id="L2892">		return getValueAsBoolean(&quot;Processed&quot;);</span>
+	}	//	isProcessed
+
+	/**
+	 * Is the current record active
+	 * @return true if current record is active
+	 * author Teo Sarca - BF [ 1742159 ]
+	 */
+	public boolean isActive()
+	{
+<span class="nc" id="L2902">		return getValueAsBoolean(&quot;IsActive&quot;);</span>
+	}	//	isProcessed
+
+	/**
+	 *  Process Field Change - evaluate Dependencies and process Callouts.
+	 *  &lt;p&gt;
+	 *  Usually called from UI side data status change listener.
+	 *  @param changedField changed field
+	 *  @return error message or &quot;&quot;
+	 */
+	public String processFieldChange (GridField changedField)
+	{
+<span class="nc" id="L2914">		processDependencies (changedField);</span>
+<span class="nc" id="L2915">		return processCallout (changedField);</span>
+	}   //  processFieldChange
+
+	/**
+	 *  Evaluate Dependencies
+	 *  @param changedField changed field
+	 */
+	private void processDependencies (GridField changedField)
+	{
+<span class="nc" id="L2924">		String columnName = changedField.getColumnName();</span>
+
+		//  when column name is not in list of DependentOn fields - fini
+<span class="nc bnc" id="L2927" title="All 2 branches missed.">		if (!hasDependants(columnName))</span>
+<span class="nc" id="L2928">			return;</span>
+
+		//  Get dependent MFields (may be because of display or dynamic lookup)
+<span class="nc bnc" id="L2931" title="All 2 branches missed.">		for (GridField dependentField : getDependantFields(columnName))</span>
+		{
+<span class="nc bnc" id="L2933" title="All 4 branches missed.">			if (dependentField == null || dependentField.isLookupEditorSettingValue())</span>
+<span class="nc" id="L2934">				continue;</span>
+
+<span class="nc" id="L2936">			GridField.updateDependentField(dependentField, columnName, getTabNo(), () -&gt; {</span>
+<span class="nc" id="L2937">				Object currentValue = dependentField.getValue();</span>
+				
+				//  invalidate current selection
+<span class="nc" id="L2940">				setValue(dependentField, null);</span>
+				
+<span class="nc bnc" id="L2942" title="All 2 branches missed.">				if (dependentField.getLookup() instanceof MLookup mLookup) {</span>
+<span class="nc bnc" id="L2943" title="All 4 branches missed.">					if (currentValue != null &amp;&amp; mLookup.containsKeyNoDirect(currentValue))</span>
+<span class="nc" id="L2944">						setValue(dependentField, currentValue);</span>
+				}
+<span class="nc" id="L2946">			});</span>
+		}   //  for all dependent fields
+<span class="nc" id="L2948">	}   //  processDependencies</span>
+
+<span class="nc" id="L2950">	private List&lt;String&gt; activeCallouts = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L2951">	private List&lt;Callout&gt; activeCalloutInstance = new ArrayList&lt;Callout&gt;();</span>
+
+<span class="nc" id="L2953">	private boolean m_updateWindowContext = true;</span>
+
+	// Cached parent Tab No
+<span class="nc" id="L2956">	private int m_parentTabNo = -1;</span>
+
+	/**
+	 * @return list of active call out for this tab
+	 */
+	public String[] getActiveCallouts()
+	{
+<span class="nc" id="L2963">		String[] list = new String[activeCallouts.size()];</span>
+<span class="nc" id="L2964">		return activeCallouts.toArray(list);</span>
+	}
+
+	/**
+	 * @return list of active call out instance for this tab
+	 */
+	public Callout[] getActiveCalloutInstance()
+	{
+<span class="nc" id="L2972">		Callout[] list = new Callout[activeCalloutInstance.size()];</span>
+<span class="nc" id="L2973">		return activeCalloutInstance.toArray(list);</span>
+	}
+
+	/**
+	 * Process Callout(s).
+	 * &lt;p&gt;
+	 * The traditional column callout is in the format of &quot;class.method;class.method;&quot;.&lt;br/&gt;
+	 * The class needs to comply with the Interface Callout.
+	 * &lt;p&gt;
+	 * Newer callout implement the {@link IColumnCallout} interface and discover via {@link IColumnCalloutFactory} service.
+	 * @param field field
+	 * @return error message or &quot;&quot;
+	 * @see org.compiere.model.Callout
+	 * @see IColumnCallout
+	 */
+	public String processCallout (GridField field)
+	{
+		//
+<span class="nc bnc" id="L2991" title="All 6 branches missed.">		if (isProcessed() &amp;&amp; !field.isAlwaysUpdateable() &amp;&amp; !field.isKey())		//	only active records</span>
+<span class="nc" id="L2992">			return &quot;&quot;;			//	&quot;DocProcessed&quot;;</span>
+
+<span class="nc" id="L2994">		Object value = field.getValue();</span>
+<span class="nc" id="L2995">		Object oldValue = field.getOldValue();</span>
+
+<span class="nc" id="L2997">		String callout = field.getCallout();</span>
+
+<span class="nc bnc" id="L2999" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(field.getColumnName() + &quot;=&quot; + value</span>
+<span class="nc" id="L3000">			+ &quot; (&quot; + callout + &quot;) - old=&quot; + oldValue);</span>
+
+<span class="nc bnc" id="L3002" title="All 2 branches missed.">		if (callout.length() &gt; 0)</span>
+		{
+<span class="nc" id="L3004">			StringTokenizer st = new StringTokenizer(callout, &quot;;,&quot;, false);</span>
+<span class="nc bnc" id="L3005" title="All 2 branches missed.">			while (st.hasMoreTokens())      //  for each callout</span>
+			{
+<span class="nc" id="L3007">				String cmd = st.nextToken().trim();</span>
+
+				//detect infinite loop
+<span class="nc bnc" id="L3010" title="All 2 branches missed.">				if (activeCallouts.contains(cmd)) continue;</span>
+
+<span class="nc" id="L3012">				String retValue = &quot;&quot;;</span>
+				// FR [1877902]
+				// CarlosRuiz - globalqss - implement beanshell callout
+				// Victor Perez  - vpj-cd implement JSR 223 Scripting
+<span class="nc bnc" id="L3016" title="All 2 branches missed.">				if (cmd.toLowerCase().startsWith(MRule.SCRIPT_PREFIX)) {</span>
+
+<span class="nc" id="L3018">					MRule rule = MRule.get(m_vo.ctx, cmd.substring(MRule.SCRIPT_PREFIX.length()));</span>
+<span class="nc bnc" id="L3019" title="All 2 branches missed.">					if (rule == null) {</span>
+<span class="nc" id="L3020">						retValue = &quot;Callout &quot; + cmd + &quot; not found&quot;;</span>
+<span class="nc" id="L3021">						log.log(Level.SEVERE, retValue);</span>
+<span class="nc" id="L3022">						return retValue;</span>
+					}
+<span class="nc bnc" id="L3024" title="All 2 branches missed.">					if ( !  (rule.getEventType().equals(MRule.EVENTTYPE_Callout)</span>
+<span class="nc bnc" id="L3025" title="All 2 branches missed.">						  &amp;&amp; rule.getRuleType().equals(MRule.RULETYPE_JSR223ScriptingAPIs))) {</span>
+<span class="nc" id="L3026">						retValue = &quot;Callout &quot; + cmd</span>
+							+ &quot; must be of type JSR 223 and event Callout&quot;;
+<span class="nc" id="L3028">						log.log(Level.SEVERE, retValue);</span>
+<span class="nc" id="L3029">						return retValue;</span>
+					}
+
+					// Try cached compiled script for performance
+<span class="nc" id="L3033">                    CompiledScript compiled = Core.getCompiledScript(rule);</span>
+<span class="nc bnc" id="L3034" title="All 2 branches missed.">                    if (compiled != null) {</span>
+<span class="nc" id="L3035">                        Bindings bindings = compiled.getEngine().createBindings();</span>
+                        // Window context are    W_
+						// Login context  are    G_
+<span class="nc" id="L3038">                        MRule.setContext(bindings, m_vo.ctx, m_vo.WindowNo);</span>
+<span class="nc" id="L3039">                        setCalloutScriptContext(bindings::put, m_vo.WindowNo, field, value, oldValue);</span>
+						try
+						{
+<span class="nc" id="L3042">							activeCallouts.add(cmd);</span>
+<span class="nc" id="L3043">							Object result = compiled.eval(bindings);</span>
+<span class="nc bnc" id="L3044" title="All 2 branches missed.">							retValue = result != null ? result.toString() : &quot;&quot;;</span>
+<span class="nc" id="L3045">						}</span>
+<span class="nc" id="L3046">						catch (Exception e)</span>
+						{
+<span class="nc" id="L3048">							log.log(Level.SEVERE, &quot;&quot;, e);</span>
+<span class="nc" id="L3049">							retValue = &quot;Callout Invalid: &quot; + e.getLocalizedMessage();</span>
+<span class="nc" id="L3050">							return retValue;</span>
+						}
+						finally
+						{
+<span class="nc" id="L3054">							activeCallouts.remove(cmd);</span>
+						}
+                    } else {
+                        // Fallback to non-compiled execution for engines that don't support Compilable
+<span class="nc" id="L3058">                        ScriptEngine engine = rule.getScriptEngine();</span>
+<span class="nc bnc" id="L3059" title="All 2 branches missed.">						if (engine == null) {</span>
+<span class="nc" id="L3060">							retValue = 	&quot;Callout Invalid, engine not found: &quot; + rule.getEngineName();</span>
+<span class="nc" id="L3061">							log.log(Level.SEVERE, retValue);</span>
+<span class="nc" id="L3062">							return retValue;</span>
+						}
+
+						// Window context are    W_
+						// Login context  are    G_
+<span class="nc" id="L3067">						MRule.setContext(engine, m_vo.ctx, m_vo.WindowNo);</span>
+<span class="nc" id="L3068">						setCalloutScriptContext(engine::put, m_vo.WindowNo, field, value, oldValue);</span>
+						try
+						{
+<span class="nc" id="L3071">							activeCallouts.add(cmd);</span>
+<span class="nc" id="L3072">							Object result = engine.eval(rule.getScript());</span>
+<span class="nc bnc" id="L3073" title="All 2 branches missed.">							retValue = result != null ? result.toString() : &quot;&quot;;</span>
+<span class="nc" id="L3074">						}</span>
+<span class="nc" id="L3075">						catch (Exception e)</span>
+						{
+<span class="nc" id="L3077">							log.log(Level.SEVERE, &quot;&quot;, e);</span>
+<span class="nc" id="L3078">							retValue = &quot;Callout Invalid: &quot; + e.getLocalizedMessage();</span>
+<span class="nc" id="L3079">							return retValue;</span>
+						}
+						finally
+						{
+<span class="nc" id="L3083">							activeCallouts.remove(cmd);</span>
+						}
+                    }
+				} else {
+<span class="nc" id="L3087">					Callout call = null;</span>
+<span class="nc" id="L3088">					String method = null;</span>
+<span class="nc" id="L3089">					int methodStart = cmd.lastIndexOf('.');</span>
+					try
+					{
+<span class="nc bnc" id="L3092" title="All 2 branches missed.">						if (methodStart != -1)      //  has class name</span>
+						{
+<span class="nc" id="L3094">							String className = cmd.substring(0,methodStart);</span>
+							// IDEMPIERE-2732
+<span class="nc" id="L3096">							method = cmd.substring(methodStart+1);</span>
+							// get corresponding callout
+<span class="nc" id="L3098">							call = Core.getCallout(className, method);</span>
+							// end IDEMPIERE-2732
+<span class="nc bnc" id="L3100" title="All 2 branches missed.">							if (call == null) {</span>
+								//no match from factory, check java classpath
+<span class="nc" id="L3102">								Class&lt;?&gt; cClass = Class.forName(className);</span>
+<span class="nc" id="L3103">								call = (Callout)cClass.getDeclaredConstructor().newInstance();</span>
+							}
+						}
+<span class="nc" id="L3106">					}</span>
+<span class="nc" id="L3107">					catch (Exception e)</span>
+					{
+<span class="nc" id="L3109">						log.log(Level.SEVERE, &quot;class&quot;, e);</span>
+<span class="nc" id="L3110">						return &quot;Callout Invalid: &quot; + cmd + &quot; (&quot; + e.toString() + &quot;)&quot;;</span>
+					}
+
+<span class="nc bnc" id="L3113" title="All 6 branches missed.">					if (call == null || method == null || method.length() == 0)</span>
+<span class="nc" id="L3114">						return &quot;Callout Invalid: &quot; + method;</span>
+
+					try
+					{
+<span class="nc" id="L3118">						activeCallouts.add(cmd);</span>
+<span class="nc" id="L3119">						activeCalloutInstance.add(call);</span>
+<span class="nc" id="L3120">						retValue = call.start(m_vo.ctx, method, m_vo.WindowNo, this, field, value, oldValue);</span>
+<span class="nc" id="L3121">					}</span>
+<span class="nc" id="L3122">					catch (Exception e)</span>
+					{
+<span class="nc" id="L3124">						log.log(Level.SEVERE, &quot;start&quot;, e);</span>
+<span class="nc" id="L3125">						retValue = 	&quot;Callout Invalid: &quot; + e.toString();</span>
+<span class="nc" id="L3126">						return retValue;</span>
+					}
+					finally
+					{
+<span class="nc" id="L3130">						activeCallouts.remove(cmd);</span>
+<span class="nc" id="L3131">						activeCalloutInstance.remove(call);</span>
+					}
+				}
+
+<span class="nc bnc" id="L3135" title="All 2 branches missed.">				if (!Util.isEmpty(retValue))		//	interrupt on first error</span>
+				{
+<span class="nc" id="L3137">					log.config(retValue); // no need to save an AD_Issue error on each callout</span>
+<span class="nc" id="L3138">					return retValue;</span>
+				}
+			}   //  for each callout
+		}
+
+<span class="nc" id="L3143">		List&lt;IColumnCallout&gt; callouts = Core.findCallout(getTableName(), field.getColumnName());</span>
+<span class="nc bnc" id="L3144" title="All 4 branches missed.">		if (callouts != null &amp;&amp; !callouts.isEmpty()) {</span>
+<span class="nc bnc" id="L3145" title="All 2 branches missed.">			for(IColumnCallout co : callouts)</span>
+			{
+<span class="nc" id="L3147">				String retValue = &quot;&quot;;</span>
+
+<span class="nc" id="L3149">				String cmd = co.getClass().getName();</span>
+				//detect infinite loop
+<span class="nc bnc" id="L3151" title="All 2 branches missed.">				if (activeCallouts.contains(cmd)) continue;</span>
+				try
+				{
+<span class="nc" id="L3154">					activeCallouts.add(cmd);</span>
+<span class="nc" id="L3155">					retValue = co.start(m_vo.ctx, m_vo.WindowNo, this, field, value, oldValue);</span>
+<span class="nc" id="L3156">				}</span>
+<span class="nc" id="L3157">				catch (Exception e)</span>
+				{
+<span class="nc" id="L3159">					log.log(Level.SEVERE, &quot;start&quot;, e);</span>
+<span class="nc" id="L3160">					retValue = 	&quot;Callout Invalid: &quot; + e.toString();</span>
+<span class="nc" id="L3161">					return retValue;</span>
+				}
+				finally
+				{
+<span class="nc" id="L3165">					activeCallouts.remove(cmd);</span>
+				}
+<span class="nc bnc" id="L3167" title="All 2 branches missed.">				if (!Util.isEmpty(retValue))		//	interrupt on first error</span>
+				{
+<span class="nc" id="L3169">					log.severe (retValue);</span>
+<span class="nc" id="L3170">					return retValue;</span>
+				}
+			}
+		}
+
+<span class="nc" id="L3175">		return &quot;&quot;;</span>
+	}	//	processCallout
+
+	/**
+	 * Populates the script execution context for callout rule execution.
+	 * &lt;p&gt;
+	 * This method binds standard callout-related variables into the script context
+	 * using a generic key/value consumer. It abstracts the difference between
+	 * compiled and non-compiled script execution by allowing the caller to supply
+	 * either {@link javax.script.Bindings} or {@link javax.script.ScriptEngine}
+	 * as the target context.
+	 * &lt;p&gt;
+	 * The following variables are exposed to the callout script using the
+	 * {@link MRule#ARGUMENTS_PREFIX}:
+	 * &lt;ul&gt;
+	 *   &lt;li&gt;{@code WindowNo} current window number&lt;/li&gt;
+	 *   &lt;li&gt;{@code Tab} current {@link GridTab}&lt;/li&gt;
+	 *   &lt;li&gt;{@code Field} field that triggered the callout&lt;/li&gt;
+	 *   &lt;li&gt;{@code Value} new field value&lt;/li&gt;
+	 *   &lt;li&gt;{@code OldValue} previous field value&lt;/li&gt;
+	 *   &lt;li&gt;{@code Ctx} application context&lt;/li&gt;
+	 * &lt;/ul&gt;
+	 *
+	 * @param putter
+	 *            Consumer used to bind variables into the script context.
+	 *            Typically {@code Bindings::put} for compiled scripts or
+	 *            {@code ScriptEngine::put} for non-compiled scripts.
+	 * @param windowNo
+	 *            Window number in which the callout is executed.
+	 * @param field
+	 *            The {@link GridField} that triggered the callout.
+	 * @param value
+	 *            The new value of the field.
+	 * @param oldValue
+	 *            The previous value of the field.
+	 */
+	private void setCalloutScriptContext(BiConsumer&lt;String, Object&gt; putter, int windowNo, GridField field, Object value, Object oldValue)
+	{
+		// now add the callout parameters windowNo, tab, field, value, oldValue to the engine Method
+		// arguments context are A_
+<span class="nc" id="L3215">		putter.accept(MRule.ARGUMENTS_PREFIX + &quot;WindowNo&quot;, windowNo);</span>
+<span class="nc" id="L3216">		putter.accept(MRule.ARGUMENTS_PREFIX + &quot;Tab&quot;, this);</span>
+<span class="nc" id="L3217">		putter.accept(MRule.ARGUMENTS_PREFIX + &quot;Field&quot;, field);</span>
+<span class="nc" id="L3218">		putter.accept(MRule.ARGUMENTS_PREFIX + &quot;Value&quot;, value);</span>
+<span class="nc" id="L3219">		putter.accept(MRule.ARGUMENTS_PREFIX + &quot;OldValue&quot;, oldValue);</span>
+<span class="nc" id="L3220">		putter.accept(MRule.ARGUMENTS_PREFIX + &quot;Ctx&quot;, m_vo.ctx);</span>
+<span class="nc" id="L3221">	} // setCalloutScriptContext</span>
+
+	/**
+	 *  Get Value of Field with columnName
+	 *  @param columnName column name
+	 *  @return value
+	 */
+	public Object getValue (String columnName)
+	{
+<span class="nc bnc" id="L3230" title="All 2 branches missed.">		if (columnName == null)</span>
+<span class="nc" id="L3231">			return null;</span>
+<span class="nc" id="L3232">		GridField field = m_mTable.getField(columnName);</span>
+<span class="nc" id="L3233">		return getValue(field);</span>
+	}   //  getValue
+
+	/**
+	 * Get Boolean Value of Field with columnName.&lt;br/&gt;
+	 * If there is no column with the given name, the context for current window will be checked.
+	 * @param columnName column name
+	 * @return boolean value or false if the field was not found
+	 * author Teo Sarca
+	 */
+	public boolean getValueAsBoolean(String columnName)
+	{
+<span class="nc" id="L3245">		int index = m_mTable.findColumn(columnName);</span>
+<span class="nc bnc" id="L3246" title="All 2 branches missed.">		if (index != -1)</span>
+		{
+<span class="nc" id="L3248">			Object oo = m_mTable.getValueAt(m_currentRow, index);</span>
+<span class="nc bnc" id="L3249" title="All 2 branches missed.">			if (oo instanceof String)</span>
+<span class="nc" id="L3250">				return &quot;Y&quot;.equals(oo);</span>
+<span class="nc bnc" id="L3251" title="All 2 branches missed.">			if (oo instanceof Boolean)</span>
+<span class="nc" id="L3252">				return ((Boolean)oo).booleanValue();</span>
+		}
+<span class="nc" id="L3254">		return &quot;Y&quot;.equals(Env.getContext(m_vo.ctx, m_vo.WindowNo, columnName));</span>
+	}	//	isProcessed
+
+	/**
+	 *  Get Value of Field
+	 *  @param field field
+	 *  @return value
+	 */
+	public Object getValue (GridField field)
+	{
+<span class="nc bnc" id="L3264" title="All 2 branches missed.">		if (field == null)</span>
+<span class="nc" id="L3265">			return null;</span>
+<span class="nc" id="L3266">		return field.getValue();</span>
+	}   //  getValue
+
+	/**
+	 *  Get Value of Field for a row.
+	 *  @param row row index
+	 *  @param columnName column name
+	 *  @return value
+	 */
+	public Object getValue (int row, String columnName)
+	{
+<span class="nc" id="L3277">		int col = m_mTable.findColumn(columnName);</span>
+<span class="nc bnc" id="L3278" title="All 2 branches missed.">		if (col == -1)</span>
+<span class="nc" id="L3279">			return null;</span>
+<span class="nc" id="L3280">		return m_mTable.getValueAt(row, col);</span>
+	}   //  getValue
+
+	/**
+	 *  toString
+	 *  @return String representation
+	 */
+	public String toString()
+	{
+<span class="nc" id="L3289">		String retValue = &quot;MTab #&quot;;</span>
+<span class="nc bnc" id="L3290" title="All 2 branches missed.">		if (m_vo != null)</span>
+<span class="nc" id="L3291">			retValue += m_vo.TabNo + &quot; &quot; + m_vo.Name + &quot; (&quot; + m_vo.AD_Tab_ID + &quot;)&quot;;</span>
+		else
+<span class="nc" id="L3293">			retValue += &quot;???&quot;;</span>
+<span class="nc" id="L3294">		return retValue;</span>
+	}   //  toString
+
+	/**
+	 *  @param l listener
+	 */
+	public synchronized void removePropertyChangeListener(PropertyChangeListener l)
+	{
+<span class="nc" id="L3302">		m_propertyChangeSupport.removePropertyChangeListener(l);</span>
+<span class="nc" id="L3303">	}</span>
+	
+	/**
+	 *  @param l listener
+	 */
+	public synchronized void addPropertyChangeListener(PropertyChangeListener l)
+	{
+<span class="nc" id="L3310">		m_propertyChangeSupport.addPropertyChangeListener(l);</span>
+<span class="nc" id="L3311">	}</span>
+
+	/**
+	 *  @param l listener
+	 */
+	public synchronized void removeDataStatusListener(DataStatusListener l)
+	{
+<span class="nc" id="L3318">		m_listenerList.remove(DataStatusListener.class, l);</span>
+<span class="nc" id="L3319">	}</span>
+	
+	/**
+	 *  @param l listener
+	 */
+	public synchronized void addDataStatusListener(DataStatusListener l)
+	{
+<span class="nc" id="L3326">		m_listenerList.add(DataStatusListener.class, l);</span>
+<span class="nc" id="L3327">	}</span>
+
+	/**
+	 * @param l
+	 */
+	public synchronized void addStateChangeListener(StateChangeListener l)
+	{
+<span class="nc" id="L3334">		m_listenerList.add(StateChangeListener.class, l);</span>
+<span class="nc" id="L3335">	}</span>
+
+	/**
+	 * @param l
+	 */
+	public synchronized void removeStateChangeListener(StateChangeListener l)
+	{
+<span class="nc" id="L3342">		m_listenerList.remove(StateChangeListener.class, l);</span>
+<span class="nc" id="L3343">	}</span>
+
+	/**
+	 * Feature Request [1707462]
+	 * Enable runtime change of VFormat
+	 * @param identifier column name
+	 * @param strNewFormat new input mask
+	 * author fer_luck
+	 */
+	public void setFieldVFormat (String identifier, String strNewFormat)
+	{
+<span class="nc" id="L3354">		m_mTable.setFieldVFormat(identifier, strNewFormat);</span>
+<span class="nc" id="L3355">	}	//	setFieldVFormat</span>
+
+	/**
+	 * Switches the line/seqNo of the two rows
+	 * @param from row index
+	 * @param to row index
+	 * @param sortColumn column index of sort column
+	 * @param ascending sorting modus
+	 */
+	public void switchRows(int from, int to, int sortColumn, boolean ascending) {
+<span class="nc bnc" id="L3365" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(from + &quot; - &quot; + to + &quot; - &quot; + sortColumn + &quot; - &quot; + ascending);</span>
+		// nothing to do
+<span class="nc bnc" id="L3367" title="All 2 branches missed.">		if (from == to) {</span>
+<span class="nc" id="L3368">			log.finest(&quot;nothing to do - from == to&quot;);</span>
+<span class="nc" id="L3369">			return;</span>
+		}
+		//check if lines are editable
+<span class="nc bnc" id="L3372" title="All 4 branches missed.">		if(!(m_mTable.isRowEditable(from)&amp;&amp; m_mTable.isRowEditable(to))){</span>
+<span class="nc" id="L3373">			log.finest(&quot;row not editable - return&quot;);</span>
+<span class="nc" id="L3374">			return;</span>
+		}
+		// Row range check
+<span class="nc" id="L3377">		to = verifyRow(to);</span>
+<span class="nc bnc" id="L3378" title="All 2 branches missed.">		if (to == -1) {</span>
+<span class="nc" id="L3379">			log.finest(&quot;Row range check - return&quot;);</span>
+<span class="nc" id="L3380">			return;</span>
+		}
+
+		// Check, if we have old uncommitted data
+<span class="nc" id="L3384">		m_mTable.dataSave(to, false);</span>
+
+		//find the line column
+<span class="nc" id="L3387">		int lineCol = m_mTable.findColumn(&quot;Line&quot;);</span>
+<span class="nc bnc" id="L3388" title="All 2 branches missed.">		if (lineCol == -1) {</span>
+<span class="nc" id="L3389">			lineCol = m_mTable.findColumn(&quot;SeqNo&quot;);</span>
+		}
+<span class="nc bnc" id="L3391" title="All 2 branches missed.">		if(lineCol == -1){</span>
+			//no Line, no SeqNo
+<span class="nc" id="L3393">			return;</span>
+		}
+		//get the line/seq numbers
+<span class="nc" id="L3396">		int lineNoCurrentRow = -1;</span>
+<span class="nc" id="L3397">		int lineNoNextRow = -1;</span>
+<span class="nc bnc" id="L3398" title="All 2 branches missed.">		if (m_mTable.getValueAt(from, lineCol) instanceof Number) {</span>
+<span class="nc" id="L3399">			lineNoCurrentRow = ((Number) m_mTable.getValueAt(from, lineCol)).intValue();</span>
+<span class="nc" id="L3400">			lineNoNextRow = ((Number) m_mTable.getValueAt(to, lineCol)).intValue();</span>
+<span class="nc" id="L3401">		} else {</span>
+<span class="nc" id="L3402">			log.fine(&quot;unknown value format - return&quot;);</span>
+<span class="nc" id="L3403">			return;</span>
+		}
+		//don't sort special lines like taxes
+<span class="nc bnc" id="L3406" title="All 2 branches missed.">		if (lineNoCurrentRow &gt;= 9900</span>
+<span class="nc bnc" id="L3407" title="All 2 branches missed.">				|| lineNoNextRow &gt;= 9900) {</span>
+<span class="nc" id="L3408">			log.fine(&quot;don't sort - might be special lines&quot;);</span>
+<span class="nc" id="L3409">			return;</span>
+		}
+		// switch the line numbers and save new values
+
+<span class="nc" id="L3413">		m_mTable.setValueAt(lineNoCurrentRow, to, lineCol);</span>
+<span class="nc" id="L3414">		setCurrentRow(to, false);</span>
+<span class="nc" id="L3415">		m_mTable.dataSave(true);</span>
+<span class="nc" id="L3416">		m_mTable.setValueAt(lineNoNextRow, from, lineCol);</span>
+<span class="nc" id="L3417">		setCurrentRow(from, false);</span>
+<span class="nc" id="L3418">		m_mTable.dataSave(true);</span>
+		//resort
+<span class="nc bnc" id="L3420" title="All 2 branches missed.">		if(sortColumn != -1) {</span>
+<span class="nc" id="L3421">			m_mTable.sort(sortColumn, ascending);</span>
+<span class="nc" id="L3422">		} else {</span>
+<span class="nc" id="L3423">			m_mTable.sort(lineCol, true);</span>
+		}
+<span class="nc" id="L3425">		navigate(to);</span>
+<span class="nc" id="L3426">	}</span>
+
+	/**
+	 * Fire state change event
+	 * @param e
+	 */
+	private void fireStateChangeEvent(StateChangeEvent e)
+	{
+<span class="nc" id="L3434">		StateChangeListener[] listeners = m_listenerList.getListeners(StateChangeListener.class);</span>
+<span class="nc bnc" id="L3435" title="All 2 branches missed.">		if (listeners.length == 0)</span>
+<span class="nc" id="L3436">			return;</span>
+<span class="nc bnc" id="L3437" title="All 2 branches missed.">		for(int i = 0; i &lt; listeners.length; i++) {</span>
+<span class="nc" id="L3438">			listeners[i].stateChange(e);</span>
+		}
+
+<span class="nc" id="L3441">	}</span>
+
+	/**
+	 * @return list of all tabs included in this tab
+	 */
+	@GeneratedCodeCoverageExclusion
+	public List&lt;GridTab&gt; getIncludedTabs()
+	{
+		List&lt;GridTab&gt; list = new ArrayList&lt;GridTab&gt;(1);
+		for (GridField field : getFields())
+		{
+			if (field.getIncluded_Tab_ID() &gt; 0)
+			{
+				for (int i = 0; i &lt; m_window.getTabCount(); i++)
+				{
+					final GridTab detailTab = m_window.getTab(i);
+					if (detailTab.getAD_Tab_ID() == field.getIncluded_Tab_ID())
+					{
+						list.add(detailTab);
+						break;
+					}
+				}
+			}
+		}
+		return list;
+	}
+
+	//BF [ 2910358 ]
+	/**
+	 * get Parent Tab No
+	 * @return Parent Tab No
+	 */
+	private int getParentTabNo()
+	{
+<span class="nc bnc" id="L3475" title="All 2 branches missed.">		if (m_parentTabNo &gt;= 0)</span>
+<span class="nc" id="L3476">			return m_parentTabNo;</span>
+<span class="nc" id="L3477">		int tabNo = m_vo.TabNo;</span>
+<span class="nc" id="L3478">		int currentLevel = m_vo.TabLevel;</span>
+<span class="nc" id="L3479">		int parentLevel = currentLevel-1;</span>
+<span class="nc bnc" id="L3480" title="All 2 branches missed.">		if (parentLevel &lt; 0)</span>
+<span class="nc" id="L3481">			return (m_parentTabNo = tabNo);</span>
+<span class="nc bnc" id="L3482" title="All 2 branches missed.">		while (parentLevel != currentLevel)</span>
+		{
+<span class="nc" id="L3484">			tabNo--;</span>
+<span class="nc" id="L3485">			currentLevel = Env.getContextAsInt(m_vo.ctx, m_vo.WindowNo, tabNo, GridTab.CTX_TabLevel);</span>
+<span class="nc bnc" id="L3486" title="All 2 branches missed.">			if (tabNo == 0)</span>
+<span class="nc" id="L3487">				break;</span>
+		}
+<span class="nc" id="L3489">		return (m_parentTabNo = tabNo);</span>
+	}
+
+	/**
+	 * @return parent GridTab
+	 */
+	public GridTab getParentTab()
+	{
+<span class="nc" id="L3497">		int parentTabNo = getParentTabNo();</span>
+<span class="nc bnc" id="L3498" title="All 4 branches missed.">		if (parentTabNo &lt; 0 || parentTabNo == m_vo.TabNo)</span>
+<span class="nc" id="L3499">			return null;</span>
+<span class="nc" id="L3500">		return m_window.getTab(parentTabNo);</span>
+	}
+	
+	/**
+	 * @return number of columns in form presentation
+	 */
+	public int getNumColumns() {
+<span class="nc" id="L3507">		int maxcol=0;</span>
+<span class="nc bnc" id="L3508" title="All 2 branches missed.">        for (GridField gridField : getFields())</span>
+        {
+<span class="nc bnc" id="L3510" title="All 4 branches missed.">        	if (!gridField.isDisplayed() || gridField.isToolbarOnlyButton())</span>
+<span class="nc" id="L3511">        		continue;</span>
+<span class="nc" id="L3512">        	int col = gridField.getXPosition() + gridField.getColumnSpan();</span>
+<span class="nc bnc" id="L3513" title="All 2 branches missed.">        	if (gridField.isFieldOnly()</span>
+<span class="nc bnc" id="L3514" title="All 2 branches missed.">        		|| gridField.getDisplayType() == DisplayType.Button</span>
+<span class="nc bnc" id="L3515" title="All 2 branches missed.">    			|| gridField.getDisplayType() == DisplayType.YesNo) {</span>
+<span class="nc" id="L3516">        		col--;</span>
+        	}
+<span class="nc bnc" id="L3518" title="All 2 branches missed.">        	if (col &gt; maxcol) {</span>
+<span class="nc" id="L3519">        		maxcol = col;</span>
+        	}
+        }
+<span class="nc" id="L3522">		return maxcol;</span>
+	}
+
+	/**
+	 * @return true if current row is a new record row
+	 */
+	public boolean isNew() {
+<span class="nc bnc" id="L3529" title="All 6 branches missed.">		return isOpen() &amp;&amp; getCurrentRow() &gt;= 0 &amp;&amp; getCurrentRow() == m_mTable.getNewRow();</span>
+	}
+
+	/**
+	 * @return AD_Tab_UU
+	 */
+	public String getAD_Tab_UU() {
+<span class="nc" id="L3536">		return m_vo.AD_Tab_UU;</span>
+	}
+
+	/**
+	 * @return AD_Process_UU
+	 */
+	public String getAD_Process_UU()
+	{
+<span class="nc" id="L3544">		return m_vo.AD_Process_UU;</span>
+	}
+
+	/**
+	 * @return true if tab will update window context
+	 */
+	public boolean isUpdateWindowContext() 
+	{
+<span class="nc" id="L3552">		return m_updateWindowContext ;</span>
+	}
+		
+	/**
+	 * @param updateWindowContext
+	 */
+	public void setUpdateWindowContext(boolean updateWindowContext)
+	{
+<span class="nc" id="L3560">		m_updateWindowContext = updateWindowContext;</span>
+<span class="nc" id="L3561">	}</span>
+
+	/**
+	 * Add row index to selection 
+	 * @param rowIndex
+	 */
+	public void addToSelection(int rowIndex) {
+<span class="nc bnc" id="L3568" title="All 2 branches missed.">		if (!selection.contains(rowIndex))</span>
+<span class="nc" id="L3569">			selection.add(rowIndex);</span>
+<span class="nc" id="L3570">	}</span>
+
+	/**
+	 * Remove row index from selection
+	 * @param rowIndex
+	 * @return true if rowIndex is found and remove
+	 */
+	public boolean removeFromSelection(int rowIndex) {
+<span class="nc" id="L3578">		return selection.remove((Integer)rowIndex);</span>
+	}
+	
+	/**
+	 * @return selected indexes
+	 */
+	public int[] getSelection() 
+	{
+<span class="nc" id="L3586">		int[] selected = new int[selection.size()];</span>
+<span class="nc" id="L3587">		int i = 0;</span>
+<span class="nc bnc" id="L3588" title="All 2 branches missed.">		for(Integer row : selection) </span>
+		{
+<span class="nc" id="L3590">			selected[i++] = row.intValue();</span>
+		}
+<span class="nc" id="L3592">		return selected;</span>
+	}
+	
+	/**
+	 * @param rowIndex
+	 * @return true if rowIndex is in current selection
+	 */
+	public boolean isSelected(int rowIndex)
+	{
+<span class="nc" id="L3601">		return selection.contains((Integer)rowIndex);		</span>
+	}
+	
+	/**
+	 * clear row selection
+	 */
+	public void clearSelection()
+	{
+<span class="nc" id="L3609">		selection.clear();</span>
+<span class="nc" id="L3610">	}</span>
+
+	/**
+	 * @return true if tab is in quick form
+	 */
+	public boolean isQuickForm() {
+<span class="nc" id="L3616">		return isQuickForm;</span>
+	}
+
+	/**
+	 * @param isQuickForm
+	 */
+	public void setQuickForm(boolean isQuickForm) {
+<span class="nc" id="L3623">		this.isQuickForm = isQuickForm;</span>
+<span class="nc" id="L3624">	}</span>
+
+	/**
+	 * @return GridWindow
+	 */
+	public GridWindow getGridWindow()
+	{
+<span class="nc" id="L3631">		return this.m_window;</span>
+	}
+	
+	/**
+	 * @return GridTabVO
+	 */
+	public GridTabVO getVO() 
+	{
+<span class="nc" id="L3639">		return m_vo;</span>
+	}
+
+	/**
+	 * @return ICalloutUI
+	 */
+	public ICalloutUI getCalloutUI() {
+<span class="nc" id="L3646">		return calloutUI;</span>
+	}
+
+	/**
+	 * @param calloutUI
+	 */
+	public void setCalloutUI(ICalloutUI calloutUI) {
+<span class="nc" id="L3653">		this.calloutUI = calloutUI;</span>
+<span class="nc" id="L3654">	}</span>
+
+	/**
+	 * Get Delete Confirmation Logic
+	 * @return Delete Confirmation Logic
+	 */
+	public String getDeleteConfirmationLogic() {
+<span class="nc" id="L3661">		return m_vo.deleteConfirmationLogic;</span>
+	}
+	
+	/**
+	 * Set Delete Confirmation Logic
+	 * @param deleteConfirmationLogic
+	 */
+	public void setDeleteConfirmationLogic(String deleteConfirmationLogic) {
+<span class="nc" id="L3669">		m_vo.deleteConfirmationLogic = deleteConfirmationLogic;</span>
+<span class="nc" id="L3670">	}</span>
+	
+	/** 
+	 * Get Max Query Records.&lt;br/&gt;
+	 * If defined, you cannot query more records as defined - the query criteria needs to be changed to query less records.
+	 * @return Max Query Records
+     */
+	public int getMaxQueryRecords() {
+		// minimum between AD_Tab.MaxQueryRecords and AD_Role.MaxQueryRecords
+<span class="nc" id="L3679">		int roleMaxQueryRecords = MRole.getDefault().getMaxQueryRecords();</span>
+<span class="nc" id="L3680">		int tabMaxQueryRecords = m_vo.MaxQueryRecords;</span>
+<span class="nc bnc" id="L3681" title="All 6 branches missed.">		if (roleMaxQueryRecords &gt; 0 &amp;&amp; (roleMaxQueryRecords &lt; tabMaxQueryRecords || tabMaxQueryRecords == 0))</span>
+<span class="nc" id="L3682">			tabMaxQueryRecords = roleMaxQueryRecords;</span>
+<span class="nc bnc" id="L3683" title="All 2 branches missed.">		if (tabMaxQueryRecords == 0)</span>
+<span class="nc" id="L3684">			tabMaxQueryRecords = MSysConfig.getIntValue(MSysConfig.GLOBAL_MAX_QUERY_RECORDS, </span>
+<span class="nc" id="L3685">	        		DEFAULT_GLOBAL_MAX_QUERY_RECORDS, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc" id="L3686">		return tabMaxQueryRecords;</span>
+	}
+
+	/**
+	 * 	Require Query
+	 *	@param noRecords records
+	 *	@return true if query is required
+	 */
+	public boolean isQueryRequire (int noRecords)
+	{
+<span class="nc bnc" id="L3696" title="All 2 branches missed.">		if (noRecords &lt; 2)</span>
+<span class="nc" id="L3697">			return false;</span>
+<span class="nc" id="L3698">		int max = getMaxQueryRecords();</span>
+<span class="nc bnc" id="L3699" title="All 4 branches missed.">		if (max &gt; 0 &amp;&amp; noRecords &gt; max)</span>
+<span class="nc" id="L3700">			return true;</span>
+<span class="nc" id="L3701">		int qu = MRole.getDefault().getConfirmQueryRecords();</span>
+<span class="nc bnc" id="L3702" title="All 2 branches missed.">		return (noRecords &gt; qu);</span>
+	}	//	isQueryRequire
+
+	/**
+	 * 	Over max Query
+	 *	@param noRecords records
+	 *	@return true if over max query records
+	 */
+	public boolean isQueryMax (int noRecords)
+	{
+<span class="nc" id="L3712">		int max = getMaxQueryRecords();</span>
+<span class="nc bnc" id="L3713" title="All 4 branches missed.">		return max &gt; 0 &amp;&amp; noRecords &gt; max;</span>
+	}	//	isQueryMax
+
+	/**
+	 * reset to empty
+	 */
+	public void reset() {
+<span class="nc" id="L3720">		m_mTable.reset();</span>
+<span class="nc" id="L3721">		setCurrentRow(0, true);</span>
+<span class="nc" id="L3722">	}</span>
+
+	/**
+	 * Get last DataStatusEvent
+	 * @return last DataStatusEvent
+	 */
+	public DataStatusEvent getLastDataStatusEvent() {
+<span class="nc" id="L3729">		DataStatusEventRecord dse = m_lastDataStatusEventReference.get();</span>
+<span class="nc bnc" id="L3730" title="All 2 branches missed.">		if (dse != null) {</span>
+<span class="nc" id="L3731">			return dse.dataStatusEvent();</span>
+		}
+<span class="nc" id="L3733">		return null;</span>
+	}
+}	//	GridTab
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

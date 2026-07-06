@@ -1,0 +1,481 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AnnotationBasedEventManager.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.base</a> &gt; <span class="el_source">AnnotationBasedEventManager.java</span></div><h1>AnnotationBasedEventManager.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - hengsin                         								   *
+ **********************************************************************/
+package org.adempiere.base;
+
+import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.logging.Level;
+
+import org.adempiere.base.annotation.EventTopicDelegate;
+import org.adempiere.base.annotation.ImportEventTopic;
+import org.adempiere.base.annotation.ModelEventTopic;
+import org.adempiere.base.annotation.ProcessEventTopic;
+import org.adempiere.base.event.IEventManager;
+import org.adempiere.base.event.annotations.EventDelegate;
+import org.adempiere.base.event.annotations.ModelEventDelegate;
+import org.adempiere.base.event.annotations.ModelEventHandler;
+import org.adempiere.base.event.annotations.SimpleEventHandler;
+import org.adempiere.base.event.annotations.imp.ImportEventDelegate;
+import org.adempiere.base.event.annotations.imp.ImportEventHandler;
+import org.adempiere.base.event.annotations.process.ProcessEventDelegate;
+import org.adempiere.base.event.annotations.process.ProcessEventHandler;
+import org.compiere.model.PO;
+import org.compiere.util.CLogger;
+import org.compiere.util.Util;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceReference;
+import org.osgi.framework.wiring.BundleWiring;
+import org.osgi.service.component.ComponentContext;
+import org.osgi.service.component.annotations.Activate;
+import org.osgi.service.component.annotations.Deactivate;
+import org.osgi.service.event.Event;
+import org.osgi.service.event.EventHandler;
+import org.osgi.util.tracker.ServiceTracker;
+import org.osgi.util.tracker.ServiceTrackerCustomizer;
+
+import io.github.classgraph.AnnotationClassRef;
+import io.github.classgraph.AnnotationInfo;
+import io.github.classgraph.ClassGraph;
+import io.github.classgraph.ClassGraph.ScanResultProcessor;
+import io.github.classgraph.ClassInfo;
+
+/**
+ * Scan, discover and register classes with {@link EventTopicDelegate} annotation
+ * @author hengsin
+ *
+ */
+public abstract class AnnotationBasedEventManager extends AnnotationBasedFactory {
+
+<span class="nc" id="L75">	private static final CLogger s_log = CLogger.getCLogger(AnnotationBasedEventManager.class); </span>
+	
+	protected IEventManager eventManager;
+	protected BundleContext bundleContext;
+<span class="nc" id="L79">	protected List&lt;EventHandler&gt; handlers = new ArrayList&lt;&gt;();</span>
+
+	private ServiceTracker&lt;IEventManager, IEventManager&gt; serviceTracker;
+	
+	/**
+	 * default constructor
+	 */
+<span class="nc" id="L86">	public AnnotationBasedEventManager() {</span>
+<span class="nc" id="L87">	}</span>
+
+	/**
+	 * Subclass would override this to define the list of packages to perform the scan, discover and register operation
+	 * @return packages to scan
+	 */
+	public abstract String[] getPackages();
+	
+	@Activate
+	public void activate(ComponentContext context) {
+<span class="nc" id="L97">		bundleContext = context.getBundleContext();</span>
+<span class="nc" id="L98">		serviceTracker = new ServiceTracker&lt;IEventManager, IEventManager&gt;(bundleContext, IEventManager.class, </span>
+<span class="nc" id="L99">				new Customizer());</span>
+<span class="nc" id="L100">		serviceTracker.open();</span>
+<span class="nc" id="L101">	}</span>
+	
+	@Deactivate
+	public void deactivate(ComponentContext context) {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">		if (serviceTracker != null) {</span>
+<span class="nc" id="L106">			serviceTracker.close();</span>
+<span class="nc" id="L107">			serviceTracker = null;</span>
+		}
+<span class="nc bnc" id="L109" title="All 2 branches missed.">		if (eventManager != null) {</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">			if (handlers.size() &gt; 0)</span>
+<span class="nc" id="L111">				unbindService(eventManager);</span>
+<span class="nc" id="L112">			eventManager = null;</span>
+		}
+<span class="nc" id="L114">	}</span>
+	
+	/**
+	 * 
+	 * @param eventManager
+	 */
+	protected void bindService(IEventManager eventManager) {
+<span class="nc" id="L121">		this.eventManager = eventManager;</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		if (eventManager != null)</span>
+<span class="nc" id="L123">			scan();</span>
+<span class="nc" id="L124">	}</span>
+	
+	/**
+	 * 
+	 * @param eventManager
+	 */
+	protected void unbindService(IEventManager eventManager) {
+<span class="nc bnc" id="L131" title="All 4 branches missed.">		if (eventManager != null &amp;&amp; eventManager == this.eventManager) {</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			if (handlers.size() &gt; 0) {</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">				for(EventHandler handler : handlers)</span>
+<span class="nc" id="L134">					eventManager.unregister(handler);</span>
+			}
+<span class="nc" id="L136">			this.eventManager = null;</span>
+		}
+<span class="nc" id="L138">	}</span>
+	
+	/**
+	 * Scan, discover and register annotated event delegate classes. &lt;br/&gt;
+	 * The scan is asynchronous and return {@link CompletableFuture} to caller.
+	 * If needed, caller can use the return {@link CompletableFuture} to wait for the scan to complete (using either get or join).
+	 * @param context bundle context
+	 * @param packageNames one or more package to scan
+	 * @return CompletableFuture&amp;lt;List&amp;lt;EventHandler&amp;gt;&amp;gt;
+	 */
+	public synchronized CompletableFuture&lt;List&lt;EventHandler&gt;&gt; scan(BundleContext context, String ...packageNames) {
+<span class="nc" id="L149">		return scan(context, false, packageNames);</span>
+	}
+	
+	/**
+	 * Scan, discover and register annotated event delegate classes.
+	 * @param context bundle context
+	 * @param logScanDuration
+	 * @param packageNames one or more package to scan
+	 * @return CompletableFuture&amp;lt;List&amp;lt;EventHandler&amp;gt;&amp;gt;
+	 */
+	protected CompletableFuture&lt;List&lt;EventHandler&gt;&gt; scan(BundleContext context, boolean logScanDuration, String ...packageNames) {
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		long start = logScanDuration ? System.currentTimeMillis() : 0;</span>
+<span class="nc" id="L161">		final CompletableFuture&lt;List&lt;EventHandler&gt;&gt; completable = new CompletableFuture&lt;&gt;();</span>
+<span class="nc" id="L162">		ClassLoader classLoader = context.getBundle().adapt(BundleWiring.class).getClassLoader();</span>
+		
+<span class="nc" id="L164">		ClassGraph graph = new ClassGraph()</span>
+<span class="nc" id="L165">				.enableAnnotationInfo()</span>
+<span class="nc" id="L166">				.overrideClassLoaders(classLoader)</span>
+<span class="nc" id="L167">				.disableNestedJarScanning()</span>
+<span class="nc" id="L168">				.disableModuleScanning()</span>
+<span class="nc" id="L169">				.acceptPackagesNonRecursive(packageNames);</span>
+
+<span class="nc" id="L171">		ScanResultProcessor scanResultProcessor = scanResult -&gt;</span>
+		{
+<span class="nc" id="L173">			List&lt;EventHandler&gt; handlerList = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">		    for (ClassInfo classInfo : scanResult.getClassesWithAnnotation(EventTopicDelegate.class)) {</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">		    	if (classInfo.isAbstract())</span>
+<span class="nc" id="L176">		    		continue;</span>
+<span class="nc" id="L177">		    	EventHandler handler = null;</span>
+<span class="nc" id="L178">		        String className = classInfo.getName();</span>
+<span class="nc" id="L179">		        AnnotationInfo baseInfo = classInfo.getAnnotationInfo(EventTopicDelegate.class);</span>
+<span class="nc" id="L180">		        String filter = (String) baseInfo.getParameterValues().getValue(&quot;filter&quot;);</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">		        if (classInfo.hasAnnotation(ModelEventTopic.class)) {</span>
+<span class="nc" id="L182">		        	AnnotationInfo annotationInfo = classInfo.getAnnotationInfo(ModelEventTopic.class);</span>
+<span class="nc" id="L183">			        handler = modelEventDelegate(classLoader, className, annotationInfo, filter);</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">		        } else if (classInfo.hasAnnotation(ImportEventTopic.class)) {</span>
+<span class="nc" id="L185">		        	AnnotationInfo annotationInfo = classInfo.getAnnotationInfo(ImportEventTopic.class);</span>
+<span class="nc" id="L186">		        	handler = importEventDelegate(classLoader, className, annotationInfo, filter);</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">		        } else if (classInfo.hasAnnotation(ProcessEventTopic.class)) {</span>
+<span class="nc" id="L188">		        	AnnotationInfo annotationInfo = classInfo.getAnnotationInfo(ProcessEventTopic.class);</span>
+<span class="nc" id="L189">		        	handler = processEventDelegate(classLoader, className, annotationInfo, filter);</span>
+<span class="nc" id="L190">		        } else {</span>
+<span class="nc" id="L191">		        	handler = simpleEventDelegate(classLoader, className, filter);</span>
+		        }
+<span class="nc bnc" id="L193" title="All 2 branches missed.">		        if (handler != null)</span>
+<span class="nc" id="L194">		        	handlerList.add(handler);</span>
+		    }
+<span class="nc" id="L196">			long end = System.currentTimeMillis();</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">			if (logScanDuration)</span>
+<span class="nc" id="L198">				s_log.info(() -&gt; this.getClass().getSimpleName() + &quot; loaded &quot; + handlerList.size() + &quot; classes in &quot;</span>
+<span class="nc" id="L199">							+ ((end-start)/1000f) + &quot;s&quot;);</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">			if (handlerList.size() &gt; 0) {</span>
+<span class="nc" id="L201">				synchronized (handlers) {</span>
+<span class="nc" id="L202">					handlers.addAll(handlerList);</span>
+				}
+			}
+<span class="nc" id="L205">			completable.complete(handlerList);</span>
+<span class="nc" id="L206">		};</span>
+
+<span class="nc" id="L208">		graph.scanAsync(getExecutorService(), getMaxThreads(), scanResultProcessor, getScanFailureHandler());</span>
+<span class="nc" id="L209">		return completable;</span>
+	}
+	/**
+	 * Perform asynchronous scan, discover and register of annotated event delegate classes.
+	 */
+	protected void scan() {
+<span class="nc" id="L215">		scan(bundleContext, true, getPackages());</span>
+<span class="nc" id="L216">	}</span>
+
+	/**
+	 * @return array of registered event handlers
+	 */
+	public EventHandler[] getHandlers() {
+<span class="nc" id="L222">		synchronized (handlers) {</span>
+<span class="nc" id="L223">			return handlers.toArray(new EventHandler[0]);</span>
+		}
+	}
+	
+	/**
+	 * Remove a event handler
+	 * @param handler
+	 * @return true if removed
+	 */
+	public boolean removeHandler(EventHandler handler) {
+<span class="nc bnc" id="L233" title="All 2 branches missed.">		if (handler == null)</span>
+<span class="nc" id="L234">			return false;</span>
+		
+<span class="nc" id="L236">		boolean removed = false;</span>
+<span class="nc" id="L237">		synchronized (handlers) {</span>
+<span class="nc" id="L238">			removed = handlers.remove(handler);</span>
+		}
+<span class="nc" id="L240">		IEventManager em = eventManager;</span>
+<span class="nc bnc" id="L241" title="All 4 branches missed.">		if (em != null &amp;&amp; removed) {</span>
+<span class="nc" id="L242">			em.unregister(handler);</span>
+		}
+<span class="nc" id="L244">		return removed;</span>
+	}
+	
+	/**
+	 * @param classLoader
+	 * @param className
+	 * @param filter
+	 * @return new SimpleEventHandler instance
+	 */
+	private EventHandler simpleEventDelegate(ClassLoader classLoader, String className, String filter) {
+		try {
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L256">			Class&lt;? extends EventDelegate&gt; delegateClass = (Class&lt;? extends EventDelegate&gt;) classLoader.loadClass(className);</span>
+<span class="nc" id="L257">			Constructor&lt;?&gt; constructor = delegateClass.getConstructor(Event.class);</span>
+<span class="nc" id="L258">			EventDelegateSupplier supplier = new EventDelegateSupplier(constructor);</span>
+<span class="nc" id="L259">			SimpleEventHandler handler = new SimpleEventHandler(delegateClass, supplier);</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">			if (!Util.isEmpty(filter, true))</span>
+<span class="nc" id="L261">				handler.setFilter(filter);</span>
+<span class="nc" id="L262">			String[] topics = handler.getTopics();</span>
+<span class="nc bnc" id="L263" title="All 4 branches missed.">			if (topics == null || topics.length == 0)</span>
+<span class="nc" id="L264">				return null;</span>
+<span class="nc" id="L265">			eventManager.register(topics, handler.getFilter(), handler);</span>
+<span class="nc" id="L266">			return handler;</span>
+<span class="nc" id="L267">		} catch (Exception e) {</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">			if (s_log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L269">				s_log.log(Level.INFO, e.getMessage(), e);</span>
+<span class="nc" id="L270">			return null;</span>
+		}
+	}
+
+	/**
+	 * @param classLoader
+	 * @param className
+	 * @param annotationInfo
+	 * @param filter
+	 * @return new ProcessEventHandler instance
+	 */
+	private EventHandler processEventDelegate(ClassLoader classLoader, String className, AnnotationInfo annotationInfo, String filter) {		
+		try {
+<span class="nc" id="L283">			String processUUID = (String) annotationInfo.getParameterValues().getValue(&quot;processUUID&quot;);</span>
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L285">			Class&lt;? extends ProcessEventDelegate&gt; delegateClass = (Class&lt;? extends ProcessEventDelegate&gt;) classLoader.loadClass(className);</span>
+<span class="nc" id="L286">			Constructor&lt;?&gt; constructor = delegateClass.getConstructor(Event.class);</span>
+<span class="nc" id="L287">			ProcessDelegateSupplier supplier = new ProcessDelegateSupplier(constructor);</span>
+<span class="nc" id="L288">			ProcessEventHandler handler = new ProcessEventHandler(delegateClass, processUUID, supplier);</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">			if (!Util.isEmpty(filter, true))</span>
+<span class="nc" id="L290">				handler.setFilter(filter);</span>
+<span class="nc" id="L291">			String[] topics = handler.getTopics();</span>
+<span class="nc bnc" id="L292" title="All 4 branches missed.">			if (topics == null || topics.length == 0)</span>
+<span class="nc" id="L293">				return null;</span>
+<span class="nc" id="L294">		    eventManager.register(topics, handler.getFilter(), handler);</span>
+<span class="nc" id="L295">		    return handler;</span>
+<span class="nc" id="L296">		} catch (Exception e) {</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">			if (s_log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L298">				s_log.log(Level.INFO, e.getMessage(), e);</span>
+<span class="nc" id="L299">			return null;</span>
+		}
+	}
+
+	/**
+	 * @param classLoader
+	 * @param className
+	 * @param annotationInfo
+	 * @param filter
+	 * @return new ImportEventHandler instance
+	 */
+	private EventHandler importEventDelegate(ClassLoader classLoader, String className, AnnotationInfo annotationInfo, String filter) {		
+		try {
+<span class="nc" id="L312">			String importTableName = (String) annotationInfo.getParameterValues().getValue(&quot;importTableName&quot;);</span>
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L314">			Class&lt;? extends ImportEventDelegate&gt; delegateClass = (Class&lt;? extends ImportEventDelegate&gt;) classLoader.loadClass(className);</span>
+<span class="nc" id="L315">			Constructor&lt;?&gt; constructor = delegateClass.getConstructor(Event.class);</span>
+<span class="nc" id="L316">			ImportDelegateSupplier supplier = new ImportDelegateSupplier(constructor);</span>
+<span class="nc" id="L317">			ImportEventHandler handler = new ImportEventHandler(delegateClass, importTableName, supplier);</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">			if (!Util.isEmpty(filter, true))</span>
+<span class="nc" id="L319">				handler.setFilter(filter);</span>
+<span class="nc" id="L320">			String[] topics = handler.getTopics();</span>
+<span class="nc bnc" id="L321" title="All 4 branches missed.">			if (topics == null || topics.length == 0)</span>
+<span class="nc" id="L322">				return null;</span>
+<span class="nc" id="L323">			eventManager.register(topics, handler.getFilter(), handler);</span>
+<span class="nc" id="L324">			return handler;</span>
+<span class="nc" id="L325">		} catch (Exception e) {</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">			if (s_log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L327">				s_log.log(Level.INFO, e.getMessage(), e);</span>
+<span class="nc" id="L328">			return null;</span>
+		}
+	}
+
+	/**
+	 * @param classLoader
+	 * @param className
+	 * @param annotationInfo
+	 * @param filter
+	 * @return new ModelEventHandler instance
+	 */
+	private EventHandler modelEventDelegate(ClassLoader classLoader, String className, AnnotationInfo annotationInfo, String filter) {		
+		try {			
+<span class="nc" id="L341">			AnnotationClassRef classRef = (AnnotationClassRef) annotationInfo.getParameterValues().getValue(&quot;modelClass&quot;);</span>
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L343">			Class&lt;? extends PO&gt; modelClass = (Class&lt;? extends PO&gt;)classRef.loadClass();</span>
+		    @SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L345">			Class&lt;? extends ModelEventDelegate&lt;? extends PO&gt;&gt; delegateClass = (Class&lt;ModelEventDelegate&lt;? extends PO&gt;&gt;) classLoader.loadClass(className);</span>
+<span class="nc" id="L346">		    Constructor&lt;?&gt; constructor = delegateClass.getDeclaredConstructor(modelClass, Event.class);</span>
+<span class="nc" id="L347">		    ModelDelegateSupplier supplier = new ModelDelegateSupplier(constructor);</span>
+		    @SuppressWarnings({ &quot;rawtypes&quot;, &quot;unchecked&quot; })
+<span class="nc" id="L349">			ModelEventHandler&lt;?&gt; handler = new ModelEventHandler(modelClass, delegateClass, supplier);</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">		    if (!Util.isEmpty(filter, true))</span>
+<span class="nc" id="L351">				handler.setFilter(filter);</span>
+<span class="nc" id="L352">			String[] topics = handler.getTopics();</span>
+<span class="nc bnc" id="L353" title="All 4 branches missed.">			if (topics == null || topics.length == 0)</span>
+<span class="nc" id="L354">				return null;</span>
+<span class="nc" id="L355">		    eventManager.register(topics, handler.getFilter(), handler);</span>
+<span class="nc" id="L356">		    return handler;</span>
+<span class="nc" id="L357">		} catch (Exception e) {</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">			if (s_log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L359">				s_log.log(Level.INFO, e.getMessage(), e);</span>
+<span class="nc" id="L360">			return null;</span>
+		}
+	}
+	
+<span class="nc" id="L364">	private class Customizer implements ServiceTrackerCustomizer&lt;IEventManager, IEventManager&gt; {</span>
+		@Override
+		public IEventManager addingService(ServiceReference&lt;IEventManager&gt; reference) {
+<span class="nc" id="L367">			IEventManager eventManager = bundleContext.getService(reference);</span>
+<span class="nc" id="L368">			bindService(eventManager);</span>
+<span class="nc" id="L369">			return eventManager;</span>
+		}
+
+		@Override
+		public void modifiedService(ServiceReference&lt;IEventManager&gt; reference, IEventManager service) {
+<span class="nc bnc" id="L374" title="All 4 branches missed.">			if (eventManager != null &amp;&amp; eventManager != service) {</span>
+<span class="nc" id="L375">				unbindService(eventManager);</span>
+<span class="nc" id="L376">				bindService(service);</span>
+			}
+<span class="nc" id="L378">		}</span>
+
+		@Override
+		public void removedService(ServiceReference&lt;IEventManager&gt; reference, IEventManager service) {
+<span class="nc" id="L382">			unbindService(service);</span>
+<span class="nc" id="L383">		}</span>
+	}
+	
+	private static class ModelDelegateSupplier implements BiFunction&lt;PO, Event, ModelEventDelegate&lt;?&gt;&gt; {
+
+		private Constructor&lt;?&gt; constructor;
+
+<span class="nc" id="L390">		private ModelDelegateSupplier(Constructor&lt;?&gt; constructor) {</span>
+<span class="nc" id="L391">			this.constructor = constructor;</span>
+<span class="nc" id="L392">		}</span>
+		
+		@Override
+		public ModelEventDelegate&lt;?&gt; apply(PO t, Event u) {
+<span class="nc" id="L396">			ModelEventDelegate&lt;?&gt; delegate = null;</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">			if (constructor != null) {</span>
+				try {
+<span class="nc" id="L399">					delegate = (ModelEventDelegate&lt;?&gt;) constructor.newInstance(t, u);</span>
+<span class="nc" id="L400">				} catch (Exception e) {</span>
+<span class="nc" id="L401">					constructor = null;</span>
+<span class="nc" id="L402">					s_log.log(Level.WARNING, e.getMessage(), e);</span>
+				}
+			}
+<span class="nc" id="L405">			return delegate;</span>
+		}		
+	}
+	
+	private static class ImportDelegateSupplier implements Function&lt;Event, ImportEventDelegate&gt; {
+
+		private Constructor&lt;?&gt; constructor;
+
+<span class="nc" id="L413">		private ImportDelegateSupplier(Constructor&lt;?&gt; constructor) {</span>
+<span class="nc" id="L414">			this.constructor = constructor;</span>
+<span class="nc" id="L415">		}</span>
+		
+		@Override
+		public ImportEventDelegate apply(Event t) {
+<span class="nc" id="L419">			ImportEventDelegate delegate = null;</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">			if (constructor != null) {</span>
+				try {
+<span class="nc" id="L422">					delegate = (ImportEventDelegate) constructor.newInstance(t);</span>
+<span class="nc" id="L423">				} catch (Exception e) {</span>
+<span class="nc" id="L424">					constructor = null;</span>
+<span class="nc" id="L425">					s_log.log(Level.WARNING, e.getMessage(), e);</span>
+				}
+			}
+<span class="nc" id="L428">			return delegate;</span>
+		}
+		
+	}
+	
+	private static class ProcessDelegateSupplier implements Function&lt;Event, ProcessEventDelegate&gt; {
+
+		private Constructor&lt;?&gt; constructor;
+
+<span class="nc" id="L437">		private ProcessDelegateSupplier(Constructor&lt;?&gt; constructor) {</span>
+<span class="nc" id="L438">			this.constructor = constructor;</span>
+<span class="nc" id="L439">		}</span>
+		
+		@Override
+		public ProcessEventDelegate apply(Event t) {
+<span class="nc" id="L443">			ProcessEventDelegate delegate = null;</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">			if (constructor != null) {</span>
+				try {
+<span class="nc" id="L446">					delegate = (ProcessEventDelegate) constructor.newInstance(t);</span>
+<span class="nc" id="L447">				} catch (Exception e) {</span>
+<span class="nc" id="L448">					constructor = null;</span>
+<span class="nc" id="L449">					s_log.log(Level.WARNING, e.getMessage(), e);</span>
+				}
+			}
+<span class="nc" id="L452">			return delegate;</span>
+		}
+		
+	}
+	
+	private static class EventDelegateSupplier implements Function&lt;Event, EventDelegate&gt; {
+
+		private Constructor&lt;?&gt; constructor;
+
+<span class="nc" id="L461">		private EventDelegateSupplier(Constructor&lt;?&gt; constructor) {</span>
+<span class="nc" id="L462">			this.constructor = constructor;</span>
+<span class="nc" id="L463">		}</span>
+		
+		@Override
+		public EventDelegate apply(Event t) {
+<span class="nc" id="L467">			EventDelegate delegate = null;</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">			if (constructor != null) {</span>
+				try {
+<span class="nc" id="L470">					delegate = (EventDelegate) constructor.newInstance(t);</span>
+<span class="nc" id="L471">				} catch (Exception e) {</span>
+<span class="nc" id="L472">					constructor = null;</span>
+<span class="nc" id="L473">					s_log.log(Level.WARNING, e.getMessage(), e);</span>
+				}
+			}
+<span class="nc" id="L476">			return delegate;</span>
+		}
+		
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

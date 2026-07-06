@@ -1,0 +1,320 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PackIn.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.pipo</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.pipo2</a> &gt; <span class="el_source">PackIn.java</span></div><h1>PackIn.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 Adempiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *
+ * Copyright (C) 2005 Robert KLEIN.  robeklein@hotmail.com
+ *
+ *****************************************************************************/
+
+package org.adempiere.pipo2;
+
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.logging.Level;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+import javax.xml.parsers.SAXParser;
+import javax.xml.parsers.SAXParserFactory;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.PO;
+import org.compiere.model.X_AD_Package_Imp_Detail;
+import org.compiere.model.X_AD_Package_Imp_Proc;
+import org.compiere.util.CLogger;
+import org.compiere.util.Trx;
+
+/**
+ * IntPackIn Tool.
+ *
+ * @author: Robert KLEIN. robeklein@hotmail.com
+ */
+public class PackIn {
+
+	/** Logger */
+<span class="nc" id="L56">	private static final CLogger log = CLogger.getCLogger(PackIn.class);</span>
+	//update system maintain dictionary, default to false
+<span class="nc" id="L58">	private boolean m_UpdateDictionary = false;</span>
+<span class="nc" id="L59">	private String m_packageDirectory = null;</span>
+
+<span class="nc" id="L61">	private Map&lt;String,Integer&gt; tableCache = new HashMap&lt;String,Integer&gt;();</span>
+<span class="nc" id="L62">	private Map&lt;String,Integer&gt; columnCache = new HashMap&lt;String,Integer&gt;();</span>
+<span class="nc" id="L63">	private String packageName = null;</span>
+<span class="nc" id="L64">	private String packageVersion = null;</span>
+<span class="nc" id="L65">	private PackInNotifier notifier = new PackInNotifier(this);</span>
+	private X_AD_Package_Imp_Proc packinProc;
+
+	private List&lt;X_AD_Package_Imp_Detail&gt; importDetails;
+<span class="nc" id="L69">	private boolean success = false;</span>
+
+	public PackIn() {
+<span class="nc" id="L72">		super();</span>
+<span class="nc" id="L73">	}</span>
+
+	/**
+	 * add to table id cache
+	 * @param tableName
+	 * @param tableId
+	 */
+	public void addTable(String tableName, int tableId) {
+<span class="nc" id="L81">		tableCache.put(tableName, tableId);</span>
+<span class="nc" id="L82">	}</span>
+
+	/**
+	 * Find table id from cache
+	 * @param tableName
+	 * @return tableId
+	 */
+	public int getTableId(String tableName) {
+<span class="nc bnc" id="L90" title="All 2 branches missed.">		if (tableCache.containsKey(tableName))</span>
+<span class="nc" id="L91">			return tableCache.get(tableName).intValue();</span>
+		else
+<span class="nc" id="L93">			return 0;</span>
+	}
+
+	/**
+	 * add to column id cache
+	 * @param tableName
+	 * @param columnName
+	 * @param columnId
+	 */
+	public void addColumn(String tableName, String columnName, int columnId) {
+<span class="nc" id="L103">		columnCache.put(tableName+&quot;.&quot;+columnName, columnId);</span>
+<span class="nc" id="L104">	}</span>
+
+	/**
+	 * find column id from cache
+	 * @param tableName
+	 * @param columnName
+	 * @return column id
+	 */
+	public int getColumnId(String tableName, String columnName) {
+<span class="nc" id="L113">		String key = tableName+&quot;.&quot;+columnName;</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">		if (columnCache.containsKey(key))</span>
+<span class="nc" id="L115">			return columnCache.get(key).intValue();</span>
+		else
+<span class="nc" id="L117">			return 0;</span>
+	}
+
+	/**
+	 * Uses PackInHandler to update AD.
+	 *
+	 * @param fileName xml file to read
+	 * @return status message
+	 */
+	public String importXML(String fileName, Properties ctx, String trxName) throws Exception {
+<span class="nc bnc" id="L127" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;importXML:&quot; + fileName);</span>
+<span class="nc" id="L128">		File in = new File(fileName);</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">		if (!in.exists()) {</span>
+<span class="nc" id="L130">			String msg = &quot;File does not exist: &quot; + fileName;</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			if (log.isLoggable(Level.SEVERE)) log.info(&quot;importXML:&quot; + msg);</span>
+<span class="nc" id="L132">			throw new AdempiereException(msg);</span>
+		}
+<span class="nc" id="L134">		try (FileInputStream input = new FileInputStream(in)) {</span>
+<span class="nc" id="L135">			return importXML(input, ctx, trxName);</span>
+<span class="nc" id="L136">		} catch (Exception e) {</span>
+<span class="nc" id="L137">			log.log(Level.SEVERE, &quot;importXML:&quot;, e);</span>
+<span class="nc" id="L138">			throw e;</span>
+		}
+	}
+
+	public void addImportDetail(X_AD_Package_Imp_Detail importDetail) {
+<span class="nc" id="L143">		importDetails.add(importDetail);</span>
+<span class="nc" id="L144">	}</span>
+	
+	/**
+	 *
+	 * @param input
+	 * @param ctx
+	 * @param trxName
+	 * @return status message
+	 */
+	public String importXML(InputStream input, Properties ctx, String trxName) {
+		try {
+<span class="nc" id="L155">			log.info(&quot;starting&quot;);</span>
+			// clear cache of previous runs
+<span class="nc" id="L157">			IDFinder.clearIDCache();</span>
+<span class="nc" id="L158">			importDetails = new ArrayList&lt;X_AD_Package_Imp_Detail&gt;();</span>
+
+<span class="nc" id="L160">			PackInHandler handler = new PackInHandler();</span>
+<span class="nc" id="L161">			PIPOContext context = new PIPOContext();</span>
+<span class="nc" id="L162">			context.trx = Trx.get(trxName, true);</span>
+<span class="nc" id="L163">			context.packIn = this;</span>
+<span class="nc" id="L164">			context.ctx = ctx;</span>
+<span class="nc" id="L165">			context.ctx.setProperty(&quot;isHandleTranslations&quot;, MSysConfig.getValue(MSysConfig.TWOPACK_HANDLE_TRANSLATIONS));</span>
+<span class="nc" id="L166">			handler.setCtx(context);</span>
+<span class="nc" id="L167">			handler.setProcess(this);</span>
+<span class="nc" id="L168">			SAXParserFactory factory = SAXParserFactory.newInstance();</span>
+<span class="nc" id="L169">			SAXParser parser = factory.newSAXParser();</span>
+<span class="nc" id="L170">			String msg = &quot;Start Parser&quot;;</span>
+<span class="nc" id="L171">			log.info(msg);</span>
+<span class="nc" id="L172">			parser.parse(input, handler);</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">			for (PO importDetail : importDetails) {</span>
+<span class="nc" id="L174">				importDetail.saveEx();</span>
+			}
+<span class="nc" id="L176">			msg = &quot;End Parser&quot;;</span>
+<span class="nc" id="L177">			log.info(msg);</span>
+<span class="nc" id="L178">			msg = &quot;Processed=&quot;+handler.getElementsProcessed()+&quot; Un-Resolved=&quot;+handler.getUnresolvedCount();</span>
+<span class="nc" id="L179">			getNotifier().addStatusLine(msg);</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">			if (handler.getUnresolvedCount() &gt; 0) {</span>
+<span class="nc" id="L181">				handler.dumpUnresolvedElements();</span>
+<span class="nc" id="L182">				throw new AdempiereException(&quot;Unresolved elements&quot;);</span>
+			}
+<span class="nc" id="L184">			return msg;</span>
+<span class="nc" id="L185">		} catch (Exception e) {</span>
+<span class="nc" id="L186">			log.log(Level.SEVERE, &quot;importXML:&quot;, e);</span>
+<span class="nc" id="L187">			throw new RuntimeException(e.getLocalizedMessage(), e);</span>
+		}
+	}
+
+	public String getPackageDirectory() {
+<span class="nc" id="L192">		return m_packageDirectory;</span>
+	}
+
+	public void setPackageDirectory(String packageDirectory) {
+<span class="nc" id="L196">		m_packageDirectory = packageDirectory;</span>
+<span class="nc" id="L197">	}</span>
+
+	public boolean isUpdateDictionary() {
+<span class="nc" id="L200">		return m_UpdateDictionary;</span>
+	}
+
+	public void setUpdateDictionary(boolean updateDictionary) {
+<span class="nc" id="L204">		m_UpdateDictionary = updateDictionary;</span>
+<span class="nc" id="L205">	}</span>
+
+	public byte[] readBlob(String fileName) throws IOException {
+<span class="nc" id="L208">		byte[] data = null;</span>
+<span class="nc" id="L209">		File file = new File(m_packageDirectory+File.separator+&quot;blobs&quot;+File.separator, fileName);</span>
+<span class="nc" id="L210">		FileInputStream fis = null;</span>
+<span class="nc" id="L211">		BufferedInputStream bis = null;</span>
+		try {
+<span class="nc" id="L213">			fis = new FileInputStream(file);</span>
+<span class="nc" id="L214">			bis = new BufferedInputStream(fis);</span>
+<span class="nc" id="L215">			ByteArrayOutputStream baos = new ByteArrayOutputStream();</span>
+<span class="nc" id="L216">			while (true) {</span>
+<span class="nc" id="L217">				int b = bis.read();</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">				if (b == -1)</span>
+<span class="nc" id="L219">					break;</span>
+				else
+<span class="nc" id="L221">					baos.write(b);</span>
+			}
+<span class="nc" id="L223">			data = baos.toByteArray();</span>
+<span class="nc" id="L224">		} finally {</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">			if (fis != null) {</span>
+				try {
+<span class="nc" id="L227">					fis.close();</span>
+<span class="nc" id="L228">				} catch (IOException e) {}</span>
+			}
+<span class="nc bnc" id="L230" title="All 2 branches missed.">			if (bis != null) {</span>
+				try {
+<span class="nc" id="L232">					bis.close();</span>
+<span class="nc" id="L233">				} catch (Exception e) {}</span>
+<span class="nc" id="L234">				bis = null;</span>
+			}
+		}
+<span class="nc" id="L237">		return data;</span>
+	}
+
+	public File[] readFilesFromBlob(String fileName) throws IOException {
+<span class="nc" id="L241">		ZipFile zf = new ZipFile(m_packageDirectory+File.separator+&quot;blobs&quot;+File.separator+fileName);</span>
+<span class="nc" id="L242">		Enumeration&lt;?&gt; e = zf.entries();</span>
+<span class="nc" id="L243">		ArrayList&lt;File&gt; files = new ArrayList&lt;File&gt;();</span>
+<span class="nc" id="L244">		File[] retValue = null;</span>
+<span class="nc" id="L245">		try (zf) {</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">			while (e.hasMoreElements()) {</span>
+<span class="nc" id="L247">				ZipEntry ze = (ZipEntry) e.nextElement();</span>
+<span class="nc" id="L248">				File file = new File(m_packageDirectory, ze.getName());</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">				if (!file.toPath().normalize().startsWith(m_packageDirectory)) {</span>
+<span class="nc" id="L250">					throw new AdempiereException(&quot;Bad zip entry: &quot; + ze.getName());</span>
+				}
+<span class="nc" id="L252">				try (</span>
+<span class="nc" id="L253">				FileOutputStream fout = new FileOutputStream(file);</span>
+<span class="nc" id="L254">				InputStream in = zf.getInputStream(ze);</span>
+				) {
+<span class="nc bnc" id="L256" title="All 2 branches missed.">				for (int c = in.read(); c != -1; c = in.read()) {</span>
+<span class="nc" id="L257">					fout.write(c);</span>
+				}}
+<span class="nc" id="L259">				files.add(file);</span>
+			}
+<span class="nc" id="L261">			retValue = new File[files.size()];	</span>
+<span class="nc" id="L262">			files.toArray(retValue);</span>
+		}
+<span class="nc" id="L264">		return retValue;</span>
+	}
+
+	/**
+	 * @return package name
+	 */
+	public String getPackageName() {
+<span class="nc" id="L271">		return packageName;</span>
+	}
+
+	/**
+	 *
+	 * @param packageName
+	 */
+	public void setPackageName(String packageName) {
+<span class="nc" id="L279">		this.packageName = packageName;</span>
+<span class="nc" id="L280">	}</span>
+
+	/**
+	 * @return package Version
+	 */
+	public String getPackageVersion() {
+<span class="nc" id="L286">		return packageVersion;</span>
+	}
+
+	/**
+	 *
+	 * @param packageVersion
+	 */
+	public void setPackageVersion(String packageVersion) {
+<span class="nc" id="L294">		this.packageVersion = packageVersion;</span>
+<span class="nc" id="L295">	}</span>
+
+	public PackInNotifier getNotifier() {
+<span class="nc" id="L298">		return notifier;</span>
+	}
+
+	public X_AD_Package_Imp_Proc getAD_Package_Imp_Proc() {
+<span class="nc bnc" id="L302" title="All 2 branches missed.">		if (packinProc.getAD_Package_Imp_Proc_ID() == 0)</span>
+<span class="nc" id="L303">			packinProc.saveEx(); // we need the ID to set</span>
+<span class="nc" id="L304">		return packinProc;</span>
+	}
+
+	public void setAD_Package_Imp_Proc(X_AD_Package_Imp_Proc packinProc) {
+<span class="nc" id="L308">		this.packinProc = packinProc;</span>
+<span class="nc" id="L309">	}</span>
+
+	public void setSuccess(boolean success) {
+<span class="nc" id="L312">		this.success = success;</span>
+<span class="nc" id="L313">	}</span>
+
+	public boolean isSuccess() {
+<span class="nc" id="L316">		return success;</span>
+	}
+
+} // PackIn
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

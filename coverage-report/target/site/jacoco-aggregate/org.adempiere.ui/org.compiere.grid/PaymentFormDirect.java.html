@@ -1,0 +1,310 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PaymentFormDirect.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.grid</a> &gt; <span class="el_source">PaymentFormDirect.java</span></div><h1>PaymentFormDirect.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2012 Elaine Tan                                              *
+ * Copyright (C) 2012 Trek Global
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.grid;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.GridTab;
+import org.compiere.model.MBankAccountProcessor;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MOrder;
+import org.compiere.model.MPayment;
+import org.compiere.model.MRole;
+import org.compiere.process.DocAction;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+
+/**
+ * Payment for direct debit and direct deposit
+ * @author Elaine
+ */
+public abstract class PaymentFormDirect extends PaymentForm {
+	private String PAYMENTRULE;
+	
+	/** Start Payment */
+<span class="nc" id="L44">	protected int 				m_C_Payment_ID = 0;</span>
+<span class="nc" id="L45">	protected MPayment 			m_mPayment = null;</span>
+<span class="nc" id="L46">	protected MPayment 			m_mPaymentOriginal = null;</span>
+	
+	/**
+	 * @param windowNo
+	 * @param mTab
+	 * @param isDebit
+	 */
+	public PaymentFormDirect(int windowNo, GridTab mTab, boolean isDebit) {
+<span class="nc" id="L54">		super(windowNo, mTab);</span>
+<span class="nc bnc" id="L55" title="All 2 branches missed.">		PAYMENTRULE = isDebit ? MInvoice.PAYMENTRULE_DirectDebit : MInvoice.PAYMENTRULE_DirectDeposit;</span>
+<span class="nc" id="L56">	}</span>
+	
+	@Override
+	public void loadData() {
+		//  Existing Payment
+<span class="nc bnc" id="L61" title="All 2 branches missed.">		if (getGridTab().getValue(&quot;C_Payment_ID&quot;) != null)</span>
+		{
+<span class="nc" id="L63">			m_C_Payment_ID = ((Integer)getGridTab().getValue(&quot;C_Payment_ID&quot;)).intValue();</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">			if (m_C_Payment_ID != 0)</span>
+			{
+<span class="nc" id="L66">				m_mPayment = new MPayment(Env.getCtx(), m_C_Payment_ID, null);</span>
+<span class="nc" id="L67">				m_mPaymentOriginal = new MPayment(Env.getCtx(), m_C_Payment_ID, null);	//	full copy</span>
+			}
+		}
+		
+<span class="nc bnc" id="L71" title="All 2 branches missed.">		if (m_mPayment == null)</span>
+		{
+<span class="nc" id="L73">			m_mPayment = new MPayment (Env.getCtx (), 0, null);</span>
+<span class="nc" id="L74">			m_mPayment.setAD_Org_ID(m_AD_Org_ID);</span>
+<span class="nc" id="L75">			m_mPayment.setAmount (m_C_Currency_ID, m_Amount);</span>
+		}
+<span class="nc" id="L77">	}</span>
+	
+	/**
+	 * Get bank account list
+	 * @return List of active bank accounts (C_BankAccount_ID, Name+AccountNo)
+	 */
+	public ArrayList&lt;KeyNamePair&gt; getBankAccountList() {
+<span class="nc" id="L84">		ArrayList&lt;KeyNamePair&gt; list = new ArrayList&lt;KeyNamePair&gt;();</span>
+		
+		/**
+		 *  Load Bank Accounts
+		 */
+<span class="nc" id="L89">		String SQL = MRole.getDefault().addAccessSQL(</span>
+<span class="nc" id="L90">			&quot;SELECT C_BankAccount_ID, ba.Name || ' ' || ba.AccountNo, ba.IsDefault &quot;</span>
+			+ &quot;FROM C_BankAccount ba&quot;
+			+ &quot; INNER JOIN C_Bank b ON (ba.C_Bank_ID=b.C_Bank_ID) &quot;
+			+ &quot;WHERE b.IsActive='Y' AND ba.IsActive='Y' ORDER BY ba.IsDefault DESC &quot;,
+<span class="nc" id="L94">			&quot;ba&quot;, MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO);</span>
+<span class="nc" id="L95">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L96">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L99">			pstmt = DB.prepareStatement(SQL, null);</span>
+<span class="nc" id="L100">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L103">				int key = rs.getInt(1);</span>
+<span class="nc" id="L104">				String name = rs.getString(2);</span>
+<span class="nc" id="L105">				KeyNamePair pp = new KeyNamePair(key, name);</span>
+<span class="nc" id="L106">				list.add(pp);</span>
+			}
+<span class="nc" id="L108">		}</span>
+<span class="nc" id="L109">		catch (SQLException eac)</span>
+		{
+<span class="nc" id="L111">			log.log(Level.SEVERE, SQL, eac);</span>
+		}
+		finally
+		{
+<span class="nc" id="L115">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L116">			rs = null;</span>
+<span class="nc" id="L117">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L120">		return list;</span>
+	}
+	
+	@Override
+	public boolean saveChanges() {
+<span class="nc" id="L125">		boolean ok = super.saveChanges();</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">		if (m_mPayment != null)</span>
+<span class="nc" id="L127">			m_mPayment.set_TrxName(null);</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">		if (m_mPaymentOriginal != null)</span>
+<span class="nc" id="L129">			m_mPaymentOriginal.set_TrxName(null);</span>
+<span class="nc" id="L130">		return ok;</span>
+	}
+	
+	protected String processMsg;
+	
+	/**
+	 * Save changes
+	 * @param C_BankAccount_ID
+	 * @param routing routing number
+	 * @param number account number
+	 * @param trxName
+	 * @return true if save successfully
+	 */
+	public boolean save(int C_BankAccount_ID, String routing, String number, String trxName)
+	{
+		// set trxname for class objects
+<span class="nc bnc" id="L146" title="All 2 branches missed.">		if (m_mPayment != null)</span>
+<span class="nc" id="L147">			m_mPayment.set_TrxName(trxName);</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		if (m_mPaymentOriginal != null)</span>
+<span class="nc" id="L149">			m_mPaymentOriginal.set_TrxName(trxName);</span>
+				
+<span class="nc" id="L151">		processMsg = null;</span>
+		
+<span class="nc bnc" id="L153" title="All 2 branches missed.">		String payTypes = m_Cash_As_Payment ? &quot;KTSDB&quot; : &quot;KTSD&quot;;</span>
+		
+		/***********************
+		 *  Changed PaymentRule
+		 */
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		if (!PAYMENTRULE.equals(m_PaymentRule))</span>
+		{
+<span class="nc bnc" id="L160" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Changed PaymentRule: &quot; + m_PaymentRule + &quot; -&gt; &quot; + PAYMENTRULE);</span>
+			//  We had a change in Payment type (e.g. Check to CC)
+<span class="nc bnc" id="L162" title="All 6 branches missed.">			if (payTypes.indexOf(m_PaymentRule) != -1 &amp;&amp; payTypes.indexOf(PAYMENTRULE) != -1 &amp;&amp; m_mPaymentOriginal != null)</span>
+			{
+<span class="nc bnc" id="L164" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Old Payment(1) - &quot; + m_mPaymentOriginal);</span>
+<span class="nc" id="L165">				m_mPaymentOriginal.setDocAction(DocAction.ACTION_Reverse_Correct);</span>
+<span class="nc" id="L166">				boolean ok = m_mPaymentOriginal.processIt(DocAction.ACTION_Reverse_Correct);</span>
+<span class="nc" id="L167">				m_mPaymentOriginal.saveEx();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">				if (ok) {</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info( &quot;Payment Cancelled - &quot; + m_mPaymentOriginal);</span>
+<span class="nc" id="L170">				} else {</span>
+<span class="nc" id="L171">					processMsg = Msg.getMsg(Env.getCtx(), &quot;PaymentNotCancelled&quot;) + &quot; &quot; + m_mPaymentOriginal.getDocumentNo();</span>
+<span class="nc" id="L172">					throw new AdempiereException(processMsg);</span>
+				}
+<span class="nc" id="L174">				m_mPayment.resetNew();</span>
+<span class="nc" id="L175">			}</span>
+			//	We had a Payment and something else (e.g. Check to Cash)
+<span class="nc bnc" id="L177" title="All 4 branches missed.">			else if (payTypes.indexOf(m_PaymentRule) != -1 &amp;&amp; payTypes.indexOf(PAYMENTRULE) == -1)</span>
+			{
+<span class="nc bnc" id="L179" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Old Payment(2) - &quot; + m_mPaymentOriginal);</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">				if (m_mPaymentOriginal != null)</span>
+				{
+<span class="nc" id="L182">					m_mPaymentOriginal.setDocAction(DocAction.ACTION_Reverse_Correct);</span>
+<span class="nc" id="L183">					boolean ok = m_mPaymentOriginal.processIt(DocAction.ACTION_Reverse_Correct);</span>
+<span class="nc" id="L184">					m_mPaymentOriginal.saveEx();</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">					if (ok)        //  Cancel Payment</span>
+					{
+<span class="nc bnc" id="L187" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;PaymentCancelled &quot; + m_mPayment.getDocumentNo ());</span>
+<span class="nc" id="L188">						getGridTab().getTableModel().dataSave(true);</span>
+<span class="nc" id="L189">						m_mPayment.resetNew();</span>
+<span class="nc" id="L190">						m_mPayment.setAmount(m_C_Currency_ID, m_Amount);</span>
+<span class="nc" id="L191">					}</span>
+					else
+					{
+<span class="nc" id="L194">						processMsg = Msg.getMsg(Env.getCtx(), &quot;PaymentNotCancelled&quot;) + &quot; &quot; + m_mPayment.getDocumentNo();</span>
+<span class="nc" id="L195">						throw new AdempiereException(processMsg);</span>
+					}
+				}
+			}
+		}
+		
+		//  Get Order and optionally Invoice
+<span class="nc" id="L202">		int C_Order_ID = Env.getContextAsInt(Env.getCtx(), getWindowNo(), &quot;C_Order_ID&quot;);</span>
+<span class="nc" id="L203">		int C_Invoice_ID = Env.getContextAsInt(Env.getCtx(), getWindowNo(), &quot;C_Invoice_ID&quot;);</span>
+<span class="nc bnc" id="L204" title="All 4 branches missed.">		if (C_Invoice_ID == 0 &amp;&amp; m_DocStatus.equals(&quot;CO&quot;))</span>
+<span class="nc" id="L205">			C_Invoice_ID = getInvoiceID (C_Order_ID);</span>
+
+		//  Amount sign negative, if ARC (Credit Memo) or API (AP Invoice)
+<span class="nc" id="L208">		boolean negateAmt = false;</span>
+<span class="nc" id="L209">		MInvoice invoice = null;</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">		if (C_Invoice_ID != 0)</span>
+		{
+<span class="nc" id="L212">			invoice = new MInvoice (Env.getCtx(), C_Invoice_ID, null);</span>
+<span class="nc" id="L213">			negateAmt = invoice.isCreditMemo();</span>
+		}
+<span class="nc" id="L215">		MOrder order = null;</span>
+<span class="nc bnc" id="L216" title="All 4 branches missed.">		if (invoice == null &amp;&amp; C_Order_ID != 0)</span>
+<span class="nc" id="L217">			order = new MOrder (Env.getCtx(), C_Order_ID, null);</span>
+		
+<span class="nc" id="L219">		BigDecimal payAmount = m_Amount;</span>
+		
+
+<span class="nc bnc" id="L222" title="All 2 branches missed.">		if (negateAmt)</span>
+<span class="nc" id="L223">			payAmount = m_Amount.negate();</span>
+		// Info
+<span class="nc bnc" id="L225" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;C_Order_ID=&quot; + C_Order_ID + &quot;, C_Invoice_ID=&quot; + C_Invoice_ID + &quot;, NegateAmt=&quot; + negateAmt);</span>
+		
+		/***********************
+		 *  Payments
+		 */
+		//  Set Amount
+<span class="nc" id="L231">		m_mPayment.setAmount(m_C_Currency_ID, payAmount);</span>
+<span class="nc" id="L232">		m_mPayment.setBankACH(C_BankAccount_ID, m_isSOTrx, PAYMENTRULE, routing, number);</span>
+<span class="nc" id="L233">		m_mPayment.setC_BPartner_ID(m_C_BPartner_ID);</span>
+<span class="nc" id="L234">		m_mPayment.setC_Invoice_ID(C_Invoice_ID);</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		if (order != null)</span>
+		{
+<span class="nc" id="L237">			m_mPayment.setC_Order_ID(C_Order_ID);					</span>
+		}
+<span class="nc" id="L239">		m_mPayment.setDateTrx(m_DateAcct);</span>
+<span class="nc" id="L240">		m_mPayment.setDateAcct(m_DateAcct);</span>
+<span class="nc" id="L241">		setCustomizeValues(m_mPayment);</span>
+<span class="nc" id="L242">		m_mPayment.saveEx();</span>
+		
+		//  Save/Post
+<span class="nc bnc" id="L245" title="All 4 branches missed.">		if (m_mPayment.get_ID() &gt; 0 &amp;&amp; MPayment.DOCSTATUS_Drafted.equals(m_mPayment.getDocStatus()))</span>
+		{
+<span class="nc" id="L247">			boolean ok = m_mPayment.processIt(DocAction.ACTION_Complete);</span>
+<span class="nc" id="L248">			m_mPayment.saveEx();</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">			if (ok)</span>
+<span class="nc" id="L250">				processMsg = m_mPayment.getDocumentNo();</span>
+			else
+			{
+<span class="nc" id="L253">				processMsg = Msg.getMsg(Env.getCtx(), &quot;PaymentNotCreated&quot;);</span>
+<span class="nc" id="L254">				throw new AdempiereException(processMsg);</span>
+			}
+		}
+		else
+<span class="nc bnc" id="L258" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;NotDraft &quot; + m_mPayment);</span>
+		
+<span class="nc" id="L260">		return true;</span>
+	}
+
+	@Override
+	protected void afterSave(boolean success) 
+	{
+<span class="nc bnc" id="L266" title="All 2 branches missed.">		if (!success)</span>
+<span class="nc" id="L267">			return;</span>
+		
+		/**********************
+		 *	Save Values to mTab
+		 */
+		//refresh
+<span class="nc" id="L273">		getGridTab().dataRefresh(false);</span>
+<span class="nc" id="L274">		Object paymentIdValue = getGridTab().getValue(&quot;C_Payment_ID&quot;);</span>
+<span class="nc bnc" id="L275" title="All 4 branches missed.">		if (paymentIdValue != null &amp;&amp; paymentIdValue instanceof Number)</span>
+<span class="nc" id="L276">			m_C_Payment_ID = ((Number)paymentIdValue).intValue();</span>
+		else
+<span class="nc" id="L278">			m_C_Payment_ID = 0;</span>
+		//	Set Payment
+<span class="nc bnc" id="L280" title="All 2 branches missed.">		if (m_mPayment.getC_Payment_ID() != m_C_Payment_ID)</span>
+		{
+<span class="nc bnc" id="L282" title="All 2 branches missed.">			if (m_mPayment.getC_Payment_ID() == 0)</span>
+<span class="nc" id="L283">				getGridTab().setValue(&quot;C_Payment_ID&quot;, null);</span>
+			else
+<span class="nc" id="L285">				getGridTab().setValue(&quot;C_Payment_ID&quot;, Integer.valueOf(m_mPayment.getC_Payment_ID()));</span>
+<span class="nc" id="L286">			m_needSave = true;</span>
+		}
+<span class="nc" id="L288">	}</span>
+	
+	/**
+	 * Is online payment processor have been configured for direct* tender type
+	 * @return true if online payment processor have been configured for direct* tender type
+	 */
+	public boolean isBankAccountProcessorExist()
+	{
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		String tender = PAYMENTRULE.equals(MInvoice.PAYMENTRULE_DirectDebit) ? MPayment.TENDERTYPE_DirectDebit : MPayment.TENDERTYPE_DirectDeposit;</span>
+<span class="nc" id="L297">		return isBankAccountProcessorExist(Env.getCtx(), tender, &quot;&quot;, Env.getAD_Client_ID(Env.getCtx()), m_C_Currency_ID, m_Amount, null);</span>
+	}
+	
+	/**
+	 * Get online payment processor configured for direct* tender type
+	 * @return {@link MBankAccountProcessor}
+	 */
+	public MBankAccountProcessor getBankAccountProcessor()
+	{
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		String tender = PAYMENTRULE.equals(MInvoice.PAYMENTRULE_DirectDebit) ? MPayment.TENDERTYPE_DirectDebit : MPayment.TENDERTYPE_DirectDeposit;</span>
+<span class="nc" id="L307">		return getBankAccountProcessor(Env.getCtx(), tender, &quot;&quot;, Env.getAD_Client_ID(Env.getCtx()), m_C_Currency_ID, m_Amount, null);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,763 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>EMailProcessor.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.server</a> &gt; <span class="el_source">EMailProcessor.java</span></div><h1>EMailProcessor.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.server;
+
+import java.io.InputStream;
+import java.util.Enumeration;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import javax.mail.Address;
+import javax.mail.Flags;
+import javax.mail.Folder;
+import javax.mail.Header;
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.Multipart;
+import javax.mail.Part;
+import javax.mail.Session;
+import javax.mail.Store;
+
+import org.compiere.Adempiere;
+import org.compiere.model.MClient;
+import org.compiere.util.CLogMgt;
+import org.compiere.util.CLogger;
+import org.compiere.util.EMailAuthenticator;
+
+/**
+ *	Request Mail Processor
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: EMailProcessor.java,v 1.3 2006/07/30 00:53:33 jjanke Exp $
+ */
+public class EMailProcessor
+{
+	/**
+	 * 	EMail Processor
+	 *	@param client client
+	 */
+	public EMailProcessor (MClient client)
+	{
+<span class="nc" id="L55">		this (client.getSMTPHost(), client.getRequestUser(), client.getRequestUserPW());</span>
+<span class="nc" id="L56">	}	//	EMailProcessor</span>
+	
+	/**
+	 * 	EMail Processor
+	 * 	@param host host
+	 * 	@param user user id
+	 * 	@param password password
+	 */
+<span class="nc" id="L64">	public EMailProcessor (String host, String user, String password)</span>
+	{
+<span class="nc" id="L66">		m_host = host;</span>
+<span class="nc" id="L67">		m_user = user;</span>
+<span class="nc" id="L68">		m_pass = password;</span>
+<span class="nc" id="L69">	}	//	EMail</span>
+
+	/**	EMail Host Parameter		*/
+<span class="nc" id="L72">	protected String	m_host = null;</span>
+	/**	EMail User Parameter		*/
+<span class="nc" id="L74">	protected String	m_user = null;</span>
+	/**	Password Parameter			*/
+<span class="nc" id="L76">	protected String	m_pass = null;</span>
+	
+	/**	Session				*/
+<span class="nc" id="L79">	protected Session 	m_session = null;</span>
+	/**	Store				*/
+<span class="nc" id="L81">	protected Store 		m_store = null;</span>
+
+	
+	/**	Logger			*/
+<span class="nc" id="L85">	protected static final CLogger	log = CLogger.getCLogger(EMailProcessor.class);</span>
+	
+	/**	Process Error				*/
+	protected static final int		ERROR = 0;
+	/**	Process Request				*/
+	protected static final int		REQUEST = 1;
+	/**	Process Workflow			*/
+	protected static final int		WORKFLOW = 2;
+	
+	/**	Process Delivery Confirm	*/
+<span class="nc" id="L95">	protected static final int		DELIVERY = 9;</span>
+	
+	/**
+	 * 	Process Messages in InBox
+	 *	@return number of mails processed
+	 */
+	public int processMessages()
+	{
+<span class="nc" id="L103">		int processed = 0;</span>
+		try
+		{
+<span class="nc" id="L106">			getSession();</span>
+<span class="nc" id="L107">			getStore();</span>
+<span class="nc" id="L108">			processed = processInBox();</span>
+<span class="nc" id="L109">		}</span>
+<span class="nc" id="L110">		catch (Exception e)</span>
+		{
+<span class="nc" id="L112">			log.log(Level.SEVERE, &quot;processInBox&quot;, e);</span>
+		}
+		//	Cleanup
+		try
+		{
+<span class="nc bnc" id="L117" title="All 4 branches missed.">			if (m_store != null &amp;&amp; m_store.isConnected())</span>
+<span class="nc" id="L118">				m_store.close();</span>
+<span class="nc" id="L119">		}</span>
+<span class="nc" id="L120">		catch (Exception e)</span>
+		{
+		}
+<span class="nc" id="L123">		m_store = null;</span>
+<span class="nc" id="L124">		return processed;</span>
+	}	//	processMessages
+	
+	
+	/**************************************************************************
+	 * 	Get Session
+	 *	@return Session
+	 *	@throws Exception
+	 */
+	protected Session getSession() throws Exception
+	{
+<span class="nc bnc" id="L135" title="All 2 branches missed.">		if (m_session != null)</span>
+<span class="nc" id="L136">			return m_session;</span>
+		
+		//	Session
+<span class="nc" id="L139">		Properties props = new Properties();</span>
+<span class="nc" id="L140">		props.putAll(System.getProperties());</span>
+<span class="nc" id="L141">		props.put(&quot;mail.store.protocol&quot;, &quot;smtp&quot;);</span>
+<span class="nc" id="L142">		props.put(&quot;mail.transport.protocol&quot;, &quot;smtp&quot;);</span>
+<span class="nc" id="L143">		props.put(&quot;mail.host&quot;, m_host);</span>
+<span class="nc" id="L144">		props.put(&quot;mail.smtp.auth&quot;,&quot;true&quot;);</span>
+<span class="nc" id="L145">		EMailAuthenticator auth = new EMailAuthenticator (m_user, m_pass);</span>
+		//
+<span class="nc" id="L147">		m_session = Session.getDefaultInstance(props, auth);</span>
+<span class="nc" id="L148">		m_session.setDebug(CLogMgt.isLevelFinest());</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;getSession - &quot; + m_session);</span>
+<span class="nc" id="L150">		return m_session;</span>
+	}	//	getSession
+	
+	
+	/**
+	 * 	Get Store
+	 *	@return Store
+	 *	@throws Exception
+	 */
+	protected Store getStore() throws Exception
+	{
+<span class="nc bnc" id="L161" title="All 2 branches missed.">		if (m_store != null)</span>
+<span class="nc" id="L162">			return m_store;</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (getSession() == null)</span>
+<span class="nc" id="L164">			throw new IllegalStateException(&quot;No Session&quot;);</span>
+		
+		//	Get IMAP Store
+<span class="nc" id="L167">		m_store = m_session.getStore(&quot;imap&quot;);</span>
+		//	Connect
+<span class="nc" id="L169">		m_store.connect();</span>
+		//
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;getStore - &quot; + m_store);</span>
+<span class="nc" id="L172">		return m_store;</span>
+	}	//	getStore
+
+	
+	/**
+	 * 	Process InBox
+	 *	@return number of processed
+	 *	@throws Exception
+	 */
+	protected int processInBox() throws Exception
+	{
+		//	Folder
+<span class="nc" id="L184">		Folder folder = null;</span>
+<span class="nc" id="L185">		Folder inbox = null;</span>
+<span class="nc" id="L186">		Folder requestFolder = null;</span>
+<span class="nc" id="L187">		Folder workflowFolder = null;</span>
+<span class="nc" id="L188">		Folder errorFolder = null;</span>
+<span class="nc" id="L189">		int noProcessed = 0;</span>
+		try {
+<span class="nc" id="L191">			folder = m_store.getDefaultFolder();</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">			if (folder == null)</span>
+<span class="nc" id="L193">				throw new IllegalStateException(&quot;No default folder&quot;);</span>
+			//	Open Inbox
+<span class="nc" id="L195">			inbox = folder.getFolder(&quot;INBOX&quot;);</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">			if (!inbox.exists())</span>
+<span class="nc" id="L197">				throw new IllegalStateException(&quot;No Inbox&quot;);</span>
+<span class="nc" id="L198">			inbox.open(Folder.READ_WRITE);</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;processInBox - &quot; + inbox.getName() </span>
+<span class="nc" id="L200">				+ &quot;; Messages Total=&quot; + inbox.getMessageCount()</span>
+<span class="nc" id="L201">				+ &quot;; New=&quot; + inbox.getNewMessageCount());</span>
+
+			//	Open Request
+<span class="nc" id="L204">			requestFolder = folder.getFolder(&quot;CRequest&quot;);</span>
+<span class="nc bnc" id="L205" title="All 4 branches missed.">			if (!requestFolder.exists() &amp;&amp; !requestFolder.create(Folder.HOLDS_MESSAGES))</span>
+<span class="nc" id="L206">				throw new IllegalStateException(&quot;Cannot create Request Folder&quot;);</span>
+<span class="nc" id="L207">			requestFolder.open(Folder.READ_WRITE);</span>
+
+			//	Open Workflow
+<span class="nc" id="L210">			workflowFolder = folder.getFolder(&quot;CWorkflow&quot;);</span>
+<span class="nc bnc" id="L211" title="All 4 branches missed.">			if (!workflowFolder.exists() &amp;&amp; !workflowFolder.create(Folder.HOLDS_MESSAGES))</span>
+<span class="nc" id="L212">				throw new IllegalStateException(&quot;Cannot create Workflow Folder&quot;);</span>
+<span class="nc" id="L213">			workflowFolder.open(Folder.READ_WRITE);</span>
+
+			//	Open Error
+<span class="nc" id="L216">			errorFolder = folder.getFolder(&quot;AdempiereError&quot;);</span>
+<span class="nc bnc" id="L217" title="All 4 branches missed.">			if (!errorFolder.exists() &amp;&amp; !errorFolder.create(Folder.HOLDS_MESSAGES))</span>
+<span class="nc" id="L218">				throw new IllegalStateException(&quot;Cannot create Error Folder&quot;);</span>
+<span class="nc" id="L219">			errorFolder.open(Folder.READ_WRITE);</span>
+
+			//	Messages
+<span class="nc" id="L222">			Message[] messages = inbox.getMessages();</span>
+			/**
+			FetchProfile fp = new FetchProfile();
+			fp.add(FetchProfile.Item.ENVELOPE);
+			fp.add(FetchProfile.Item.FLAGS);
+			fp.add(&quot;X-Mailer&quot;);
+			inbox.fetch(messages, fp);
+			**/
+			//
+<span class="nc" id="L231">			int noError = 0;</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">			for (int i = 0; i &lt; messages.length; i++)</span>
+//			for (int i = messages.length-1; i &gt;= 0; i--)	//	newest first
+			{
+<span class="nc" id="L235">				Message msg = messages[i];</span>
+<span class="nc" id="L236">				int result = processMessage (msg);</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">				if (result == REQUEST)</span>
+				{
+<span class="nc" id="L239">					msg.setFlag(Flags.Flag.SEEN, true);</span>
+<span class="nc" id="L240">					msg.setFlag(Flags.Flag.ANSWERED, true);</span>
+					//	Copy to processed
+<span class="nc" id="L242">					requestFolder.appendMessages(new Message[]{msg});</span>
+<span class="nc" id="L243">				}</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">				else if (result == WORKFLOW)</span>
+				{
+<span class="nc" id="L246">					msg.setFlag(Flags.Flag.SEEN, true);</span>
+<span class="nc" id="L247">					msg.setFlag(Flags.Flag.ANSWERED, true);</span>
+					//	Copy to processed
+<span class="nc" id="L249">					workflowFolder.appendMessages(new Message[]{msg});</span>
+<span class="nc" id="L250">				}</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">				else if (result == DELIVERY)</span>
+				{
+<span class="nc" id="L253">					msg.setFlag(Flags.Flag.SEEN, true);</span>
+<span class="nc" id="L254">					msg.setFlag(Flags.Flag.ANSWERED, true);</span>
+<span class="nc" id="L255">				}</span>
+				else	//	error
+				{
+<span class="nc" id="L258">					errorFolder.appendMessages(new Message[]{msg});</span>
+<span class="nc" id="L259">					noError++;</span>
+				}
+				//	Delete in InBox
+//				msg.setFlag(Flags.Flag.DELETED, true);
+//				Message[] deleted = inbox.expunge();
+				//
+<span class="nc" id="L265">				noProcessed++;</span>
+			}
+
+<span class="nc bnc" id="L268" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;processInBox - Total=&quot; + noProcessed + &quot; - Errors=&quot; + noError);</span>
+<span class="nc" id="L269">		} finally {</span>
+<span class="nc bnc" id="L270" title="All 4 branches missed.">			if (errorFolder != null &amp;&amp; errorFolder.isOpen()) {</span>
+				try {
+<span class="nc" id="L272">					errorFolder.close(false);</span>
+<span class="nc" id="L273">				} catch (Exception e) {</span>
+<span class="nc" id="L274">					e.printStackTrace();</span>
+				}
+			}
+			
+<span class="nc bnc" id="L278" title="All 4 branches missed.">			if (requestFolder != null &amp;&amp; requestFolder.isOpen()) {</span>
+				try {
+<span class="nc" id="L280">					requestFolder.close(false);</span>
+<span class="nc" id="L281">				} catch (Exception e) {</span>
+<span class="nc" id="L282">					e.printStackTrace();</span>
+				}				
+			}
+			
+<span class="nc bnc" id="L286" title="All 4 branches missed.">			if (workflowFolder != null &amp;&amp; workflowFolder.isOpen()) {</span>
+				try {
+<span class="nc" id="L288">					workflowFolder.close(false);</span>
+<span class="nc" id="L289">				} catch (Exception e) {</span>
+<span class="nc" id="L290">					e.printStackTrace();</span>
+				}
+			}
+			
+<span class="nc bnc" id="L294" title="All 4 branches missed.">			if (inbox != null &amp;&amp; inbox.isOpen()) {</span>
+				try {
+<span class="nc" id="L296">					inbox.close(true);</span>
+<span class="nc" id="L297">				} catch (Exception e) {</span>
+<span class="nc" id="L298">					e.printStackTrace();</span>
+				}
+			}
+			
+<span class="nc bnc" id="L302" title="All 4 branches missed.">			if (folder != null &amp;&amp; folder.isOpen()) {</span>
+				try {
+<span class="nc" id="L304">					folder.close(false);</span>
+<span class="nc" id="L305">				} catch (Exception e) {</span>
+<span class="nc" id="L306">					e.printStackTrace();</span>
+				}
+			}
+		}
+<span class="nc" id="L310">		return noProcessed;</span>
+	}	//	processInBox
+
+	
+	/**
+	 * 	Process Message
+	 *	@param msg message
+	 *	@return Type of Message
+	 *	@throws Exception
+	 */
+	protected int processMessage (Message msg) throws Exception
+	{
+<span class="nc" id="L322">		dumpEnvelope (msg);</span>
+<span class="nc" id="L323">		dumpBody (msg);</span>
+<span class="nc" id="L324">		printOut (&quot;:::::::::::::::&quot;);</span>
+<span class="nc" id="L325">		printOut (getSubject(msg));</span>
+<span class="nc" id="L326">		printOut (&quot;:::::::::::::::&quot;);</span>
+<span class="nc" id="L327">		printOut (getMessage(msg));</span>
+<span class="nc" id="L328">		printOut (&quot;:::::::::::::::&quot;);</span>
+<span class="nc" id="L329">		String delivery = getDeliveryReport(msg);</span>
+<span class="nc" id="L330">		printOut (delivery);</span>
+<span class="nc" id="L331">		printOut (&quot;:::::::::::::::&quot;);</span>
+		
+	//	if (delivery != null)
+	//		return DELIVERY;
+		
+		//	Unknown
+<span class="nc" id="L337">		return ERROR;</span>
+	}	//	processMessage
+	
+	/**
+	 * 	Get Subject
+	 *	@param msg message
+	 *	@return subject or &quot;&quot;
+	 */
+	protected String getSubject (Message msg)
+	{
+		try
+		{
+<span class="nc" id="L349">			String str = msg.getSubject();</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">			if (str != null)</span>
+<span class="nc" id="L351">				return str.trim();</span>
+		}
+<span class="nc" id="L353">		catch (MessagingException e)</span>
+		{
+<span class="nc" id="L355">			log.log(Level.SEVERE, &quot;getSubject&quot;, e);</span>
+		}
+<span class="nc" id="L357">		return &quot;&quot;;</span>
+	}	//	getSubject
+	
+	/**
+	 * 	Get Message
+	 *	@param msg Message
+	 *	@return message or &quot;&quot;
+	 */
+	protected String getMessage (Part msg)
+	{
+<span class="nc" id="L367">		StringBuilder sb = new StringBuilder();</span>
+		try
+		{
+			//	Text
+<span class="nc bnc" id="L371" title="All 2 branches missed.">			if (msg.isMimeType(&quot;text/plain&quot;))</span>
+			{
+<span class="nc" id="L373">				sb.append(msg.getContent());</span>
+<span class="nc" id="L374">			}</span>
+			//	Other Text (e.g. html/xml) 
+<span class="nc bnc" id="L376" title="All 2 branches missed.">			else if (msg.isMimeType(&quot;text/*&quot;))</span>
+			{
+<span class="nc" id="L378">				sb.append(msg.getContent());</span>
+<span class="nc" id="L379">			}</span>
+			//	Nested
+<span class="nc bnc" id="L381" title="All 2 branches missed.">			else if (msg.isMimeType(&quot;message/rfc822&quot;))</span>
+			{
+<span class="nc" id="L383">				sb.append(msg.getContent());</span>
+<span class="nc" id="L384">			}</span>
+			//	Multi Part Alternative
+<span class="nc bnc" id="L386" title="All 2 branches missed.">			else if (msg.isMimeType(&quot;multipart/alternative&quot;))</span>
+			{
+<span class="nc" id="L388">				String plainText = null;</span>
+<span class="nc" id="L389">				String otherStuff = null;</span>
+				//
+<span class="nc" id="L391">				Multipart mp = (Multipart)msg.getContent();</span>
+<span class="nc" id="L392">				int count = mp.getCount();</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">				for (int i = 0; i &lt; count; i++)</span>
+				{
+<span class="nc" id="L395">					Part part = mp.getBodyPart(i);</span>
+<span class="nc" id="L396">					Object content = part.getContent();</span>
+<span class="nc bnc" id="L397" title="All 4 branches missed.">					if (content == null || content.toString().trim().length() == 0)</span>
+<span class="nc" id="L398">						continue;</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">					if (part.isMimeType(&quot;text/plain&quot;))</span>
+<span class="nc" id="L400">						plainText = content.toString();</span>
+					else
+<span class="nc" id="L402">						otherStuff = content.toString();</span>
+				}
+<span class="nc bnc" id="L404" title="All 2 branches missed.">				if (plainText != null)</span>
+<span class="nc" id="L405">					sb.append(plainText);</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">				else if (otherStuff != null)</span>
+<span class="nc" id="L407">					sb.append(otherStuff);</span>
+<span class="nc" id="L408">			}</span>
+			//	Multi Part
+<span class="nc bnc" id="L410" title="All 2 branches missed.">			else if (msg.isMimeType(&quot;multipart/*&quot;))</span>
+			{
+<span class="nc" id="L412">				Multipart mp = (Multipart)msg.getContent();</span>
+<span class="nc" id="L413">				int count = mp.getCount();</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">				for (int i = 0; i &lt; count; i++)</span>
+				{
+<span class="nc" id="L416">					String str = getMessage(mp.getBodyPart(i));</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">					if (str.length() &gt; 0)</span>
+					{
+<span class="nc bnc" id="L419" title="All 2 branches missed.">						if (sb.length() &gt; 0)</span>
+<span class="nc" id="L420">							sb.append(&quot;\n-----\n&quot;);</span>
+<span class="nc" id="L421">						sb.append(str);</span>
+					}
+				}
+<span class="nc" id="L424">			}</span>
+			else
+			{
+				/*
+				 * If we actually want to see the data, and it's not a
+				 * MIME type we know, fetch it and check its Java type.
+				 */
+<span class="nc" id="L431">				Object o = msg.getContent();</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">				if (o instanceof String)</span>
+				{
+<span class="nc" id="L434">					sb.append(o);</span>
+				}
+			}
+<span class="nc" id="L437">		}</span>
+<span class="nc" id="L438">		catch (Exception e)</span>
+		{
+<span class="nc" id="L440">			log.log(Level.SEVERE, &quot;getMessage&quot;, e);</span>
+		}
+<span class="nc" id="L442">		return sb.toString().trim();</span>
+	}	//	getMessage
+
+	/**
+	 * 	Get Delivery Report
+	 *	@param msg message
+	 *	@return delivery info or null
+	 */
+	protected String getDeliveryReport (Part msg)
+	{
+		try
+		{
+<span class="nc bnc" id="L454" title="All 2 branches missed.">			if (msg.isMimeType(&quot;multipart/report&quot;))</span>
+			{
+<span class="nc" id="L456">				String deliveryMessage = null;</span>
+<span class="nc" id="L457">				String otherStuff = null;</span>
+				//
+<span class="nc" id="L459">				Multipart mp = (Multipart)msg.getContent();</span>
+<span class="nc" id="L460">				int count = mp.getCount();</span>
+<span class="nc bnc" id="L461" title="All 2 branches missed.">				for (int i = 0; i &lt; count; i++)</span>
+				{
+<span class="nc" id="L463">					Part part = mp.getBodyPart(i);</span>
+<span class="nc" id="L464">					Object content = part.getContent();</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">					if (content == null)</span>
+<span class="nc" id="L466">						continue;</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">					if (part.isMimeType(&quot;message/*&quot;))</span>
+<span class="nc" id="L468">						deliveryMessage = getDeliveredReportDetail (part);</span>
+					else
+<span class="nc" id="L470">						otherStuff = content.toString().trim();</span>
+				}
+<span class="nc bnc" id="L472" title="All 2 branches missed.">				if (deliveryMessage != null)</span>
+<span class="nc" id="L473">					return deliveryMessage;</span>
+<span class="nc" id="L474">				return otherStuff;</span>
+			}
+<span class="nc bnc" id="L476" title="All 2 branches missed.">			else if (msg.isMimeType(&quot;message/*&quot;))</span>
+			{
+<span class="nc" id="L478">				return getDeliveredReportDetail (msg);</span>
+			}
+		}
+<span class="nc" id="L481">		catch (Exception e)</span>
+		{
+<span class="nc" id="L483">			log.log(Level.SEVERE, &quot;getDeliveryReport&quot;, e);</span>
+		}
+		//	Nothing
+<span class="nc" id="L486">		return null;</span>
+	}	//	getDeliveryReport
+	
+	/**
+	 * 	Get Delivered Report Detail
+	 *	@param part Mime Type message/*
+	 *	@return info or null
+	 *	@throws Exception
+	 */
+	protected String getDeliveredReportDetail (Part part) throws Exception
+	{
+<span class="nc" id="L497">		Object content = part.getContent();</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">		if (content == null)</span>
+<span class="nc" id="L499">			return null;</span>
+		
+<span class="nc" id="L501">		String deliveryMessage = null;</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">		if (content instanceof InputStream)</span>
+		{
+<span class="nc" id="L504">			StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L505">			InputStream is = null;</span>
+			try {
+<span class="nc" id="L507">				is = (InputStream)content;</span>
+				int c;
+<span class="nc bnc" id="L509" title="All 2 branches missed.">				while ((c = is.read()) != -1)</span>
+<span class="nc" id="L510">					sb.append((char)c);</span>
+<span class="nc" id="L511">			} finally {</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">				if (is != null)</span>
+<span class="nc" id="L513">					is.close();</span>
+			}
+<span class="nc" id="L515">			deliveryMessage = sb.toString().trim();</span>
+<span class="nc" id="L516">		}</span>
+		else
+<span class="nc" id="L518">			deliveryMessage = content.toString().trim();</span>
+		//
+<span class="nc bnc" id="L520" title="All 2 branches missed.">		if (deliveryMessage == null)</span>
+<span class="nc" id="L521">			return null;</span>
+		
+		//	Final-Recipient: RFC822; jjanke@adempiere.org
+<span class="nc" id="L524">		int index = deliveryMessage.indexOf(&quot;Final-Recipient:&quot;);</span>
+<span class="nc bnc" id="L525" title="All 2 branches missed.">		if (index != -1)</span>
+		{
+<span class="nc" id="L527">			String finalRecipient = deliveryMessage.substring(index);</span>
+<span class="nc" id="L528">			int atIndex = finalRecipient.indexOf('@');</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">			if (atIndex != -1)</span>
+			{
+<span class="nc" id="L531">				index = finalRecipient.lastIndexOf(' ', atIndex);</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">				if (index != -1)</span>
+<span class="nc" id="L533">					finalRecipient = finalRecipient.substring(index+1);</span>
+<span class="nc" id="L534">				atIndex = finalRecipient.indexOf('@');</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">				if (atIndex != -1)</span>
+<span class="nc" id="L536">					index = finalRecipient.indexOf(' ', atIndex);</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">				if (index != -1)</span>
+<span class="nc" id="L538">					finalRecipient = finalRecipient.substring(0, index);</span>
+<span class="nc" id="L539">				index = finalRecipient.indexOf('\n');</span>
+<span class="nc bnc" id="L540" title="All 2 branches missed.">				if (index != -1)</span>
+<span class="nc" id="L541">					finalRecipient = finalRecipient.substring(0, index);</span>
+<span class="nc" id="L542">				return finalRecipient.trim();</span>
+			}
+		}
+<span class="nc" id="L545">		return deliveryMessage;</span>
+	}	//	getDeliveredReportDetail
+	
+	
+	/**************************************************************************
+	 * 	Print Envelope
+	 *	@param m message
+	 *	@throws Exception
+	 */
+	protected void dumpEnvelope(Message m) throws Exception
+	{
+<span class="nc" id="L556">		printOut(&quot;-----------------------------------------------------------------&quot;);</span>
+		Address[] a;
+		// FROM
+<span class="nc bnc" id="L559" title="All 2 branches missed.">		if ((a = m.getFrom()) != null)</span>
+		{
+<span class="nc bnc" id="L561" title="All 2 branches missed.">			for (int j = 0; j &lt; a.length; j++)</span>
+<span class="nc" id="L562">				printOut(&quot;FROM: &quot; + a[j].toString());</span>
+		}
+
+		// TO
+<span class="nc bnc" id="L566" title="All 2 branches missed.">		if ((a = m.getRecipients(Message.RecipientType.TO)) != null)</span>
+		{
+<span class="nc bnc" id="L568" title="All 2 branches missed.">			for (int j = 0; j &lt; a.length; j++)</span>
+<span class="nc" id="L569">				printOut(&quot;TO: &quot; + a[j].toString());</span>
+		}
+
+		// SUBJECT
+<span class="nc" id="L573">		printOut(&quot;SUBJECT: &quot; + m.getSubject());</span>
+
+		// DATE
+<span class="nc" id="L576">		java.util.Date d = m.getSentDate();</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">		printOut(&quot;SendDate: &quot; + (d != null ? d.toString() : &quot;UNKNOWN&quot;));</span>
+
+		// FLAGS
+<span class="nc" id="L580">		Flags flags = m.getFlags();</span>
+<span class="nc" id="L581">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L582">		Flags.Flag[] sf = flags.getSystemFlags(); // get the system flags</span>
+
+<span class="nc" id="L584">		boolean first = true;</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">		for (int i = 0; i &lt; sf.length; i++)</span>
+		{
+			String s;
+<span class="nc" id="L588">			Flags.Flag f = sf[i];</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">			if (f == Flags.Flag.ANSWERED)</span>
+<span class="nc" id="L590">				s = &quot;\\Answered&quot;;</span>
+<span class="nc bnc" id="L591" title="All 2 branches missed.">			else if (f == Flags.Flag.DELETED)</span>
+<span class="nc" id="L592">				s = &quot;\\Deleted&quot;;</span>
+<span class="nc bnc" id="L593" title="All 2 branches missed.">			else if (f == Flags.Flag.DRAFT)</span>
+<span class="nc" id="L594">				s = &quot;\\Draft&quot;;</span>
+<span class="nc bnc" id="L595" title="All 2 branches missed.">			else if (f == Flags.Flag.FLAGGED)</span>
+<span class="nc" id="L596">				s = &quot;\\Flagged&quot;;</span>
+<span class="nc bnc" id="L597" title="All 2 branches missed.">			else if (f == Flags.Flag.RECENT)</span>
+<span class="nc" id="L598">				s = &quot;\\Recent&quot;;</span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">			else if (f == Flags.Flag.SEEN)</span>
+<span class="nc" id="L600">				s = &quot;\\Seen&quot;;</span>
+			else
+				continue;	// skip it
+<span class="nc bnc" id="L603" title="All 2 branches missed.">			if (first)</span>
+<span class="nc" id="L604">				first = false;</span>
+			else
+<span class="nc" id="L606">				sb.append(' ');</span>
+<span class="nc" id="L607">			sb.append(s);</span>
+		}
+
+<span class="nc" id="L610">		String[] uf = flags.getUserFlags(); // get the user flag strings</span>
+<span class="nc bnc" id="L611" title="All 2 branches missed.">		for (int i = 0; i &lt; uf.length; i++)</span>
+		{
+<span class="nc bnc" id="L613" title="All 2 branches missed.">			if (first)</span>
+<span class="nc" id="L614">				first = false;</span>
+			else
+<span class="nc" id="L616">				sb.append(' ');</span>
+<span class="nc" id="L617">			sb.append(uf[i]);</span>
+		}
+<span class="nc" id="L619">		printOut(&quot;FLAGS: &quot; + sb.toString());</span>
+
+		// X-MAILER
+<span class="nc" id="L622">		String[] hdrs = m.getHeader(&quot;X-Mailer&quot;);</span>
+<span class="nc bnc" id="L623" title="All 2 branches missed.">		if (hdrs != null)</span>
+		{
+<span class="nc" id="L625">			StringBuilder sb1 = new StringBuilder(&quot;X-Mailer: &quot;);</span>
+<span class="nc bnc" id="L626" title="All 2 branches missed.">			for (int i = 0; i &lt; hdrs.length; i++)</span>
+<span class="nc" id="L627">				sb1.append(hdrs[i]).append(&quot;  &quot;);</span>
+<span class="nc" id="L628">			printOut(sb1.toString());</span>
+<span class="nc" id="L629">		}</span>
+		else
+<span class="nc" id="L631">			printOut(&quot;X-Mailer NOT available&quot;);</span>
+		
+		//	Message ID
+<span class="nc" id="L634">		hdrs = m.getHeader(&quot;Message-ID&quot;);</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">		if (hdrs != null)</span>
+		{
+<span class="nc" id="L637">			StringBuilder sb1 = new StringBuilder(&quot;Message-ID: &quot;);</span>
+<span class="nc bnc" id="L638" title="All 2 branches missed.">			for (int i = 0; i &lt; hdrs.length; i++)</span>
+<span class="nc" id="L639">				sb1.append(hdrs[i]).append(&quot;  &quot;);</span>
+<span class="nc" id="L640">			printOut(sb1.toString());</span>
+<span class="nc" id="L641">		}</span>
+		else
+<span class="nc" id="L643">			printOut(&quot;Message-ID NOT available&quot;);</span>
+		
+		//	All
+<span class="nc" id="L646">		printOut(&quot;ALL HEADERs:&quot;);</span>
+<span class="nc" id="L647">		Enumeration&lt;?&gt; en = m.getAllHeaders();</span>
+<span class="nc bnc" id="L648" title="All 2 branches missed.">		while (en.hasMoreElements())</span>
+		{
+<span class="nc" id="L650">			Header hdr = (Header)en.nextElement();</span>
+<span class="nc" id="L651">			printOut (&quot;  &quot; + hdr.getName() + &quot; = &quot; + hdr.getValue());</span>
+		}
+		
+		
+<span class="nc" id="L655">		printOut(&quot;-----------------------------------------------------------------&quot;);</span>
+<span class="nc" id="L656">	}	//	printEnvelope</span>
+
+	/**
+	 * 	Print Body
+	 *	@param p
+	 *	@throws Exception
+	 */
+	protected void dumpBody (Part p) throws Exception
+	{
+		//	http://www.iana.org/assignments/media-types/
+<span class="nc" id="L666">		printOut(&quot;=================================================================&quot;);</span>
+<span class="nc" id="L667">		printOut(&quot;CONTENT-TYPE: &quot; + p.getContentType());</span>
+		/**
+		Enumeration en = p.getAllHeaders();
+		while (en.hasMoreElements())
+		{
+			Header hdr = (Header)en.nextElement();
+			printOut (&quot;  &quot; + hdr.getName() + &quot; = &quot; + hdr.getValue());
+		}
+		printOut(&quot;= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =&quot;);
+		/** **/
+		
+		/**
+		 * Using isMimeType to determine the content type avoids
+		 * fetching the actual content data until we need it.
+		 */
+<span class="nc bnc" id="L682" title="All 2 branches missed.">		if (p.isMimeType(&quot;text/plain&quot;))</span>
+		{
+<span class="nc" id="L684">			printOut(&quot;Plain text ---------------------------&quot;);</span>
+<span class="nc" id="L685">			System.out.println((String)p.getContent());</span>
+<span class="nc" id="L686">		}</span>
+<span class="nc bnc" id="L687" title="All 2 branches missed.">		else if (p.getContentType().toUpperCase().startsWith(&quot;TEXT&quot;))</span>
+		{
+<span class="nc" id="L689">			printOut(&quot;Other text ---------------------------&quot;);</span>
+<span class="nc" id="L690">			System.out.println((String)p.getContent());</span>
+<span class="nc" id="L691">		}</span>
+<span class="nc bnc" id="L692" title="All 2 branches missed.">		else if (p.isMimeType(&quot;multipart/*&quot;))</span>
+		{
+<span class="nc" id="L694">			printOut(&quot;Multipart ---------------------------&quot;);</span>
+<span class="nc" id="L695">			Multipart mp = (Multipart)p.getContent();</span>
+<span class="nc" id="L696">			int count = mp.getCount();</span>
+<span class="nc bnc" id="L697" title="All 2 branches missed.">			for (int i = 0; i &lt; count; i++)</span>
+<span class="nc" id="L698">				dumpBody(mp.getBodyPart(i));</span>
+<span class="nc" id="L699">		}</span>
+<span class="nc bnc" id="L700" title="All 2 branches missed.">		else if (p.isMimeType(&quot;message/rfc822&quot;))</span>
+		{
+<span class="nc" id="L702">			printOut(&quot;Nested ---------------------------&quot;);</span>
+<span class="nc" id="L703">			dumpBody((Part)p.getContent());</span>
+<span class="nc" id="L704">		}</span>
+		else
+		{
+			/*
+			 * If we actually want to see the data, and it's not a
+			 * MIME type we know, fetch it and check its Java type.
+			 */
+<span class="nc" id="L711">			Object o = p.getContent();</span>
+<span class="nc bnc" id="L712" title="All 2 branches missed.">			if (o instanceof String)</span>
+			{
+<span class="nc" id="L714">				printOut(&quot;This is a string ---------------------------&quot;);</span>
+<span class="nc" id="L715">				System.out.println((String)o);</span>
+<span class="nc" id="L716">			}</span>
+<span class="nc bnc" id="L717" title="All 2 branches missed.">			else if (o instanceof InputStream)</span>
+			{
+<span class="nc" id="L719">				printOut(&quot;This is just an input stream ---------------------------&quot;);</span>
+<span class="nc" id="L720">				InputStream is = (InputStream)o;</span>
+				int c;
+<span class="nc bnc" id="L722" title="All 2 branches missed.">				while ((c = is.read()) != -1)</span>
+<span class="nc" id="L723">					System.out.write(c);</span>
+<span class="nc" id="L724">				is.close();</span>
+<span class="nc" id="L725">			}</span>
+			else
+			{
+<span class="nc" id="L728">				printOut(&quot;This is an unknown type ---------------------------&quot;);</span>
+<span class="nc" id="L729">				printOut(o.toString());</span>
+			}
+		}
+<span class="nc" id="L732">		printOut(&quot;=================================================================&quot;);</span>
+<span class="nc" id="L733">	}	//	printBody</span>
+
+	/**
+	 * 	Print
+	 *	@param s string
+	 */
+	protected static void printOut(String s)
+	{
+	//    System.out.print(indentStr.substring(0, level * 2));
+<span class="nc" id="L742">		System.out.println(s);</span>
+<span class="nc" id="L743">	}</span>
+
+
+	/**************************************************************************
+	 *	Main Test
+	 *	@param args ignored
+	 */
+	public static void main (String[] args)
+	{
+<span class="nc" id="L752">		Adempiere.startupEnvironment(true);</span>
+<span class="nc" id="L753">		EMailProcessor m = new EMailProcessor(&quot;admin&quot;, &quot;test&quot;, &quot;testadempiere&quot;);</span>
+<span class="nc" id="L754">		m.processMessages();</span>
+		
+	//	System.out.println(EMailServer.send(&quot;main&quot;, &quot;jjanke@adempiere.org&quot;, &quot;jjanke@yahoo.com&quot;, &quot;test1&quot;, &quot;test1 message&quot;));
+	//	System.out.println(EMailServer.send(&quot;main&quot;, &quot;administrator@adempiere.org&quot;, &quot;jjanke@yahoo.com&quot;, &quot;test2&quot;, &quot;test2 message&quot;));
+	//	System.out.println(EMailServer.send(&quot;main&quot;, &quot;jjanke@adempiere.org&quot;, &quot;jjanke@yahoo.com&quot;, &quot;test3&quot;, &quot;test3 message&quot;));
+
+<span class="nc" id="L760">	}	//	main</span>
+	
+}	//	EMailProcessor
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

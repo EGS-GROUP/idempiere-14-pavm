@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DefaultSQLSearchProvider.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.base.search</a> &gt; <span class="el_source">DefaultSQLSearchProvider.java</span></div><h1>DefaultSQLSearchProvider.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - hengsin                         								   *
+ **********************************************************************/
+package org.adempiere.base.search;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+
+import org.compiere.model.MColumn;
+import org.compiere.model.MLookup;
+import org.compiere.model.MLookupFactory;
+import org.compiere.model.MLookupInfo;
+import org.compiere.model.MPayment;
+import org.compiere.model.MRole;
+import org.compiere.model.MSearchDefinition;
+import org.compiere.model.MTable;
+import org.compiere.model.MWindow;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+import org.osgi.service.component.annotations.Component;
+
+@Component(service = ISearchProvider.class, immediate = true)
+<span class="nc" id="L56">public class DefaultSQLSearchProvider implements ISearchProvider {</span>
+
+<span class="nc" id="L58">	private static final CLogger log = CLogger.getCLogger(DefaultSQLSearchProvider.class);</span>
+	
+    @Override
+    public boolean accept(MSearchDefinition def) {
+<span class="nc bnc" id="L62" title="All 2 branches missed.">        return MSearchDefinition.SEARCHTYPE_Table.equals(def.getSearchType())</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">                || MSearchDefinition.SEARCHTYPE_Query.equals(def.getSearchType());</span>
+    }
+
+    @Override
+    public List&lt;SearchResult&gt; search(MSearchDefinition msd, String searchString, int pageSize, int pageNo) {
+<span class="nc" id="L68">        List&lt;SearchResult&gt; list = new ArrayList&lt;SearchResult&gt;();</span>
+<span class="nc" id="L69">        final MRole role = MRole.get(Env.getCtx(), Env.getAD_Role_ID(Env.getCtx()), Env.getAD_User_ID(Env.getCtx()),</span>
+<span class="nc" id="L70">                true);</span>
+
+<span class="nc" id="L72">        MTable table = new MTable(Env.getCtx(), msd.getAD_Table_ID(), null);</span>
+<span class="nc" id="L73">        StringBuilder sql = null;</span>
+<span class="nc bnc" id="L74" title="All 4 branches missed.">        MWindow window = msd.getAD_Window_ID() &gt; 0 &amp;&amp; role.getWindowAccess(msd.getAD_Window_ID()) != null</span>
+<span class="nc" id="L75">                ? MWindow.get(Env.getCtx(), msd.getAD_Window_ID())</span>
+<span class="nc" id="L76">                : null;</span>
+<span class="nc bnc" id="L77" title="All 4 branches missed.">        MWindow powindow = msd.getPO_Window_ID() &gt; 0 &amp;&amp; role.getWindowAccess(msd.getPO_Window_ID()) != null</span>
+<span class="nc" id="L78">                ? MWindow.get(Env.getCtx(), msd.getPO_Window_ID())</span>
+<span class="nc" id="L79">                : null;</span>
+<span class="nc bnc" id="L80" title="All 4 branches missed.">        if (window == null &amp;&amp; powindow == null)</span>
+<span class="nc" id="L81">            return list;</span>
+
+<span class="nc" id="L83">        List&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+        // SearchDefinition with a given table and column
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        if (msd.getSearchType().equals(MSearchDefinition.SEARCHTYPE_Table)) {</span>
+<span class="nc" id="L86">            MColumn column = MColumn.get(Env.getCtx(), msd.getAD_Column_ID());</span>
+<span class="nc" id="L87">            sql = new StringBuilder(&quot;SELECT &quot;).append(table.getTableName()).append(&quot;_ID, &quot;)</span>
+<span class="nc" id="L88">                    .append(column.getColumnName());</span>
+<span class="nc" id="L89">            sql.append(&quot; FROM &quot;)</span>
+<span class="nc" id="L90">                    .append(table.getTableName())</span>
+<span class="nc" id="L91">                    .append(&quot; &quot;);</span>
+            // search for an Integer
+<span class="nc bnc" id="L93" title="All 2 branches missed.">            if (msd.getDataType().equals(MSearchDefinition.DATATYPE_INTEGER)) {</span>
+<span class="nc" id="L94">                sql.append(&quot;WHERE &quot;).append(column.getColumnName()).append(&quot;=?&quot;);</span>
+                // search for a String
+<span class="nc" id="L96">            } else {</span>
+<span class="nc" id="L97">                sql.append(&quot;WHERE UPPER(&quot;).append(column.getColumnName()).append(&quot;) LIKE UPPER(?)&quot;);</span>
+            }
+            
+            // search for a Integer
+<span class="nc bnc" id="L101" title="All 2 branches missed.">            if (msd.getDataType().equals(MSearchDefinition.DATATYPE_INTEGER)) {</span>
+<span class="nc" id="L102">                String digitsOnly = searchString.replaceAll(&quot;\\D&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">                if (Util.isEmpty(digitsOnly))</span>
+<span class="nc" id="L104">                    return list; // No valid integer to search</span>
+<span class="nc" id="L105">                params.add(Integer.valueOf(digitsOnly));</span>
+                // search for a String
+<span class="nc bnc" id="L107" title="All 2 branches missed.">            } else if (msd.getDataType().equals(MSearchDefinition.DATATYPE_STRING)) {</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">                if (searchString.endsWith(&quot;%&quot;))</span>
+<span class="nc" id="L109">                    params.add(searchString);</span>
+                else
+<span class="nc" id="L111">                    params.add(searchString + &quot;%&quot;);</span>
+            }
+<span class="nc" id="L113">            sql.append(&quot; AND AD_Client_ID=? &quot;);</span>
+<span class="nc" id="L114">            params.add(Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">            if (!Util.isEmpty(msd.getQuery(), true)) {</span>
+<span class="nc" id="L116">            	sql.append(&quot; AND (&quot;).append(msd.getQuery()).append(&quot;) &quot;);</span>
+            }
+            // SearchDefinition with a special query
+<span class="nc bnc" id="L119" title="All 2 branches missed.">        } else if (msd.getSearchType().equals(MSearchDefinition.SEARCHTYPE_Query)) {</span>
+<span class="nc" id="L120">            sql = new StringBuilder().append(msd.getQuery());</span>
+            // count '?' in statement
+<span class="nc" id="L122">            int count = 1;</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">            for (char c : sql.toString().toCharArray()) {</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">                if (c == '?') {</span>
+<span class="nc" id="L125">                    count++;</span>
+                }
+            }
+<span class="nc bnc" id="L128" title="All 2 branches missed.">            for (int i = 1; i &lt; count; i++) {</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">                if (msd.getDataType().equals(MSearchDefinition.DATATYPE_INTEGER)) {</span>
+<span class="nc" id="L130">                    String digitsOnly = searchString.replaceAll(&quot;\\D&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                    if (Util.isEmpty(digitsOnly))</span>
+<span class="nc" id="L132">                        return list; // No valid integer to search</span>
+<span class="nc" id="L133">                    params.add(Integer.valueOf(digitsOnly));</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                } else if (msd.getDataType().equals(MSearchDefinition.DATATYPE_STRING)) {</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">                    if (searchString.endsWith(&quot;%&quot;))</span>
+<span class="nc" id="L136">                        params.add(searchString);</span>
+                    else
+<span class="nc" id="L138">                        params.add(searchString + &quot;%&quot;);</span>
+                }
+            }
+        }
+
+<span class="nc" id="L143">        MLookupInfo lookupInfo = MLookupFactory.getLookupInfo(Env.getCtx(), -1, -1, DisplayType.Search,</span>
+<span class="nc" id="L144">                Env.getLanguage(Env.getCtx()), table.getTableName() + &quot;_ID&quot;, 0, false, null);</span>
+<span class="nc" id="L145">        MLookup lookup = new MLookup(lookupInfo, -1);</span>
+
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        if (sql != null) {</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">            if (powindow != null) {</span>
+<span class="nc" id="L149">                String whereCol = null;</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">                if (table.columnExistsInDictionary(&quot;IsSOTrx&quot;)) {</span>
+<span class="nc" id="L151">                    whereCol = &quot; AND IsSOTrx=&quot;;</span>
+<span class="nc" id="L152">                } else {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                    if (MPayment.Table_Name.equals(table.getTableName())) {</span>
+<span class="nc" id="L154">                        whereCol = &quot; AND IsReceipt=&quot;;</span>
+                    }
+                }
+<span class="nc bnc" id="L157" title="All 2 branches missed.">                if (whereCol == null) {</span>
+<span class="nc" id="L158">                    doRetrieval(msd, sql, params, lookup, powindow, table.getTableName(), null, list, pageSize);</span>
+<span class="nc" id="L159">                } else {</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">                    if (window != null) {</span>
+<span class="nc" id="L161">                        String soWhereTrx = whereCol + &quot;'Y' &quot;;</span>
+<span class="nc" id="L162">                        doRetrieval(msd, sql, params, lookup, window, table.getTableName(), soWhereTrx, list, pageSize);</span>
+                    }
+<span class="nc" id="L164">                    String poWhereTrx = whereCol + &quot;'N' &quot;;</span>
+<span class="nc" id="L165">                    doRetrieval(msd, sql, params, lookup, powindow, table.getTableName(), poWhereTrx, list, pageSize);</span>
+                }
+<span class="nc bnc" id="L167" title="All 2 branches missed.">            } else if (window != null) {</span>
+<span class="nc" id="L168">                doRetrieval(msd, sql, params, lookup, window, table.getTableName(), null, list, pageSize);</span>
+            }
+        }
+
+<span class="nc" id="L172">        return list;</span>
+    }
+
+    private void doRetrieval(MSearchDefinition msd, StringBuilder builder, List&lt;Object&gt; params, MLookup lookup,
+            MWindow window, String tableName,
+            String extraWhereClase, List&lt;SearchResult&gt; list, int pageSize) {
+<span class="nc" id="L178">        PreparedStatement pstmt = null;</span>
+<span class="nc" id="L179">        ResultSet rs = null;</span>
+        try {
+<span class="nc" id="L181">            String sql = builder.toString();</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">            if (!Util.isEmpty(extraWhereClase))</span>
+<span class="nc" id="L183">                sql = sql + extraWhereClase;</span>
+            // @@ is full text search operator for postgresql
+<span class="nc bnc" id="L185" title="All 2 branches missed.">            boolean hasFullTextOperator = sql.indexOf(&quot;@@&quot;) &gt;= 0;</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">            if (hasFullTextOperator)</span>
+<span class="nc" id="L187">                sql = sql.replace(&quot;@@&quot;, &quot;~!#$*&quot;);</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            if (sql.contains(&quot;@&quot;)) {</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">				if (params.isEmpty()) {</span>
+<span class="nc" id="L190">					sql = Env.parseContextForSql(Env.getCtx(), -1, sql, false, true, params);</span>
+<span class="nc" id="L191">				} else {</span>
+<span class="nc" id="L192">					List&lt;Object&gt; contextParams = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L193">					String beforeParseSql = sql;</span>
+<span class="nc" id="L194">					sql = Env.parseContextForSql(Env.getCtx(), -1, sql, false, true, contextParams);</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">					if (contextParams.size() &gt; 0)</span>
+<span class="nc" id="L196">						params = Env.mergeParameters(beforeParseSql, sql, params.toArray(), contextParams.toArray());						</span>
+				}
+			}
+<span class="nc bnc" id="L199" title="All 2 branches missed.">            if (hasFullTextOperator)</span>
+<span class="nc" id="L200">                sql = sql.replace(&quot;~!#$*&quot;, &quot;@@&quot;);</span>
+
+<span class="nc" id="L202">            sql = DB.getDatabase().addPagingSQL(sql, 0, pageSize);</span>
+
+<span class="nc" id="L204">            pstmt = DB.prepareStatement(sql, (String) null);</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">            if (params.size() &gt; 0)</span>
+<span class="nc" id="L206">                DB.setParameters(pstmt, params);</span>
+<span class="nc" id="L207">            pstmt.setQueryTimeout(1);</span>
+<span class="nc" id="L208">            rs = pstmt.executeQuery();</span>
+<span class="nc" id="L209">            int count = 0;</span>
+<span class="nc" id="L210">            ResultSetMetaData metaData = null;</span>
+<span class="nc bnc" id="L211" title="All 4 branches missed.">            while (rs.next() &amp;&amp; count &lt; pageSize) {</span>
+<span class="nc" id="L212">                count++;</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                if (metaData == null)</span>
+<span class="nc" id="L214">                    metaData = rs.getMetaData();</span>
+<span class="nc" id="L215">                int id = rs.getInt(1);</span>
+<span class="nc" id="L216">                SearchResult result = new SearchResult();</span>
+<span class="nc" id="L217">                result.setLabel(lookup.getDisplay(id));</span>
+<span class="nc" id="L218">                result.setRecordId(id);</span>
+<span class="nc" id="L219">                result.setWindowName(window.get_Translation(&quot;Name&quot;));</span>
+<span class="nc" id="L220">                result.setWindowId(window.getAD_Window_ID());</span>
+
+<span class="nc" id="L222">                result.setTableName(tableName);</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                if (metaData.getColumnCount() &gt; 1) {</span>
+<span class="nc" id="L224">                    result.setName(rs.getString(2));</span>
+                }
+<span class="nc" id="L226">                Map&lt;String, Object&gt; valueMap = new HashMap&lt;String, Object&gt;();</span>
+<span class="nc" id="L227">                valueMap.put(metaData.getColumnName(1), id);</span>
+<span class="nc" id="L228">                List&lt;Object&gt; values = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L229">                values.add(id);</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">                if (metaData.getColumnCount() &gt; 1) {</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">                    for (int i = 2; i &lt;= metaData.getColumnCount(); i++) {</span>
+<span class="nc" id="L232">                        Object value = rs.getObject(i);</span>
+<span class="nc" id="L233">                        values.add(value);</span>
+<span class="nc" id="L234">                        valueMap.put(metaData.getColumnName(i), value);</span>
+                    }
+                }
+<span class="nc" id="L237">                result.setValues(values.toArray());</span>
+<span class="nc" id="L238">                result.setValueMap(valueMap);</span>
+<span class="nc bnc" id="L239" title="All 4 branches missed.">                if (msd.getSearchType().equals(MSearchDefinition.SEARCHTYPE_Query) &amp;&amp; msd.getAD_Message_ID() &gt; 0) {</span>
+<span class="nc" id="L240">                    result.setAD_Message_ID(msd.getAD_Message_ID());</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">                    if (msd.getAD_Style_ID() &gt; 0)</span>
+<span class="nc" id="L242">                        result.setAD_Style_ID(msd.getAD_Style_ID());</span>
+                }
+<span class="nc" id="L244">                list.add(result);</span>
+            }
+<span class="nc" id="L246">        } catch (SQLException e) {</span>
+<span class="nc" id="L247">            SearchResult result = new SearchResult();</span>
+<span class="nc" id="L248">            result.setRecordId(-1);</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">            if (DB.getDatabase().isQueryTimeout(e)) {</span>
+<span class="nc" id="L250">                result.setLabel(Msg.getMsg(Env.getCtx(), &quot;Timeout&quot;));</span>
+<span class="nc" id="L251">            } else {</span>
+<span class="nc" id="L252">                result.setLabel(Msg.getMsg(Env.getCtx(), &quot;DBExecuteError&quot;));</span>
+<span class="nc" id="L253">                log.log(Level.WARNING, e.getLocalizedMessage(), e);</span>
+            }
+<span class="nc" id="L255">            list.add(result);</span>
+        } finally {
+<span class="nc" id="L257">            DB.close(rs, pstmt);</span>
+        }
+<span class="nc" id="L259">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

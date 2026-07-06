@@ -1,0 +1,464 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AlertProcessor.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.server</a> &gt; <span class="el_source">AlertProcessor.java</span></div><h1>AlertProcessor.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.server;
+
+import java.io.File;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.Timestamp;
+import java.text.DateFormat;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.logging.Level;
+
+import org.adempiere.impexp.ArrayExcelExporter;
+import org.compiere.model.MAlert;
+import org.compiere.model.MAlertProcessor;
+import org.compiere.model.MAlertProcessorLog;
+import org.compiere.model.MAlertRule;
+import org.compiere.model.MAttachment;
+import org.compiere.model.MClient;
+import org.compiere.model.MNote;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MSystem;
+import org.compiere.model.MUser;
+import org.compiere.model.SystemIDs;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Language;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Trx;
+import org.compiere.util.ValueNamePair;
+
+/**
+ *	Alert Processor
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: AlertProcessor.java,v 1.4 2006/07/30 00:53:33 jjanke Exp $
+ * 
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;FR [ 1894573 ] Alert Processor Improvements
+ * 			&lt;li&gt;FR [ 2453882 ] Alert Processor : attached file name improvement
+ * @author Kubotti
+ * 			&lt;li&gt;BF [ 2785633 ] Adding a Notice in Alert Processor
+ */
+public class AlertProcessor extends AdempiereServer
+{
+	/**
+	 * 	Alert Processor
+	 *	@param model model
+	 */
+	public AlertProcessor (MAlertProcessor model)
+	{
+<span class="nc" id="L71">		super (model, 30);	//	30 seconds delay </span>
+<span class="nc" id="L72">		m_model = model;</span>
+<span class="nc" id="L73">		m_client = MClient.get(model.getCtx(), model.getAD_Client_ID());</span>
+<span class="nc" id="L74">	}	//	AlertProcessor</span>
+
+	/**	The Concrete Model			*/
+<span class="nc" id="L77">	protected MAlertProcessor		m_model = null;</span>
+	/**	Last Summary				*/
+<span class="nc" id="L79">	protected StringBuffer 		m_summary = new StringBuffer();</span>
+	/**	Last Error Msg				*/
+<span class="nc" id="L81">	protected StringBuffer 		m_errors = new StringBuffer();</span>
+	/** Client info					*/
+<span class="nc" id="L83">	protected MClient 			m_client = null;</span>
+
+	/**
+	 * 	Work
+	 */
+	protected void doWork ()
+	{
+<span class="nc" id="L90">		m_summary = new StringBuffer();</span>
+<span class="nc" id="L91">		m_errors = new StringBuffer();</span>
+		//
+<span class="nc" id="L93">		int count = 0;</span>
+<span class="nc" id="L94">		int countError = 0;</span>
+<span class="nc" id="L95">		MAlert[] alerts = m_model.getAlerts(false);</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">		for (int i = 0; i &lt; alerts.length; i++)</span>
+		{
+<span class="nc" id="L98">			Language language = Env.getLanguage(getCtx());</span>
+			// Try to get the language of the client's alert
+<span class="nc" id="L100">			MClient client = MClient.get(getCtx(), alerts[i].getAD_Client_ID());</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			if (client.getLanguage() != null)</span>
+<span class="nc" id="L102">				language = client.getLanguage();</span>
+
+<span class="nc bnc" id="L104" title="All 2 branches missed.">			if (!processAlert(alerts[i], language))</span>
+<span class="nc" id="L105">				countError++;</span>
+<span class="nc" id="L106">			count++;</span>
+		}
+		//
+<span class="nc" id="L109">		String summary = &quot;Total=&quot; + count;</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">		if (countError &gt; 0)</span>
+<span class="nc" id="L111">			summary += &quot;, Not processed=&quot; + countError;</span>
+<span class="nc" id="L112">		summary += &quot; - &quot;;</span>
+<span class="nc" id="L113">		m_summary.insert(0, summary);</span>
+		//
+<span class="nc" id="L115">		int no = m_model.deleteLog();</span>
+<span class="nc" id="L116">		m_summary.append(&quot;Logs deleted=&quot;).append(no);</span>
+		//
+<span class="nc" id="L118">		MAlertProcessorLog pLog = new MAlertProcessorLog(m_model, m_summary.toString());</span>
+<span class="nc" id="L119">		pLog.setReference(&quot;#&quot; + String.valueOf(p_runCount) </span>
+<span class="nc" id="L120">			+ &quot; - &quot; + TimeUtil.formatElapsed(new Timestamp(p_startWork)));</span>
+<span class="nc" id="L121">		pLog.setTextMsg(m_errors.toString());</span>
+<span class="nc" id="L122">		pLog.saveEx();</span>
+<span class="nc" id="L123">	}	//	doWork</span>
+
+	/**
+	 * 	Process Alert
+	 *	@param alert alert
+	 *	@return true if processed
+	 */
+	protected boolean processAlert (MAlert alert, Language language)
+	{
+<span class="nc bnc" id="L132" title="All 2 branches missed.">		if (!alert.isValid())</span>
+<span class="nc" id="L133">			return false;</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;&quot; + alert);</span>
+
+<span class="nc" id="L136">		MSystem system = MSystem.get(Env.getCtx());</span>
+<span class="nc" id="L137">		MClient client = MClient.get(Env.getCtx(), alert.getAD_Client_ID());</span>
+		// parse variables from Client, then from System
+<span class="nc" id="L139">		String alertMessage = Env.parseVariable(alert.getAlertMessage(), client, null, false, false, true, true); // keep escape sequence</span>
+<span class="nc" id="L140">		alertMessage = Env.parseVariable(alertMessage, system, null, false, false, true, false);</span>
+<span class="nc" id="L141">		StringBuilder message = new StringBuilder(alertMessage).append(Env.NL);</span>
+		//
+<span class="nc" id="L143">		boolean valid = true;</span>
+<span class="nc" id="L144">		boolean processed = false;</span>
+<span class="nc" id="L145">		ArrayList&lt;File&gt; attachments = new ArrayList&lt;File&gt;();</span>
+<span class="nc" id="L146">		MAlertRule[] rules = alert.getRules(false);</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">		for (int i = 0; i &lt; rules.length; i++)</span>
+		{
+<span class="nc bnc" id="L149" title="All 2 branches missed.">			if (i &gt; 0)</span>
+<span class="nc" id="L150">				message.append(Env.NL);</span>
+			
+<span class="nc" id="L152">			MAlertRule rule = rules[i];</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">			if (!rule.isValid())</span>
+<span class="nc" id="L154">				continue;</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;&quot; + rule);</span>
+			
+			//	Pre
+<span class="nc" id="L158">			String sql = rule.getPreProcessing();</span>
+<span class="nc bnc" id="L159" title="All 4 branches missed.">			if (sql != null &amp;&amp; sql.length() &gt; 0)</span>
+			{
+<span class="nc" id="L161">				int no = DB.executeUpdate(sql, false, null);</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">				if (no == -1)</span>
+				{
+<span class="nc" id="L164">					ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc" id="L165">					rule.setErrorMsg(&quot;Pre=&quot; + error.getName());</span>
+<span class="nc" id="L166">					m_errors.append(&quot;Pre=&quot; + error.getName());</span>
+<span class="nc" id="L167">					rule.setIsValid(false);</span>
+<span class="nc" id="L168">					rule.saveEx();</span>
+<span class="nc" id="L169">					valid = false;</span>
+<span class="nc" id="L170">					break;</span>
+				}
+			}	//	Pre
+			
+			//	The processing
+<span class="nc" id="L175">			sql = rule.getSql(true);</span>
+			try
+			{
+<span class="nc" id="L178">				String text = null;</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">				if (MSysConfig.getBooleanValue(MSysConfig.ALERT_SEND_ATTACHMENT_AS_XLS, true, alert.getAD_Client_ID()))</span>
+<span class="nc" id="L180">					text = getExcelReport(rule, sql, language, null, attachments);</span>
+				else
+<span class="nc" id="L182">					text = getPlainTextReport(rule, sql, null, attachments);</span>
+<span class="nc bnc" id="L183" title="All 4 branches missed.">				if (text != null &amp;&amp; text.length() &gt; 0)</span>
+				{
+<span class="nc" id="L185">					message.append(text);</span>
+<span class="nc" id="L186">					processed = true;</span>
+				}
+<span class="nc" id="L188">			}</span>
+<span class="nc" id="L189">			catch (Exception e)</span>
+			{
+<span class="nc" id="L191">				rule.setErrorMsg(&quot;Select=&quot; + e.getLocalizedMessage());</span>
+<span class="nc" id="L192">				m_errors.append(&quot;Select=&quot; + e.getLocalizedMessage());</span>
+<span class="nc" id="L193">				rule.setIsValid(false);</span>
+<span class="nc" id="L194">				rule.saveEx();</span>
+<span class="nc" id="L195">				valid = false;</span>
+<span class="nc" id="L196">				break;</span>
+			}
+
+			//	Post
+<span class="nc" id="L200">			sql = rule.getPostProcessing();</span>
+<span class="nc bnc" id="L201" title="All 4 branches missed.">			if (sql != null &amp;&amp; sql.length() &gt; 0)</span>
+			{
+<span class="nc" id="L203">				int no = DB.executeUpdate(sql, false, null);</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">				if (no == -1)</span>
+				{
+<span class="nc" id="L206">					ValueNamePair error = CLogger.retrieveError();</span>
+<span class="nc" id="L207">					rule.setErrorMsg(&quot;Post=&quot; + error.getName());</span>
+<span class="nc" id="L208">					m_errors.append(&quot;Post=&quot; + error.getName());</span>
+<span class="nc" id="L209">					rule.setIsValid(false);</span>
+<span class="nc" id="L210">					rule.saveEx();</span>
+<span class="nc" id="L211">					valid = false;</span>
+<span class="nc" id="L212">					break;</span>
+				}
+			}	//	Post
+
+		}	//	 for all rules
+		
+		//	Update header if error
+<span class="nc bnc" id="L219" title="All 2 branches missed.">		if (!valid)</span>
+		{
+<span class="nc" id="L221">			alert.setIsValid(false);</span>
+<span class="nc" id="L222">			alert.saveEx();</span>
+<span class="nc" id="L223">			return false;</span>
+		}
+		
+		//	Nothing to report
+<span class="nc bnc" id="L227" title="All 2 branches missed.">		if (!processed)</span>
+		{
+<span class="nc" id="L229">			m_summary.append(alert.getName()).append(&quot;=No Result - &quot;);</span>
+<span class="nc" id="L230">			return true;</span>
+		}
+		
+		//
+		// Report footer - Date Generated
+<span class="nc" id="L235">		DateFormat df = DisplayType.getDateFormat(DisplayType.DateTime, language);</span>
+<span class="nc" id="L236">		message.append(Env.NL).append(Env.NL);</span>
+<span class="nc" id="L237">		message.append(Msg.translate(language, &quot;Date&quot;)).append(&quot; : &quot;)</span>
+<span class="nc" id="L238">				.append(df.format(new Timestamp(System.currentTimeMillis())));</span>
+		
+<span class="nc" id="L240">		Collection&lt;Integer&gt; users = alert.getRecipientUsers();</span>
+		// parse variables from Client, then from System
+<span class="nc" id="L242">		String alertSubject = Env.parseVariable(alert.getAlertSubject(), client, null, true);</span>
+<span class="nc" id="L243">		alertSubject = Env.parseVariable(alertSubject, system, null, true);</span>
+<span class="nc" id="L244">		int countMail = notifyUsers(users, alertSubject, message.toString(), attachments, alert);</span>
+		
+		// IDEMPIERE-2864
+<span class="nc bnc" id="L247" title="All 2 branches missed.">		for(File attachment : attachments)</span>
+		{
+<span class="nc bnc" id="L249" title="All 4 branches missed.">			if(attachment.exists() &amp;&amp; !attachment.delete())</span>
+<span class="nc" id="L250">				attachment.deleteOnExit();</span>
+		}
+		
+<span class="nc" id="L253">		m_summary.append(alert.getName()).append(&quot; (EMails+Notes=&quot;).append(countMail).append(&quot;) - &quot;);</span>
+<span class="nc" id="L254">		return valid;</span>
+	}	//	processAlert
+	
+	/**
+	 * Notify users
+	 * @param users AD_User_ID list
+	 * @param subject email subject
+	 * @param message email message
+	 * @param attachments 
+	 * @param alert 
+	 * @return how many email were sent
+	 */
+	protected int notifyUsers(Collection&lt;Integer&gt; users, String subject, String message, Collection&lt;File&gt; attachments, MAlert alert)
+	{
+<span class="nc" id="L268">		int countMail = 0;</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">		for (int user_id : users) {</span>
+<span class="nc" id="L270">			MUser user = MUser.get(getCtx(), user_id);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">			if (user.isNotificationEMail()) {</span>
+<span class="nc" id="L272">				String messageHTML = message.replaceAll(Env.NL, &quot;&lt;br&gt;&quot;);</span>
+<span class="nc" id="L273">				MClient client = MClient.get(Env.getCtx(), alert.getAD_Client_ID());</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">				if (client.sendEMailAttachments (user_id, subject, messageHTML, attachments, true))</span>
+				{
+<span class="nc" id="L276">					countMail++;</span>
+				}
+			}
+
+<span class="nc bnc" id="L280" title="All 2 branches missed.">			if (user.isNotificationNote()) {</span>
+<span class="nc" id="L281">				Trx trx = null;</span>
+				try {
+<span class="nc" id="L283">					trx = Trx.get(Trx.createTrxName(&quot;AP_NU&quot;), true);</span>
+<span class="nc" id="L284">					trx.setDisplayName(getClass().getName()+&quot;_&quot;+m_model.getName()+&quot;_notifyUsers&quot;);</span>
+					// Notice
+<span class="nc" id="L286">					int AD_Message_ID = SystemIDs.MESSAGE_NOTES;  /* TODO - Hardcoded message=notes */</span>
+<span class="nc" id="L287">					MNote note = new MNote(getCtx(), AD_Message_ID, user_id, trx.getTrxName());</span>
+<span class="nc" id="L288">					note.setClientOrg(alert.getAD_Client_ID(), alert.getAD_Org_ID());</span>
+<span class="nc" id="L289">					note.setTextMsg(message);</span>
+<span class="nc" id="L290">					note.setDescription(subject);</span>
+<span class="nc" id="L291">					note.saveEx();</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">					if (attachments.size() &gt; 0) {</span>
+						// Attachment
+<span class="nc" id="L294">						try (MAttachment attachment = new MAttachment (getCtx(), MNote.Table_ID, note.getAD_Note_ID(), note.getAD_Note_UU(), trx.getTrxName())) {</span>
+<span class="nc" id="L295">						attachment.setClientOrg(alert.getAD_Client_ID(), alert.getAD_Org_ID());</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">						for (File f : attachments) {</span>
+<span class="nc" id="L297">							attachment.addEntry(f);</span>
+						}
+<span class="nc" id="L299">						attachment.saveEx();}</span>
+					}
+<span class="nc" id="L301">					countMail++;</span>
+<span class="nc" id="L302">					trx.commit();</span>
+<span class="nc" id="L303">				} catch (Throwable e) {</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">					if (trx != null) trx.rollback();</span>
+				} finally {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">					if (trx != null) trx.close();</span>
+				}
+			}
+
+		}
+<span class="nc" id="L311">		return countMail;</span>
+	}
+	
+	/**
+	 * Get Alert Data
+	 * @param sql
+	 * @param trxName
+	 * @return data
+	 * @throws Exception
+	 */
+	protected ArrayList&lt;ArrayList&lt;Object&gt;&gt; getData (String sql, String trxName) throws Exception
+	{
+<span class="nc" id="L323">		ArrayList&lt;ArrayList&lt;Object&gt;&gt; data = new ArrayList&lt;ArrayList&lt;Object&gt;&gt;();</span>
+<span class="nc" id="L324">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L325">		ResultSet rs = null;</span>
+<span class="nc" id="L326">		Exception error = null;</span>
+		try
+		{
+<span class="nc" id="L329">			pstmt = DB.prepareNormalReadReplicaStatement(sql, trxName);</span>
+<span class="nc" id="L330">			rs = pstmt.executeQuery ();</span>
+<span class="nc" id="L331">			ResultSetMetaData meta = rs.getMetaData();</span>
+<span class="nc" id="L332">			boolean isFirstRow = true;</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc bnc" id="L335" title="All 2 branches missed.">				ArrayList&lt;Object&gt; header = (isFirstRow ? new ArrayList&lt;Object&gt;() : null);</span>
+<span class="nc" id="L336">				ArrayList&lt;Object&gt; row = new ArrayList&lt;Object&gt;();</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">				for (int col = 1; col &lt;= meta.getColumnCount(); col++)</span>
+				{
+<span class="nc bnc" id="L339" title="All 2 branches missed.">					if (isFirstRow) {</span>
+<span class="nc" id="L340">						String columnName = meta.getColumnLabel(col);</span>
+<span class="nc" id="L341">						header.add(columnName);</span>
+					}
+<span class="nc" id="L343">					Object o = rs.getObject(col);</span>
+<span class="nc" id="L344">					row.add(o);</span>
+				}	//	for all columns
+<span class="nc bnc" id="L346" title="All 2 branches missed.">				if (isFirstRow)</span>
+<span class="nc" id="L347">					data.add(header);</span>
+<span class="nc" id="L348">				data.add(row);</span>
+<span class="nc" id="L349">				isFirstRow = false;</span>
+			}
+<span class="nc" id="L351">		}</span>
+<span class="nc" id="L352">		catch (Throwable e)</span>
+		{
+<span class="nc" id="L354">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">			if (e instanceof Exception)</span>
+<span class="nc" id="L356">				error = (Exception)e;</span>
+			else
+<span class="nc" id="L358">				error = new Exception(e.getMessage(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L362">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L363">			rs = null; pstmt = null;</span>
+		}
+		
+		//	Error occurred
+<span class="nc bnc" id="L367" title="All 2 branches missed.">		if (error != null)</span>
+<span class="nc" id="L368">			throw new Exception (&quot;(&quot; + sql + &quot;) &quot; + Env.NL </span>
+<span class="nc" id="L369">				+ error.getLocalizedMessage());</span>
+		
+<span class="nc" id="L371">		return data;</span>
+	}	//	getData
+	
+	/**
+	 * Get Plain Text Report (old functionality) 
+	 * @param rule (ignored)
+	 * @param sql sql select
+	 * @param trxName transaction
+	 * @param attachments (ignored)
+	 * @return list of rows and values
+	 * @throws Exception
+	 */
+	protected String getPlainTextReport(MAlertRule rule, String sql, String trxName, Collection&lt;File&gt; attachments)
+	throws Exception
+	{
+<span class="nc" id="L386">		StringBuilder result = new StringBuilder();</span>
+<span class="nc" id="L387">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L388">		ResultSet rs = null;</span>
+<span class="nc" id="L389">		Exception error = null;</span>
+		try
+		{
+<span class="nc" id="L392">			pstmt = DB.prepareNormalReadReplicaStatement(sql, trxName);</span>
+<span class="nc" id="L393">			rs = pstmt.executeQuery ();</span>
+<span class="nc" id="L394">			ResultSetMetaData meta = rs.getMetaData();</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">			while (rs.next ())</span>
+			{
+<span class="nc" id="L397">				result.append(&quot;------------------&quot;).append(Env.NL);</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">				for (int col = 1; col &lt;= meta.getColumnCount(); col++)</span>
+				{
+<span class="nc" id="L400">					result.append(meta.getColumnLabel(col)).append(&quot; = &quot;);</span>
+<span class="nc" id="L401">					result.append(rs.getString(col));</span>
+<span class="nc" id="L402">					result.append(Env.NL);</span>
+				}	//	for all columns
+			}
+<span class="nc bnc" id="L405" title="All 2 branches missed.">			if (result.length() == 0)</span>
+<span class="nc" id="L406">				log.fine(&quot;No rows selected&quot;);</span>
+<span class="nc" id="L407">		}</span>
+<span class="nc" id="L408">		catch (Throwable e)</span>
+		{
+<span class="nc" id="L410">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">			if (e instanceof Exception)</span>
+<span class="nc" id="L412">				error = (Exception)e;</span>
+			else
+<span class="nc" id="L414">				error = new Exception(e.getMessage(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L418">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L419">			rs = null; pstmt = null;</span>
+		}
+		
+		//	Error occurred
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (error != null)</span>
+<span class="nc" id="L424">			throw new Exception (&quot;(&quot; + sql + &quot;) &quot; + Env.NL </span>
+<span class="nc" id="L425">				+ error.getLocalizedMessage());</span>
+		
+<span class="nc" id="L427">		return result.toString();</span>
+	}
+
+	/**
+	 * Get Excel Report
+	 * @param rule
+	 * @param sql
+	 * @param trxName
+	 * @param attachments
+	 * @return summary message to be added into mail content
+	 * @throws Exception
+	 */
+	protected String getExcelReport(MAlertRule rule, String sql, Language language, String trxName, Collection&lt;File&gt; attachments)
+	throws Exception
+	{
+<span class="nc" id="L442">		ArrayList&lt;ArrayList&lt;Object&gt;&gt; data = getData(sql, trxName);</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">		if (data.size() &lt;= 1)</span>
+<span class="nc" id="L444">			return null;</span>
+		// File
+<span class="nc" id="L446">		File file = rule.createReportFile(&quot;xlsx&quot;);</span>
+		//
+<span class="nc" id="L448">		ArrayExcelExporter exporter = new ArrayExcelExporter(getCtx(), data);</span>
+<span class="nc" id="L449">		exporter.export(file, language, false);</span>
+<span class="nc" id="L450">		attachments.add(file);</span>
+<span class="nc" id="L451">		String msg = rule.getName() + &quot; (&quot; + Msg.translate(language, &quot;SeeAttachment&quot;) + &quot; &quot; + file.getName() + &quot;)&quot; + Env.NL;</span>
+<span class="nc" id="L452">		return msg;</span>
+	}
+	
+	/**
+	 * 	Get Server Info
+	 *	@return info
+	 */
+	public String getServerInfo()
+	{
+<span class="nc" id="L461">		return &quot;#&quot; + p_runCount + &quot; - Last=&quot; + m_summary.toString();</span>
+	}	//	getServerInfo	
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

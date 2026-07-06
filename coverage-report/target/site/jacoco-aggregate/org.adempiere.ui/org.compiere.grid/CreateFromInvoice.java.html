@@ -1,0 +1,469 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CreateFromInvoice.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.grid</a> &gt; <span class="el_source">CreateFromInvoice.java</span></div><h1>CreateFromInvoice.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2009 Low Heng Sin                                            *
+ * Copyright (C) 2009 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.grid;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Vector;
+import java.util.logging.Level;
+
+import org.compiere.apps.IStatusBar;
+import org.compiere.minigrid.IMiniTable;
+import org.compiere.model.GridTab;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MOrder;
+import org.compiere.model.MProduct;
+import org.compiere.model.MRMA;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Msg;
+
+/**
+ *  Create Invoice Lines from Purchase Order, Material Receipt or Vendor RMA
+ *
+ *  @author Jorg Janke
+ *  @version  $Id: VCreateFromInvoice.java,v 1.4 2006/07/30 00:51:28 jjanke Exp $
+ *
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;BF [ 1896947 ] Generate invoice from Order error
+ * 			&lt;li&gt;BF [ 2007837 ] VCreateFrom.save() should run in trx
+ */
+public abstract class CreateFromInvoice extends CreateFrom
+{
+	/**
+	 *  Constructor
+	 *  @param mTab MTab
+	 */
+	public CreateFromInvoice(GridTab mTab)
+	{
+<span class="nc" id="L57">		super(mTab);</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(mTab.toString());</span>
+<span class="nc" id="L59">	}   //  CreateFromInvoice</span>
+
+	@Override
+	protected boolean dynInit() throws Exception
+	{
+<span class="nc" id="L64">		log.config(&quot;&quot;);</span>
+<span class="nc" id="L65">		setTitle(Msg.getElement(Env.getCtx(), &quot;C_Invoice_ID&quot;, false) + &quot; .. &quot; + Msg.translate(Env.getCtx(), &quot;CreateFrom&quot;));</span>
+
+<span class="nc" id="L67">		return true;</span>
+	}   //  dynInit
+
+	/**
+	 * Load BPartner related Shipment records.
+	 * @param C_BPartner_ID
+	 * @return list of shipment records
+	 */
+	protected ArrayList&lt;KeyNamePair&gt; loadShipmentData (int C_BPartner_ID)
+	{
+<span class="nc bnc" id="L77" title="All 2 branches missed.">		String isSOTrxParam = isSOTrx ? &quot;Y&quot;:&quot;N&quot;;</span>
+<span class="nc" id="L78">		ArrayList&lt;KeyNamePair&gt; list = new ArrayList&lt;KeyNamePair&gt;();</span>
+
+		//	Display
+<span class="nc" id="L81">		StringBuffer display = new StringBuffer(&quot;s.DocumentNo||' - '||&quot;)</span>
+<span class="nc" id="L82">			.append(DB.TO_CHAR(&quot;s.MovementDate&quot;, DisplayType.Date, Env.getAD_Language(Env.getCtx())));</span>
+		//
+<span class="nc" id="L84">		StringBuffer sql = new StringBuffer(&quot;SELECT s.M_InOut_ID,&quot;).append(display)</span>
+<span class="nc" id="L85">			.append(&quot; FROM M_InOut s &quot;</span>
+			+ &quot;WHERE s.C_BPartner_ID=? AND s.IsSOTrx=? AND s.DocStatus IN ('CL','CO')&quot;
+			+ &quot; AND s.M_InOut_ID IN &quot;
+				+ &quot;(SELECT sl.M_InOut_ID FROM M_InOutLine sl&quot;);
+<span class="nc bnc" id="L89" title="All 2 branches missed.">			if(!isSOTrx)</span>
+<span class="nc" id="L90">				sql.append(&quot; LEFT OUTER JOIN M_MatchInv mi ON (sl.M_InOutLine_ID=mi.M_InOutLine_ID) &quot;</span>
+					+ &quot; JOIN M_InOut s2 ON (sl.M_InOut_ID=s2.M_InOut_ID) &quot;
+					+ &quot; WHERE s2.C_BPartner_ID=? AND s2.IsSOTrx=? AND s2.DocStatus IN ('CL','CO') &quot;
+					+ &quot; GROUP BY sl.M_InOut_ID,sl.MovementQty,s2.MovementType,mi.M_InOutLine_ID&quot;
+					+ &quot; HAVING (sl.MovementQty &lt;&gt; SUM(mi.Qty) * CASE WHEN s2.MovementType = 'V-' THEN -1 ELSE 1 END&quot;
+<span class="nc" id="L95">					+ &quot; AND mi.M_InOutLine_ID IS NOT NULL) OR mi.M_InOutLine_ID IS NULL &quot;);</span>
+			else
+<span class="nc" id="L97">				sql.append(&quot; INNER JOIN M_InOut s2 ON (sl.M_InOut_ID=s2.M_InOut_ID)&quot;</span>
+					+ &quot; LEFT JOIN C_InvoiceLine il ON sl.M_InOutLine_ID = il.M_InOutLine_ID&quot;
+					+ &quot; WHERE s2.C_BPartner_ID=? AND s2.IsSOTrx=? AND s2.DocStatus IN ('CL','CO')&quot;
+					+ &quot; GROUP BY sl.M_InOutLine_ID&quot;
+					+ &quot; HAVING sl.MovementQty - sum(COALESCE(il.QtyInvoiced,0)) &gt; 0&quot;);
+<span class="nc" id="L102">			sql.append(&quot;) ORDER BY s.MovementDate&quot;);</span>
+<span class="nc" id="L103">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L104">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L107">			pstmt = DB.prepareStatement(sql.toString(), getTrxName());</span>
+<span class="nc" id="L108">			pstmt.setInt(1, C_BPartner_ID);</span>
+<span class="nc" id="L109">			pstmt.setString(2, isSOTrxParam);</span>
+<span class="nc" id="L110">			pstmt.setInt(3, C_BPartner_ID);</span>
+<span class="nc" id="L111">			pstmt.setString(4, isSOTrxParam);</span>
+<span class="nc" id="L112">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L115">				list.add(new KeyNamePair(rs.getInt(1), rs.getString(2)));</span>
+			}
+<span class="nc" id="L117">		}</span>
+<span class="nc" id="L118">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L120">			log.log(Level.SEVERE, sql.toString(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L124">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L125">			rs = null;</span>
+<span class="nc" id="L126">			pstmt = null;</span>
+		}
+
+<span class="nc" id="L129">		return list;</span>
+	}
+
+	/**
+	 *  Load BPartner related RMA records
+	 *  @param C_BPartner_ID BPartner
+	 *  @return list of RMA records
+	 */
+	protected ArrayList&lt;KeyNamePair&gt; loadRMAData(int C_BPartner_ID) {
+<span class="nc" id="L138">		ArrayList&lt;KeyNamePair&gt; list = new ArrayList&lt;KeyNamePair&gt;();</span>
+
+<span class="nc" id="L140">		String sqlStmt = &quot;SELECT r.M_RMA_ID, r.DocumentNo || '-' || r.Amt from M_RMA r &quot;</span>
+				+ &quot;INNER JOIN M_RMALine l ON (l.M_RMA_ID = r.M_RMA_ID) &quot;
+				+ &quot;WHERE ISSOTRX='N' AND r.DocStatus in ('CO', 'CL') &quot;
+				+ &quot;AND r.C_BPartner_ID=? &quot;
+				+ &quot;AND COALESCE(l.QtyInvoiced,0) &lt; l.Qty &quot;;
+
+<span class="nc" id="L146">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L147">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L149">			pstmt = DB.prepareStatement(sqlStmt, getTrxName());</span>
+<span class="nc" id="L150">			pstmt.setInt(1, C_BPartner_ID);</span>
+<span class="nc" id="L151">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">			while (rs.next()) {</span>
+<span class="nc" id="L153">				list.add(new KeyNamePair(rs.getInt(1), rs.getString(2)));</span>
+			}
+<span class="nc" id="L155">		} catch (SQLException e) {</span>
+<span class="nc" id="L156">			log.log(Level.SEVERE, sqlStmt.toString(), e);</span>
+		} finally{
+<span class="nc" id="L158">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L159">			rs = null;</span>
+<span class="nc" id="L160">			pstmt = null;</span>
+		}
+
+<span class="nc" id="L163">		return list;</span>
+	}
+
+	/**
+	 *  Load Shipment Lines not invoiced
+	 *  @param M_InOut_ID InOut
+	 *  @return shipment lines (selection,qty,[c_uom_id,uomSymbol/name],[m_product_id,name],vendorProductNo,[c_orderline_id,.],[m_inoutline_id,line],null)
+	 */
+	protected Vector&lt;Vector&lt;Object&gt;&gt; getShipmentData(int M_InOut_ID)
+	{
+<span class="nc bnc" id="L173" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;M_InOut_ID=&quot; + M_InOut_ID);</span>
+<span class="nc" id="L174">		MInOut inout = new MInOut(Env.getCtx(), M_InOut_ID, getTrxName());</span>
+<span class="nc" id="L175">		p_order = null;</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		if (inout.getC_Order_ID() != 0)</span>
+<span class="nc" id="L177">			p_order = new MOrder (Env.getCtx(), inout.getC_Order_ID(), getTrxName());</span>
+
+<span class="nc" id="L179">		m_rma = null;</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">		if (inout.getM_RMA_ID() != 0)</span>
+<span class="nc" id="L181">			m_rma = new MRMA (Env.getCtx(), inout.getM_RMA_ID(), getTrxName());</span>
+		//
+<span class="nc" id="L183">		Vector&lt;Vector&lt;Object&gt;&gt; data = new Vector&lt;Vector&lt;Object&gt;&gt;();</span>
+<span class="nc" id="L184">		StringBuilder sql = new StringBuilder(&quot;SELECT &quot;);	//	QtyEntered</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		if(!isSOTrx)</span>
+<span class="nc" id="L186">			sql.append(&quot;l.Movementqty-SUM(COALESCE(mi.Qty, 0))*CASE WHEN io.MovementType = 'V-' THEN -1 ELSE 1 END,&quot;);</span>
+		else
+<span class="nc" id="L188">			sql.append(&quot;l.MovementQty-SUM(COALESCE(il.QtyInvoiced,0)),&quot;);</span>
+<span class="nc" id="L189">		sql.append(&quot; l.QtyEntered/l.MovementQty,&quot;</span>
+			+ &quot; l.C_UOM_ID, COALESCE(uom.UOMSymbol, uom.Name),&quot;			//  3..4
+			+ &quot; l.M_Product_ID, p.Name, po.VendorProductNo, l.M_InOutLine_ID, l.Line,&quot;        //  5..9
+			+ &quot; l.C_OrderLine_ID &quot; //  10
+			+ &quot; FROM M_InOutLine l &quot;
+			);
+<span class="nc bnc" id="L195" title="All 2 branches missed.">		if (Env.isBaseLanguage(Env.getCtx(), &quot;C_UOM&quot;))</span>
+<span class="nc" id="L196">			sql.append(&quot; LEFT OUTER JOIN C_UOM uom ON (l.C_UOM_ID=uom.C_UOM_ID)&quot;);</span>
+		else
+<span class="nc" id="L198">			sql.append(&quot; LEFT OUTER JOIN C_UOM_Trl uom ON (l.C_UOM_ID=uom.C_UOM_ID AND uom.AD_Language='&quot;)</span>
+<span class="nc" id="L199">				.append(Env.getAD_Language(Env.getCtx())).append(&quot;')&quot;);</span>
+
+<span class="nc" id="L201">		sql.append(&quot; LEFT OUTER JOIN M_Product p ON (l.M_Product_ID=p.M_Product_ID)&quot;)</span>
+<span class="nc" id="L202">			.append(&quot; INNER JOIN M_InOut io ON (l.M_InOut_ID=io.M_InOut_ID)&quot;);</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">		if(!isSOTrx)</span>
+<span class="nc" id="L204">			sql.append(&quot; LEFT OUTER JOIN M_MatchInv mi ON (l.M_InOutLine_ID=mi.M_InOutLine_ID)&quot;);</span>
+		else
+<span class="nc" id="L206">			sql.append(&quot; LEFT JOIN C_InvoiceLine il ON l.M_InOutLine_ID = il.M_InOutLine_ID&quot;);</span>
+<span class="nc" id="L207">		sql.append(&quot; LEFT OUTER JOIN M_Product_PO po ON (l.M_Product_ID = po.M_Product_ID AND io.C_BPartner_ID = po.C_BPartner_ID)&quot;)</span>
+
+<span class="nc" id="L209">			.append(&quot; WHERE l.M_InOut_ID=? AND l.MovementQty&lt;&gt;0 &quot;)</span>
+<span class="nc" id="L210">			.append(&quot;GROUP BY l.MovementQty, l.QtyEntered/l.MovementQty, &quot;</span>
+				+ &quot;l.C_UOM_ID, COALESCE(uom.UOMSymbol, uom.Name), &quot;
+				+ &quot;l.M_Product_ID, p.Name, po.VendorProductNo, l.M_InOutLine_ID, l.Line, l.C_OrderLine_ID, io.MovementType &quot;);
+<span class="nc bnc" id="L213" title="All 2 branches missed.">		if(!isSOTrx)</span>
+<span class="nc" id="L214">			sql.append(&quot; HAVING l.MovementQty-SUM(COALESCE(mi.Qty, 0)) &lt;&gt;0&quot;);</span>
+		else
+<span class="nc" id="L216">			sql.append(&quot; HAVING l.MovementQty-SUM(COALESCE(il.QtyInvoiced,0)) &lt;&gt;0&quot;);</span>
+<span class="nc" id="L217">		sql.append(&quot; ORDER BY l.Line&quot;);</span>
+<span class="nc" id="L218">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L219">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L222">			pstmt = DB.prepareStatement(sql.toString(), getTrxName());</span>
+<span class="nc" id="L223">			pstmt.setInt(1, M_InOut_ID);</span>
+<span class="nc" id="L224">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L227">				Vector&lt;Object&gt; line = new Vector&lt;Object&gt;(7);</span>
+<span class="nc" id="L228">				line.add(Boolean.FALSE);           //  0-Selection</span>
+<span class="nc" id="L229">				BigDecimal qtyMovement = rs.getBigDecimal(1);</span>
+<span class="nc" id="L230">				BigDecimal multiplier = rs.getBigDecimal(2);</span>
+<span class="nc" id="L231">				BigDecimal qtyEntered = qtyMovement.multiply(multiplier);</span>
+<span class="nc" id="L232">				line.add(qtyEntered);  //  1-Qty</span>
+<span class="nc" id="L233">				KeyNamePair pp = new KeyNamePair(rs.getInt(3), rs.getString(4).trim());</span>
+<span class="nc" id="L234">				line.add(pp);                           //  2-UOM</span>
+<span class="nc" id="L235">				pp = new KeyNamePair(rs.getInt(5), rs.getString(6));</span>
+<span class="nc" id="L236">				line.add(pp);                           //  3-Product</span>
+<span class="nc" id="L237">				line.add(rs.getString(7));				// 4-VendorProductNo</span>
+<span class="nc" id="L238">				int C_OrderLine_ID = rs.getInt(10);</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">				if (rs.wasNull())</span>
+<span class="nc" id="L240">					line.add(null);                     //  5-Order</span>
+				else
+<span class="nc" id="L242">					line.add(new KeyNamePair(C_OrderLine_ID,&quot;.&quot;));</span>
+<span class="nc" id="L243">				pp = new KeyNamePair(rs.getInt(8), rs.getString(9));</span>
+<span class="nc" id="L244">				line.add(pp);                           //  6-Ship</span>
+<span class="nc" id="L245">				line.add(null);                     	//  7-RMA</span>
+<span class="nc" id="L246">				data.add(line);</span>
+			}
+<span class="nc" id="L248">		}</span>
+<span class="nc" id="L249">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L251">			log.log(Level.SEVERE, sql.toString(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L255">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L256">			rs = null;</span>
+<span class="nc" id="L257">			pstmt = null;</span>
+		}
+
+<span class="nc" id="L260">		return data;</span>
+	}   //  getShipmentData
+
+	/**
+	 * Load RMA line records
+	 * @param M_RMA_ID RMA
+	 * @return RMA lines (selection,qty,[c_uom_id,uomSymbol/name],[m_product_id,name],null,null,null,[m_rmaline_id,line])
+	 */
+	protected Vector&lt;Vector&lt;Object&gt;&gt; getRMAData(int M_RMA_ID)
+	{
+<span class="nc" id="L270">	    p_order = null;</span>
+
+<span class="nc" id="L272">	    Vector&lt;Vector&lt;Object&gt;&gt; data = new Vector&lt;Vector&lt;Object&gt;&gt;();</span>
+<span class="nc" id="L273">	    StringBuilder sqlStmt = new StringBuilder();</span>
+<span class="nc" id="L274">	    sqlStmt.append(&quot;SELECT rl.M_RMALine_ID, rl.line, rl.Qty - COALESCE(rl.QtyInvoiced, 0), iol.M_Product_ID, p.Name, uom.C_UOM_ID, COALESCE(uom.UOMSymbol,uom.Name) &quot;);</span>
+<span class="nc" id="L275">	    sqlStmt.append(&quot;FROM M_RMALine rl INNER JOIN M_InOutLine iol ON rl.M_InOutLine_ID=iol.M_InOutLine_ID &quot;);</span>
+
+<span class="nc bnc" id="L277" title="All 2 branches missed.">	    if (Env.isBaseLanguage(Env.getCtx(), &quot;C_UOM&quot;))</span>
+        {
+<span class="nc" id="L279">	        sqlStmt.append(&quot;LEFT OUTER JOIN C_UOM uom ON (uom.C_UOM_ID=iol.C_UOM_ID) &quot;);</span>
+<span class="nc" id="L280">        }</span>
+	    else
+        {
+<span class="nc" id="L283">	        sqlStmt.append(&quot;LEFT OUTER JOIN C_UOM_Trl uom ON (uom.C_UOM_ID=iol.C_UOM_ID AND uom.AD_Language='&quot;);</span>
+<span class="nc" id="L284">	        sqlStmt.append(Env.getAD_Language(Env.getCtx())).append(&quot;') &quot;);</span>
+        }
+<span class="nc" id="L286">	    sqlStmt.append(&quot;LEFT OUTER JOIN M_Product p ON p.M_Product_ID=iol.M_Product_ID &quot;);</span>
+<span class="nc" id="L287">	    sqlStmt.append(&quot;WHERE rl.M_RMA_ID=? &quot;);</span>
+<span class="nc" id="L288">	    sqlStmt.append(&quot;AND rl.M_INOUTLINE_ID IS NOT NULL&quot;);</span>
+
+<span class="nc" id="L290">	    sqlStmt.append(&quot; UNION &quot;);</span>
+
+<span class="nc" id="L292">	    sqlStmt.append(&quot;SELECT rl.M_RMALine_ID, rl.line, rl.Qty - rl.QtyDelivered, 0, c.Name, uom.C_UOM_ID, COALESCE(uom.UOMSymbol,uom.Name) &quot;);</span>
+<span class="nc" id="L293">	    sqlStmt.append(&quot;FROM M_RMALine rl INNER JOIN C_Charge c ON c.C_Charge_ID = rl.C_Charge_ID &quot;);</span>
+<span class="nc bnc" id="L294" title="All 2 branches missed.">	    if (Env.isBaseLanguage(Env.getCtx(), &quot;C_UOM&quot;))</span>
+        {
+<span class="nc" id="L296">	        sqlStmt.append(&quot;LEFT OUTER JOIN C_UOM uom ON (uom.C_UOM_ID=100) &quot;);</span>
+<span class="nc" id="L297">        }</span>
+	    else
+        {
+<span class="nc" id="L300">	        sqlStmt.append(&quot;LEFT OUTER JOIN C_UOM_Trl uom ON (uom.C_UOM_ID=100 AND uom.AD_Language='&quot;);</span>
+<span class="nc" id="L301">	        sqlStmt.append(Env.getAD_Language(Env.getCtx())).append(&quot;') &quot;);</span>
+        }
+<span class="nc" id="L303">	    sqlStmt.append(&quot;WHERE rl.M_RMA_ID=? &quot;);</span>
+<span class="nc" id="L304">	    sqlStmt.append(&quot;AND rl.C_Charge_ID IS NOT NULL&quot;);</span>
+
+<span class="nc" id="L306">	    PreparedStatement pstmt = null;</span>
+<span class="nc" id="L307">	    ResultSet rs = null;</span>
+	    try
+	    {
+<span class="nc" id="L310">	        pstmt = DB.prepareStatement(sqlStmt.toString(), getTrxName());</span>
+<span class="nc" id="L311">	        pstmt.setInt(1, M_RMA_ID);</span>
+<span class="nc" id="L312">	        pstmt.setInt(2, M_RMA_ID);</span>
+<span class="nc" id="L313">	        rs = pstmt.executeQuery();</span>
+
+<span class="nc bnc" id="L315" title="All 2 branches missed.">	        while (rs.next())</span>
+            {
+<span class="nc" id="L317">	            Vector&lt;Object&gt; line = new Vector&lt;Object&gt;(7);</span>
+<span class="nc" id="L318">	            line.add(Boolean.FALSE);   // 0-Selection</span>
+<span class="nc" id="L319">	            line.add(rs.getBigDecimal(3));  // 1-Qty</span>
+<span class="nc" id="L320">	            KeyNamePair pp = new KeyNamePair(rs.getInt(6), rs.getString(7));</span>
+<span class="nc" id="L321">	            line.add(pp); // 2-UOM</span>
+<span class="nc" id="L322">	            pp = new KeyNamePair(rs.getInt(4), rs.getString(5));</span>
+<span class="nc" id="L323">	            line.add(pp); // 3-Product</span>
+<span class="nc" id="L324">	            line.add(null); //4-Vendor Product No</span>
+<span class="nc" id="L325">	            line.add(null); //5-Order</span>
+<span class="nc" id="L326">	            pp = new KeyNamePair(rs.getInt(1), rs.getString(2));</span>
+<span class="nc" id="L327">	            line.add(null);   //6-Ship</span>
+<span class="nc" id="L328">	            line.add(pp);   //7-RMA</span>
+<span class="nc" id="L329">	            data.add(line);</span>
+            }
+<span class="nc" id="L331">	    }</span>
+<span class="nc" id="L332">	    catch (Exception ex)</span>
+	    {
+<span class="nc" id="L334">	        log.log(Level.SEVERE, sqlStmt.toString(), ex);</span>
+	    }
+	    finally
+	    {
+<span class="nc" id="L338">	    	DB.close(rs, pstmt);</span>
+<span class="nc" id="L339">	    	rs = null; pstmt = null;</span>
+	    }
+
+<span class="nc" id="L342">	    return data;</span>
+	}
+
+	@Override
+	public void info(IMiniTable miniTable, IStatusBar statusBar)
+	{
+
+<span class="nc" id="L349">	}</span>
+
+	/**
+	 * set class/type of columns
+	 * @param miniTable
+	 */
+	protected void configureMiniTable (IMiniTable miniTable)
+	{
+<span class="nc" id="L357">		miniTable.setColumnClass(0, Boolean.class, false);      //  0-Selection</span>
+<span class="nc" id="L358">		miniTable.setColumnClass(1, BigDecimal.class, false);   //  1-Qty</span>
+<span class="nc" id="L359">		miniTable.setColumnClass(2, String.class, true);        //  2-UOM</span>
+<span class="nc" id="L360">		miniTable.setColumnClass(3, String.class, true);        //  3-Product</span>
+<span class="nc" id="L361">		miniTable.setColumnClass(4, String.class, true);        //  4-VendorProductNo</span>
+<span class="nc" id="L362">		miniTable.setColumnClass(5, String.class, true);        //  5-Order</span>
+<span class="nc" id="L363">		miniTable.setColumnClass(6, String.class, true);        //  6-Ship</span>
+<span class="nc" id="L364">		miniTable.setColumnClass(7, String.class, true);        //  7-Invoice</span>
+		//  Table UI
+<span class="nc" id="L366">		miniTable.autoSize();</span>
+<span class="nc" id="L367">	}</span>
+
+	/**
+	 *  Save - Create Invoice Lines
+	 *  @return true if saved
+	 */
+	@Override
+	public boolean save(IMiniTable miniTable, String trxName)
+	{
+		//  Invoice
+<span class="nc" id="L377">		int C_Invoice_ID = ((Integer)getGridTab().getValue(&quot;C_Invoice_ID&quot;)).intValue();</span>
+<span class="nc" id="L378">		MInvoice invoice = new MInvoice (Env.getCtx(), C_Invoice_ID, trxName);</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(invoice.toString());</span>
+
+<span class="nc bnc" id="L381" title="All 2 branches missed.">		if (p_order != null)</span>
+		{
+<span class="nc" id="L383">			invoice.setOrder(p_order);	//	overwrite header values</span>
+<span class="nc" id="L384">			invoice.saveEx();</span>
+		}
+
+<span class="nc bnc" id="L387" title="All 2 branches missed.">		if (m_rma != null)</span>
+		{
+<span class="nc" id="L389">			invoice.setM_RMA_ID(m_rma.getM_RMA_ID());</span>
+<span class="nc" id="L390">			invoice.saveEx();</span>
+		}
+
+		//  Lines
+<span class="nc bnc" id="L394" title="All 2 branches missed.">		for (int i = 0; i &lt; miniTable.getRowCount(); i++)</span>
+		{
+<span class="nc bnc" id="L396" title="All 2 branches missed.">			if (((Boolean)miniTable.getValueAt(i, 0)).booleanValue())</span>
+			{
+<span class="nc" id="L398">				MProduct product = null;</span>
+				//  variable values
+<span class="nc" id="L400">				BigDecimal QtyEntered = (BigDecimal)miniTable.getValueAt(i, 1);              //  1-Qty</span>
+
+<span class="nc" id="L402">				KeyNamePair pp = (KeyNamePair)miniTable.getValueAt(i, 2);   //  2-UOM</span>
+<span class="nc" id="L403">				int C_UOM_ID = pp.getKey();</span>
+				//
+<span class="nc" id="L405">				pp = (KeyNamePair)miniTable.getValueAt(i, 3);               //  3-Product</span>
+<span class="nc" id="L406">				int M_Product_ID = 0;</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">				if (pp != null)</span>
+<span class="nc" id="L408">					M_Product_ID = pp.getKey();</span>
+				//
+<span class="nc" id="L410">				int C_OrderLine_ID = 0;</span>
+<span class="nc" id="L411">				pp = (KeyNamePair)miniTable.getValueAt(i, 5);               //  5-OrderLine</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">				if (pp != null)</span>
+<span class="nc" id="L413">					C_OrderLine_ID = pp.getKey();</span>
+<span class="nc" id="L414">				int M_InOutLine_ID = 0;</span>
+<span class="nc" id="L415">				pp = (KeyNamePair)miniTable.getValueAt(i, 6);               //  6-Shipment</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">				if (pp != null)</span>
+<span class="nc" id="L417">					M_InOutLine_ID = pp.getKey();</span>
+				//
+<span class="nc" id="L419">				int M_RMALine_ID = 0;</span>
+<span class="nc" id="L420">				pp = (KeyNamePair)miniTable.getValueAt(i, 7);               //  7-RMALine</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">				if (pp != null)</span>
+<span class="nc" id="L422">					M_RMALine_ID = pp.getKey();</span>
+
+				//	Precision of Qty UOM
+<span class="nc" id="L425">				int precision = 2;</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">				if (M_Product_ID != 0)</span>
+				{
+<span class="nc" id="L428">					product = MProduct.get(Env.getCtx(), M_Product_ID);</span>
+<span class="nc" id="L429">					precision = product.getUOMPrecision();</span>
+				}
+<span class="nc" id="L431">				QtyEntered = QtyEntered.setScale(precision, RoundingMode.HALF_DOWN);</span>
+				//
+<span class="nc bnc" id="L433" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE)) log.fine(&quot;Line QtyEntered=&quot; + QtyEntered</span>
+<span class="nc" id="L434">					+ &quot;, Product_ID=&quot; + M_Product_ID</span>
+<span class="nc" id="L435">					+ &quot;, OrderLine_ID=&quot; + C_OrderLine_ID + &quot;, InOutLine_ID=&quot; + M_InOutLine_ID);</span>
+
+				//	Create new Invoice Line
+<span class="nc" id="L438">				invoice.createLineFrom(C_OrderLine_ID, M_InOutLine_ID, M_RMALine_ID, M_Product_ID, C_UOM_ID, QtyEntered);</span>
+			}   //   if selected
+		}   //  for all rows
+		
+		//  Update Header
+<span class="nc" id="L443">		invoice.updateFrom(p_order);</span>
+
+<span class="nc" id="L445">		return true;</span>
+	}   //  save
+
+	/**
+	 * 
+	 * @return column header names (select,quantity,uom,product,vendorProductNo,order,shipment,rma)
+	 */
+	protected Vector&lt;String&gt; getOISColumnNames()
+	{
+		//  Header Info
+<span class="nc" id="L455">	    Vector&lt;String&gt; columnNames = new Vector&lt;String&gt;(7);</span>
+<span class="nc" id="L456">	    columnNames.add(Msg.getMsg(Env.getCtx(), &quot;Select&quot;));</span>
+<span class="nc" id="L457">	    columnNames.add(Msg.translate(Env.getCtx(), &quot;Quantity&quot;));</span>
+<span class="nc" id="L458">	    columnNames.add(Msg.translate(Env.getCtx(), &quot;C_UOM_ID&quot;));</span>
+<span class="nc" id="L459">	    columnNames.add(Msg.translate(Env.getCtx(), &quot;M_Product_ID&quot;));</span>
+<span class="nc" id="L460">	    columnNames.add(Msg.getElement(Env.getCtx(), &quot;VendorProductNo&quot;, isSOTrx));</span>
+<span class="nc" id="L461">	    columnNames.add(Msg.getElement(Env.getCtx(), &quot;C_Order_ID&quot;, isSOTrx));</span>
+<span class="nc" id="L462">	    columnNames.add(Msg.getElement(Env.getCtx(), &quot;M_InOut_ID&quot;, isSOTrx));</span>
+<span class="nc" id="L463">	    columnNames.add(Msg.getElement(Env.getCtx(), &quot;M_RMA_ID&quot;, isSOTrx));</span>
+
+<span class="nc" id="L465">	    return columnNames;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

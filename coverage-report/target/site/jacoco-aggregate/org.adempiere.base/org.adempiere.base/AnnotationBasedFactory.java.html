@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AnnotationBasedFactory.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.base</a> &gt; <span class="el_source">AnnotationBasedFactory.java</span></div><h1>AnnotationBasedFactory.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.base;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+
+import org.compiere.Adempiere;
+import org.compiere.util.CLogger;
+import org.compiere.util.Ini;
+
+import io.github.classgraph.ClassGraph.FailureHandler;
+
+/**
+ * Base class for factories that discover their classes by means of annotation scanning.
+ * @author Saulo Gil
+ */
+<span class="nc" id="L36">public abstract class AnnotationBasedFactory {</span>
+
+	private boolean scanSuccessful;
+
+<span class="nc" id="L40">	private final AtomicBoolean scanCompleted = new AtomicBoolean(false);</span>
+
+	/**
+	 * Bogus {@link Future} used only to block the calling thread.
+	 * @see #blockWhileScanning()
+	 */
+<span class="nc" id="L46">	private CompletableFuture&lt;Void&gt; threadBlockerFuture = new CompletableFuture&lt;&gt;();</span>
+
+	/**
+	 * {@link Executor} to be used for asynchronous class scanning. It never gets shut down 
+	 * since there's no way to tell when it wouldn't be needed anymore. However, footprint
+	 * should be minimal when unused.
+	 */
+<span class="nc" id="L53">	private static final ExecutorService executorService = Executors.newCachedThreadPool();</span>
+
+<span class="nc" id="L55">	private final static CLogger s_log = CLogger.getCLogger(AnnotationBasedFactory.class);</span>
+
+<span class="nc" id="L57">	private final FailureHandler defaultScanFailureHandler = throwable -&gt; {</span>
+<span class="nc" id="L58">		s_log.severe(throwable.getMessage());</span>
+<span class="nc" id="L59">		signalScanCompletion(false);</span>
+<span class="nc" id="L60">	};</span>
+
+	protected void signalScanCompletion(boolean succeeded) {
+<span class="nc" id="L63">		scanSuccessful = succeeded;</span>
+<span class="nc" id="L64">		scanCompleted.set(true);</span>
+		try {
+<span class="nc" id="L66">			threadBlockerFuture.complete(null);</span>
+<span class="nc" id="L67">		} catch (Exception e) { }</span>
+<span class="nc" id="L68">	}</span>
+
+	/**
+	 * Wait for completion of annotation scanning
+	 */
+	protected void blockWhileScanning() {
+<span class="nc" id="L74">		String className = this.getClass().getSimpleName();</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">		if(!scanCompleted.get())</span>
+			try {
+<span class="nc" id="L77">				Instant start = Instant.now();</span>
+<span class="nc" id="L78">				threadBlockerFuture.get();</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">				if (s_log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L80">					s_log.fine(() -&gt; String.format(&quot;%s waited %d(ms) for class scanning to end&quot;</span>
+<span class="nc" id="L81">							, className, Duration.between(start, Instant.now()).toMillis()));</span>
+<span class="nc" id="L82">			} catch (Exception e) {</span>
+<span class="nc" id="L83">				e.printStackTrace();</span>
+<span class="nc" id="L84">				throw new RuntimeException(e);</span>
+			}
+
+<span class="nc bnc" id="L87" title="All 2 branches missed.">		if(!scanSuccessful)</span>
+<span class="nc" id="L88">			throw new RuntimeException(className + &quot; - annotation scan unsuccessful&quot;);</span>
+<span class="nc" id="L89">	}</span>
+
+	protected ExecutorService getExecutorService() {
+<span class="nc" id="L92">		return executorService;</span>
+	}
+
+	/**
+	 * Suggests a maximum amount of threads to be allocated to annotation scanning
+	 * for each individual factory.
+	 * @return suggested maximum amount of threads
+	 * @see #executorService
+	 * @see Adempiere#getThreadPoolExecutor()
+	 */
+	protected int getMaxThreads() {
+<span class="nc" id="L103">		int max = Runtime.getRuntime().availableProcessors() * 5;</span>
+<span class="nc" id="L104">		int defaultMax = max;</span>
+<span class="nc" id="L105">		Properties properties = Ini.getProperties();</span>
+<span class="nc" id="L106">		String maxSize = properties.getProperty(&quot;MaxThreadPoolSize&quot;);</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">		if (maxSize != null) {</span>
+			try {
+<span class="nc" id="L109">				max = Integer.parseInt(maxSize) / 5;</span>
+<span class="nc" id="L110">			} catch (Exception e) {}</span>
+		}
+<span class="nc bnc" id="L112" title="All 2 branches missed.">		if (max &lt;= 0)</span>
+<span class="nc" id="L113">			max = defaultMax;</span>
+<span class="nc" id="L114">		return max;</span>
+	}
+
+	protected FailureHandler getScanFailureHandler() {
+<span class="nc" id="L118">		return defaultScanFailureHandler;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

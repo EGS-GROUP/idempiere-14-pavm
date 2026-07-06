@@ -1,0 +1,2896 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DB.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">DB.java</span></div><h1>DB.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.math.BigDecimal;
+import java.sql.CallableStatement;
+import java.sql.Clob;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.sql.SQLWarning;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.logging.Level;
+
+import javax.sql.RowSet;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.Adempiere;
+import org.compiere.db.AdempiereDatabase;
+import org.compiere.db.CConnection;
+import org.compiere.db.Database;
+import org.compiere.db.ProxyFactory;
+import org.compiere.model.MSequence;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MSystem;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.POResultSet;
+import org.compiere.model.SystemIDs;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ *  Static methods for JDBC interface
+ *
+ *  @author     Jorg Janke
+ *  @version    $Id: DB.java,v 1.8 2006/10/09 00:22:29 jjanke Exp $
+ *  ---
+ *  @author Ashley Ramdass (Posterita)
+ *		&lt;li&gt;Modifications: removed static references to database connection and instead always
+ *			get a new connection from database pool manager which manages all connections
+ *			set rw/ro properties for the connection accordingly.
+ *
+ *  @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 		&lt;li&gt;BF [ 1647864 ] WAN: delete record error
+ * 		&lt;li&gt;FR [ 1884435 ] Add more DB.getSQLValue helper methods
+ * 		&lt;li&gt;FR [ 1904460 ] DB.executeUpdate should handle Boolean params
+ * 		&lt;li&gt;BF [ 1962568 ] DB.executeUpdate should handle null params
+ * 		&lt;li&gt;FR [ 1984268 ] DB.executeUpdateEx should throw DBException
+ * 		&lt;li&gt;FR [ 1986583 ] Add DB.executeUpdateEx(String, Object[], String)
+ * 		&lt;li&gt;BF [ 2030233 ] Remove duplicate code from DB class
+ * 		&lt;li&gt;FR [ 2107062 ] Add more DB.getKeyNamePairs methods
+ *		&lt;li&gt;FR [ 2448461 ] Introduce DB.getSQLValue*Ex methods
+ *		&lt;li&gt;FR [ 2781053 ] Introduce DB.getValueNamePairs
+ *		&lt;li&gt;FR [ 2818480 ] Introduce DB.createT_Selection helper method
+ *			https://sourceforge.net/p/adempiere/feature-requests/757/
+ *  @author Teo Sarca, teo.sarca@gmail.com
+ * 		&lt;li&gt;BF [ 2873324 ] DB.TO_NUMBER should be a static method
+ * 			https://sourceforge.net/p/adempiere/bugs/2160/
+ * 		&lt;li&gt;FR [ 2873891 ] DB.getKeyNamePairs should use trxName
+ * 			https://sourceforge.net/p/adempiere/feature-requests/847/
+ *  @author Paul Bowden, phib BF 2900767 Zoom to child tab - inefficient queries
+ *  @see https://sourceforge.net/p/adempiere/bugs/2222/
+ */
+<span class="nc" id="L91">public final class DB</span>
+{
+	/** Connection Descriptor           */
+<span class="nc" id="L94">	private static CConnection      s_cc = null;</span>
+	/**	Logger							*/
+<span class="nc" id="L96">	private static CLogger			log = CLogger.getCLogger (DB.class);</span>
+	/** Lock object for mutual access to {@link #s_cc} */
+<span class="nc" id="L98">	private static Object			s_ccLock = new Object();</span>
+
+	/** SQL Statement Separator &quot;; &quot;	*/
+	public static final String SQLSTATEMENT_SEPARATOR = &quot;; &quot;;
+
+	/**
+	 * 	Update Mail Settings for System Client and System User (idempiereEnv.properties)
+	 */
+	public static void updateMail()
+	{
+		//	Get Property File
+<span class="nc" id="L109">		String envName = Ini.getAdempiereHome();</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">		if (envName == null)</span>
+<span class="nc" id="L111">			return;</span>
+<span class="nc" id="L112">		envName += File.separator + &quot;idempiereEnv.properties&quot;;</span>
+<span class="nc" id="L113">		File envFile = new File(envName);</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">		if (!envFile.exists())</span>
+<span class="nc" id="L115">			return;</span>
+
+<span class="nc" id="L117">		Properties env = new Properties();</span>
+		try
+		{
+<span class="nc" id="L120">			FileInputStream in = new FileInputStream(envFile);</span>
+<span class="nc" id="L121">			env.load(in);</span>
+<span class="nc" id="L122">			in.close();</span>
+<span class="nc" id="L123">		}</span>
+<span class="nc" id="L124">		catch (Exception e)</span>
+		{
+<span class="nc" id="L126">			return;</span>
+		}
+<span class="nc" id="L128">		String updated = env.getProperty(&quot;ADEMPIERE_MAIL_UPDATED&quot;);</span>
+<span class="nc bnc" id="L129" title="All 4 branches missed.">		if (updated != null &amp;&amp; updated.equals(&quot;Y&quot;))</span>
+<span class="nc" id="L130">			return;</span>
+
+		//	See org.compiere.install.ConfigurationData
+<span class="nc" id="L133">		String server = env.getProperty(&quot;ADEMPIERE_MAIL_SERVER&quot;);</span>
+<span class="nc bnc" id="L134" title="All 4 branches missed.">		if (server == null || server.length() == 0)</span>
+<span class="nc" id="L135">			return;</span>
+<span class="nc" id="L136">		String adminEMail = env.getProperty(&quot;ADEMPIERE_ADMIN_EMAIL&quot;);</span>
+<span class="nc bnc" id="L137" title="All 4 branches missed.">		if (adminEMail == null || adminEMail.length() == 0)</span>
+<span class="nc" id="L138">			return;</span>
+<span class="nc" id="L139">		String mailUser = env.getProperty(&quot;ADEMPIERE_MAIL_USER&quot;);</span>
+<span class="nc bnc" id="L140" title="All 4 branches missed.">		if (mailUser == null || mailUser.length() == 0)</span>
+<span class="nc" id="L141">			return;</span>
+		String mailPassword;
+<span class="nc bnc" id="L143" title="All 4 branches missed.">		if (!env.containsKey(&quot;ADEMPIERE_MAIL_PASSWORD&quot;) &amp;&amp; MSystem.isSecureProps())</span>
+<span class="nc" id="L144">			mailPassword = Ini.getVar(&quot;ADEMPIERE_MAIL_PASSWORD&quot;);</span>
+		else
+<span class="nc" id="L146">			mailPassword = env.getProperty(&quot;ADEMPIERE_MAIL_PASSWORD&quot;);</span>
+		//
+<span class="nc" id="L148">		StringBuilder sql = new StringBuilder(&quot;UPDATE AD_Client SET&quot;)</span>
+<span class="nc" id="L149">			.append(&quot; SMTPHost=&quot;).append(DB.TO_STRING(server))</span>
+<span class="nc" id="L150">			.append(&quot;, RequestEMail=&quot;).append(DB.TO_STRING(adminEMail))</span>
+<span class="nc" id="L151">			.append(&quot;, RequestUser=&quot;).append(DB.TO_STRING(mailUser))</span>
+<span class="nc" id="L152">			.append(&quot;, RequestUserPW=&quot;).append(DB.TO_STRING(mailPassword))</span>
+<span class="nc" id="L153">			.append(&quot;, IsSMTPAuthorization='Y' WHERE AD_Client_ID=0&quot;);</span>
+<span class="nc" id="L154">		int no = DB.executeUpdate(sql.toString(), null);</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Client #&quot;+no);</span>
+		//
+<span class="nc" id="L157">		sql = new StringBuilder(&quot;UPDATE AD_User SET &quot;)</span>
+<span class="nc" id="L158">			.append(&quot; EMail=&quot;).append(DB.TO_STRING(adminEMail))</span>
+<span class="nc" id="L159">			.append(&quot;, EMailUser=&quot;).append(DB.TO_STRING(mailUser))</span>
+<span class="nc" id="L160">			.append(&quot;, EMailUserPW=&quot;).append(DB.TO_STRING(mailPassword))</span>
+<span class="nc" id="L161">			.append(&quot; WHERE AD_User_ID IN (?,?,?)&quot;);</span>
+<span class="nc" id="L162">		no = DB.executeUpdate(sql.toString(), new Object[]{SystemIDs.USER_SYSTEM_DEPRECATED, SystemIDs.USER_SYSTEM, SystemIDs.USER_SUPERUSER}, false, null);</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;User #&quot;+no);</span>
+		//
+<span class="nc" id="L165">		try (FileOutputStream out = new FileOutputStream(envFile))</span>
+		{
+<span class="nc" id="L167">			env.setProperty(&quot;ADEMPIERE_MAIL_UPDATED&quot;, &quot;Y&quot;);</span>
+<span class="nc" id="L168">			env.store(out, &quot;&quot;);</span>
+<span class="nc" id="L169">			out.flush();</span>
+		}
+<span class="nc" id="L171">		catch (Exception e)</span>
+		{
+		}
+
+<span class="nc" id="L175">	}	//	updateMail</span>
+
+	/**
+	 *  Set active connection profile
+	 *  @param cc connection profile
+	 */
+	public synchronized static void setDBTarget (CConnection cc)
+	{
+<span class="nc bnc" id="L183" title="All 2 branches missed.">		if (cc == null)</span>
+<span class="nc" id="L184">			throw new IllegalArgumentException(&quot;Connection is NULL&quot;);</span>
+
+<span class="nc bnc" id="L186" title="All 4 branches missed.">		if (s_cc != null &amp;&amp; s_cc.equals(cc))</span>
+<span class="nc" id="L187">			return;</span>
+
+<span class="nc" id="L189">		DB.closeTarget();</span>
+		//
+<span class="nc" id="L191">		synchronized(s_ccLock)</span>
+		{
+<span class="nc" id="L193">			s_cc = cc;</span>
+		}
+
+<span class="nc" id="L196">		s_cc.setDataSource();</span>
+
+<span class="nc bnc" id="L198" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(s_cc + &quot; - DS=&quot; + s_cc.isDataSource());</span>
+<span class="nc" id="L199">	}   //  setDBTarget</span>
+
+	/**
+	 * Connect to database and initialise all connections.
+	 * @return True if success, false otherwise
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean connect() {
+		//direct connection
+<span class="nc" id="L208">		boolean success =false;</span>
+		try
+		{
+<span class="nc" id="L211">            Connection conn = getConnection();</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">            if (conn != null)</span>
+            {
+<span class="nc" id="L214">                s_cc.readInfo(conn);</span>
+<span class="nc" id="L215">                conn.close();</span>
+            }
+
+<span class="nc bnc" id="L218" title="All 2 branches missed.">            success = (conn != null);</span>
+<span class="nc" id="L219">		}</span>
+<span class="nc" id="L220">        catch (Exception e)</span>
+		{
+        	//logging here could cause infinite loop
+            //log.log(Level.SEVERE, &quot;Could not connect to DB&quot;, e);
+<span class="nc" id="L224">        	System.err.println(&quot;Could not connect to DB - &quot; + e.getLocalizedMessage());</span>
+<span class="nc" id="L225">        	e.printStackTrace();</span>
+<span class="nc" id="L226">            success = false;</span>
+		}
+<span class="nc" id="L228">		return success;</span>
+	}
+
+	/**
+	 * Is connected to DB.
+	 * @return true, if connected to database
+	 */
+	public static boolean isConnected()
+	{
+		//bug [1637432]
+<span class="nc bnc" id="L238" title="All 2 branches missed.">		if (s_cc == null) return false;</span>
+
+		//get connection
+<span class="nc" id="L241">		boolean success = false;</span>
+		try
+		{
+<span class="nc" id="L244">            Connection conn = getConnection();   //  try to get a connection</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">            if (conn != null)</span>
+            {
+<span class="nc" id="L247">                conn.close();</span>
+<span class="nc" id="L248">                success = true;</span>
+<span class="nc" id="L249">            }</span>
+<span class="nc" id="L250">            else success = false;</span>
+<span class="nc" id="L251">		}</span>
+<span class="nc" id="L252">		catch (Exception e)</span>
+		{
+<span class="nc" id="L254">			success = false;</span>
+		}
+<span class="nc" id="L256">		return success;</span>
+	}
+
+	/**
+	 * Get auto commit connection from connection pool.
+	 * @return {@link Connection}
+	 */
+	public static Connection getConnection() 
+	{
+<span class="nc" id="L265">		return getConnection(true);</span>
+	}
+	
+	/**
+	 * Get auto or not auto commit connection from connection pool.&lt;br/&gt;
+	 * Usually, developer should use @{@link #getConnection()} instead to get auto commit connection 
+	 * and use {@link Trx} to works with not autoCommit connection.
+	 * @param autoCommit
+	 * @return {@link Connection}
+	 */
+	public static Connection getConnection(boolean autoCommit) 
+	{
+<span class="nc" id="L277">		return createConnection(autoCommit, Connection.TRANSACTION_READ_COMMITTED);</span>
+	}
+
+	/**
+	 *	Return a replica connection if possible, otherwise from pool.
+	 *  @return Connection (r/o)
+	 */
+	public static Connection getReportingConnectionRO ()
+	{
+<span class="nc" id="L286">		Connection conn = DBReadReplica.getConnectionRO();</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		if (conn == null)</span>
+<span class="nc" id="L288">			conn = getConnection();</span>
+<span class="nc" id="L289">        return conn;</span>
+	}	//	getReportingConnectionRO
+
+	/**
+	 *	Create new Connection.&lt;br/&gt;
+	 *  The connection must be closed explicitly by the caller.&lt;br/&gt;
+	 *  Usually, developer should not call this directly.
+	 *
+	 *  @param autoCommit auto commit
+	 *  @param trxLevel - Connection.TRANSACTION_READ_UNCOMMITTED, Connection.TRANSACTION_READ_COMMITTED, Connection.TRANSACTION_REPEATABLE_READ, or Connection.TRANSACTION_READ_COMMITTED.
+	 *  @return Connection connection
+	 */
+	public static Connection createConnection (boolean autoCommit, int trxLevel)
+	{
+<span class="nc" id="L303">		Connection conn = s_cc.getConnection (autoCommit, trxLevel);</span>
+
+<span class="nc bnc" id="L305" title="All 2 branches missed.">		if (conn == null)</span>
+        {
+<span class="nc" id="L307">            throw new IllegalStateException(&quot;DB.createConnection - @NoDBConnection@&quot;);</span>
+        }
+		
+		//hengsin: failed to set autocommit can lead to severe lock up of the system
+        try {
+<span class="nc bnc" id="L312" title="All 4 branches missed.">	        if (conn != null &amp;&amp; conn.getAutoCommit() != autoCommit)</span>
+	        {
+<span class="nc" id="L314">	        	throw new IllegalStateException(&quot;Failed to set the requested auto commit mode on connection. [autoCommit=&quot; + autoCommit +&quot;]&quot;);</span>
+	        }
+<span class="nc" id="L316">        } catch (SQLException e) {}</span>
+
+<span class="nc" id="L318">		return conn;</span>
+	}	//	createConnection
+
+
+	/**
+	 *  Get Database Adapter.&lt;br/&gt;
+	 *  Access to database specific functionality.
+	 *  @return iDempiere Database Adapter
+	 */
+	public static AdempiereDatabase getDatabase()
+	{
+<span class="nc bnc" id="L329" title="All 2 branches missed.">		if (s_cc != null)</span>
+<span class="nc" id="L330">			return s_cc.getDatabase();</span>
+<span class="nc" id="L331">		log.severe(&quot;No Database Connection&quot;);</span>
+<span class="nc" id="L332">		return null;</span>
+	}   //  getDatabase
+
+	/**
+	 *  Get Database Adapter.&lt;br/&gt;
+	 *  Access to database specific functionality.
+	 *  @param URL JDBC connection url
+	 *  @return iDempiere Database Adapter
+	 */
+	public static AdempiereDatabase getDatabase(String URL)
+	{
+<span class="nc" id="L343">		return Database.getDatabaseFromURL(URL);</span>
+	}   //  getDatabase
+
+	/**
+	 * 	Is connected to Oracle DB  ?
+	 *	@return true if connected to Oracle
+	 */
+	public static boolean isOracle()
+	{
+<span class="nc bnc" id="L352" title="All 2 branches missed.">		if (s_cc != null)</span>
+<span class="nc" id="L353">			return s_cc.isOracle();</span>
+<span class="nc" id="L354">		log.severe(&quot;No Database Connection&quot;);</span>
+<span class="nc" id="L355">		return false;</span>
+	}	//	isOracle
+
+	/**
+	 * 	Is connected to PostgreSQL DB ?
+	 *	@return true if connected to PostgreSQL
+	 */
+	public static boolean isPostgreSQL()
+	{
+<span class="nc bnc" id="L364" title="All 2 branches missed.">		if (s_cc != null)</span>
+<span class="nc" id="L365">			return s_cc.isPostgreSQL();</span>
+<span class="nc" id="L366">		log.severe(&quot;No Database&quot;);</span>
+<span class="nc" id="L367">		return false;</span>
+	}	//	isPostgreSQL
+
+	/**
+	 * 	Get Database Info
+	 *	@return info
+	 */
+	public static String getDatabaseInfo()
+	{
+<span class="nc bnc" id="L376" title="All 2 branches missed.">		if (s_cc != null)</span>
+<span class="nc" id="L377">			return s_cc.getDBInfo();</span>
+<span class="nc" id="L378">		return &quot;No Database&quot;;</span>
+	}	//	getDatabaseInfK
+
+	/**
+	 *  Check Build Version of Database against running client
+	 *  @param ctx context
+	 *  @return true if Database version (date) is the same
+	 */
+	public static boolean isBuildOK (Properties ctx)
+	{
+		//  Check Build
+<span class="nc" id="L389">        String buildClient = Adempiere.getVersion();</span>
+<span class="nc" id="L390">        String buildDatabase = &quot;&quot;;</span>
+<span class="nc" id="L391">        boolean failOnBuild = false;</span>
+<span class="nc" id="L392">        String sql = &quot;SELECT LastBuildInfo, IsFailOnBuildDiffer FROM AD_System&quot;;</span>
+<span class="nc" id="L393">        PreparedStatement pstmt = null;</span>
+<span class="nc" id="L394">        ResultSet rs = null;</span>
+        try
+        {
+<span class="nc" id="L397">            pstmt = prepareStatement(sql, null);</span>
+<span class="nc" id="L398">            rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">            if (rs.next()) {</span>
+<span class="nc" id="L400">                buildDatabase = rs.getString(1);</span>
+<span class="nc" id="L401">                failOnBuild = rs.getString(2).equals(&quot;Y&quot;);</span>
+            }
+<span class="nc" id="L403">        }</span>
+<span class="nc" id="L404">        catch (SQLException e)</span>
+        {
+<span class="nc" id="L406">            log.log(Level.SEVERE, &quot;Problem with AD_System Table - Run system.sql script - &quot; + e.toString());</span>
+<span class="nc" id="L407">            return false;</span>
+        }
+        finally
+        {
+<span class="nc" id="L411">            close(rs);</span>
+<span class="nc" id="L412">            close(pstmt);</span>
+<span class="nc" id="L413">            rs= null;</span>
+<span class="nc" id="L414">            pstmt = null;</span>
+        }
+<span class="nc bnc" id="L416" title="All 2 branches missed.">        if (log.isLoggable(Level.INFO)){</span>
+<span class="nc" id="L417">        	log.info(&quot;Build DB=&quot; + buildDatabase);</span>
+<span class="nc" id="L418">        	log.info(&quot;Build Cl=&quot; + buildClient);</span>
+        }
+        //  Identical DB version
+<span class="nc bnc" id="L421" title="All 2 branches missed.">        if (buildClient.equals(buildDatabase))</span>
+<span class="nc" id="L422">            return true;</span>
+
+<span class="nc" id="L424">        String AD_Message = &quot;BuildVersionError&quot;;</span>
+        // The program assumes build version {0}, but database has build Version {1}.
+<span class="nc" id="L426">        String msg = Msg.getMsg(ctx, AD_Message, new Object[] {buildClient, buildDatabase});   //  complete message</span>
+<span class="nc bnc" id="L427" title="All 2 branches missed.">        if (! failOnBuild) {</span>
+<span class="nc" id="L428">        	log.warning(msg);</span>
+<span class="nc" id="L429">        	return true;</span>
+        }
+        
+<span class="nc" id="L432">        log.log(Level.SEVERE, msg);</span>
+<span class="nc" id="L433">        return false;</span>
+	}   //  isDatabaseOK
+
+	/**
+	 *	Close DB connection profile
+	 */
+	public static void closeTarget()
+	{
+
+<span class="nc" id="L442">        boolean closed = false;</span>
+
+        //  CConnection
+<span class="nc bnc" id="L445" title="All 2 branches missed.">        if (s_cc != null)</span>
+        {
+<span class="nc" id="L447">            closed = true;</span>
+<span class="nc" id="L448">            s_cc.setDataSource(null);</span>
+        }
+<span class="nc" id="L450">        s_cc = null;</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">        if (closed)</span>
+<span class="nc" id="L452">            log.fine(&quot;closed&quot;);</span>
+<span class="nc" id="L453">	}	//	closeTarget</span>
+
+	/**
+	 *	Create callable statement proxy
+	 *  @param sql
+	 *  @return Callable Statement
+	 */
+	public static CallableStatement prepareCall(String sql)
+	{
+<span class="nc" id="L462">		return prepareCall(sql, ResultSet.CONCUR_UPDATABLE, null);</span>
+	}
+
+	/**
+	 *	Create callable statement proxy
+	 *  @param SQL
+	 *  @param resultSetConcurrency
+	 *  @param trxName
+	 *  @return Callable Statement
+	 */
+	public static CallableStatement prepareCall(String SQL, int resultSetConcurrency, String trxName)
+	{
+<span class="nc bnc" id="L474" title="All 4 branches missed.">		if (SQL == null || SQL.length() == 0)</span>
+<span class="nc" id="L475">			throw new IllegalArgumentException(&quot;Required parameter missing - &quot; + SQL);</span>
+<span class="nc" id="L476">		return ProxyFactory.newCCallableStatement(ResultSet.TYPE_FORWARD_ONLY, resultSetConcurrency, SQL,</span>
+<span class="nc" id="L477">				trxName);</span>
+	}	//	prepareCall
+
+	/**
+	 *	Prepare Statement
+	 *  @param sql
+	 *  @return Prepared Statement
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static CPreparedStatement prepareStatement (String sql)
+	{
+<span class="nc" id="L489">		return prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, null);</span>
+	}	//	prepareStatement
+
+	/**
+	 *	Create prepare Statement proxy
+	 *  @param sql
+	 * 	@param trxName transaction
+	 *  @return Prepared Statement
+	 */
+	public static CPreparedStatement prepareStatement (String sql, String trxName)
+	{
+<span class="nc" id="L500">		return prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, trxName);</span>
+	}	//	prepareStatement
+
+	/**
+	 *	Create prepare Statement proxy
+	 *  @param connection
+	 *  @param sql
+	 *  @return Prepared Statement
+	 */
+	public static CPreparedStatement prepareStatement (Connection connection, String sql)
+	{
+<span class="nc" id="L511">		return prepareStatement(connection, sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+	}	//	prepareStatement
+	
+	/**
+	 *	Prepare Statement.
+	 *  @param sql
+	 *  @param resultSetType - ResultSet.TYPE_FORWARD_ONLY, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.TYPE_SCROLL_SENSITIVE
+	 *  @param resultSetConcurrency - ResultSet.CONCUR_READ_ONLY or ResultSet.CONCUR_UPDATABLE
+	 *  @return Prepared Statement
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static CPreparedStatement prepareStatement (String sql,
+		int resultSetType, int resultSetConcurrency)
+	{
+<span class="nc" id="L526">		return prepareStatement(sql, resultSetType, resultSetConcurrency, null);</span>
+	}	//	prepareStatement
+
+	/**
+	 *	Create prepare Statement proxy
+	 *  @param sql
+	 *  @param resultSetType - ResultSet.TYPE_FORWARD_ONLY, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.TYPE_SCROLL_SENSITIVE
+	 *  @param resultSetConcurrency - ResultSet.CONCUR_READ_ONLY or ResultSet.CONCUR_UPDATABLE
+	 * 	@param trxName transaction name
+	 *  @return Prepared Statement
+	 */
+	public static CPreparedStatement prepareStatement(String sql,
+		int resultSetType, int resultSetConcurrency, String trxName)
+	{
+<span class="nc bnc" id="L540" title="All 4 branches missed.">		if (sql == null || sql.length() == 0)</span>
+<span class="nc" id="L541">			throw new IllegalArgumentException(&quot;No SQL&quot;);</span>
+		//
+<span class="nc" id="L543">		return ProxyFactory.newCPreparedStatement(resultSetType, resultSetConcurrency, sql, trxName);</span>
+	}	//	prepareStatement
+
+	/**
+	 *	Create prepare Statement proxy
+	 *  @param connection
+	 *  @param sql sql statement
+	 *  @param resultSetType - ResultSet.TYPE_FORWARD_ONLY, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.TYPE_SCROLL_SENSITIVE
+	 *  @param resultSetConcurrency - ResultSet.CONCUR_READ_ONLY or ResultSet.CONCUR_UPDATABLE
+	 *  @return Prepared Statement r/o or r/w depending on concur
+	 */
+	public static CPreparedStatement prepareStatement(Connection connection, String sql,
+		int resultSetType, int resultSetConcurrency)
+	{
+<span class="nc bnc" id="L557" title="All 4 branches missed.">		if (sql == null || sql.length() == 0)</span>
+<span class="nc" id="L558">			throw new IllegalArgumentException(&quot;No SQL&quot;);</span>
+		//
+<span class="nc" id="L560">		return ProxyFactory.newCPreparedStatement(resultSetType, resultSetConcurrency, sql, connection);</span>
+	}	//	prepareStatement
+	
+	/**
+	 *	Create Statement proxy
+	 *  @return Statement
+	 */
+	public static Statement createStatement()
+	{
+<span class="nc" id="L569">		return createStatement (ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, null);</span>
+	}	//	createStatement
+
+	/**
+	 *	Create Statement Proxy.
+	 *  @param resultSetType - ResultSet.TYPE_FORWARD_ONLY, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.TYPE_SCROLL_SENSITIVE
+	 *  @param resultSetConcurrency - ResultSet.CONCUR_READ_ONLY or ResultSet.CONCUR_UPDATABLE
+	 * 	@param trxName transaction name
+	 *  @return Statement
+	 */
+	public static Statement createStatement(int resultSetType, int resultSetConcurrency, String trxName)
+	{
+<span class="nc" id="L581">		return ProxyFactory.newCStatement(resultSetType, resultSetConcurrency, trxName);</span>
+	}	//	createStatement
+
+	/**
+	 * Set parameters for given statement
+	 * @param stmt statements
+	 * @param params parameters array; if null or empty array, no parameters are set
+	 */
+	public static void setParameters(PreparedStatement stmt, Object[] params)
+	throws SQLException
+	{
+<span class="nc bnc" id="L592" title="All 4 branches missed.">		if (params == null || params.length == 0) {</span>
+<span class="nc" id="L593">			return;</span>
+		}
+		//
+<span class="nc bnc" id="L596" title="All 2 branches missed.">		for (int i = 0; i &lt; params.length; i++)</span>
+		{
+<span class="nc" id="L598">			setParameter(stmt, i+1, params[i]);</span>
+		}
+<span class="nc" id="L600">	}</span>
+
+	/**
+	 * Set parameters for given statement
+	 * @param stmt statements
+	 * @param params parameters list; if null or empty list, no parameters are set
+	 */
+	public static void setParameters(PreparedStatement stmt, List&lt;?&gt; params)
+	throws SQLException
+	{
+<span class="nc bnc" id="L610" title="All 4 branches missed.">		if (params == null || params.size() == 0)</span>
+		{
+<span class="nc" id="L612">			return;</span>
+		}
+<span class="nc bnc" id="L614" title="All 2 branches missed.">		for (int i = 0; i &lt; params.size(); i++)</span>
+		{
+<span class="nc" id="L616">			setParameter(stmt, i+1, params.get(i));</span>
+		}
+<span class="nc" id="L618">	}</span>
+
+	/**
+	 * Set PreparedStatement's parameter.&lt;br/&gt;
+	 * Similar with calling &lt;code&gt;pstmt.setObject(index, param)&lt;/code&gt;
+	 * @param pstmt
+	 * @param index
+	 * @param param
+	 * @throws SQLException
+	 */
+	public static void setParameter(PreparedStatement pstmt, int index, Object param)
+	throws SQLException
+	{
+<span class="nc bnc" id="L631" title="All 2 branches missed.">		if (param == null)</span>
+<span class="nc" id="L632">			pstmt.setObject(index, null);</span>
+<span class="nc bnc" id="L633" title="All 2 branches missed.">		else if (param instanceof String)</span>
+<span class="nc" id="L634">			pstmt.setString(index, (String)param);</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">		else if (param instanceof Integer)</span>
+<span class="nc" id="L636">			pstmt.setInt(index, ((Integer)param).intValue());</span>
+<span class="nc bnc" id="L637" title="All 2 branches missed.">		else if (param instanceof BigDecimal)</span>
+<span class="nc" id="L638">			pstmt.setBigDecimal(index, (BigDecimal)param);</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">		else if (param instanceof Timestamp)</span>
+<span class="nc" id="L640">			pstmt.setTimestamp(index, (Timestamp)param);</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">		else if (param instanceof Boolean)</span>
+<span class="nc bnc" id="L642" title="All 2 branches missed.">			pstmt.setString(index, ((Boolean)param).booleanValue() ? &quot;Y&quot; : &quot;N&quot;);</span>
+<span class="nc bnc" id="L643" title="All 2 branches missed.">		else if (param instanceof byte[])</span>
+<span class="nc" id="L644">			pstmt.setBytes(index, (byte[]) param);</span>
+<span class="nc bnc" id="L645" title="All 2 branches missed.">		else if (param instanceof Clob)</span>
+<span class="nc" id="L646">			pstmt.setClob(index, (Clob) param);</span>
+<span class="nc bnc" id="L647" title="All 2 branches missed.">		else if (param instanceof UUID</span>
+<span class="nc bnc" id="L648" title="All 2 branches missed.">				 || param.getClass().getName().equals(&quot;oracle.sql.BLOB&quot;))</span>
+<span class="nc" id="L649">			pstmt.setObject(index, param);</span>
+		else //let jdbc driver handle the rest of types
+<span class="nc" id="L651">			pstmt.setObject(index, param);</span>
+<span class="nc" id="L652">	}</span>
+
+	/**
+	 *	Execute Update.
+	 *  saves &quot;DBExecuteError&quot; in Log
+	 *  @param sql
+	 *  @return number of rows updated or -1 if error
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static int executeUpdate (String sql)
+	{
+<span class="nc" id="L664">		return executeUpdate(sql, null, false, null);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, String)} instead.
+	 *  @param sql
+	 * 	@param trxName optional transaction name
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, String trxName)
+	{
+<span class="nc" id="L677">		return executeUpdate(sql, trxName, 0);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, String, int)} instead.
+	 *  @param sql
+	 * 	@param trxName optional transaction name
+	 *  @param timeOut optional timeout parameter
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, String trxName, int timeOut)
+	{
+<span class="nc" id="L691">		return executeUpdate(sql, null, false, trxName, timeOut);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.
+	 *  saves &quot;DBExecuteError&quot; in Log
+	 *  @param sql
+	 * 	@param ignoreError if true, no execution error is reported
+	 *  @return number of rows updated or -1 if error
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static int executeUpdate (String sql, boolean ignoreError)
+	{
+<span class="nc" id="L705">		return executeUpdate (sql, null, ignoreError, null);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, String)} instead.
+	 *  @param sql
+	 * 	@param ignoreError if true, no execution error is reported
+	 * 	@param trxName transaction
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, boolean ignoreError, String trxName)
+	{
+<span class="nc" id="L719">		return executeUpdate (sql, ignoreError, trxName, 0);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, String, int)} instead.
+	 *  @param sql
+	 * 	@param ignoreError if true, no execution error is reported
+	 * 	@param trxName transaction
+	 *  @param timeOut optional timeOut parameter
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, boolean ignoreError, String trxName, int timeOut)
+	{
+<span class="nc" id="L734">		return executeUpdate (sql, null, ignoreError, trxName, timeOut);</span>
+	}
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, Object[], String)} instead.
+	 *  @param sql
+	 *  @param param int param
+	 * 	@param trxName transaction
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, int param, String trxName)
+	{
+<span class="nc" id="L748">		return executeUpdate (sql, param, trxName, 0);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, Object[], String, int)} instead.
+	 *  @param sql
+	 *  @param param int param
+	 * 	@param trxName transaction
+	 *  @param timeOut optional timeOut parameter
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, int param, String trxName, int timeOut)
+	{
+<span class="nc" id="L763">		return executeUpdate (sql, new Object[]{Integer.valueOf(param)}, false, trxName, timeOut);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, Object[], String)} instead.
+	 *  @param sql
+	 *  @param param int parameter
+	 * 	@param ignoreError if true, no execution error is reported
+	 * 	@param trxName transaction
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, int param, boolean ignoreError, String trxName)
+	{
+<span class="nc" id="L778">		return executeUpdate (sql, param, ignoreError, trxName, 0);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, Object[], String, int)} instead.
+	 *  @param sql
+	 *  @param param int parameter
+	 * 	@param ignoreError if true, no execution error is reported
+	 * 	@param trxName transaction
+	 *  @param timeOut optional timeOut parameter
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, int param, boolean ignoreError, String trxName, int timeOut)
+	{
+<span class="nc" id="L794">		return executeUpdate (sql, new Object[]{Integer.valueOf(param)}, ignoreError, trxName, timeOut);</span>
+	}	//	executeUpdate
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, Object[], String)} instead.
+	 *  @param sql
+	 *  @param params array of parameters
+	 * 	@param ignoreError if true, no execution error is reported
+	 * 	@param trxName optional transaction name
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, Object[] params, boolean ignoreError, String trxName)
+	{
+<span class="nc" id="L809">		return executeUpdate(sql, params, ignoreError, trxName, 0);</span>
+	}
+
+	/**
+	 *	Execute Update.&lt;br/&gt;
+	 *  Saves &quot;DBExecuteError&quot; in Log.&lt;br/&gt;
+	 *  Developer is recommended to call {@link #executeUpdateEx(String, Object[], String, int)} instead.
+	 *  @param sql
+	 *  @param params array of parameters
+	 * 	@param ignoreError if true, no execution error is reported
+	 * 	@param trxName optional transaction name
+	 *  @param timeOut optional timeOut parameter
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdate (String sql, Object[] params, boolean ignoreError, String trxName, int timeOut)
+	{
+<span class="nc bnc" id="L825" title="All 4 branches missed.">		if (sql == null || sql.length() == 0)</span>
+<span class="nc" id="L826">			throw new IllegalArgumentException(&quot;Required parameter missing - &quot; + sql);</span>
+<span class="nc" id="L827">		verifyTrx(trxName);</span>
+		//
+<span class="nc" id="L829">		int no = -1;</span>
+<span class="nc" id="L830">		CPreparedStatement cs = ProxyFactory.newCPreparedStatement(ResultSet.TYPE_FORWARD_ONLY,</span>
+<span class="nc" id="L831">			ResultSet.CONCUR_UPDATABLE, sql, trxName);	//	converted in call</span>
+
+		try
+		{
+<span class="nc" id="L835">			setParameters(cs, params);</span>
+			//set timeout
+<span class="nc bnc" id="L837" title="All 2 branches missed.">			if (timeOut &gt; 0)</span>
+			{
+<span class="nc" id="L839">				cs.setQueryTimeout(timeOut);</span>
+			}
+<span class="nc" id="L841">			no = cs.executeUpdate();</span>
+<span class="nc" id="L842">		}</span>
+<span class="nc" id="L843">		catch (Exception e)</span>
+		{
+<span class="nc" id="L845">			e = getSQLException(e);</span>
+<span class="nc bnc" id="L846" title="All 2 branches missed.">			if (ignoreError)</span>
+<span class="nc" id="L847">				log.log(Level.SEVERE, cs.getSql() + &quot; [&quot; + trxName + &quot;] - &quot; +  e.getMessage());</span>
+			else
+			{
+<span class="nc" id="L850">				log.log(Level.SEVERE, cs.getSql() + &quot; [&quot; + trxName + &quot;]&quot;, e);</span>
+<span class="nc" id="L851">				String msg = DBException.getDefaultDBExceptionMessage(e);</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">				log.saveError (msg != null ? msg : &quot;DBExecuteError&quot;, e);</span>
+			}
+		}
+		finally
+		{
+			//  Always close cursor
+<span class="nc" id="L858">			close(cs);</span>
+<span class="nc" id="L859">			cs = null;</span>
+		}
+<span class="nc" id="L861">		return no;</span>
+	}	//	executeUpdate
+
+	/**
+	 * Execute update and throw DBException if there are errors.
+	 * @param sql
+	 * @param params statement parameters
+	 * @param trxName transaction
+	 * @return number of rows updated
+	 * @throws SQLException
+	 */
+	public static int executeUpdateEx (String sql, Object[] params, String trxName) throws DBException
+	{
+<span class="nc" id="L874">		return executeUpdateEx(sql, params, trxName, 0);</span>
+	}
+
+	/**
+	 * Execute update and throw DBException if there are errors.
+	 * @param sql
+	 * @param params statement parameters
+	 * @param trxName transaction
+	 * @param timeOut optional timeOut parameter
+	 * @return number of rows updated
+	 * @throws DBException
+	 */
+	public static int executeUpdateEx (String sql, Object[] params, String trxName, int timeOut) throws DBException
+	{
+<span class="nc bnc" id="L888" title="All 4 branches missed.">		if (sql == null || sql.length() == 0)</span>
+<span class="nc" id="L889">			throw new IllegalArgumentException(&quot;Required parameter missing - &quot; + sql);</span>
+		//
+<span class="nc" id="L891">		verifyTrx(trxName);</span>
+<span class="nc" id="L892">		int no = -1;</span>
+<span class="nc" id="L893">		CPreparedStatement cs = ProxyFactory.newCPreparedStatement(ResultSet.TYPE_FORWARD_ONLY,</span>
+<span class="nc" id="L894">			ResultSet.CONCUR_UPDATABLE, sql, trxName);	//	converted in call</span>
+
+		try
+		{
+<span class="nc" id="L898">			setParameters(cs, params);</span>
+<span class="nc bnc" id="L899" title="All 2 branches missed.">			if (timeOut &gt; 0)</span>
+			{
+<span class="nc" id="L901">				cs.setQueryTimeout(timeOut);</span>
+			}
+<span class="nc" id="L903">			no = cs.executeUpdate();</span>
+<span class="nc" id="L904">		}</span>
+<span class="nc" id="L905">		catch (Exception e)</span>
+		{
+<span class="nc" id="L907">			throw new DBException(e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L911">			close(cs);</span>
+<span class="nc" id="L912">			cs = null;</span>
+		}
+<span class="nc" id="L914">		return no;</span>
+	}
+
+	/**
+	 *	Execute multiple Update statements.&lt;br/&gt;
+	 *  Saves (last) &quot;DBExecuteError&quot; in Log.
+	 *  @param sql multiple sql statements separated by &quot;; &quot; SQLSTATEMENT_SEPARATOR
+	 * 	@param ignoreError if true, no execution error is reported
+	 * 	@param trxName optional transaction name
+	 *  @return number of rows updated or -1 if error
+	 */
+	public static int executeUpdateMultiple (String sql, boolean ignoreError, String trxName)
+	{
+<span class="nc bnc" id="L927" title="All 4 branches missed.">		if (sql == null || sql.length() == 0)</span>
+<span class="nc" id="L928">			throw new IllegalArgumentException(&quot;Required parameter missing - &quot; + sql);</span>
+<span class="nc" id="L929">		int index = sql.indexOf(SQLSTATEMENT_SEPARATOR);</span>
+<span class="nc bnc" id="L930" title="All 2 branches missed.">		if (index == -1)</span>
+<span class="nc" id="L931">			return executeUpdate(sql, null, ignoreError, trxName);</span>
+<span class="nc" id="L932">		int no = 0;</span>
+		//
+<span class="nc" id="L934">		String statements[] = sql.split(SQLSTATEMENT_SEPARATOR);</span>
+<span class="nc bnc" id="L935" title="All 2 branches missed.">		for (int i = 0; i &lt; statements.length; i++)</span>
+		{
+<span class="nc bnc" id="L937" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(statements[i]);</span>
+<span class="nc" id="L938">			no += executeUpdate(statements[i], null, ignoreError, trxName);</span>
+		}
+
+<span class="nc" id="L941">		return no;</span>
+	}	//	executeUpdareMultiple
+
+	/**
+	 * Execute update and throw DBException if there are errors.
+	 * @param sql
+	 * @param trxName
+	 * @see {@link #executeUpdateEx(String, Object[], String)}
+	 */
+	public static int executeUpdateEx (String sql, String trxName) throws DBException
+	{
+<span class="nc" id="L952">		return executeUpdateEx(sql, trxName, 0);</span>
+	}	//	executeUpdateEx
+
+	/**
+	 * Execute update and throw DBException if there are errors.
+	 * @param sql
+	 * @param trxName
+	 * @param timeOut
+	 * @see {@link #executeUpdateEx(String, Object[], String)}
+	 */
+	public static int executeUpdateEx (String sql, String trxName, int timeOut) throws DBException
+	{
+<span class="nc" id="L964">		return executeUpdateEx(sql, null, trxName, timeOut);</span>
+	}	//	executeUpdateEx
+
+	/**
+	 *	Commit transaction
+	 *  @param throwException if true, re-throws exception
+	 * 	@param trxName transaction name
+	 *  @return true if not needed (trxName is null) or success
+	 *  @throws SQLException
+	 */
+	public static boolean commit (boolean throwException, String trxName) throws SQLException,IllegalStateException
+	{
+        // Not on transaction scope, Connection are thus auto commit
+<span class="nc bnc" id="L977" title="All 2 branches missed.">        if (trxName == null)</span>
+        {
+<span class="nc" id="L979">            return true;</span>
+        }
+
+		try
+		{
+<span class="nc" id="L984">			Trx trx = Trx.get(trxName, false);</span>
+<span class="nc bnc" id="L985" title="All 2 branches missed.">			if (trx != null)</span>
+<span class="nc" id="L986">				return trx.commit(true);</span>
+
+<span class="nc bnc" id="L988" title="All 2 branches missed.">            if (throwException)</span>
+            {
+<span class="nc" id="L990">                throw new IllegalStateException(&quot;Could not load transation with identifier: &quot; + trxName);</span>
+            }
+            else
+            {
+<span class="nc" id="L994">                return false;</span>
+            }
+		}
+<span class="nc" id="L997">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L999">			log.log(Level.SEVERE, &quot;[&quot; + trxName + &quot;]&quot;, e);</span>
+<span class="nc bnc" id="L1000" title="All 2 branches missed.">			if (throwException)</span>
+<span class="nc" id="L1001">				throw e;</span>
+<span class="nc" id="L1002">			return false;</span>
+		}
+	}	//	commit
+
+	/**
+	 *	Rollback transaction
+	 *  @param throwException if true, re-throws exception
+	 * 	@param trxName transaction name
+	 *  @return true if not needed (trxName is null) or success
+	 *  @throws SQLException
+	 */
+	public static boolean rollback (boolean throwException, String trxName) throws SQLException
+	{
+		// Not on transaction scope, Connection are thus auto commit/rollback
+<span class="nc bnc" id="L1016" title="All 2 branches missed.">        if (trxName == null)</span>
+        {
+<span class="nc" id="L1018">            return true;</span>
+        }
+        
+		try
+		{
+<span class="nc" id="L1023">			Trx trx = Trx.get(trxName, false);</span>
+<span class="nc bnc" id="L1024" title="All 2 branches missed.">			if (trx != null)</span>
+<span class="nc" id="L1025">				return trx.rollback(true);</span>
+			
+<span class="nc bnc" id="L1027" title="All 2 branches missed.">			if (throwException)</span>
+            {
+<span class="nc" id="L1029">                throw new IllegalStateException(&quot;Could not load transation with identifier: &quot; + trxName);</span>
+            }
+            else
+            {
+<span class="nc" id="L1033">                return false;</span>
+            }
+		}
+<span class="nc" id="L1036">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L1038">			log.log(Level.SEVERE, &quot;[&quot; + trxName + &quot;]&quot;, e);</span>
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">			if (throwException)</span>
+<span class="nc" id="L1040">				throw e;</span>
+<span class="nc" id="L1041">			return false;</span>
+		}
+	}	//	commit
+
+	/**
+	 * 	Get Row Set.&lt;br/&gt;
+	 * 	When a Rowset is closed, it also closes the underlying connection.
+	 *	@param sql
+	 *	@return row set or null
+	 */
+	public static RowSet getRowSet (String sql)
+	{
+<span class="nc" id="L1053">		return getRowSet(sql, null);</span>
+	}
+	
+	/**
+	 * 	Get Row Set.&lt;br/&gt;
+	 * 	When a Rowset is closed, it also closes the underlying connection.
+	 *	@param sql
+	 *  @param trxName optional transaction name
+	 *	@return row set or null
+	 */
+	public static RowSet getRowSet (String sql, String trxName)
+	{
+<span class="nc" id="L1065">		CStatementVO info = new CStatementVO (RowSet.TYPE_SCROLL_INSENSITIVE, RowSet.CONCUR_READ_ONLY, DB.getDatabase().convertStatement(sql));</span>
+<span class="nc" id="L1066">		info.setTrxName(trxName);</span>
+<span class="nc" id="L1067">		CPreparedStatement stmt = null;</span>
+<span class="nc" id="L1068">		RowSet retValue = null;</span>
+		try {
+<span class="nc" id="L1070">			stmt = ProxyFactory.newCPreparedStatement(info);</span>
+<span class="nc" id="L1071">			retValue = stmt.getRowSet();</span>
+<span class="nc" id="L1072">		} finally {</span>
+<span class="nc" id="L1073">			close(stmt);			</span>
+		}
+<span class="nc" id="L1075">		return retValue;</span>
+	}	//	getRowSet
+
+    /**
+     * Get int Value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or -1 if not found
+     * @throws DBException if there is any SQLException
+     */
+    public static int getSQLValueEx (String trxName, String sql, Object... params) throws DBException
+    {
+<span class="nc" id="L1088">    	int retValue = -1;</span>
+<span class="nc" id="L1089">    	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1090">    	ResultSet rs = null;</span>
+<span class="nc" id="L1091">    	Connection conn = null; </span>
+<span class="nc bnc" id="L1092" title="All 2 branches missed.">    	if (trxName == null)</span>
+<span class="nc" id="L1093">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    	try
+    	{
+<span class="nc bnc" id="L1096" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1098">    			conn.setAutoCommit(false);</span>
+<span class="nc" id="L1099">    			conn.setReadOnly(true);</span>
+    		}
+    		
+<span class="nc bnc" id="L1102" title="All 2 branches missed.">    		if (conn != null)</span>
+<span class="nc" id="L1103">    			pstmt = prepareStatement(conn, sql);</span>
+    		else
+<span class="nc" id="L1105">    			pstmt = prepareStatement(sql, trxName);</span>
+<span class="nc" id="L1106">    		setParameters(pstmt, params);</span>
+<span class="nc" id="L1107">    		rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1108" title="All 2 branches missed.">    		if (rs.next())</span>
+<span class="nc" id="L1109">    			retValue = rs.getInt(1);</span>
+    		else
+<span class="nc bnc" id="L1111" title="All 2 branches missed.">    			if (log.isLoggable(Level.FINE)) log.fine(&quot;No Value &quot; + sql);</span>
+<span class="nc" id="L1112">    	}</span>
+<span class="nc" id="L1113">    	catch (SQLException e)</span>
+    	{
+<span class="nc bnc" id="L1115" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+    			try {
+<span class="nc" id="L1118">					conn.rollback();</span>
+<span class="nc" id="L1119">				} catch (SQLException e1) {</span>
+<span class="nc" id="L1120">					e1.printStackTrace();</span>
+				}
+    		}
+<span class="nc" id="L1123">    		throw new DBException(e, sql);</span>
+    	}
+    	finally
+    	{
+<span class="nc" id="L1127">    		close(rs, pstmt);</span>
+<span class="nc" id="L1128">    		rs = null; pstmt = null;</span>
+<span class="nc bnc" id="L1129" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1131">    			closeAndResetReadonlyConnection(conn);</span>
+    		}
+    	}
+<span class="nc" id="L1134">    	return retValue;</span>
+    }
+
+    /**
+     * Reset connection's auto commit to true and read only to false before closing it.
+     * @param conn
+     */
+	public static void closeAndResetReadonlyConnection(Connection conn) {
+		try {
+<span class="nc" id="L1143">			conn.setAutoCommit(true);</span>
+<span class="nc" id="L1144">		} catch (SQLException e) {</span>
+<span class="nc" id="L1145">			e.printStackTrace();</span>
+		}
+		try {
+<span class="nc" id="L1148">			conn.setReadOnly(false);</span>
+<span class="nc" id="L1149">		} catch (SQLException e) {</span>
+<span class="nc" id="L1150">			e.printStackTrace();</span>
+		}		
+		try {
+<span class="nc" id="L1153">			conn.close();</span>
+<span class="nc" id="L1154">		} catch (SQLException e) {</span>
+<span class="nc" id="L1155">			e.printStackTrace();</span>
+		}
+<span class="nc" id="L1157">	}</span>
+
+    /**
+     * Get int value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or -1
+     * @throws DBException if there is any SQLException
+     */
+    public static int getSQLValueEx (String trxName, String sql, List&lt;Object&gt; params)
+    {
+<span class="nc" id="L1169">		return getSQLValueEx(trxName, sql, params.toArray(new Object[params.size()]));</span>
+    }
+
+    /**
+     * Get int Value from sql.&lt;br/&gt;
+     * Developer is recommended to call {@link #getSQLValueEx(String, String, Object...)} instead.
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or -1 if not found or error
+     */
+    public static int getSQLValue (String trxName, String sql, Object... params)
+    {
+<span class="nc" id="L1182">    	int retValue = -1;</span>
+    	try
+    	{
+<span class="nc" id="L1185">    		retValue = getSQLValueEx(trxName, sql, params);</span>
+<span class="nc" id="L1186">    	}</span>
+<span class="nc" id="L1187">    	catch (Exception e)</span>
+    	{
+<span class="nc" id="L1189">    		log.log(Level.SEVERE, sql, getSQLException(e));</span>
+    	}
+<span class="nc" id="L1191">    	return retValue;</span>
+    }
+
+    /**
+     * Get int value from sql.&lt;br/&gt;
+     * Developer is recommended to call {@link #getSQLValueEx(String, String, List)} instead.
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or null
+     */
+    public static int getSQLValue (String trxName, String sql, List&lt;Object&gt; params)
+    {
+<span class="nc" id="L1204">		return getSQLValue(trxName, sql, params.toArray(new Object[params.size()]));</span>
+    }
+
+    /**
+     * Get string value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or null
+     * @throws DBException if there is any SQLException
+     */
+    public static String getSQLValueStringEx (String trxName, String sql, Object... params)
+    {
+<span class="nc" id="L1217">    	String retValue = null;</span>
+<span class="nc" id="L1218">    	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1219">    	ResultSet rs = null;</span>
+<span class="nc" id="L1220">    	Connection conn = null;</span>
+<span class="nc bnc" id="L1221" title="All 2 branches missed.">    	if (trxName == null)</span>
+<span class="nc" id="L1222">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    	try
+    	{
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1227">    			conn.setAutoCommit(false);</span>
+<span class="nc" id="L1228">    			conn.setReadOnly(true);</span>
+    		}
+    		
+<span class="nc bnc" id="L1231" title="All 2 branches missed.">    		if (conn != null)</span>
+<span class="nc" id="L1232">    			pstmt = prepareStatement(conn, sql);</span>
+    		else
+<span class="nc" id="L1234">    			pstmt = prepareStatement(sql, trxName);</span>
+<span class="nc" id="L1235">    		setParameters(pstmt, params);</span>
+<span class="nc" id="L1236">    		rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">    		if (rs.next())</span>
+<span class="nc" id="L1238">    			retValue = rs.getString(1);</span>
+    		else
+<span class="nc bnc" id="L1240" title="All 2 branches missed.">    			if (log.isLoggable(Level.FINE)) log.fine(&quot;No Value &quot; + sql);</span>
+<span class="nc" id="L1241">    	}</span>
+<span class="nc" id="L1242">    	catch (SQLException e)</span>
+    	{
+<span class="nc bnc" id="L1244" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+    			try {
+<span class="nc" id="L1247">					conn.rollback();</span>
+<span class="nc" id="L1248">				} catch (SQLException e1) {</span>
+<span class="nc" id="L1249">					e1.printStackTrace();</span>
+				}
+    		}
+<span class="nc" id="L1252">    		throw new DBException(e, sql);</span>
+    	}
+    	finally
+    	{
+<span class="nc" id="L1256">    		close(rs, pstmt);</span>
+<span class="nc" id="L1257">    		rs = null; pstmt = null;</span>
+<span class="nc bnc" id="L1258" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1260">    			closeAndResetReadonlyConnection(conn);</span>
+    		}
+    	}
+<span class="nc" id="L1263">    	return retValue;</span>
+    }
+
+    /**
+     * Get String Value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or null
+     * @throws DBException if there is any SQLException
+     */
+    public static String getSQLValueStringEx (String trxName, String sql, List&lt;Object&gt; params)
+    {
+<span class="nc" id="L1276">		return getSQLValueStringEx(trxName, sql, params.toArray(new Object[params.size()]));</span>
+    }
+
+    /**
+     * Get String Value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or null
+     */
+    public static String getSQLValueString (String trxName, String sql, Object... params)
+    {
+<span class="nc" id="L1288">    	String retValue = null;</span>
+    	try
+    	{
+<span class="nc" id="L1291">    		retValue = getSQLValueStringEx(trxName, sql, params);</span>
+<span class="nc" id="L1292">    	}</span>
+<span class="nc" id="L1293">    	catch (Exception e)</span>
+    	{
+<span class="nc" id="L1295">    		log.log(Level.SEVERE, sql, getSQLException(e));</span>
+    	}
+<span class="nc" id="L1297">    	return retValue;</span>
+    }
+
+    /**
+     * Get string value from sql.&lt;br/&gt;
+     * Developer is recommended to call {@link #getSQLValueStringEx(String, String, List)} instead.
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or null
+     */
+    public static String getSQLValueString (String trxName, String sql, List&lt;Object&gt; params)
+    {
+<span class="nc" id="L1310">		return getSQLValueString(trxName, sql, params.toArray(new Object[params.size()]));</span>
+    }
+
+    /**
+     * Get BigDecimal value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or null if not found
+     * @throws DBException if there is any SQLException
+     */
+    public static BigDecimal getSQLValueBDEx (String trxName, String sql, Object... params) throws DBException
+    {
+<span class="nc" id="L1323">    	BigDecimal retValue = null;</span>
+<span class="nc" id="L1324">    	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1325">    	ResultSet rs = null;</span>
+<span class="nc" id="L1326">    	Connection conn = null;</span>
+<span class="nc bnc" id="L1327" title="All 2 branches missed.">    	if (trxName == null)</span>
+<span class="nc" id="L1328">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    	try
+    	{
+<span class="nc bnc" id="L1331" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1333">    			conn.setAutoCommit(false);</span>
+<span class="nc" id="L1334">    			conn.setReadOnly(true);</span>
+    		}
+    		
+<span class="nc bnc" id="L1337" title="All 2 branches missed.">    		if (conn != null)</span>
+<span class="nc" id="L1338">    			pstmt = prepareStatement(conn, sql);</span>
+    		else
+<span class="nc" id="L1340">    			pstmt = prepareStatement(sql, trxName);</span>
+<span class="nc" id="L1341">    		setParameters(pstmt, params);</span>
+<span class="nc" id="L1342">    		rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1343" title="All 2 branches missed.">    		if (rs.next())</span>
+<span class="nc" id="L1344">    			retValue = rs.getBigDecimal(1);</span>
+    		else
+<span class="nc bnc" id="L1346" title="All 2 branches missed.">    			if (log.isLoggable(Level.FINE)) log.fine(&quot;No Value &quot; + sql);</span>
+<span class="nc" id="L1347">    	}</span>
+<span class="nc" id="L1348">    	catch (SQLException e)</span>
+    	{
+<span class="nc bnc" id="L1350" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+    			try {
+<span class="nc" id="L1353">					conn.rollback();</span>
+<span class="nc" id="L1354">				} catch (SQLException e1) {</span>
+<span class="nc" id="L1355">					e1.printStackTrace();</span>
+				}
+    		}
+<span class="nc" id="L1358">    		throw new DBException(e, sql);</span>
+    	}
+    	finally
+    	{
+<span class="nc" id="L1362">    		close(rs, pstmt);</span>
+<span class="nc" id="L1363">    		rs = null; pstmt = null;</span>
+<span class="nc bnc" id="L1364" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1366">    			closeAndResetReadonlyConnection(conn);</span>
+    		}
+    	}
+<span class="nc" id="L1369">    	return retValue;</span>
+    }
+
+    /**
+     * Get BigDecimal Value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or null if not found
+     * @throws DBException if there is any SQLException
+     */
+    public static BigDecimal getSQLValueBDEx (String trxName, String sql, List&lt;Object&gt; params) throws DBException
+    {
+<span class="nc" id="L1382">		return getSQLValueBDEx(trxName, sql, params.toArray(new Object[params.size()]));</span>
+    }
+
+    /**
+     * Get BigDecimal Value from sql.&lt;br/&gt;
+     * Developer is recommended to call {@link #getSQLValueBDEx(String, String, Object...)} instead.
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or null
+     */
+    public static BigDecimal getSQLValueBD (String trxName, String sql, Object... params)
+    {
+    	try
+    	{
+<span class="nc" id="L1397">    		return getSQLValueBDEx(trxName, sql, params);</span>
+    	}
+<span class="nc" id="L1399">    	catch (Exception e)</span>
+    	{
+<span class="nc" id="L1401">    		log.log(Level.SEVERE, sql, getSQLException(e));</span>
+    	}
+<span class="nc" id="L1403">    	return null;</span>
+    }
+
+    /**
+     * Get BigDecimal Value from sql.&lt;br/&gt;
+     * Developer is recommended to call {@link #getSQLValueBDEx(String, String, List)} instead.
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or null
+     */
+    public static BigDecimal getSQLValueBD (String trxName, String sql, List&lt;Object&gt; params)
+    {
+<span class="nc" id="L1416">		return getSQLValueBD(trxName, sql, params.toArray(new Object[params.size()]));</span>
+    }
+
+    /**
+     * Get Timestamp Value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or null
+     * @throws DBException if there is any SQLException
+     */
+    public static Timestamp getSQLValueTSEx (String trxName, String sql, Object... params)
+    {
+<span class="nc" id="L1429">    	Timestamp retValue = null;</span>
+<span class="nc" id="L1430">    	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1431">    	ResultSet rs = null;</span>
+<span class="nc" id="L1432">    	Connection conn = null;</span>
+<span class="nc bnc" id="L1433" title="All 2 branches missed.">    	if (trxName == null)</span>
+<span class="nc" id="L1434">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    	try
+    	{
+<span class="nc bnc" id="L1437" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1439">    			conn.setAutoCommit(false);</span>
+<span class="nc" id="L1440">    			conn.setReadOnly(true);</span>
+    		}
+    		
+<span class="nc bnc" id="L1443" title="All 2 branches missed.">    		if (conn != null)</span>
+<span class="nc" id="L1444">    			pstmt = prepareStatement(conn, sql);</span>
+    		else
+<span class="nc" id="L1446">    			pstmt = prepareStatement(sql, trxName);</span>
+<span class="nc" id="L1447">    		setParameters(pstmt, params);</span>
+<span class="nc" id="L1448">    		rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1449" title="All 2 branches missed.">    		if (rs.next())</span>
+<span class="nc" id="L1450">    			retValue = rs.getTimestamp(1);</span>
+    		else
+<span class="nc bnc" id="L1452" title="All 2 branches missed.">    			if (log.isLoggable(Level.FINE)) log.fine(&quot;No Value &quot; + sql);</span>
+<span class="nc" id="L1453">    	}</span>
+<span class="nc" id="L1454">    	catch (SQLException e)</span>
+    	{
+<span class="nc bnc" id="L1456" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+    			try {
+<span class="nc" id="L1459">					conn.rollback();</span>
+<span class="nc" id="L1460">				} catch (SQLException e1) {</span>
+<span class="nc" id="L1461">					e1.printStackTrace();</span>
+				}
+    		}
+<span class="nc" id="L1464">    		throw new DBException(e, sql);</span>
+    	}
+    	finally
+    	{
+<span class="nc" id="L1468">    		close(rs, pstmt);</span>
+<span class="nc" id="L1469">    		rs = null; pstmt = null;</span>
+<span class="nc bnc" id="L1470" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L1472">    			closeAndResetReadonlyConnection(conn);</span>
+    		}
+    	}
+<span class="nc" id="L1475">    	return retValue;</span>
+    }
+
+    /**
+     * Get Timestamp Value from sql
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or null if not found
+     * @throws DBException if there is any SQLException
+     */
+    public static Timestamp getSQLValueTSEx (String trxName, String sql, List&lt;Object&gt; params) throws DBException
+    {
+<span class="nc" id="L1488">		return getSQLValueTSEx(trxName, sql, params.toArray(new Object[params.size()]));</span>
+    }
+
+    /**
+     * Get Timestamp Value from sql.&lt;br/&gt;
+     * Developer is recommended to call {@link #getSQLValueTSEx(String, String, Object...)} instead.
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return first value or null
+     */
+    public static Timestamp getSQLValueTS (String trxName, String sql, Object... params)
+    {
+    	try
+    	{
+<span class="nc" id="L1503">    		return getSQLValueTSEx(trxName, sql, params);</span>
+    	}
+<span class="nc" id="L1505">    	catch (Exception e)</span>
+    	{
+<span class="nc" id="L1507">    		log.log(Level.SEVERE, sql, getSQLException(e));</span>
+    	}
+<span class="nc" id="L1509">    	return null;</span>
+    }
+
+    /**
+     * Get Timestamp Value from sql.&lt;br/&gt;
+     * Developer is recommended to call {@link #getSQLValueTSEx(String, String, List)} instead.
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params collection of parameters
+     * @return first value or null
+     */
+    public static Timestamp getSQLValueTS (String trxName, String sql, List&lt;Object&gt; params)
+    {
+<span class="nc" id="L1522">		Object[] arr = new Object[params.size()];</span>
+<span class="nc" id="L1523">		params.toArray(arr);</span>
+<span class="nc" id="L1524">		return getSQLValueTS(trxName, sql, arr);</span>
+    }
+
+	/**
+	 * Get Array of Key Name Pairs
+	 * @param sql select with id / name as first / second column
+	 * @param optional if true (-1,&quot;&quot;) is added
+	 * @return array of {@link KeyNamePair}
+	 * @see #getKeyNamePairs(String, boolean, Object...)
+	 */
+	public static KeyNamePair[] getKeyNamePairs(String sql, boolean optional)
+	{
+<span class="nc" id="L1536">		return getKeyNamePairs(sql, optional, (Object[])null);</span>
+	}
+
+	/**
+	 * Get Array of Key Name Pairs
+	 * @param sql select with id / name as first / second column
+	 * @param optional if true (-1,&quot;&quot;) is added
+	 * @return array of {@link KeyNamePair}
+	 * @see #getKeyNamePairs(String, boolean, Object...)
+	 */
+	public static KeyNamePair[] getKeyNamePairsEx(String sql, boolean optional)
+	{
+<span class="nc" id="L1548">		return getKeyNamePairsEx(sql, optional, (Object[])null);</span>
+	}
+	
+	/**
+	 * Get Array of Key Name Pairs
+	 * @param sql select with id / name as first / second column
+	 * @param optional if true (-1,&quot;&quot;) is added
+	 * @param params query parameters
+	 */
+	public static KeyNamePair[] getKeyNamePairs(String sql, boolean optional, Object ... params)
+	{
+<span class="nc" id="L1559">		return getKeyNamePairs(null, sql, optional, params);</span>
+	}
+
+	/**
+	 * Get Array of Key Name Pairs
+	 * @param sql select with id / name as first / second column
+	 * @param optional if true (-1,&quot;&quot;) is added
+	 * @param params query parameters
+	 */
+	public static KeyNamePair[] getKeyNamePairsEx(String sql, boolean optional, Object ... params)
+	{
+<span class="nc" id="L1570">		return getKeyNamePairsEx(null, sql, optional, params);</span>
+	}
+	
+	/**
+	 * Get Array of Key Name Pairs
+	 * @param trxName
+	 * @param sql select with id / name as first / second column
+	 * @param optional if true (-1,&quot;&quot;) is added
+	 * @param params query parameters
+	 * @return Array of Key Name Pairs
+	 */
+	public static KeyNamePair[] getKeyNamePairs(String trxName, String sql, boolean optional, Object ... params)
+	{
+		try 
+		{
+<span class="nc" id="L1585">			return getKeyNamePairsEx(trxName, sql, optional, params);		</span>
+		} 
+<span class="nc" id="L1587">		catch (Exception e)</span>
+        {
+<span class="nc" id="L1589">            log.log(Level.SEVERE, sql, getSQLException(e));</span>
+        }
+<span class="nc" id="L1591">		return new KeyNamePair[0];</span>
+	}
+	
+	/**
+	 * Get Array of Key Name Pairs
+	 * @param trxName
+	 * @param sql select with id / name as first / second column
+	 * @param optional if true (-1,&quot;&quot;) is added
+	 * @param params query parameters
+	 * @return Array of Key Name Pairs
+	 */
+	public static KeyNamePair[] getKeyNamePairsEx(String trxName, String sql, boolean optional, Object ... params)
+	{
+<span class="nc" id="L1604">        PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1605">        ResultSet rs = null;</span>
+<span class="nc" id="L1606">        Connection conn = null; </span>
+<span class="nc bnc" id="L1607" title="All 2 branches missed.">    	if (trxName == null)</span>
+<span class="nc" id="L1608">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+<span class="nc" id="L1609">        ArrayList&lt;KeyNamePair&gt; list = new ArrayList&lt;KeyNamePair&gt;();</span>
+<span class="nc bnc" id="L1610" title="All 2 branches missed.">        if (optional)</span>
+        {
+<span class="nc" id="L1612">            list.add (new KeyNamePair(-1, &quot;&quot;));</span>
+        }
+        try
+        {
+<span class="nc bnc" id="L1616" title="All 2 branches missed.">        	if (conn != null)</span>
+    		{
+<span class="nc" id="L1618">    			conn.setAutoCommit(false);</span>
+<span class="nc" id="L1619">    			conn.setReadOnly(true);</span>
+    		}
+<span class="nc bnc" id="L1621" title="All 2 branches missed.">        	if (conn != null)</span>
+<span class="nc" id="L1622">        		pstmt = prepareStatement(conn, sql);</span>
+        	else
+<span class="nc" id="L1624">        		pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L1625">            setParameters(pstmt, params);</span>
+<span class="nc" id="L1626">            rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1627" title="All 2 branches missed.">            while (rs.next())</span>
+            {
+<span class="nc" id="L1629">                list.add(new KeyNamePair(rs.getInt(1), rs.getString(2)));</span>
+            }
+<span class="nc" id="L1631">        }</span>
+<span class="nc" id="L1632">        catch (SQLException e)</span>
+        {
+<span class="nc bnc" id="L1634" title="All 2 branches missed.">        	if (conn != null)</span>
+    		{
+    			try {
+<span class="nc" id="L1637">					conn.rollback();</span>
+<span class="nc" id="L1638">				} catch (SQLException e1) {</span>
+<span class="nc" id="L1639">					e1.printStackTrace();</span>
+				}
+    		}
+<span class="nc" id="L1642">            throw new DBException(e.getMessage(), e);</span>
+        }
+        finally
+        {
+<span class="nc" id="L1646">            close(rs, pstmt);</span>
+<span class="nc" id="L1647">            rs= null;</span>
+<span class="nc" id="L1648">            pstmt = null;</span>
+<span class="nc bnc" id="L1649" title="All 2 branches missed.">            if (conn != null)</span>
+    		{
+<span class="nc" id="L1651">    			closeAndResetReadonlyConnection(conn);</span>
+    		}
+        }
+<span class="nc" id="L1654">        KeyNamePair[] retValue = new KeyNamePair[list.size()];</span>
+<span class="nc" id="L1655">        list.toArray(retValue);</span>
+<span class="nc" id="L1656">        return retValue;</span>
+	}	//	getKeyNamePairs
+
+	/**
+	 * Get Array of IDs
+	 * @param trxName
+	 * @param sql select with id as first column
+	 * @param params query parameters
+     * @throws DBException if there is any SQLException
+     */
+	public static int[] getIDsEx(String trxName, String sql, Object ... params) throws DBException
+	{
+<span class="nc" id="L1668">        PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1669">        ResultSet rs = null;</span>
+<span class="nc" id="L1670">        ArrayList&lt;Integer&gt; list = new ArrayList&lt;Integer&gt;();</span>
+        try
+        {
+<span class="nc" id="L1673">            pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L1674">            setParameters(pstmt, params);</span>
+<span class="nc" id="L1675">            rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1676" title="All 2 branches missed.">            while (rs.next())</span>
+            {
+<span class="nc" id="L1678">                list.add(rs.getInt(1));</span>
+            }
+<span class="nc" id="L1680">        }</span>
+<span class="nc" id="L1681">        catch (SQLException e)</span>
+        {
+<span class="nc" id="L1683">    		throw new DBException(e, sql);</span>
+        }
+        finally
+        {
+<span class="nc" id="L1687">            close(rs, pstmt);</span>
+<span class="nc" id="L1688">            rs= null;</span>
+<span class="nc" id="L1689">            pstmt = null;</span>
+        }
+		//	Convert to array
+<span class="nc" id="L1692">		int[] retValue = new int[list.size()];</span>
+<span class="nc bnc" id="L1693" title="All 2 branches missed.">		for (int i = 0; i &lt; retValue.length; i++)</span>
+		{
+<span class="nc" id="L1695">			retValue[i] = list.get(i);</span>
+		}
+<span class="nc" id="L1697">        return retValue;</span>
+	}	//	getIDsEx
+	
+	/**
+	 * 	Is Sales Order Trx.&lt;br/&gt;
+	 * 	Assumes Sales Order. Query IsSOTrx value of table with where clause
+	 *	@param TableName table
+	 *	@param whereClause where clause
+	 *  @param windowNo
+	 *	@return true (default) or false if tested that not SO
+	 */
+	public static boolean isSOTrx (String TableName, String whereClause, int windowNo)
+	{
+<span class="nc" id="L1710">		return isSOTrx (TableName, whereClause, windowNo, List.of());</span>
+	}
+	
+	/**
+	 * 	Is Sales Order Trx.&lt;br/&gt;
+	 * 	Assumes Sales Order. Query IsSOTrx value of table with where clause
+	 *	@param TableName table
+	 *	@param whereClause where clause
+	 *  @param windowNo
+	 *  @param params list of parameters
+	 *	@return true (default) or false if tested that not SO
+	 */
+	public static boolean isSOTrx (String TableName, String whereClause, int windowNo, List&lt;Object&gt; params)
+	{
+<span class="nc bnc" id="L1724" title="All 4 branches missed.">        if (TableName == null || TableName.length() == 0)</span>
+        {
+<span class="nc" id="L1726">            log.severe(&quot;No TableName&quot;);</span>
+<span class="nc" id="L1727">            return true;</span>
+        }
+<span class="nc bnc" id="L1729" title="All 4 branches missed.">        if (whereClause == null || whereClause.length() == 0)</span>
+        {
+<span class="nc" id="L1731">            log.severe(&quot;No Where Clause&quot;);</span>
+<span class="nc" id="L1732">            return true;</span>
+        }
+        //
+<span class="nc" id="L1735">        Boolean isSOTrx = null;</span>
+<span class="nc" id="L1736">        boolean noIsSOTrxColumn = false;</span>
+<span class="nc bnc" id="L1737" title="All 2 branches missed.">        if (MTable.get(Env.getCtx(), TableName).getColumn(&quot;IsSOTrx&quot;) == null) {</span>
+<span class="nc" id="L1738">        	noIsSOTrxColumn = true;</span>
+<span class="nc" id="L1739">        } else {</span>
+<span class="nc" id="L1740">        	String sql = &quot;SELECT IsSOTrx FROM &quot; + TableName</span>
+<span class="nc" id="L1741">        	+ &quot; WHERE &quot; + whereClause;</span>
+<span class="nc" id="L1742">        	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1743">        	ResultSet rs = null;</span>
+        	try
+        	{
+<span class="nc" id="L1746">        		pstmt = DB.prepareStatement (sql, null);</span>
+<span class="nc bnc" id="L1747" title="All 4 branches missed.">        		if (params != null &amp;&amp; !params.isEmpty()) {</span>
+<span class="nc" id="L1748">					setParameters(pstmt, params);</span>
+				}
+<span class="nc" id="L1750">        		rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L1751" title="All 2 branches missed.">        		if (rs.next ())</span>
+<span class="nc" id="L1752">        			isSOTrx = Boolean.valueOf(&quot;Y&quot;.equals(rs.getString(1)));</span>
+<span class="nc" id="L1753">        	}</span>
+<span class="nc" id="L1754">        	catch (Exception e)</span>
+        	{
+<span class="nc" id="L1756">        		noIsSOTrxColumn = true;</span>
+        	}
+        	finally
+        	{
+<span class="nc" id="L1760">        		close(rs, pstmt);</span>
+<span class="nc" id="L1761">        		rs= null;</span>
+<span class="nc" id="L1762">        		pstmt = null;</span>
+        	}
+        }
+<span class="nc bnc" id="L1765" title="All 4 branches missed.">        if (noIsSOTrxColumn &amp;&amp; TableName.endsWith(&quot;Line&quot;)) {</span>
+<span class="nc" id="L1766">        	noIsSOTrxColumn = false;</span>
+<span class="nc" id="L1767">        	String hdr = TableName.substring(0, TableName.indexOf(&quot;Line&quot;));</span>
+<span class="nc bnc" id="L1768" title="All 4 branches missed.">        	if (MTable.get(Env.getCtx(), hdr) == null || MTable.get(Env.getCtx(), hdr).getColumn(&quot;IsSOTrx&quot;) == null) {</span>
+<span class="nc" id="L1769">        		noIsSOTrxColumn = true;</span>
+<span class="nc" id="L1770">        	} else {</span>
+        		// use IN instead of EXISTS as the subquery should be highly selective
+<span class="nc" id="L1772">        		String sql = &quot;SELECT IsSOTrx FROM &quot; + hdr</span>
+<span class="nc" id="L1773">        		+ &quot; h WHERE h.&quot; + hdr + &quot;_ID IN (SELECT l.&quot; + hdr + &quot;_ID FROM &quot; + TableName</span>
+<span class="nc" id="L1774">        		+ &quot; l WHERE &quot; + whereClause + &quot;)&quot;;</span>
+<span class="nc" id="L1775">        		PreparedStatement pstmt2 = null;</span>
+<span class="nc" id="L1776">        		ResultSet rs2 = null;</span>
+        		try
+        		{
+<span class="nc" id="L1779">        			pstmt2 = DB.prepareStatement (sql, null);</span>
+<span class="nc" id="L1780">        			rs2 = pstmt2.executeQuery ();</span>
+<span class="nc bnc" id="L1781" title="All 2 branches missed.">        			if (rs2.next ())</span>
+<span class="nc" id="L1782">        				isSOTrx = Boolean.valueOf(&quot;Y&quot;.equals(rs2.getString(1)));</span>
+<span class="nc" id="L1783">        		}</span>
+<span class="nc" id="L1784">        		catch (Exception ee)</span>
+        		{
+<span class="nc" id="L1786">        			noIsSOTrxColumn = true;</span>
+        		}
+        		finally
+        		{
+<span class="nc" id="L1790">        			close(rs2, pstmt2);</span>
+<span class="nc" id="L1791">        			rs2= null;</span>
+<span class="nc" id="L1792">        			pstmt2 = null;</span>
+        		}
+        	}
+        }
+<span class="nc bnc" id="L1796" title="All 2 branches missed.">        if (noIsSOTrxColumn)</span>
+<span class="nc bnc" id="L1797" title="All 2 branches missed.">        	if (log.isLoggable(Level.FINEST))log.log(Level.FINEST, TableName + &quot; - No SOTrx&quot;);</span>
+<span class="nc bnc" id="L1798" title="All 2 branches missed.">        if (isSOTrx == null) {</span>
+<span class="nc bnc" id="L1799" title="All 2 branches missed.">        	if (windowNo &gt;= 0) {</span>
+        		// check context
+<span class="nc" id="L1801">        		isSOTrx = Boolean.valueOf(&quot;Y&quot;.equals(Env.getContext(Env.getCtx(), windowNo, &quot;IsSOTrx&quot;)));</span>
+<span class="nc" id="L1802">        	} else {</span>
+<span class="nc" id="L1803">            	isSOTrx = Boolean.TRUE;</span>
+        	}
+        }
+<span class="nc" id="L1806">        return isSOTrx.booleanValue();</span>
+	}	//	isSOTrx
+
+	/**
+	 * Delegate to {@link #isSOTrx(String, String, int)} with -1 for windowNo parameter.
+	 * @param TableName
+	 * @param whereClause
+	 * @return true (default) or false if tested that not SO
+	 */
+	public static boolean isSOTrx (String TableName, String whereClause)
+	{
+<span class="nc" id="L1817">		return isSOTrx (TableName, whereClause, List.of());</span>
+	}
+	
+	/**
+	 * Delegate to {@link #isSOTrx(String, String, int)} with -1 for windowNo parameter.
+	 * @param TableName
+	 * @param whereClause
+	 * @param params list of parameters
+	 * @return true (default) or false if tested that not SO
+	 */
+	public static boolean isSOTrx (String TableName, String whereClause, List&lt;Object&gt; params) {
+<span class="nc" id="L1828">		return isSOTrx (TableName, whereClause, -1, params);</span>
+	}
+
+	/**
+	 *	Get next id for table
+	 *  @param ctx client
+	 *  @param TableName table name
+	 * 	@param trxName optional transaction name
+	 *  @return next id no
+	 */
+	public static int getNextID (Properties ctx, String TableName, String trxName)
+	{
+<span class="nc bnc" id="L1840" title="All 2 branches missed.">		if (ctx == null)</span>
+<span class="nc" id="L1841">			throw new IllegalArgumentException(&quot;Context missing&quot;);</span>
+<span class="nc bnc" id="L1842" title="All 4 branches missed.">		if (TableName == null || TableName.length() == 0)</span>
+<span class="nc" id="L1843">			throw new IllegalArgumentException(&quot;TableName missing&quot;);</span>
+<span class="nc" id="L1844">		return getNextID(Env.getAD_Client_ID(ctx), TableName, trxName);</span>
+	}	//	getNextID
+
+	/**
+	 *	Get next id for table
+	 *  @param AD_Client_ID client
+	 *  @param TableName table name
+	 * 	@param trxName optional Transaction Name
+	 *  @return next id no
+	 *  @see {@link MSequence#getNextID(int, String, String)}
+	 */
+	public static int getNextID (int AD_Client_ID, String TableName, String trxName)
+	{
+<span class="nc" id="L1857">		return MSequence.getNextID (AD_Client_ID, TableName, trxName);</span>
+	}	//	getNextID
+
+	/**
+	 * 	Get Document No based on Document Type (backward compatibility)
+	 *	@param C_DocType_ID document type
+	 * 	@param trxName optional Transaction Name
+	 *	@return document no or null
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static String getDocumentNo(int C_DocType_ID, String trxName)
+	{
+<span class="nc" id="L1870">		return MSequence.getDocumentNo (C_DocType_ID, trxName, false);</span>
+	}	//	getDocumentNo
+
+	/**
+	 * 	Get Document No based on Document Type
+	 *	@param C_DocType_ID document type
+	 * 	@param trxName optional Transaction Name
+	 *  @param definite asking for a definitive or temporary sequence
+	 *	@return document no or null
+	 */
+	public static String getDocumentNo(int C_DocType_ID, String trxName, boolean definite) {
+<span class="nc" id="L1881">		return getDocumentNo(C_DocType_ID, trxName, definite, null);</span>
+	}
+
+	/**
+	 * 	Get Document No based on Document Type
+	 *	@param C_DocType_ID document type
+	 * 	@param trxName optional Transaction Name
+	 *  @param definite asking for a definitive or temporary sequence
+	 *  @param po PO
+	 *	@return document no or null
+	 *  @see {@link MSequence#getDocumentNo(int, String, boolean, PO)}
+	 */
+	public static String getDocumentNo(int C_DocType_ID, String trxName, boolean definite, PO po)
+	{
+<span class="nc" id="L1895">		return MSequence.getDocumentNo (C_DocType_ID, trxName, definite, po);</span>
+	}	//	getDocumentNo
+
+	/**
+	 * 	Get Document No for table
+	 *	@param AD_Client_ID client
+	 *	@param TableName table name
+	 * 	@param trxName optional Transaction Name
+	 *	@return document no or null
+	 */
+	public static String getDocumentNo (int AD_Client_ID, String TableName, String trxName)
+	{
+<span class="nc" id="L1907">		return getDocumentNo(AD_Client_ID, TableName, trxName, null);</span>
+	}
+
+	/**
+	 * 	Get Document No for table
+	 *	@param AD_Client_ID client
+	 *	@param TableName table name
+	 * 	@param trxName optional Transaction Name
+	 *  @param po
+	 *	@return document no or null
+	 *  @see {@link MSequence#getDocumentNo(int, String, String, PO)}
+	 */
+	public static String getDocumentNo (int AD_Client_ID, String TableName, String trxName, PO po)
+	{
+<span class="nc" id="L1921">		String dn = MSequence.getDocumentNo (AD_Client_ID, TableName, trxName, po);</span>
+<span class="nc bnc" id="L1922" title="All 2 branches missed.">		if (dn == null)</span>
+<span class="nc" id="L1923">			throw new DBException (&quot;No DocumentNo&quot;);</span>
+<span class="nc" id="L1924">		return dn;</span>
+	}	//	getDocumentNo
+
+	/**
+	 *	Get Document Number for current document.
+	 *  &lt;br&gt;
+	 *  - first search for DocumentNo based on DocType from environment context&lt;br/&gt;
+	 *  - then search for DocumentNo based on TableName
+	 *  @param ctx context
+	 *  @param WindowNo window
+	 *  @param TableName table
+	 *  @param onlyDocType Do not search for document no based on TableName
+	 * 	@param trxName optional Transaction Name
+	 *	@return DocumentNo or null, if no doc number defined
+	 */
+	public static String getDocumentNo (Properties ctx, int WindowNo,
+		String TableName, boolean onlyDocType, String trxName)
+	{
+<span class="nc bnc" id="L1942" title="All 6 branches missed.">		if (ctx == null || TableName == null || TableName.length() == 0)</span>
+<span class="nc" id="L1943">			throw new IllegalArgumentException(&quot;Required parameter missing&quot;);</span>
+<span class="nc" id="L1944">		int AD_Client_ID = Env.getContextAsInt(ctx, WindowNo, &quot;AD_Client_ID&quot;);</span>
+
+		//	Get C_DocType_ID from context - NO Defaults -
+<span class="nc" id="L1947">		int C_DocType_ID = Env.getContextAsInt(ctx, WindowNo + &quot;|C_DocTypeTarget_ID&quot;);</span>
+<span class="nc bnc" id="L1948" title="All 2 branches missed.">		if (C_DocType_ID == 0)</span>
+<span class="nc" id="L1949">			C_DocType_ID = Env.getContextAsInt(ctx, WindowNo + &quot;|C_DocType_ID&quot;);</span>
+<span class="nc bnc" id="L1950" title="All 2 branches missed.">		if (C_DocType_ID == 0)</span>
+		{
+<span class="nc bnc" id="L1952" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Window=&quot; + WindowNo</span>
+<span class="nc" id="L1953">				+ &quot; - Target=&quot; + Env.getContextAsInt(ctx, WindowNo + &quot;|C_DocTypeTarget_ID&quot;) + &quot;/&quot; + Env.getContextAsInt(ctx, WindowNo, &quot;C_DocTypeTarget_ID&quot;)</span>
+<span class="nc" id="L1954">				+ &quot; - Actual=&quot; + Env.getContextAsInt(ctx, WindowNo + &quot;|C_DocType_ID&quot;) + &quot;/&quot; + Env.getContextAsInt(ctx, WindowNo, &quot;C_DocType_ID&quot;));</span>
+<span class="nc" id="L1955">			return getDocumentNo (AD_Client_ID, TableName, trxName);</span>
+		}
+
+<span class="nc" id="L1958">		String retValue = getDocumentNo (C_DocType_ID, trxName, false);</span>
+<span class="nc bnc" id="L1959" title="All 4 branches missed.">		if (!onlyDocType &amp;&amp; retValue == null)</span>
+<span class="nc" id="L1960">			return getDocumentNo (AD_Client_ID, TableName, trxName);</span>
+<span class="nc" id="L1961">		return retValue;</span>
+	}	//	getDocumentNo
+
+	/**
+	 * 	Is this a remote client connection.
+	 *
+	 *  Deprecated, always return false.
+	 *	@return true if client and RMI or Objects on Server
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean isRemoteObjects()
+	{
+<span class="nc" id="L1974">		return false;</span>
+	}	//	isRemoteObjects
+
+	/**
+	 * 	Is this a remote client connection
+	 *
+	 *  Deprecated, always return false.
+	 *	@return true if client and RMI or Process on Server
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean isRemoteProcess()
+	{
+<span class="nc" id="L1987">		return false;</span>
+	}	//	isRemoteProcess
+
+	/**
+	 *	Print SQL Warnings.
+	 *  &lt;br&gt;
+	 *		Usage: DB.printWarning(&quot;comment&quot;, rs.getWarnings());
+	 *  @param comment comment
+	 *  @param warning warning
+	 */
+	public static void printWarning (String comment, SQLWarning warning)
+	{
+<span class="nc bnc" id="L1999" title="All 6 branches missed.">		if (comment == null || warning == null || comment.length() == 0)</span>
+<span class="nc" id="L2000">			return;</span>
+<span class="nc" id="L2001">		log.warning(comment);</span>
+		//
+<span class="nc" id="L2003">		SQLWarning warn = warning;</span>
+<span class="nc bnc" id="L2004" title="All 2 branches missed.">		while (warn != null)</span>
+		{
+<span class="nc" id="L2006">			StringBuilder buffer = new StringBuilder();</span>
+<span class="nc" id="L2007">			buffer.append(warn.getMessage())</span>
+<span class="nc" id="L2008">				.append(&quot;; State=&quot;).append(warn.getSQLState())</span>
+<span class="nc" id="L2009">				.append(&quot;; ErrorCode=&quot;).append(warn.getErrorCode());</span>
+<span class="nc" id="L2010">			log.warning(buffer.toString());</span>
+<span class="nc" id="L2011">			warn = warn.getNextWarning();</span>
+		}
+<span class="nc" id="L2013">	}	//	printWarning</span>
+
+	/**
+	 *  Create SQL TO Date String from Timestamp
+	 *
+	 *  @param  time Date to be converted
+	 *  @param  dayOnly true if time set to 00:00:00
+	 *
+	 *  @return TO_DATE('2001-01-30 18:10:20',''YYYY-MM-DD HH24:MI:SS')
+	 *      or  TO_DATE('2001-01-30',''YYYY-MM-DD')
+	 */
+	public static String TO_DATE (Timestamp time, boolean dayOnly)
+	{
+<span class="nc" id="L2026">		return s_cc.getDatabase().TO_DATE(time, dayOnly);</span>
+	}   //  TO_DATE
+
+	/**
+	 *  Create SQL TO Date String from Timestamp
+	 *  @param day day time
+	 *  @return TO_DATE String (day only)
+	 */
+	public static String TO_DATE (Timestamp day)
+	{
+<span class="nc" id="L2036">		return TO_DATE(day, true);</span>
+	}   //  TO_DATE
+
+	/**
+	 *  Create SQL for formatted Date, Number
+	 *
+	 *  @param  columnName  the column name in the SQL
+	 *  @param  displayType Display Type
+	 *  @param  AD_Language 6 character language setting (from Env.LANG_*)
+	 *
+	 *  @return TRIM(TO_CHAR(columnName,'999G999G999G990D00','NLS_NUMERIC_CHARACTERS='',.'''))
+	 *      or TRIM(TO_CHAR(columnName,'TM9')) depending on DisplayType and Language
+	 *  @see org.compiere.util.DisplayType
+	 *  @see org.compiere.util.Env
+	 *
+	 *   */
+	public static String TO_CHAR (String columnName, int displayType, String AD_Language)
+	{
+<span class="nc bnc" id="L2054" title="All 6 branches missed.">		if (columnName == null || AD_Language == null || columnName.length() == 0)</span>
+<span class="nc" id="L2055">			throw new IllegalArgumentException(&quot;Required parameter missing&quot;);</span>
+<span class="nc" id="L2056">		return s_cc.getDatabase().TO_CHAR(columnName, displayType, AD_Language);</span>
+	}   //  TO_CHAR
+
+	/**
+	 * 	Return number as string for INSERT statements with correct precision
+	 *	@param number number
+	 *	@param displayType display Type
+	 *	@return number as string
+	 */
+	public static String TO_NUMBER (BigDecimal number, int displayType)
+	{
+<span class="nc" id="L2067">		return s_cc.getDatabase().TO_NUMBER(number, displayType);</span>
+	}	//	TO_NUMBER
+
+	/**
+	 *  Package Strings for SQL command in quotes
+	 *  @param txt  String with text
+	 *  @return escaped string for sql statement (NULL if null)
+	 */
+	public static String TO_STRING (String txt)
+	{
+<span class="nc" id="L2077">		return TO_STRING (txt, 0);</span>
+	}   //  TO_STRING
+
+	/**
+	 *	Package Strings for SQL command in quotes.
+	 *  &lt;pre&gt;
+	 *	    -	include in ' (single quotes)
+	 *	    -	replace ' with ''
+	 *  &lt;/pre&gt;
+	 *  @param txt  String with text
+	 *  @param maxLength    Maximum Length of content or 0 to ignore
+	 *  @return escaped string for sql statement (NULL if null)
+	 */
+	public static String TO_STRING (String txt, int maxLength)
+	{
+<span class="nc bnc" id="L2092" title="All 4 branches missed.">		if (txt == null || txt.length() == 0)</span>
+<span class="nc" id="L2093">			return &quot;NULL&quot;;</span>
+
+		//  Length
+<span class="nc" id="L2096">		String text = txt;</span>
+<span class="nc bnc" id="L2097" title="All 4 branches missed.">		if (maxLength != 0 &amp;&amp; text.length() &gt; maxLength)</span>
+<span class="nc" id="L2098">			text = txt.substring(0, maxLength);</span>
+
+		//  copy characters		(we need to look through anyway)
+<span class="nc" id="L2101">		StringBuilder out = new StringBuilder();</span>
+<span class="nc" id="L2102">		out.append(QUOTE);		//	'</span>
+<span class="nc bnc" id="L2103" title="All 2 branches missed.">		for (int i = 0; i &lt; text.length(); i++)</span>
+		{
+<span class="nc" id="L2105">			char c = text.charAt(i);</span>
+<span class="nc bnc" id="L2106" title="All 2 branches missed.">			if (c == QUOTE)</span>
+<span class="nc" id="L2107">				out.append(&quot;''&quot;);</span>
+			else
+<span class="nc" id="L2109">				out.append(c);</span>
+		}
+<span class="nc" id="L2111">		out.append(QUOTE);		//	'</span>
+		//
+<span class="nc" id="L2113">		return out.toString();</span>
+	}	//	TO_STRING
+	
+	/**
+	 * 	Return string as JSON object for INSERT statements with correct precision
+	 *	@param value
+	 *	@return value as json
+	 */
+	public static String TO_JSON (String value)
+	{
+<span class="nc" id="L2123">		return s_cc.getDatabase().TO_JSON(value);</span>
+	}
+	
+	/**
+	 *	@return string with right casting for JSON inserts
+	 */
+	public static String getJSONCast()
+	{
+<span class="nc" id="L2131">		return s_cc.getDatabase().getJSONCast();</span>
+	}
+
+	/**
+	 * Convenient method to close result set
+	 * @param rs
+	 */
+	public static void close( ResultSet rs) {
+        try {
+<span class="nc bnc" id="L2140" title="All 2 branches missed.">            if (rs!=null) rs.close();</span>
+<span class="nc" id="L2141">        } catch (SQLException e) {</span>
+            ;
+        }
+<span class="nc" id="L2144">    }</span>
+
+	/**
+	 * Convenient method to close statement
+	 * @param st
+	 */
+    public static void close( Statement st) {
+        try {
+<span class="nc bnc" id="L2152" title="All 2 branches missed.">            if (st!=null) st.close();</span>
+<span class="nc" id="L2153">        } catch (SQLException e) {</span>
+            ;
+        }
+<span class="nc" id="L2156">    }</span>
+
+    /**
+     * Convenient method to close result set and statement
+     * @param rs result set
+     * @param st statement
+     * @see #close(ResultSet)
+     * @see #close(Statement)
+     */
+    public static void close(ResultSet rs, Statement st) {
+<span class="nc" id="L2166">    	close(rs);</span>
+<span class="nc" id="L2167">    	close(st);</span>
+<span class="nc" id="L2168">    }</span>
+
+    /**
+     * Convenient method to close a {@link POResultSet}
+     * @param rs result set
+     * @see POResultSet#close()
+     */
+    public static void close(POResultSet&lt;?&gt; rs) {
+<span class="nc bnc" id="L2176" title="All 2 branches missed.">    	if (rs != null)</span>
+<span class="nc" id="L2177">    		rs.close();</span>
+<span class="nc" id="L2178">    }</span>
+
+	/**
+	 * Try to get the SQLException from Exception
+	 * @param e Exception
+	 * @return SQLException if found or provided exception elsewhere
+	 */
+    public static Exception getSQLException(Exception e)
+    {
+<span class="nc" id="L2187">    	Throwable e1 = e;</span>
+<span class="nc bnc" id="L2188" title="All 2 branches missed.">    	while (e1 != null)</span>
+    	{
+<span class="nc bnc" id="L2190" title="All 2 branches missed.">	    	if (e1 instanceof SQLException)</span>
+<span class="nc" id="L2191">	    		return (SQLException)e1;</span>
+<span class="nc" id="L2192">	    	e1 = e1.getCause();</span>
+    	}
+<span class="nc" id="L2194">    	return e;</span>
+    }
+
+	/** Quote			*/
+	private static final char QUOTE = '\'';
+
+    // Following methods are kept for BeanShell compatibility.
+	// See BF [ 2030233 ] Remove duplicate code from DB class
+    // TODO: remove this when BeanShell will support varargs methods
+    public static int getSQLValue (String trxName, String sql)
+    {
+<span class="nc" id="L2205">    	return getSQLValue(trxName, sql, new Object[]{});</span>
+    }
+    public static int getSQLValue (String trxName, String sql, int int_param1)
+    {
+<span class="nc" id="L2209">    	return getSQLValue(trxName, sql, new Object[]{int_param1});</span>
+    }
+    public static int getSQLValue (String trxName, String sql, int int_param1, int int_param2)
+    {
+<span class="nc" id="L2213">    	return getSQLValue(trxName, sql, new Object[]{int_param1, int_param2});</span>
+    }
+    public static int getSQLValue (String trxName, String sql, String str_param1)
+    {
+<span class="nc" id="L2217">    	return getSQLValue(trxName, sql, new Object[]{str_param1});</span>
+    }
+    public static int getSQLValue (String trxName, String sql, int int_param1, String str_param2)
+    {
+<span class="nc" id="L2221">    	return getSQLValue(trxName, sql, new Object[]{int_param1, str_param2});</span>
+    }
+    public static String getSQLValueString (String trxName, String sql, int int_param1)
+    {
+<span class="nc" id="L2225">    	return getSQLValueString(trxName, sql, new Object[]{int_param1});</span>
+    }
+    public static BigDecimal getSQLValueBD (String trxName, String sql, int int_param1)
+    {
+<span class="nc" id="L2229">    	return getSQLValueBD(trxName, sql, new Object[]{int_param1});</span>
+    }
+    //End BeanShell compatibility.
+
+	/**
+	 * Get Array of ValueNamePair items.
+	 * &lt;pre&gt; Example:
+	 * String sql = &quot;SELECT Name, Description FROM AD_Ref_List WHERE AD_Reference_ID=?&quot;;
+	 * ValueNamePair[] list = DB.getValueNamePairs(sql, false, params);
+	 * &lt;/pre&gt;
+	 * @param sql SELECT Value_Column, Name_Column FROM ...
+	 * @param optional if {@link ValueNamePair#EMPTY} is added
+	 * @param params query parameters
+	 * @return array of {@link ValueNamePair} or empty array
+     * @throws DBException if there is any SQLException
+	 */
+	public static ValueNamePair[] getValueNamePairs(String sql, boolean optional, List&lt;Object&gt; params)
+	{
+<span class="nc" id="L2247">        PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2248">        ResultSet rs = null;</span>
+<span class="nc" id="L2249">        ArrayList&lt;ValueNamePair&gt; list = new ArrayList&lt;ValueNamePair&gt;();</span>
+<span class="nc bnc" id="L2250" title="All 2 branches missed.">        if (optional)</span>
+        {
+<span class="nc" id="L2252">            list.add (ValueNamePair.EMPTY);</span>
+        }
+        try
+        {
+<span class="nc" id="L2256">            pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L2257">            setParameters(pstmt, params);</span>
+<span class="nc" id="L2258">            rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L2259" title="All 2 branches missed.">            while (rs.next())</span>
+            {
+<span class="nc" id="L2261">                list.add(new ValueNamePair(rs.getString(1), rs.getString(2)));</span>
+            }
+<span class="nc" id="L2263">        }</span>
+<span class="nc" id="L2264">        catch (SQLException e)</span>
+        {
+<span class="nc" id="L2266">            throw new DBException(e, sql);</span>
+        }
+        finally
+        {
+<span class="nc" id="L2270">            close(rs, pstmt);</span>
+<span class="nc" id="L2271">            rs = null; pstmt = null;</span>
+        }
+<span class="nc" id="L2273">		return list.toArray(new ValueNamePair[list.size()]);</span>
+	}
+
+	/**
+	 * Get Array of KeyNamePair items.
+	 * &lt;pre&gt; Example:
+	 * String sql = &quot;SELECT C_City_ID, Name FROM C_City WHERE C_City_ID=?&quot;;
+	 * KeyNamePair[] list = DB.getKeyNamePairs(sql, false, params);
+	 * &lt;/pre&gt;
+	 * @param sql SELECT ID_Column, Name_Column FROM ...
+	 * @param optional if {@link ValueNamePair#EMPTY} is added
+	 * @param params query parameters
+	 * @return array of {@link KeyNamePair} or empty array
+     * @throws DBException if there is any SQLException
+	 */
+	public static KeyNamePair[] getKeyNamePairs(String sql, boolean optional, List&lt;Object&gt; params)
+	{
+<span class="nc" id="L2290">        PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2291">        ResultSet rs = null;</span>
+<span class="nc" id="L2292">        ArrayList&lt;KeyNamePair&gt; list = new ArrayList&lt;KeyNamePair&gt;();</span>
+<span class="nc bnc" id="L2293" title="All 2 branches missed.">        if (optional)</span>
+        {
+<span class="nc" id="L2295">            list.add (KeyNamePair.EMPTY);</span>
+        }
+        try
+        {
+<span class="nc" id="L2299">            pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L2300">            setParameters(pstmt, params);</span>
+<span class="nc" id="L2301">            rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L2302" title="All 2 branches missed.">            while (rs.next())</span>
+            {
+<span class="nc" id="L2304">                list.add(new KeyNamePair(rs.getInt(1), rs.getString(2)));</span>
+            }
+<span class="nc" id="L2306">        }</span>
+<span class="nc" id="L2307">        catch (SQLException e)</span>
+        {
+<span class="nc" id="L2309">            throw new DBException(e, sql);</span>
+        }
+        finally
+        {
+<span class="nc" id="L2313">            close(rs, pstmt);</span>
+<span class="nc" id="L2314">            rs = null; pstmt = null;</span>
+        }
+<span class="nc" id="L2316">		return list.toArray(new KeyNamePair[list.size()]);</span>
+	}
+
+	/**
+	 * Insert selection into T_Selection table.&lt;br/&gt;
+	 * Keeping this method for backward compatibility.
+	 * refer: IDEMPIERE-1970
+	 * @param AD_PInstance_ID
+	 * @param selection
+	 * @param trxName
+	 */
+	public static void createT_Selection(int AD_PInstance_ID, Collection&lt;Integer&gt; selection, String trxName)
+	{
+<span class="nc" id="L2329">		StringBuilder insert = new StringBuilder();</span>
+<span class="nc" id="L2330">		insert.append(&quot;INSERT INTO T_SELECTION(AD_PINSTANCE_ID, T_SELECTION_ID) &quot;);</span>
+<span class="nc" id="L2331">		int counter = 0;</span>
+<span class="nc bnc" id="L2332" title="All 2 branches missed.">		for(Integer selectedId : selection)</span>
+		{
+<span class="nc" id="L2334">			counter++;</span>
+<span class="nc bnc" id="L2335" title="All 2 branches missed.">			if (counter &gt; 1)</span>
+<span class="nc" id="L2336">				insert.append(&quot; UNION &quot;);</span>
+<span class="nc" id="L2337">			insert.append(&quot;SELECT &quot;);</span>
+<span class="nc" id="L2338">			insert.append(AD_PInstance_ID);</span>
+<span class="nc" id="L2339">			insert.append(&quot;, &quot;);</span>
+<span class="nc" id="L2340">			insert.append(selectedId);</span>
+<span class="nc" id="L2341">			insert.append(&quot; FROM DUAL &quot;);</span>
+
+<span class="nc bnc" id="L2343" title="All 2 branches missed.">			if (counter &gt;= 1000)</span>
+			{
+<span class="nc" id="L2345">				DB.executeUpdateEx(insert.toString(), trxName);</span>
+<span class="nc" id="L2346">				insert = new StringBuilder();</span>
+<span class="nc" id="L2347">				insert.append(&quot;INSERT INTO T_SELECTION(AD_PINSTANCE_ID, T_SELECTION_ID) &quot;);</span>
+<span class="nc" id="L2348">				counter = 0;</span>
+			}
+		}
+<span class="nc bnc" id="L2351" title="All 2 branches missed.">		if (counter &gt; 0)</span>
+		{
+<span class="nc" id="L2353">			DB.executeUpdateEx(insert.toString(), trxName);</span>
+		}
+<span class="nc" id="L2355">	}</span>
+
+	/**
+	 * Insert selection into T_Selection table.&lt;br/&gt;
+	 * saveKeys is map with rowID as key and list of viewID as value. 
+	 * @param AD_PInstance_ID
+	 * @param saveKeys - Collection of KeyNamePair
+	 * @param trxName
+	 */
+	public static void createT_SelectionNew (int AD_PInstance_ID, Collection&lt;KeyNamePair&gt; saveKeys, String trxName) {
+<span class="nc" id="L2365">		Collection&lt;NamePair&gt; saveKeysNP = new ArrayList&lt;NamePair&gt;();</span>
+<span class="nc bnc" id="L2366" title="All 2 branches missed.">		for (NamePair saveKey : saveKeys)</span>
+<span class="nc" id="L2367">			saveKeysNP.add(saveKey);</span>
+<span class="nc" id="L2368">		createT_SelectionNewNP(AD_PInstance_ID, saveKeysNP, trxName);</span>
+<span class="nc" id="L2369">	}</span>
+
+	/**
+	 * Insert selection into T_Selection table.&lt;br/&gt;
+	 * saveKeys is map with rowID as key and list of viewID as value. 
+	 * @param AD_PInstance_ID
+	 * @param saveKeys can receive a Collection of KeyNamePair (IDs) or ValueNamePair (UUIDs)
+	 * @param trxName
+	 */
+	public static void createT_SelectionNewNP (int AD_PInstance_ID, Collection&lt;NamePair&gt; saveKeys, String trxName)
+	{
+<span class="nc" id="L2380">		String initialInsert = &quot;INSERT INTO T_SELECTION(AD_PINSTANCE_ID, T_SELECTION_ID, T_SELECTION_UU, ViewID) &quot;;</span>
+<span class="nc" id="L2381">		StringBuilder insert = new StringBuilder(initialInsert);</span>
+<span class="nc" id="L2382">		int counter = 0;</span>
+<span class="nc bnc" id="L2383" title="All 2 branches missed.">		for(NamePair saveKey : saveKeys)</span>
+		{
+			Object selectedId;
+<span class="nc bnc" id="L2386" title="All 2 branches missed.">			if (saveKey instanceof KeyNamePair)</span>
+<span class="nc" id="L2387">				selectedId = ((KeyNamePair)saveKey).getKey();</span>
+<span class="nc bnc" id="L2388" title="All 2 branches missed.">			else if (saveKey instanceof ValueNamePair)</span>
+<span class="nc" id="L2389">				selectedId = ((ValueNamePair)saveKey).getValue();</span>
+			else
+<span class="nc" id="L2391">				throw new AdempiereException(&quot;NamePair type not allowed in DB.createT_SelectionNewNP, just KeyNamePair or ValueNamePair are allowed&quot;);</span>
+<span class="nc" id="L2392">			counter++;</span>
+<span class="nc bnc" id="L2393" title="All 2 branches missed.">			if (counter &gt; 1)</span>
+<span class="nc" id="L2394">				insert.append(&quot; UNION &quot;);</span>
+<span class="nc" id="L2395">			insert.append(&quot;SELECT &quot;);</span>
+<span class="nc" id="L2396">			insert.append(AD_PInstance_ID);</span>
+<span class="nc" id="L2397">			insert.append(&quot;, &quot;);</span>
+<span class="nc bnc" id="L2398" title="All 2 branches missed.">			if (selectedId instanceof Integer) {</span>
+<span class="nc" id="L2399">				insert.append((Integer)selectedId);</span>
+<span class="nc" id="L2400">				insert.append(&quot;, ' '&quot;);</span>
+<span class="nc" id="L2401">			} else {</span>
+<span class="nc" id="L2402">				insert.append(&quot;0, &quot;);</span>
+<span class="nc" id="L2403">				insert.append(DB.TO_STRING(selectedId.toString()));</span>
+			}
+<span class="nc" id="L2405">			insert.append(&quot;, &quot;);</span>
+			
+<span class="nc" id="L2407">			String viewIDValue = saveKey.getName();</span>
+			// when no process have viewID or this process have no viewID or value of viewID is null
+<span class="nc bnc" id="L2409" title="All 2 branches missed.">			if (viewIDValue == null){</span>
+<span class="nc" id="L2410">				insert.append(&quot;NULL&quot;);</span>
+<span class="nc" id="L2411">			}else{</span>
+<span class="nc" id="L2412">				insert.append(DB.TO_STRING(viewIDValue));</span>
+			}
+			
+<span class="nc" id="L2415">			insert.append(&quot; FROM DUAL &quot;);</span>
+
+<span class="nc bnc" id="L2417" title="All 2 branches missed.">			if (counter &gt;= 1000)</span>
+			{
+<span class="nc" id="L2419">				DB.executeUpdateEx(insert.toString(), trxName);</span>
+<span class="nc" id="L2420">				insert.delete(0,  insert.length());</span>
+<span class="nc" id="L2421">				insert.append(initialInsert);</span>
+<span class="nc" id="L2422">				counter = 0;</span>
+			}
+		}
+<span class="nc bnc" id="L2425" title="All 2 branches missed.">		if (counter &gt; 0)</span>
+		{
+<span class="nc" id="L2427">			DB.executeUpdateEx(insert.toString(), trxName);</span>
+		}
+<span class="nc" id="L2429">	}</span>
+
+<span class="nc" id="L2431">	private static boolean m_isUUIDVerified = false;</span>
+<span class="nc" id="L2432">	private static boolean m_isUUIDSupported = false;</span>
+	
+	/**
+	 * Is DB support generate_uuid function
+	 * @return true if current db have working generate_uuid function. generate_uuid doesn't work on 64 bit postgresql
+	 * on windows yet.
+	 */
+	public static boolean isGenerateUUIDSupported() {
+<span class="nc bnc" id="L2440" title="All 2 branches missed.">		if (! m_isUUIDVerified) {</span>
+<span class="nc" id="L2441">			String uuidTest = null;</span>
+			try {
+<span class="nc" id="L2443">				uuidTest = getSQLValueStringEx(null, &quot;SELECT Generate_UUID() FROM Dual&quot;);</span>
+<span class="nc" id="L2444">			} catch (Exception e) {}</span>
+<span class="nc bnc" id="L2445" title="All 4 branches missed.">			m_isUUIDSupported = uuidTest != null &amp;&amp; uuidTest.trim().length() == 36;</span>
+<span class="nc" id="L2446">			m_isUUIDVerified = true;</span>
+		}
+<span class="nc" id="L2448">		return m_isUUIDSupported;</span>
+	}
+
+	/**
+	 * Throw DBException if trxName doesn't return an existing Trx instance.
+	 * @param trxName
+	 */
+	private static void verifyTrx(String trxName) {
+<span class="nc bnc" id="L2456" title="All 4 branches missed.">		if (trxName != null &amp;&amp; Trx.get(trxName, false) == null) {</span>
+			// Using a trx that was previously closed or never opened
+			// probably timed out - throw Exception (IDEMPIERE-644)
+<span class="nc" id="L2459">			String msg = &quot;Transaction closed or never opened (&quot;+trxName+&quot;) =&gt; (maybe timed out)&quot;;</span>
+<span class="nc" id="L2460">			log.severe(msg); // severe</span>
+<span class="nc" id="L2461">			throw new DBException(msg);</span>
+		}
+<span class="nc" id="L2463">	}</span>
+
+	/**
+	 * Is table or view exists
+	 * @param tableName
+	 * @return true if table or view with name=tableName exists in db
+	 */
+	public static boolean isTableOrViewExists(String tableName) {
+<span class="nc" id="L2471">		Connection conn = getConnection();</span>
+<span class="nc" id="L2472">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L2474">			DatabaseMetaData metadata = conn.getMetaData();</span>
+			String tblName;
+<span class="nc bnc" id="L2476" title="All 2 branches missed.">			if (metadata.storesUpperCaseIdentifiers())</span>
+<span class="nc" id="L2477">				tblName = tableName.toUpperCase();</span>
+<span class="nc bnc" id="L2478" title="All 2 branches missed.">			else if (metadata.storesLowerCaseIdentifiers())</span>
+<span class="nc" id="L2479">				tblName = tableName.toLowerCase();</span>
+			else
+<span class="nc" id="L2481">				tblName = tableName;</span>
+<span class="nc" id="L2482">			rs = metadata.getTables(null, null, tblName, null);</span>
+<span class="nc bnc" id="L2483" title="All 2 branches missed.">			if (rs.next()) {</span>
+<span class="nc" id="L2484">				return true;</span>
+			}
+<span class="nc" id="L2486">		} catch (SQLException e) {</span>
+<span class="nc" id="L2487">			e.printStackTrace();</span>
+		} finally {
+<span class="nc" id="L2489">			DB.close(rs);</span>
+			try {
+<span class="nc" id="L2491">				conn.close();</span>
+<span class="nc" id="L2492">			} catch (SQLException e) {}</span>
+		}
+<span class="nc" id="L2494">		return false;</span>
+	}
+
+    /**
+     * Get a list of objects from sql (one per each column in the select clause), column indexing starts with 0
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return null if not found
+     * @throws DBException if there is any SQLException
+     */
+	public static List&lt;Object&gt; getSQLValueObjectsEx(String trxName, String sql, Object... params) {
+<span class="nc" id="L2506">		List&lt;Object&gt; retValue = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L2507">    	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2508">    	ResultSet rs = null;</span>
+<span class="nc" id="L2509">    	Connection conn = null;</span>
+<span class="nc bnc" id="L2510" title="All 2 branches missed.">    	if (trxName == null)</span>
+<span class="nc" id="L2511">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    	try
+    	{
+<span class="nc bnc" id="L2514" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L2516">    			conn.setAutoCommit(false);</span>
+<span class="nc" id="L2517">    			conn.setReadOnly(true);</span>
+    		}
+    		
+<span class="nc bnc" id="L2520" title="All 2 branches missed.">    		if (conn != null)</span>
+<span class="nc" id="L2521">    			pstmt = prepareStatement(conn, sql);</span>
+    		else
+<span class="nc" id="L2523">    			pstmt = prepareStatement(sql, trxName);</span>
+<span class="nc" id="L2524">    		setParameters(pstmt, params);</span>
+<span class="nc" id="L2525">    		rs = pstmt.executeQuery();</span>
+<span class="nc" id="L2526">			ResultSetMetaData rsmd = rs.getMetaData();</span>
+<span class="nc bnc" id="L2527" title="All 2 branches missed.">    		if (rs.next()) {</span>
+<span class="nc bnc" id="L2528" title="All 2 branches missed.">    			for (int i=1; i&lt;=rsmd.getColumnCount(); i++) {</span>
+<span class="nc" id="L2529">    				Object obj = rs.getObject(i);</span>
+<span class="nc bnc" id="L2530" title="All 2 branches missed.">        			if (rs.wasNull())</span>
+<span class="nc" id="L2531">        				retValue.add(null);</span>
+        			else
+<span class="nc" id="L2533">        				retValue.add(obj);</span>
+    			}
+<span class="nc" id="L2535">    		} else {</span>
+<span class="nc" id="L2536">    			retValue = null;</span>
+    		}
+<span class="nc" id="L2538">    	}</span>
+<span class="nc" id="L2539">    	catch (SQLException e)</span>
+    	{
+<span class="nc bnc" id="L2541" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+    			try {
+<span class="nc" id="L2544">					conn.rollback();</span>
+<span class="nc" id="L2545">				} catch (SQLException e1) {</span>
+<span class="nc" id="L2546">					e1.printStackTrace();</span>
+				}
+    		}
+<span class="nc" id="L2549">    		throw new DBException(e, sql);</span>
+    	}
+    	finally
+    	{
+<span class="nc" id="L2553">    		close(rs, pstmt);</span>
+<span class="nc" id="L2554">    		rs = null; pstmt = null;</span>
+<span class="nc bnc" id="L2555" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L2557">    			closeAndResetReadonlyConnection(conn);</span>
+    		}
+    	}
+<span class="nc" id="L2560">    	return retValue;</span>
+	}
+
+    /**
+     * Get a list of object list from sql (one object list per each row, and in the object list, one object per each column in the select clause), 
+     * column indexing starts with 0.&lt;br/&gt;
+     * WARNING: This method must be used just for queries returning few records, using it for many records implies heavy memory consumption
+     * @param trxName optional transaction name
+     * @param sql
+     * @param params array of parameters
+     * @return null if not found
+     * @throws DBException if there is any SQLException
+     */
+	public static List&lt;List&lt;Object&gt;&gt; getSQLArrayObjectsEx(String trxName, String sql, Object... params) {
+<span class="nc" id="L2574">		List&lt;List&lt;Object&gt;&gt; rowsArray = new ArrayList&lt;List&lt;Object&gt;&gt;();</span>
+<span class="nc" id="L2575">    	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2576">    	ResultSet rs = null;</span>
+<span class="nc" id="L2577">    	Connection conn = null;</span>
+<span class="nc bnc" id="L2578" title="All 2 branches missed.">    	if (trxName == null)</span>
+<span class="nc" id="L2579">    		conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+    	try
+    	{
+<span class="nc bnc" id="L2582" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L2584">    			conn.setAutoCommit(false);</span>
+<span class="nc" id="L2585">    			conn.setReadOnly(true);</span>
+    		}
+    		
+<span class="nc bnc" id="L2588" title="All 2 branches missed.">    		if (conn != null)</span>
+<span class="nc" id="L2589">    			pstmt = prepareStatement(conn, sql);</span>
+    		else
+<span class="nc" id="L2591">    			pstmt = prepareStatement(sql, trxName);</span>
+<span class="nc" id="L2592">    		setParameters(pstmt, params);</span>
+<span class="nc" id="L2593">    		rs = pstmt.executeQuery();</span>
+<span class="nc" id="L2594">			ResultSetMetaData rsmd = rs.getMetaData();</span>
+<span class="nc bnc" id="L2595" title="All 2 branches missed.">    		while (rs.next()) {</span>
+<span class="nc" id="L2596">    			List&lt;Object&gt; retValue = new ArrayList&lt;Object&gt;();</span>
+<span class="nc bnc" id="L2597" title="All 2 branches missed.">    			for (int i=1; i&lt;=rsmd.getColumnCount(); i++) {</span>
+<span class="nc" id="L2598">    				Object obj = rs.getObject(i);</span>
+<span class="nc bnc" id="L2599" title="All 2 branches missed.">        			if (rs.wasNull())</span>
+<span class="nc" id="L2600">        				retValue.add(null);</span>
+        			else
+<span class="nc" id="L2602">        				retValue.add(obj);</span>
+    			}
+<span class="nc" id="L2604">    			rowsArray.add(retValue);</span>
+    		}
+<span class="nc" id="L2606">    	}</span>
+<span class="nc" id="L2607">    	catch (SQLException e)</span>
+    	{
+<span class="nc bnc" id="L2609" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+    			try {
+<span class="nc" id="L2612">					conn.rollback();</span>
+<span class="nc" id="L2613">				} catch (SQLException e1) {</span>
+<span class="nc" id="L2614">					e1.printStackTrace();</span>
+				}
+    		}
+<span class="nc" id="L2617">    		throw new DBException(e, sql);</span>
+    	}
+    	finally
+    	{
+<span class="nc" id="L2621">    		close(rs, pstmt);</span>
+<span class="nc" id="L2622">    		rs = null; pstmt = null;</span>
+<span class="nc bnc" id="L2623" title="All 2 branches missed.">    		if (conn != null)</span>
+    		{
+<span class="nc" id="L2625">    			closeAndResetReadonlyConnection(conn);</span>
+    		}
+    	}
+<span class="nc bnc" id="L2628" title="All 2 branches missed.">    	if (rowsArray.size() == 0)</span>
+<span class="nc" id="L2629">    		return null;</span>
+<span class="nc" id="L2630">    	return rowsArray;</span>
+	}
+
+	/**
+	 *	Create Read Replica Prepared Statement proxy
+	 *  @param sql
+	 * 	@param trxName transaction
+	 *  @return Prepared Statement (from replica if possible, otherwise normal statement)
+	 */
+	public static PreparedStatement prepareNormalReadReplicaStatement(String sql, String trxName) {
+<span class="nc" id="L2640">		return prepareNormalReadReplicaStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, trxName);</span>
+	}
+
+	/**
+	 *	Create Read Replica Prepared Statement proxy
+	 *  @param sql
+	 *  @param resultSetType - ResultSet.TYPE_FORWARD_ONLY, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.TYPE_SCROLL_SENSITIVE
+	 *  @param resultSetConcurrency - ResultSet.CONCUR_READ_ONLY or ResultSet.CONCUR_UPDATABLE
+	 * 	@param trxName transaction name
+	 *  @return Prepared Statement (from replica if possible, otherwise normal statement)
+	 */
+	private static PreparedStatement prepareNormalReadReplicaStatement(String sql, int resultSetType, int resultSetConcurrency, String trxName) {
+<span class="nc bnc" id="L2652" title="All 4 branches missed.">		if (sql == null || sql.length() == 0)</span>
+<span class="nc" id="L2653">			throw new IllegalArgumentException(&quot;No SQL&quot;);</span>
+<span class="nc bnc" id="L2654" title="All 2 branches missed.">		boolean useReadReplica = MSysConfig.getValue(MSysConfig.DB_READ_REPLICA_URLS) != null;</span>
+<span class="nc bnc" id="L2655" title="All 2 branches missed.">		if (   trxName == null</span>
+<span class="nc bnc" id="L2656" title="All 2 branches missed.">			&amp;&amp; useReadReplica</span>
+<span class="nc bnc" id="L2657" title="All 2 branches missed.">			&amp;&amp; resultSetType == ResultSet.TYPE_FORWARD_ONLY</span>
+<span class="nc bnc" id="L2658" title="All 2 branches missed.">			&amp;&amp; resultSetConcurrency == ResultSet.CONCUR_READ_ONLY) {</span>
+			// this is a candidate for a read replica connection (read-only, forward-only, no-trx), try to obtain one, otherwise fallback to normal
+<span class="nc" id="L2660">			CPreparedStatement stmt = ProxyFactory.newReadReplicaPreparedStatement(resultSetType, resultSetConcurrency, sql);</span>
+<span class="nc bnc" id="L2661" title="All 2 branches missed.">			if (stmt != null) {</span>
+<span class="nc" id="L2662">				return stmt;</span>
+			}
+		}
+		//
+<span class="nc" id="L2666">		return ProxyFactory.newCPreparedStatement(resultSetType, resultSetConcurrency, sql, trxName);</span>
+	}
+	
+	/**
+	 * Create IN clause for csv value
+	 * @param columnName
+	 * @param csv comma separated value
+	 * @return IN clause
+	 * @deprecated use inFilterForCSV instead
+	 */
+	@Deprecated(since=&quot;13&quot;, forRemoval=true)
+	public static String inClauseForCSV(String columnName, String csv) 
+	{
+<span class="nc" id="L2679">		return inClauseForCSV(columnName, csv, false);</span>
+	}
+	
+	/**
+	 * Create IN clause for csv value
+	 * @param columnName
+	 * @param csv comma separated value
+	 * @return IN clause
+	 */
+	public static SQLFragment inFilterForCSV(String columnName, String csv) 
+	{
+<span class="nc" id="L2690">		return inFilterForCSV(columnName, csv, false);</span>
+	}
+	
+	/**
+	 * Create IN clause for csv value
+	 * @param columnName
+	 * @param csv comma separated value
+	 * @param isNotClause true to append NOT before IN
+	 * @return IN clause
+	 * @deprecated use inFilterForCSV instead
+	 */
+	@Deprecated(since=&quot;13&quot;, forRemoval=true)
+	public static String inClauseForCSV(String columnName, String csv, boolean isNotClause) 
+	{
+	    
+<span class="nc" id="L2705">		StringBuilder builder = new StringBuilder();</span>
+		
+<span class="nc bnc" id="L2707" title="All 2 branches missed.">	    if (isNotClause) {</span>
+	        // (columnName NOT IN (
+<span class="nc" id="L2709">	        builder.append(&quot;(&quot;)</span>
+<span class="nc" id="L2710">	               .append(columnName)</span>
+<span class="nc" id="L2711">	               .append(&quot; NOT&quot;);</span>
+<span class="nc" id="L2712">	    } else {</span>
+<span class="nc" id="L2713">	    	builder.append(columnName);</span>
+	    }
+	    
+<span class="nc" id="L2716">	    builder.append(&quot; IN (&quot;);	    </span>
+<span class="nc" id="L2717">		String[] values = csv.split(&quot;[,]&quot;);</span>
+<span class="nc bnc" id="L2718" title="All 2 branches missed.">		for(int i = 0; i &lt; values.length; i++)</span>
+		{
+<span class="nc bnc" id="L2720" title="All 2 branches missed.">			if (i &gt; 0)</span>
+<span class="nc" id="L2721">				builder.append(&quot;,&quot;);</span>
+<span class="nc" id="L2722">			String key = values[i];</span>
+<span class="nc bnc" id="L2723" title="All 2 branches missed.">			if (columnName.endsWith(&quot;_ID&quot;)) </span>
+			{
+<span class="nc" id="L2725">				builder.append(key);</span>
+<span class="nc" id="L2726">			}</span>
+			else
+			{
+<span class="nc bnc" id="L2729" title="All 4 branches missed.">				if (key.startsWith(&quot;\&quot;&quot;) &amp;&amp; key.endsWith(&quot;\&quot;&quot;)) </span>
+				{
+<span class="nc" id="L2731">					key = key.substring(1, key.length()-1);</span>
+				}
+<span class="nc" id="L2733">				builder.append(TO_STRING(key));</span>
+			}
+		}
+<span class="nc" id="L2736">		builder.append(&quot;)&quot;);</span>
+		
+<span class="nc bnc" id="L2738" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L2739">	        builder.append(&quot; OR &quot;)</span>
+<span class="nc" id="L2740">	               .append(columnName)</span>
+<span class="nc" id="L2741">	               .append(&quot; IS NULL)&quot;);</span>
+	    }
+	    
+<span class="nc" id="L2744">		return builder.toString();</span>
+	}
+	
+	/**
+	 * Create IN clause for csv value
+	 * @param columnName
+	 * @param csv
+	 * @param isNotClause
+	 * @return sql filter with IN clause
+	 */
+	public static SQLFragment inFilterForCSV(String columnName, String csv, boolean isNotClause) 
+	{
+<span class="nc" id="L2756">	    StringBuilder builder = new StringBuilder();</span>
+<span class="nc" id="L2757">	    List&lt;Object&gt; params = new ArrayList&lt;&gt;();</span>
+	    
+<span class="nc bnc" id="L2759" title="All 2 branches missed.">	    if (isNotClause) {</span>
+	        // (columnName NOT IN (
+<span class="nc" id="L2761">	        builder.append(&quot;(&quot;)</span>
+<span class="nc" id="L2762">	               .append(columnName)</span>
+<span class="nc" id="L2763">	               .append(&quot; NOT&quot;);</span>
+<span class="nc" id="L2764">	    } else {</span>
+<span class="nc" id="L2765">	    	builder.append(columnName);</span>
+	    }
+	    
+<span class="nc" id="L2768">	    builder.append(&quot; IN (&quot;);</span>
+
+<span class="nc" id="L2770">	    String[] values = csv.split(&quot;[,]&quot;);</span>
+<span class="nc bnc" id="L2771" title="All 2 branches missed.">	    for (int i = 0; i &lt; values.length; i++)</span>
+	    {
+<span class="nc" id="L2773">	        String key = values[i];</span>
+<span class="nc bnc" id="L2774" title="All 2 branches missed.">	        if (i &gt; 0)</span>
+<span class="nc" id="L2775">	            builder.append(&quot;,&quot;);</span>
+
+<span class="nc bnc" id="L2777" title="All 2 branches missed.">	        if (&quot;null&quot;.equalsIgnoreCase(key.trim())) {</span>
+<span class="nc" id="L2778">	            builder.append(&quot;NULL&quot;);</span>
+<span class="nc" id="L2779">	            continue;</span>
+	        }
+
+<span class="nc bnc" id="L2782" title="All 2 branches missed.">	        if (columnName.endsWith(&quot;_ID&quot;)) </span>
+	        {
+<span class="nc" id="L2784">	            params.add(Integer.valueOf(key.trim()));</span>
+<span class="nc" id="L2785">	        }</span>
+	        else
+	        {
+<span class="nc bnc" id="L2788" title="All 4 branches missed.">	            if (key.startsWith(&quot;\&quot;&quot;) &amp;&amp; key.endsWith(&quot;\&quot;&quot;)) </span>
+	            {
+<span class="nc" id="L2790">	                key = key.substring(1, key.length()-1);</span>
+	            }
+	            // empty string means NULL in this context
+<span class="nc bnc" id="L2793" title="All 2 branches missed.">	            if (Util.isEmpty(key)) {</span>
+<span class="nc" id="L2794">	                builder.append(&quot;NULL&quot;);</span>
+<span class="nc" id="L2795">	                continue;</span>
+	            } else {
+<span class="nc" id="L2797">	                params.add(key);</span>
+	            }
+	        }
+<span class="nc" id="L2800">	        builder.append(&quot;?&quot;);</span>
+	    }
+<span class="nc" id="L2802">	    builder.append(&quot;)&quot;);</span>
+
+<span class="nc bnc" id="L2804" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L2805">	        builder.append(&quot; OR &quot;)</span>
+<span class="nc" id="L2806">	               .append(columnName)</span>
+<span class="nc" id="L2807">	               .append(&quot; IS NULL)&quot;);</span>
+	    }
+
+<span class="nc" id="L2810">	    return new SQLFragment(builder.toString(), params);</span>
+	}
+	
+	
+	/**
+	 * Create subset clause for csv value (i.e columnName is a subset of the csv value set)
+	 * @param columnName
+	 * @param csv
+	 * @return subset sql clause
+	 * @deprecated use subsetFilterForCSV instead
+	 */
+	@SuppressWarnings(&quot;removal&quot;)
+	@Deprecated(since=&quot;13&quot;, forRemoval=true)
+	public static String subsetClauseForCSV(String columnName, String csv)
+	{
+<span class="nc" id="L2825">		return getDatabase().subsetClauseForCSV(columnName, csv);</span>
+	}
+	
+	/**
+	 * Create intersect clause for csv value (i.e columnName is an intersect with the csv value set)
+	 * @param columnName
+	 * @param csv
+	 * @return intersect sql clause
+	 * @deprecated use intersectFilterForCSV instead
+	 */
+	@Deprecated(since=&quot;13&quot;, forRemoval=true)
+	public static String intersectClauseForCSV(String columnName, String csv)
+	{
+<span class="nc" id="L2838">		return intersectClauseForCSV(columnName, csv, false);</span>
+	}
+	
+	/**
+	 * Create intersect clause for csv value (i.e columnName is an intersect with the csv value set)
+	 * @param columnName
+	 * @param csv
+	 * @return intersect sql clause
+	 */
+	public static SQLFragment intersectFilterForCSV(String columnName, String csv)
+	{
+<span class="nc" id="L2849">		return intersectFilterForCSV(columnName, csv, false);</span>
+	}
+	
+	/**
+	 * Create intersect clause for csv value (i.e columnName is an intersect with the csv value set)
+	 * @param columnName
+	 * @param csv
+	 * @param isNotClause true to append NOT before the intersect clause
+	 * @return intersect sql clause
+	 * @deprecated use intersectFilterForCSV instead
+	 */
+	@SuppressWarnings(&quot;removal&quot;)
+	@Deprecated(since=&quot;13&quot;, forRemoval=true)
+	public static String intersectClauseForCSV(String columnName, String csv, boolean isNotClause)
+	{
+<span class="nc" id="L2864">		return getDatabase().intersectClauseForCSV(columnName, csv, isNotClause);</span>
+	}
+	
+	/**
+	 * Create intersect clause for csv value (i.e columnName is an intersect with the csv value set)
+	 * @param columnName
+	 * @param csv
+	 * @param isNotClause
+	 * @return intersect sql clause
+	 */
+	public static SQLFragment intersectFilterForCSV(String columnName, String csv, boolean isNotClause)
+	{
+<span class="nc" id="L2876">		return getDatabase().intersectFilterForCSV(columnName, csv, isNotClause);</span>
+	}
+	
+	/**
+	 * Is sql a SELECT statement
+	 * @param sql
+	 * @return true if it is a SELECT statement
+	 */
+	public static boolean isSelectStatement(String sql) {
+<span class="nc" id="L2885">		String removeComments = &quot;/\\*(?:.|[\\n\\r])*?\\*/&quot;;</span>
+<span class="nc" id="L2886">		String removeQuotedStrings = &quot;'(?:.|[\\n\\r])*?'&quot;;</span>
+<span class="nc" id="L2887">		String removeLeadingSpaces = &quot;^\\s+&quot;;</span>
+<span class="nc" id="L2888">		String cleanSql = sql.toLowerCase().replaceAll(removeComments, &quot;&quot;).replaceAll(removeQuotedStrings, &quot;&quot;).replaceFirst(removeLeadingSpaces, &quot;&quot;);</span>
+<span class="nc bnc" id="L2889" title="All 4 branches missed.">		if(cleanSql.matches(&quot;^select\\s.*$&quot;) &amp;&amp; !cleanSql.contains(&quot;;&quot;))</span>
+<span class="nc" id="L2890">			return true;</span>
+		else
+<span class="nc" id="L2892">			return false;</span>
+	}
+
+}	//	DB
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

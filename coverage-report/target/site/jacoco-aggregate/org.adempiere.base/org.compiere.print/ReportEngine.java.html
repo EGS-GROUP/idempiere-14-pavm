@@ -1,0 +1,1923 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ReportEngine.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.print</a> &gt; <span class="el_source">ReportEngine.java</span></div><h1>ReportEngine.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.print;
+
+import static org.compiere.model.SystemIDs.PROCESS_RPT_M_INVENTORY;
+import static org.compiere.model.SystemIDs.PROCESS_RPT_M_MOVEMENT;
+
+import java.awt.print.PrinterJob;
+import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.net.URI;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import javax.print.attribute.PrintRequestAttributeSet;
+import javax.print.attribute.standard.Copies;
+import javax.print.attribute.standard.JobName;
+import javax.print.event.PrintServiceAttributeEvent;
+import javax.print.event.PrintServiceAttributeListener;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MClient;
+import org.compiere.model.MColumn;
+import org.compiere.model.MDunningRunEntry;
+import org.compiere.model.MInOut;
+import org.compiere.model.MInventory;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MLanguage;
+import org.compiere.model.MMovement;
+import org.compiere.model.MOrder;
+import org.compiere.model.MPInstance;
+import org.compiere.model.MPaySelectionCheck;
+import org.compiere.model.MProcess;
+import org.compiere.model.MProject;
+import org.compiere.model.MQuery;
+import org.compiere.model.MRfQResponse;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.PrintInfo;
+import org.compiere.print.layout.LayoutEngine;
+import org.compiere.print.layout.PrintDataEvaluatee;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.ProcessInfoParameter;
+import org.compiere.process.ServerProcessCtl;
+import org.compiere.tools.FileUtil;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Evaluator;
+import org.compiere.util.Ini;
+import org.compiere.util.Language;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.eevolution.model.MDDOrder;
+import org.eevolution.model.X_PP_Order;
+import org.idempiere.db.util.SQLFragment;
+import org.idempiere.print.renderer.CSVReportRenderer;
+import org.idempiere.print.renderer.CSVReportRendererConfiguration;
+import org.idempiere.print.renderer.HTMLReportRenderer;
+import org.idempiere.print.renderer.HTMLReportRendererConfiguration;
+import org.idempiere.print.renderer.PDFReportRenderer;
+import org.idempiere.print.renderer.PDFReportRendererConfiguration;
+import org.idempiere.print.renderer.PSReportRenderer;
+import org.idempiere.print.renderer.PSReportRendererConfiguration;
+import org.idempiere.print.renderer.SSVReportRenderer;
+import org.idempiere.print.renderer.SSVReportRendererConfiguration;
+import org.idempiere.print.renderer.TabDelimitedReportRenderer;
+import org.idempiere.print.renderer.TabDelimitedReportRendererConfiguration;
+import org.idempiere.print.renderer.XLSReportRenderer;
+import org.idempiere.print.renderer.XLSReportRendererConfiguration;
+import org.idempiere.print.renderer.XLSXReportRenderer;
+import org.idempiere.print.renderer.XLSXReportRendererConfiguration;
+import org.idempiere.print.renderer.XMLReportRenderer;
+import org.idempiere.print.renderer.XMLReportRendererConfiguration;
+
+/**
+ *	Report Engine.&lt;br/&gt;
+ *  For a given PrintFormat, create a Report.
+ *  &lt;p&gt;
+ *  Change log:
+ *  &lt;ul&gt;
+ *  &lt;li&gt;2007-02-12 - teo_sarca - [ 1658127 ] Select charset encoding on import
+ *  &lt;li&gt;2007-02-10 - teo_sarca - [ 1652660 ] Save XML,HTML,CSV should have utf8 charset
+ *  &lt;li&gt;2009-02-06 - globalqss - [ 2574162 ] Priority to choose invoice print format not working
+ *  &lt;li&gt;2009-07-10 - trifonnt - [ 2819637 ] Wrong print format on non completed order
+ *  &lt;/ul&gt;
+ *
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: ReportEngine.java,v 1.4 2006/10/08 06:52:51 comdivision Exp $
+ * 
+ *  @author Teo Sarca, www.arhipac.ro
+ * 			&lt;li&gt;BF [ 2828300 ] Error when printformat table differs from DOC_TABLES
+ * 				https://sourceforge.net/p/adempiere/bugs/1995/
+ * 			&lt;li&gt;BF [ 2828886 ] Problem with reports from temporary tables
+ * 				https://sourceforge.net/p/adempiere/bugs/2000/
+ * 
+ *  FR 2872010 - Dunning Run for a complete Dunning (not just level) - Developer: Carlos Ruiz - globalqss - Sponsor: Metas
+ */
+public class ReportEngine implements PrintServiceAttributeListener
+{
+	
+	/**
+	 *	Constructor
+	 * 	@param ctx context
+	 *  @param pf Print Format
+	 *  @param query Optional Query
+	 *  @param info print info
+	 */
+	public ReportEngine (Properties ctx, MPrintFormat pf, MQuery query, PrintInfo info)
+	{
+<span class="nc" id="L140">		this(ctx, pf, query, info, null);</span>
+<span class="nc" id="L141">	}	//	ReportEngine</span>
+	
+	/**
+	 * Create report engine with summary and null transaction
+	 * @param ctx
+	 * @param pf
+	 * @param query
+	 * @param info
+	 * @param isSummary
+	 */
+	public ReportEngine (Properties ctx, MPrintFormat pf, MQuery query, PrintInfo info, boolean isSummary)
+	{
+<span class="nc" id="L153">		this(ctx, pf, query, info, isSummary, null);</span>
+<span class="nc" id="L154">	}	//	ReportEngine</span>
+	
+	/**
+	 * Create report engine with summary = false
+	 * @param ctx
+	 * @param pf
+	 * @param query
+	 * @param info
+	 * @param trxName
+	 */
+	public ReportEngine (Properties ctx, MPrintFormat pf, MQuery query, PrintInfo info, String trxName){
+<span class="nc" id="L165">		this(ctx, pf, query, info, false, trxName);</span>
+<span class="nc" id="L166">	}</span>
+	
+	/**
+	 *	Constructor
+	 * 	@param ctx context
+	 *  @param pf Print Format
+	 *  @param query Optional Query
+	 *  @param info print info
+	 *  @param isSummary
+	 *  @param trxName
+	 */
+	public ReportEngine (Properties ctx, MPrintFormat pf, MQuery query, PrintInfo info, boolean isSummary, String trxName)
+	{
+<span class="nc" id="L179">		this(ctx, pf, query, info, false, trxName, 0);</span>
+<span class="nc" id="L180">	}</span>
+
+	/**
+	 * Set report engine with summary = false
+	 * @param ctx
+	 * @param pf
+	 * @param query
+	 * @param info
+	 * @param trxName
+	 * @param windowNo
+	 */
+	public ReportEngine (Properties ctx, MPrintFormat pf, MQuery query, PrintInfo info, String trxName, int windowNo){
+<span class="nc" id="L192">		this(ctx, pf, query, info, false, trxName, windowNo);</span>
+<span class="nc" id="L193">	}</span>
+
+	/**
+	 *	Constructor
+	 * 	@param ctx context
+	 *  @param pf Print Format
+	 *  @param query Optional Query
+	 *  @param info print info
+	 *  @param isSummary
+	 *  @param trxName
+	 *  @param windowNo
+	 */
+<span class="nc" id="L205">	public ReportEngine (Properties ctx, MPrintFormat pf, MQuery query, PrintInfo info, boolean isSummary, String trxName, int windowNo)</span>
+	{
+<span class="nc" id="L207">		m_summary = isSummary;</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">		if (pf == null)</span>
+<span class="nc" id="L209">			throw new IllegalArgumentException(&quot;ReportEngine - no PrintFormat&quot;);</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(pf + &quot; -- &quot; + query);</span>
+<span class="nc" id="L211">		m_ctx = ctx;</span>
+		//
+<span class="nc" id="L213">		m_printFormat = pf;</span>
+<span class="nc" id="L214">		m_info = info;</span>
+<span class="nc" id="L215">		m_trxName = trxName;</span>
+<span class="nc" id="L216">		m_windowNo = windowNo;</span>
+<span class="nc" id="L217">		initName();</span>
+<span class="nc" id="L218">		setQuery(query);		//	loads Data</span>
+		
+<span class="nc" id="L220">	}	//	ReportEngine</span>
+
+	/**	Static Logger	*/
+<span class="nc" id="L223">	private static CLogger	log	= CLogger.getCLogger (ReportEngine.class);</span>
+
+	/**	Context					*/
+	private Properties		m_ctx;
+
+	/**	Print Format			*/
+	private MPrintFormat	m_printFormat;
+	/** Print Info				*/
+	private PrintInfo		m_info;
+	/**	Query					*/
+	private MQuery			m_query;
+	/**	Query Data				*/
+	private PrintData		m_printData;
+	/** Layout					*/
+<span class="nc" id="L237">	private LayoutEngine 	m_layout = null;</span>
+	/**	Printer					*/
+<span class="nc" id="L239">	private String			m_printerName = Ini.getProperty(Ini.P_PRINTER);	</span>
+	/** Transaction Name 		*/
+<span class="nc" id="L241">	private String 			m_trxName = null;</span>
+	/** Where filter */
+<span class="nc" id="L243">	private SQLFragment 	m_extendedFilter = null;</span>
+	/** Window */
+<span class="nc" id="L245">	private int m_windowNo = 0;</span>
+	
+<span class="nc" id="L247">	private int m_language_id = 0;</span>
+	
+<span class="nc" id="L249">	private boolean m_summary = false;</span>
+	
+<span class="nc" id="L251">	private String m_name = null;</span>
+	
+<span class="nc" id="L253">	private boolean m_isReplaceTabContent = false;</span>
+	
+<span class="nc" id="L255">	private List&lt;IReportEngineEventListener&gt; eventListeners = new ArrayList&lt;IReportEngineEventListener&gt;();</span>
+
+	/**
+	 * Add report engine event listener
+	 * @param listener
+	 */
+	public void addEventListener(IReportEngineEventListener listener)
+	{
+<span class="nc" id="L263">		eventListeners.add(listener);</span>
+<span class="nc" id="L264">	}</span>
+	
+	/**
+	 * Remove report engine event listener
+	 * @param listener
+	 * @return true if found and remove
+	 */
+	public boolean removeEventListener(IReportEngineEventListener listener)
+	{
+<span class="nc" id="L273">		return eventListeners.remove(listener);</span>
+	}
+	
+	/**
+	 * 	Set PrintFormat.
+	 *  If Layout was created, re-create layout
+	 * 	@param pf print format
+	 */
+	public void setPrintFormat (MPrintFormat pf)
+	{
+<span class="nc" id="L283">		m_printFormat = pf;</span>
+<span class="nc" id="L284">		pf.reloadItems();</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">		if (m_layout != null)</span>
+		{
+<span class="nc" id="L287">			setPrintData();</span>
+<span class="nc" id="L288">			m_layout.setPrintFormat(pf, false);</span>
+<span class="nc" id="L289">			m_layout.setPrintData(m_printData, m_query, true);	//	format changes data</span>
+		}
+		
+<span class="nc" id="L292">		IReportEngineEventListener[] listeners = eventListeners.toArray(new IReportEngineEventListener[0]);</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">		for(IReportEngineEventListener listener : listeners)</span>
+		{
+<span class="nc" id="L295">			listener.onPrintFormatChanged(new ReportEngineEvent(this));</span>
+		}
+<span class="nc" id="L297">	}	//	setPrintFormat</span>
+	
+	/**
+	 * 	Set Query and load PrintData.&lt;br/&gt;
+	 *  If Layout was created, re-create layout.&lt;br/&gt;
+	 *  Fire onQueryChanged event.
+	 * 	@param query query
+	 */
+	public void setQuery (MQuery query)
+	{
+<span class="nc" id="L307">		m_query = query;</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">		if (query == null)</span>
+<span class="nc" id="L309">			return;</span>
+		//
+<span class="nc" id="L311">		setPrintData();</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">		if (m_layout != null)</span>
+<span class="nc" id="L313">			m_layout.setPrintData(m_printData, m_query, true);</span>
+		
+<span class="nc" id="L315">		IReportEngineEventListener[] listeners = eventListeners.toArray(new IReportEngineEventListener[0]);</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">		for(IReportEngineEventListener listener : listeners)</span>
+		{
+<span class="nc" id="L318">			listener.onQueryChanged(new ReportEngineEvent(this));</span>
+		}
+<span class="nc" id="L320">	}	//	setQuery</span>
+
+	/**
+	 * 	Get Query
+	 * 	@return query
+	 */
+	public MQuery getQuery()
+	{
+<span class="nc" id="L328">		return m_query;</span>
+	}	//	getQuery
+
+	/**
+	 * 	Load PrintData (m_printData) for Format restricted by Query.&lt;br/&gt;
+	 * 	Nothing loaded if there is no query.
+	 */
+	private void setPrintData()
+	{
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		if (m_query == null)</span>
+<span class="nc" id="L338">			return;</span>
+		
+<span class="nc" id="L340">		DataEngine de = new DataEngine(m_printFormat.getLanguage(),m_trxName, m_windowNo);</span>
+<span class="nc" id="L341">		setPrintData(de.getPrintData (m_ctx, m_printFormat, m_query, m_summary));</span>
+<span class="nc" id="L342">	}	//	setPrintData</span>
+
+	/**
+	 * 	Get PrintData
+	 * 	@return print data
+	 */
+	public PrintData getPrintData()
+	{
+<span class="nc" id="L350">		return m_printData;</span>
+	}	//	getPrintData
+
+	/**
+	 * 	Set PrintData
+	 * 	@param printData printData
+	 */
+	public void setPrintData (PrintData printData)
+	{
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (printData == null)</span>
+<span class="nc" id="L360">			return;</span>
+<span class="nc" id="L361">		m_printData = printData;</span>
+<span class="nc" id="L362">	}	//	setPrintData</span>
+	
+	/**
+	 * 	Layout
+	 *  @see LayoutEngine
+	 */
+	private void layout()
+	{
+<span class="nc bnc" id="L370" title="All 2 branches missed.">		if (m_printFormat == null)</span>
+<span class="nc" id="L371">			throw new IllegalStateException (&quot;No print format&quot;);</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">		if (m_printFormat.getJasperProcess_ID() &gt; 0)</span>
+<span class="nc" id="L373">			return;</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">		if (m_printData == null)</span>
+<span class="nc" id="L375">			throw new IllegalStateException (&quot;No print data (Delete Print Format and restart)&quot;);</span>
+<span class="nc" id="L376">		m_layout = new LayoutEngine (m_printFormat, m_printData, m_query, m_info, m_trxName, m_windowNo);</span>
+<span class="nc" id="L377">	}	//	layout</span>
+
+	/**
+	 * 	Get Layout Engine
+	 *  @return Layout engine
+	 */
+	public LayoutEngine getLayout()
+	{
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		if (m_layout == null)</span>
+<span class="nc" id="L386">			layout();</span>
+<span class="nc" id="L387">		return m_layout;</span>
+	}	//	getLayout
+
+	/**
+	 * 	Initialize Report Name
+	 */
+	public void initName()
+	{
+<span class="nc" id="L395">		Language language = m_printFormat.getLanguage();</span>
+<span class="nc" id="L396">		String processFileNamePattern = m_printFormat.get_Translation(MPrintFormat.COLUMNNAME_FileNamePattern, language.getAD_Language());</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">	 	if (m_info.getAD_Process_ID()&gt;0) {</span>
+<span class="nc" id="L398">			MProcess process = new MProcess(Env.getCtx(), m_info.getAD_Process_ID(), m_trxName);</span>
+<span class="nc bnc" id="L399" title="All 4 branches missed.">			if (process !=null &amp;&amp; !Util.isEmpty(process.getFileNamePattern())) {</span>
+<span class="nc" id="L400">				processFileNamePattern = process.getFileNamePattern();</span>
+			}
+		}  
+
+<span class="nc bnc" id="L404" title="All 2 branches missed.">		if(Util.isEmpty(processFileNamePattern)) {</span>
+<span class="nc" id="L405">			m_name = m_printFormat.get_Translation(MPrintFormat.COLUMNNAME_Name);</span>
+<span class="nc" id="L406">		} else {</span>
+<span class="nc" id="L407">			m_name = FileUtil.parseTitle(m_ctx, processFileNamePattern, m_info.getAD_Table_ID(), m_info.getRecord_ID(), m_windowNo, m_trxName);</span>
+		}
+<span class="nc" id="L409">	}	//	initName</span>
+	
+	/**
+	 * 	Get PrintFormat (Report) Name
+	 * 	@return name
+	 */
+	public String getName()
+	{
+<span class="nc bnc" id="L417" title="All 2 branches missed.">		if (m_name==null)</span>
+<span class="nc" id="L418">			initName();</span>
+<span class="nc" id="L419">		return m_name;</span>
+	}	//	getName
+
+	/**
+	 * 	Get PrintFormat
+	 * 	@return print format
+	 */
+	public MPrintFormat getPrintFormat()
+	{
+<span class="nc" id="L428">		return m_printFormat;</span>
+	}	//	getPrintFormat
+
+	/**
+	 * 	Get Print Info
+	 *	@return info
+	 */
+	public PrintInfo getPrintInfo()
+	{
+<span class="nc" id="L437">		return m_info;</span>
+	}	//	getPrintInfo
+	
+	/**
+	 * 	Get PrintLayout (Report) Context
+	 * 	@return context
+	 */
+	public Properties getCtx()
+	{
+<span class="nc" id="L446">		return m_ctx;</span>
+	}	//	getCtx
+	
+	/**
+	 * 	Get Row Count
+	 * 	@return row count
+	 */
+	public int getRowCount()
+	{
+<span class="nc bnc" id="L455" title="All 2 branches missed.">		return m_printData != null ? m_printData.getRowCount() : 0;</span>
+	}	//	getRowCount
+
+	/**
+	 * 	Get Column Count
+	 * 	@return column count
+	 */
+	public int getColumnCount()
+	{
+<span class="nc bnc" id="L464" title="All 2 branches missed.">		if (m_layout != null)</span>
+<span class="nc" id="L465">			return m_layout.getColumnCount();</span>
+<span class="nc" id="L466">		return 0;</span>
+	}	//	getColumnCount
+	
+	/**
+	 * 	Print Report. Issue print job to printer.
+	 */
+	public void print ()
+	{
+<span class="nc bnc" id="L474" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(m_info.toString());</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">		if (m_layout == null)</span>
+<span class="nc" id="L476">			layout();</span>
+		
+		//	Paper Attributes: 	media-printable-area, orientation-requested, media
+<span class="nc" id="L479">		PrintRequestAttributeSet prats = m_layout.getPaper().getPrintRequestAttributeSet();</span>
+		//	add:				copies, job-name, priority
+<span class="nc bnc" id="L481" title="All 4 branches missed.">		if (m_info.isDocumentCopy() || m_info.getCopies() &lt; 1)</span>
+<span class="nc" id="L482">			prats.add (new Copies(1));</span>
+		else
+<span class="nc" id="L484">			prats.add (new Copies(m_info.getCopies()));</span>
+<span class="nc" id="L485">		Locale locale = Language.getLoginLanguage().getLocale();</span>
+<span class="nc" id="L486">		prats.add(new JobName(m_printFormat.getName(), locale));</span>
+<span class="nc" id="L487">		prats.add(PrintUtil.getJobPriority(m_layout.getNumberOfPages(), m_info.getCopies(), true));</span>
+
+		try
+		{
+			//	PrinterJob
+<span class="nc" id="L492">			PrinterJob job = getPrinterJob(m_info.getPrinterName());</span>
+<span class="nc" id="L493">			job.setPageable(m_layout.getPageable(false));	//	no copy</span>
+		//	Dialog
+			try
+			{
+<span class="nc bnc" id="L497" title="All 4 branches missed.">				if (m_info.isWithDialog() &amp;&amp; !job.printDialog(prats))</span>
+<span class="nc" id="L498">					return;</span>
+			}
+<span class="nc" id="L500">			catch (Exception e)</span>
+			{
+<span class="nc" id="L502">				log.log(Level.WARNING, &quot;Operating System Print Issue, check &amp; try again&quot;, e);</span>
+<span class="nc" id="L503">				return;</span>
+			}
+
+		//	submit
+<span class="nc bnc" id="L507" title="All 4 branches missed.">			boolean printCopy = m_info.isDocumentCopy() &amp;&amp; m_info.getCopies() &gt; 1;</span>
+<span class="nc" id="L508">			ArchiveEngine.get().archive(m_layout, m_info);</span>
+<span class="nc" id="L509">			PrintUtil.print(job, prats, false, printCopy);</span>
+
+			//	Document: Print Copies
+<span class="nc bnc" id="L512" title="All 2 branches missed.">			if (printCopy)</span>
+			{
+<span class="nc bnc" id="L514" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Copy &quot; + (m_info.getCopies()-1));</span>
+<span class="nc" id="L515">				prats.add(new Copies(m_info.getCopies()-1));</span>
+<span class="nc" id="L516">				job = getPrinterJob(m_info.getPrinterName());</span>
+<span class="nc" id="L517">				job.setPageable (m_layout.getPageable(true));		//	Copy</span>
+<span class="nc" id="L518">				PrintUtil.print(job, prats, false, false);</span>
+			}
+<span class="nc" id="L520">		}</span>
+<span class="nc" id="L521">		catch (Exception e)</span>
+		{
+<span class="nc" id="L523">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+		}
+<span class="nc" id="L525">	}	//	print</span>
+
+	/**
+	 * 	Print Service Attribute Listener.
+	 * 	@param psae event
+	 */
+	public void attributeUpdate(PrintServiceAttributeEvent psae)
+	{
+		/**
+PrintEvent on Win32 Printer : \\MAIN\HP LaserJet 5L
+PrintServiceAttributeSet - length=2
+queued-job-count = 0  (class javax.print.attribute.standard.QueuedJobCount)
+printer-is-accepting-jobs = accepting-jobs  (class javax.print.attribute.standard.PrinterIsAcceptingJobs)
+PrintEvent on Win32 Printer : \\MAIN\HP LaserJet 5L
+PrintServiceAttributeSet - length=1
+queued-job-count = 1  (class javax.print.attribute.standard.QueuedJobCount)
+PrintEvent on Win32 Printer : \\MAIN\HP LaserJet 5L
+PrintServiceAttributeSet - length=1
+queued-job-count = 0  (class javax.print.attribute.standard.QueuedJobCount)
+		**/
+<span class="nc bnc" id="L545" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;attributeUpdate - &quot; + psae);</span>
+<span class="nc" id="L546">	}	//	attributeUpdate</span>
+
+
+	/**
+	 * 	Get PrinterJob based on PrinterName
+	 * 	@param printerName optional Printer Name
+	 * 	@return PrinterJob
+	 */
+	private PrinterJob getPrinterJob (String printerName)
+	{
+<span class="nc bnc" id="L556" title="All 4 branches missed.">		if (printerName != null &amp;&amp; printerName.length() &gt; 0)</span>
+<span class="nc" id="L557">			return PrintUtil.getPrinterJob(printerName);</span>
+<span class="nc" id="L558">		return PrintUtil.getPrinterJob(m_printerName);</span>
+	}	//	getPrinterJob
+
+	/**
+	 * 	Show Print Dialog and Set Paper.&lt;br/&gt;
+	 *  Optionally re-calculate layout.
+	 */
+	public void pageSetupDialog ()
+	{
+<span class="nc bnc" id="L567" title="All 2 branches missed.">		if (m_layout == null)</span>
+<span class="nc" id="L568">			layout();</span>
+<span class="nc" id="L569">		m_layout.pageSetupDialog(getPrinterJob(m_printerName));</span>
+		
+<span class="nc" id="L571">		IReportEngineEventListener[] listeners = eventListeners.toArray(new IReportEngineEventListener[0]);</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">		for(IReportEngineEventListener listener : listeners)</span>
+		{
+<span class="nc" id="L574">			listener.onPageSetupChanged(new ReportEngineEvent(this));</span>
+		}
+<span class="nc" id="L576">	}	//	pageSetupDialog</span>
+
+	/**
+	 * 	Set Printer (name)
+	 * 	@param printerName valid printer name
+	 */
+	public void setPrinterName(String printerName)
+	{
+<span class="nc bnc" id="L584" title="All 2 branches missed.">		if (printerName == null)</span>
+<span class="nc" id="L585">			m_printerName = Ini.getProperty(Ini.P_PRINTER);</span>
+		else
+<span class="nc" id="L587">			m_printerName = printerName;</span>
+<span class="nc" id="L588">	}	//	setPrinterName</span>
+
+	/**
+	 * 	Get Printer (name)
+	 * 	@return printer name
+	 */
+	public String getPrinterName()
+	{
+<span class="nc" id="L596">		return m_printerName;</span>
+	}	//	getPrinterName
+
+	/**
+	 * 	Create HTML File
+	 * 	@param file file
+	 *  @param onlyTable if false create complete HTML document
+	 *  @param language optional language - if null the default language is used to format numbers/dates
+	 * 	@return true if success
+	 */
+	public boolean createHTML (File file, boolean onlyTable, Language language)
+	{
+<span class="nc" id="L608">		return createHTML(file, onlyTable, language, null);</span>
+	}
+	
+	/**
+	 * 	Create HTML File
+	 * 	@param file file
+	 *  @param onlyTable if false create complete HTML document
+	 *  @param language optional language - if null the default language is used to format numbers/dates
+	 *  @param extension optional extension for html output
+	 * 	@return true if success
+	 */
+	public boolean createHTML (File file, boolean onlyTable, Language language, IHTMLExtension extension)
+	{
+		try
+		{
+<span class="nc" id="L623">			Language lang = language;</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">			if (lang == null)</span>
+<span class="nc" id="L625">				lang = Language.getLoginLanguage();</span>
+<span class="nc" id="L626">			Writer fw = new OutputStreamWriter(new FileOutputStream(file, false), Ini.getCharset()); // teo_sarca: save using adempiere charset [ 1658127 ]</span>
+<span class="nc" id="L627">			return createHTML (new BufferedWriter(fw), onlyTable, lang, extension);</span>
+		}
+<span class="nc" id="L629">		catch (FileNotFoundException fnfe)</span>
+		{
+<span class="nc" id="L631">			log.log(Level.SEVERE, &quot;(f) - &quot; + fnfe.toString());</span>
+		}
+<span class="nc" id="L633">		catch (Exception e)</span>
+		{
+<span class="nc" id="L635">			log.log(Level.SEVERE, &quot;(f)&quot;, e);</span>
+<span class="nc" id="L636">			throw new AdempiereException(e);</span>
+		}
+<span class="nc" id="L638">		return false;</span>
+	}	//	createHTML
+
+	/**
+	 * 	Write HTML to writer
+	 * 	@param writer writer
+	 *  @param onlyTable if false create complete HTML document
+	 *  @param language optional language - if null numbers/dates are not formatted
+	 * 	@return true if success
+	 */
+	public boolean createHTML (Writer writer, boolean onlyTable, Language language)
+	{
+<span class="nc" id="L650">		return createHTML(writer, onlyTable, language, null);</span>
+	}
+	
+	/**
+	 * 	Write HTML to writer with isExport = false
+	 * 	@param writer writer
+	 *  @param onlyTable if false create complete HTML document
+	 *  @param language optional language - if null numbers/dates are not formatted
+	 *  @param extension optional extension for html output
+	 * 	@return true if success
+	 */
+	public boolean createHTML (Writer writer, boolean onlyTable, Language language, IHTMLExtension extension){
+<span class="nc" id="L662">		return createHTML (writer, onlyTable, language, extension, false);</span>
+	}
+	
+	/**
+	 * 	Write HTML to writer
+	 * 	@param writer writer
+	 *  @param onlyTable if false create complete HTML document
+	 *  @param language optional language - if null numbers/dates are not formatted
+	 *  @param extension optional extension for html output
+	 *  @param isExport when isExport = true will don't embed resource dependent zk framework
+	 * 	@return true if success
+	 */
+	public boolean createHTML (Writer writer, boolean onlyTable, Language language, IHTMLExtension extension, boolean isExport)
+	{
+<span class="nc" id="L676">		HTMLReportRendererConfiguration config = new HTMLReportRendererConfiguration()</span>
+<span class="nc" id="L677">				.setOutputWriter(writer)</span>
+<span class="nc" id="L678">				.setOnlyTable(onlyTable)</span>
+<span class="nc" id="L679">				.setExport(isExport)</span>
+<span class="nc" id="L680">				.setExtension(extension)</span>
+<span class="nc" id="L681">				.setLanguage(language);</span>
+<span class="nc" id="L682">		new HTMLReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L683">		return true;</span>
+	}	//	createHTML
+
+	/**
+	 * Get record identifier string
+	 * @param mTable
+	 * @param tableName
+	 * @param recordID
+	 * @return String identifier
+	 */
+	public String getIdentifier(MTable mTable, String tableName, int recordID) {
+<span class="nc" id="L694">		ArrayList&lt;MColumn&gt; list = new ArrayList&lt;MColumn&gt;();</span>
+		// get translation table - null if not exists
+<span class="nc" id="L696">		MTable mTableTrl = MTable.get(getCtx(), tableName+&quot;_Trl&quot;);</span>
+<span class="nc" id="L697">		String tableNameTrl = &quot;&quot;;</span>
+		// get report language
+<span class="nc bnc" id="L699" title="All 2 branches missed.">		String reportLang = getLanguageID() &gt; 0 ? new MLanguage(getCtx(), getLanguageID(), null).getAD_Language() : Language.getLoginLanguage().getAD_Language();</span>
+		
+		// use Trl table or base table
+<span class="nc bnc" id="L702" title="All 2 branches missed.">		boolean isTrl = !Env.isBaseLanguage(Language.getLanguage(reportLang), tableName);</span>
+		
+<span class="nc bnc" id="L704" title="All 4 branches missed.">		if(isTrl &amp;&amp; mTableTrl != null)</span>
+<span class="nc" id="L705">			tableNameTrl = mTableTrl.getTableName();</span>
+		else
+<span class="nc" id="L707">			isTrl = false;</span>
+		
+		// load identifier columns
+<span class="nc bnc" id="L710" title="All 2 branches missed.">		for (String idColumnName : mTable.getIdentifierColumns()) {</span>
+<span class="nc" id="L711">			MColumn column = mTable.getColumn(idColumnName);</span>
+<span class="nc" id="L712">			list.add (column);</span>
+		}
+<span class="nc bnc" id="L714" title="All 2 branches missed.">		if(list.size() &lt;= 0) {</span>
+<span class="nc" id="L715">			return String.valueOf(recordID);</span>
+		}
+		
+<span class="nc" id="L718">		StringBuilder displayColumn = new StringBuilder();</span>
+<span class="nc" id="L719">		String separator = MSysConfig.getValue(MSysConfig.IDENTIFIER_SEPARATOR, &quot;_&quot;, Env.getAD_Client_ID(Env.getCtx()));</span>
+		
+		// get record identifier from SQL
+<span class="nc bnc" id="L722" title="All 2 branches missed.">		for(int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L723">			MColumn identifierColumn = list.get(i);</span>
+<span class="nc bnc" id="L724" title="All 2 branches missed.">			if(i &gt; 0)</span>
+<span class="nc" id="L725">				displayColumn.append(&quot;||'&quot;).append(separator).append(&quot;'||&quot;);</span>
+			
+<span class="nc" id="L727">			displayColumn.append(&quot;COALESCE(&quot;)</span>
+<span class="nc" id="L728">						.append(DB.TO_CHAR(addTrlSuffix(identifierColumn, tableName, isTrl)+&quot;.&quot;+identifierColumn.getColumnName(), </span>
+<span class="nc" id="L729">											identifierColumn.getAD_Reference_ID(), </span>
+<span class="nc" id="L730">											Env.getAD_Language(Env.getCtx())))</span>
+<span class="nc" id="L731">						.append(&quot;,&quot;)</span>
+<span class="nc" id="L732">						.append(DB.TO_CHAR(tableName+&quot;.&quot;+identifierColumn.getColumnName(), </span>
+<span class="nc" id="L733">								identifierColumn.getAD_Reference_ID(), </span>
+<span class="nc" id="L734">								Env.getAD_Language(Env.getCtx())))</span>
+<span class="nc" id="L735">						.append(&quot;,'')&quot;);</span>
+		}
+<span class="nc" id="L737">		ArrayList&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L738">		StringBuilder sql = new StringBuilder(&quot;SELECT &quot;);</span>
+<span class="nc" id="L739">		sql.append(displayColumn.toString());</span>
+<span class="nc" id="L740">		sql.append(&quot; FROM &quot;).append(tableName);</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">		if(isTrl) {</span>
+<span class="nc" id="L742">			sql.append(&quot; LEFT JOIN &quot;).append(tableNameTrl).append(&quot; ON &quot;)</span>
+<span class="nc" id="L743">				.append(tableName).append(&quot;.&quot;).append(tableName).append(&quot;_ID = &quot;)</span>
+<span class="nc" id="L744">				.append(tableNameTrl).append(&quot;.&quot;).append(tableName).append(&quot;_ID AND &quot;)</span>
+<span class="nc" id="L745">				.append(tableNameTrl).append(&quot;.AD_Language=?&quot;);</span>
+			
+<span class="nc" id="L747">			params.add(reportLang);</span>
+		}
+<span class="nc" id="L749">		sql.append(&quot; WHERE &quot;)</span>
+<span class="nc" id="L750">			.append(tableName).append(&quot;.&quot;).append(tableName).append(&quot;_ID=?&quot;);</span>
+		
+<span class="nc" id="L752">		params.add(recordID);		</span>
+<span class="nc" id="L753">		return DB.getSQLValueStringEx(null, sql.toString(), params);</span>
+	} // getIdentifier
+	
+	/**
+	 * Add &quot;_Trl&quot; suffix to table name, if the column is translated
+	 * @param column
+	 * @param tableName
+	 * @param isTrl - is translated
+	 * @return tableName
+	 */
+	private String addTrlSuffix(MColumn column, String tableName, boolean isTrl) {
+<span class="nc bnc" id="L764" title="All 4 branches missed.">		if(column.isTranslated() &amp;&amp; isTrl)</span>
+<span class="nc" id="L765">			return tableName + &quot;_Trl&quot;;</span>
+		else
+<span class="nc" id="L767">			return tableName;</span>
+	} // addTrlSuffix
+	
+	/**
+	 * 	Create delimited text file
+	 * 	@param file file
+	 *  @param delimiter delimiter, e.g. comma, tab
+	 *  @param language translation language
+	 * 	@return true if success
+	 */
+	public boolean createCSV (File file, char delimiter, Language language)
+	{
+		try
+		{
+<span class="nc" id="L781">			Writer fw = new OutputStreamWriter(new FileOutputStream(file, false), Ini.getCharset()); // teo_sarca: save using adempiere charset [ 1658127 ]</span>
+<span class="nc" id="L782">			return createCSV (new BufferedWriter(fw), delimiter, language);</span>
+		}
+<span class="nc" id="L784">		catch (FileNotFoundException fnfe)</span>
+		{
+<span class="nc" id="L786">			log.log(Level.SEVERE, &quot;(f) - &quot; + fnfe.toString());</span>
+		}
+<span class="nc" id="L788">		catch (Exception e)</span>
+		{
+<span class="nc" id="L790">			log.log(Level.SEVERE, &quot;(f)&quot;, e);</span>
+		}
+<span class="nc" id="L792">		return false;</span>
+	}	//	createCSV
+
+	/**
+	 * 	Write delimited content to writer
+	 * 	@param writer writer
+	 *  @param delimiter delimiter, e.g. comma, tab
+	 *  @param language translation language
+	 * 	@return true if success
+	 */
+	public boolean createCSV (Writer writer, char delimiter, Language language)
+	{
+<span class="nc bnc" id="L804" title="All 4 branches missed.">		switch (delimiter) {</span>
+			case ',' -&gt; {
+<span class="nc" id="L806">				CSVReportRendererConfiguration config = new CSVReportRendererConfiguration().setLanguage(language).setOutputWriter(writer);</span>
+<span class="nc" id="L807">				new CSVReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L808">			}</span>
+			case ';' -&gt; {
+<span class="nc" id="L810">				SSVReportRendererConfiguration config = new SSVReportRendererConfiguration().setLanguage(language).setOutputWriter(writer);</span>
+<span class="nc" id="L811">				new SSVReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L812">			}</span>
+			case '\t' -&gt; {
+<span class="nc" id="L814">				TabDelimitedReportRendererConfiguration config = new TabDelimitedReportRendererConfiguration().setLanguage(language).setOutputWriter(writer);</span>
+<span class="nc" id="L815">				new TabDelimitedReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L816">			}</span>
+<span class="nc" id="L817">			default -&gt; throw new IllegalArgumentException(&quot;Unexpected value: &quot; + delimiter);</span>
+		}
+		
+<span class="nc" id="L820">		return true;</span>
+	}	//	createCSV
+
+	/**
+	 * 	Create XML File
+	 * 	@param file file
+	 * 	@return true if success
+	 */
+	public boolean createXML (File file)
+	{
+<span class="nc" id="L830">		XMLReportRendererConfiguration config = new XMLReportRendererConfiguration().setOutputFile(file);</span>
+<span class="nc" id="L831">		new XMLReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L832">		return true;</span>
+	}	//	createXML
+
+	/**
+	 * 	Write XML to writer
+	 * 	@param writer writer
+	 * 	@return true if success
+	 */
+	public boolean createXML (Writer writer)
+	{
+<span class="nc" id="L842">		XMLReportRendererConfiguration config = new XMLReportRendererConfiguration().setOutputWriter(writer);</span>
+<span class="nc" id="L843">		new XMLReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L844">		return true;</span>
+	}	//	createXML
+	
+	/**
+	 * 	Create PDF file (created as temporary file).
+	 *	@return PDF file
+	 */
+	public File getPDF()
+	{
+<span class="nc" id="L853">		return getPDF (null);</span>
+	}	//	getPDF
+
+	/**
+	 * 	Create PDF file.
+	 * 	@param file optional, null to use system generated temporary file
+	 *	@return PDF file
+	 */
+	public File getPDF (File file)
+	{
+		try
+		{
+<span class="nc bnc" id="L865" title="All 2 branches missed.">			if (file == null)</span>
+<span class="nc bnc" id="L866" title="All 4 branches missed.">				file = (m_pi != null &amp;&amp; !Util.isEmpty(m_pi.getPDFFileName(),true)) ? FileUtil.createFile(m_pi.getPDFFileName()) :</span>
+<span class="nc" id="L867">					FileUtil.createTempFile (FileUtil.makePrefix(getName()), &quot;.pdf&quot;);</span>
+<span class="nc" id="L868">		}</span>
+<span class="nc" id="L869">		catch (IOException e)</span>
+		{
+<span class="nc" id="L871">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+		}
+<span class="nc bnc" id="L873" title="All 2 branches missed.">		if (createPDF (file))</span>
+<span class="nc" id="L874">			return file;</span>
+<span class="nc" id="L875">		return null;</span>
+	}	//	getPDF
+
+	/**
+	 * 	Create HTML file (created as temporary file).
+	 *	@return HTML file
+	 */
+	public File getHTML()
+	{
+<span class="nc" id="L884">		return getHTML(null);</span>
+	}	//	getHTML
+
+	/**
+	 * 	Create HTML file.
+	 * 	@param file optional, null to use system generated temporary file
+	 *	@return HTML file
+	 */
+	public File getHTML(File file)
+	{
+		try
+		{
+<span class="nc bnc" id="L896" title="All 2 branches missed.">			if (file == null)</span>
+<span class="nc" id="L897">				file = FileUtil.createTempFile (FileUtil.makePrefix(getName()), &quot;.html&quot;);</span>
+<span class="nc" id="L898">		}</span>
+<span class="nc" id="L899">		catch (IOException e)</span>
+		{
+<span class="nc" id="L901">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+		}
+<span class="nc bnc" id="L903" title="All 2 branches missed.">		if (createHTML(file, false, Env.getLanguage(getCtx())))</span>
+<span class="nc" id="L904">			return file;</span>
+<span class="nc" id="L905">		return null;</span>
+	}	//	getHTML
+	
+	/**
+	 * 	Create CSV file (created as temporary file).
+	 *	@return CSV file
+	 */
+	public File getCSV()
+	{
+<span class="nc" id="L914">		return getCSV(null);</span>
+	}	//	getCSV
+
+	/**
+	 * 	Create CSV file.
+	 * 	@param file optional, null to use system generated temporary file
+	 *	@return CSV file
+	 */
+	public File getCSV(File file)
+	{
+		try
+		{
+<span class="nc bnc" id="L926" title="All 2 branches missed.">			if (file == null)</span>
+<span class="nc" id="L927">				file = FileUtil.createTempFile (FileUtil.makePrefix(getName()), &quot;.csv&quot;);</span>
+<span class="nc" id="L928">		}</span>
+<span class="nc" id="L929">		catch (IOException e)</span>
+		{
+<span class="nc" id="L931">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+		}
+<span class="nc bnc" id="L933" title="All 2 branches missed.">		if (createCSV(file, ',', Env.getLanguage(getCtx())))</span>
+<span class="nc" id="L934">			return file;</span>
+<span class="nc" id="L935">		return null;</span>
+	}	//	getCSV
+	
+	/**
+	 * 	Create XLS file (created as temporary file).
+	 *	@return XLS file
+	 */
+	public File getXLS()
+	{
+<span class="nc" id="L944">		return getXLS(null);</span>
+	}	//	getXLS
+
+	/**
+	 * 	Create XLS file.
+	 * 	@param file optional, null to use system generated temporary file
+	 *	@return XLS file
+	 */
+	public File getXLS(File file)
+	{
+		try
+		{
+<span class="nc bnc" id="L956" title="All 2 branches missed.">			if (file == null)</span>
+<span class="nc" id="L957">				file = FileUtil.createTempFile (FileUtil.makePrefix(getName()), &quot;.xls&quot;);</span>
+<span class="nc" id="L958">		}</span>
+<span class="nc" id="L959">		catch (IOException e)</span>
+		{
+<span class="nc" id="L961">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+		}
+		try 
+		{
+<span class="nc" id="L965">			createXLS(file, Env.getLanguage(getCtx()));</span>
+<span class="nc" id="L966">			return file;</span>
+		} 
+<span class="nc" id="L968">		catch (Exception e)</span>
+		{
+<span class="nc" id="L970">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+<span class="nc" id="L971">			return null;</span>
+		}
+	}	//	getXLS
+	
+	/**
+	 * 	Create XLSX file (created as temporary file).
+	 *	@return XLSX file
+	 */
+	public File getXLSX()
+	{
+<span class="nc" id="L981">		return getXLSX(null);</span>
+	}	//	getXLSX
+
+	/**
+	 * 	Create XLSX file.
+	 * 	@param file optional, null to use system generated temporary file
+	 *	@return XLSX file
+	 */
+	public File getXLSX(File file)
+	{
+		try
+		{
+<span class="nc bnc" id="L993" title="All 2 branches missed.">			if (file == null)</span>
+<span class="nc" id="L994">				file = FileUtil.createTempFile (FileUtil.makePrefix(getName()), &quot;.xlsx&quot;);</span>
+<span class="nc" id="L995">		}</span>
+<span class="nc" id="L996">		catch (IOException e)</span>
+		{
+<span class="nc" id="L998">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+		}
+		try 
+		{
+<span class="nc" id="L1002">			createXLSX(file, Env.getLanguage(getCtx()));</span>
+<span class="nc" id="L1003">			return file;</span>
+		} 
+<span class="nc" id="L1005">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1007">			log.log(Level.SEVERE, &quot;&quot;, e);</span>
+<span class="nc" id="L1008">			return null;</span>
+		}
+	}	//	getXLSX
+	
+	/**
+	 * 	Create PDF File
+	 * 	@param file optional, null to use system generated temporary file
+	 * 	@return true if success
+	 */
+	public boolean createPDF (File file)
+	{
+<span class="nc" id="L1019">		String fileName = null;</span>
+<span class="nc" id="L1020">		URI uri = null;</span>
+
+		try
+		{
+<span class="nc bnc" id="L1024" title="All 2 branches missed.">			if (file == null) {</span>
+<span class="nc" id="L1025">				file = FileUtil.createTempFile (&quot;ReportEngine&quot;, &quot;.pdf&quot;);</span>
+<span class="nc" id="L1026">			} else {</span>
+<span class="nc bnc" id="L1027" title="All 2 branches missed.">				if (file.exists()) {</span>
+<span class="nc" id="L1028">					file.delete();</span>
+<span class="nc" id="L1029">					file = new File(file.getAbsolutePath());</span>
+				}
+			}
+<span class="nc" id="L1032">			uri = file.toURI();</span>
+<span class="nc" id="L1033">			fileName = file.getAbsolutePath();</span>
+<span class="nc" id="L1034">		}</span>
+<span class="nc" id="L1035">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1037">			log.log(Level.SEVERE, &quot;file&quot;, e);</span>
+<span class="nc" id="L1038">			return false;</span>
+		}
+			
+<span class="nc bnc" id="L1041" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(uri.toString());</span>
+
+		try
+		{
+<span class="nc bnc" id="L1045" title="All 4 branches missed.">			if (m_printFormat != null &amp;&amp; m_printFormat.getJasperProcess_ID() &gt; 0) {</span>
+<span class="nc" id="L1046">				ProcessInfo pi = new ProcessInfo (&quot;&quot;, m_printFormat.getJasperProcess_ID(), m_printFormat.getAD_Table_ID(), m_info.getRecord_ID());</span>
+<span class="nc bnc" id="L1047" title="All 4 branches missed.">				if (m_printFormat.getLanguage() != null &amp;&amp; m_printFormat.getLanguage().getAD_Language() != null) {</span>
+<span class="nc" id="L1048">					ProcessInfoParameter reportLanguagePip = new ProcessInfoParameter(&quot;AD_Language&quot;, m_printFormat.getLanguage().getAD_Language(), null, null, null);</span>
+<span class="nc" id="L1049">					pi.setParameter(new ProcessInfoParameter[] {reportLanguagePip});</span>
+				}
+<span class="nc" id="L1051">				pi.setIsBatch(true);</span>
+<span class="nc" id="L1052">				pi.setPDFFileName(fileName);</span>
+<span class="nc" id="L1053">				pi.setTransientObject(m_printFormat);</span>
+<span class="nc bnc" id="L1054" title="All 2 branches missed.">				ServerProcessCtl.process(pi, (m_trxName == null ? null : Trx.get(m_trxName, false)), false);</span>
+<span class="nc" id="L1055">			} else {</span>
+<span class="nc" id="L1056">				PDFReportRendererConfiguration config = new PDFReportRendererConfiguration().setOutputFile(file);</span>
+<span class="nc" id="L1057">				new PDFReportRenderer().renderReport(this, config);</span>
+			}
+<span class="nc" id="L1059">		}</span>
+<span class="nc" id="L1060">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1062">			log.log(Level.SEVERE, &quot;PDF&quot;, e);</span>
+<span class="nc" id="L1063">			throw new AdempiereException(e);</span>
+		}
+
+<span class="nc" id="L1066">		File file2 = new File(fileName);</span>
+<span class="nc bnc" id="L1067" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(file2.getAbsolutePath() + &quot; - &quot; + file2.length());</span>
+<span class="nc" id="L1068">		return file2.exists();</span>
+	}	//	createPDF
+
+	/**
+	 * 	Create PDF as Data array
+	 *	@return pdf data
+	 */
+	public byte[] createPDFData ()
+	{
+<span class="nc" id="L1077">		ByteArrayOutputStream os = new ByteArrayOutputStream();</span>
+<span class="nc" id="L1078">		PDFReportRendererConfiguration config = new PDFReportRendererConfiguration().setOutputStream(os);</span>
+<span class="nc" id="L1079">		new PDFReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L1080">		return os.toByteArray();</span>
+	}	//	createPDFData
+	
+	/**
+	 * 	Create PostScript File
+	 * 	@param file output file
+	 * 	@return true if success
+	 */
+	public boolean createPS (File file)
+	{
+<span class="nc" id="L1090">		PSReportRendererConfiguration config = new PSReportRendererConfiguration().setOutputFile(file);</span>
+<span class="nc" id="L1091">		new PSReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L1092">		return true;</span>
+	}	//	createPS
+
+	/**
+	 * 	Write PostScript to writer
+	 * 	@param os output stream
+	 * 	@return true if success
+	 */
+	public boolean createPS (OutputStream os)
+	{
+<span class="nc" id="L1102">		PSReportRendererConfiguration config = new PSReportRendererConfiguration().setOutputStream(os);</span>
+<span class="nc" id="L1103">		new PSReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L1104">		return true;</span>
+	}	//	createPS
+
+	/**
+	 * Create Excel file
+	 * @param outFile output file
+	 * @param language
+	 * @throws Exception if error
+	 */
+	public void createXLS(File outFile, Language language)
+	throws Exception
+	{
+<span class="nc" id="L1116">		XLSReportRendererConfiguration config = new XLSReportRendererConfiguration().setOutputFile(outFile).setLanguage(language);</span>
+<span class="nc" id="L1117">		new XLSReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L1118">	}</span>
+
+	/**
+	 * Create ExcelX file
+	 * @param outFile output file
+	 * @param language
+	 * @throws Exception if error
+	 */
+	public void createXLSX(File outFile, Language language)
+	throws Exception
+	{
+<span class="nc" id="L1129">		XLSXReportRendererConfiguration config = new XLSXReportRendererConfiguration().setOutputFile(outFile).setLanguage(language);</span>
+<span class="nc" id="L1130">		new XLSXReportRenderer().renderReport(this, config);</span>
+<span class="nc" id="L1131">	}</span>
+	
+	/**
+	 * 	Get Report Engine for process info 
+	 *	@param ctx context
+	 *	@param pi process info with AD_PInstance_ID
+	 *	@return report engine or null
+	 */
+	static public ReportEngine get (Properties ctx, ProcessInfo pi)
+	{
+<span class="nc" id="L1141">		return get(ctx, pi, 0);</span>
+	}
+
+	/**
+	 * 	Get Report Engine for process info 
+	 *	@param ctx context
+	 *	@param pi process info with AD_PInstance_ID
+	 *  @param windowNo Window No
+	 *	@return report engine or null
+	 */
+	static public ReportEngine get (Properties ctx, ProcessInfo pi, int windowNo)
+	{
+<span class="nc" id="L1153">		int AD_Client_ID = pi.getAD_Client_ID();</span>
+		//
+<span class="nc" id="L1155">		int AD_Table_ID = 0;</span>
+<span class="nc" id="L1156">		int AD_ReportView_ID = 0;</span>
+<span class="nc" id="L1157">		String TableName = null;</span>
+<span class="nc" id="L1158">		int AD_PrintFormat_ID = 0;</span>
+<span class="nc" id="L1159">		boolean IsForm = false;</span>
+<span class="nc" id="L1160">		int Client_ID = -1;</span>
+		
+<span class="nc" id="L1162">		MPInstance instance = null;</span>
+
+		//	Get AD_Table_ID and TableName
+<span class="nc" id="L1165">		StringBuilder sql = new StringBuilder(&quot;SELECT rv.AD_ReportView_ID,rv.WhereClause,&quot;)</span>
+<span class="nc" id="L1166">			.append(&quot; t.AD_Table_ID,t.TableName, pf.AD_PrintFormat_ID, pf.IsForm, pf.AD_Client_ID &quot;)</span>
+<span class="nc" id="L1167">			.append(&quot;FROM AD_PInstance pi&quot;)</span>
+<span class="nc" id="L1168">			.append(&quot; INNER JOIN AD_Process p ON (pi.AD_Process_ID=p.AD_Process_ID)&quot;)</span>
+<span class="nc" id="L1169">			.append(&quot; INNER JOIN AD_ReportView rv ON (p.AD_ReportView_ID=rv.AD_ReportView_ID)&quot;)</span>
+<span class="nc" id="L1170">			.append(&quot; INNER JOIN AD_Table t ON (rv.AD_Table_ID=t.AD_Table_ID)&quot;)</span>
+<span class="nc" id="L1171">			.append(&quot; LEFT OUTER JOIN AD_PrintFormat pf ON (p.AD_ReportView_ID=pf.AD_ReportView_ID AND pf.AD_Client_ID IN (0,?) AND pf.IsActive='Y') &quot;)</span>
+<span class="nc" id="L1172">			.append(&quot;WHERE pi.AD_PInstance_ID=? &quot;)		//	#2</span>
+<span class="nc" id="L1173">			.append(&quot;ORDER BY pf.AD_Client_ID DESC, pf.IsDefault DESC&quot;);	//	own first</span>
+<span class="nc" id="L1174">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1175">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1178">			pstmt = DB.prepareStatement(sql.toString(), null);</span>
+<span class="nc" id="L1179">			pstmt.setInt(1, AD_Client_ID);</span>
+<span class="nc" id="L1180">			pstmt.setInt(2, pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L1181">			rs = pstmt.executeQuery();</span>
+			//	Just get first
+<span class="nc bnc" id="L1183" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L1185">				AD_ReportView_ID = rs.getInt(1);		//	required</span>
+				//
+<span class="nc" id="L1187">				AD_Table_ID = rs.getInt(3);</span>
+<span class="nc" id="L1188">				TableName = rs.getString(4);			//	required for query</span>
+<span class="nc" id="L1189">				AD_PrintFormat_ID = rs.getInt(5);		//	required</span>
+<span class="nc" id="L1190">				IsForm = &quot;Y&quot;.equals(rs.getString(6));	//	required</span>
+<span class="nc" id="L1191">				Client_ID = rs.getInt(7);</span>
+<span class="nc" id="L1192">				instance = new MPInstance(ctx, pi.getAD_PInstance_ID(), null);</span>
+<span class="nc bnc" id="L1193" title="All 2 branches missed.">				if(instance.getAD_PrintFormat_ID() &lt;= 0)</span>
+<span class="nc" id="L1194">					instance.setAD_PrintFormat_ID(AD_PrintFormat_ID);</span>
+				else
+<span class="nc" id="L1196">					AD_PrintFormat_ID = instance.getAD_PrintFormat_ID();</span>
+<span class="nc" id="L1197">				setDefaultReportTypeToPInstance(ctx, instance, AD_PrintFormat_ID);</span>
+<span class="nc" id="L1198">				instance.saveEx();</span>
+			}
+<span class="nc" id="L1200">		}</span>
+<span class="nc" id="L1201">		catch (SQLException e1)</span>
+		{
+<span class="nc" id="L1203">			log.log(Level.SEVERE, &quot;(1) - &quot; + sql, e1);</span>
+		}
+		finally {
+<span class="nc" id="L1206">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1207">			rs = null; pstmt = null;</span>
+		}
+		//	Nothing found
+<span class="nc bnc" id="L1210" title="All 2 branches missed.">		if (AD_ReportView_ID == 0)</span>
+		{
+			//	Check Print format in Report Directly
+<span class="nc" id="L1213">			sql = new StringBuilder(&quot;SELECT t.AD_Table_ID,t.TableName, pf.AD_PrintFormat_ID, pf.IsForm &quot;)</span>
+<span class="nc" id="L1214">				.append(&quot;FROM AD_PInstance pi&quot;)</span>
+<span class="nc" id="L1215">				.append(&quot; INNER JOIN AD_Process p ON (pi.AD_Process_ID=p.AD_Process_ID)&quot;)</span>
+<span class="nc" id="L1216">				.append(&quot; INNER JOIN AD_PrintFormat pf ON (p.AD_PrintFormat_ID=pf.AD_PrintFormat_ID)&quot;)</span>
+<span class="nc" id="L1217">				.append(&quot; INNER JOIN AD_Table t ON (pf.AD_Table_ID=t.AD_Table_ID) &quot;)</span>
+<span class="nc" id="L1218">				.append(&quot;WHERE pi.AD_PInstance_ID=?&quot;);</span>
+			try
+			{
+<span class="nc" id="L1221">				pstmt = DB.prepareStatement(sql.toString(), null);</span>
+<span class="nc" id="L1222">				pstmt.setInt(1, pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L1223">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1224" title="All 2 branches missed.">				if (rs.next())</span>
+				{
+<span class="nc" id="L1226">					AD_Table_ID = rs.getInt(1);</span>
+<span class="nc" id="L1227">					TableName = rs.getString(2);			//	required for query</span>
+<span class="nc" id="L1228">					AD_PrintFormat_ID = rs.getInt(3);		//	required</span>
+<span class="nc" id="L1229">					IsForm = &quot;Y&quot;.equals(rs.getString(4));	//	required</span>
+<span class="nc" id="L1230">					Client_ID = AD_Client_ID;</span>
+<span class="nc" id="L1231">					instance = new MPInstance(ctx, pi.getAD_PInstance_ID(), null);</span>
+				}
+<span class="nc" id="L1233">			}</span>
+<span class="nc" id="L1234">			catch (SQLException e1)</span>
+			{
+<span class="nc" id="L1236">				log.log(Level.SEVERE, &quot;(2) - &quot; + sql, e1);</span>
+			}
+			finally {
+<span class="nc" id="L1239">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L1240">				rs = null; pstmt = null;</span>
+			}
+<span class="nc bnc" id="L1242" title="All 2 branches missed.">			if (AD_PrintFormat_ID == 0)</span>
+			{
+<span class="nc" id="L1244">				log.log(Level.SEVERE, &quot;Report Info NOT found AD_PInstance_ID=&quot; + pi.getAD_PInstance_ID() </span>
+<span class="nc" id="L1245">					+ &quot;,AD_Client_ID=&quot; + AD_Client_ID);</span>
+<span class="nc" id="L1246">				return null;</span>
+			}
+<span class="nc bnc" id="L1248" title="All 2 branches missed.">			else if(instance != null)</span>
+			{
+<span class="nc" id="L1250">				instance.setAD_PrintFormat_ID(AD_PrintFormat_ID);</span>
+<span class="nc" id="L1251">				setDefaultReportTypeToPInstance(ctx, instance, AD_PrintFormat_ID);</span>
+<span class="nc" id="L1252">				instance.saveEx();</span>
+			}
+		}
+
+		//  Create Query from Parameters
+<span class="nc" id="L1257">		MQuery query = null;</span>
+<span class="nc bnc" id="L1258" title="All 6 branches missed.">		if (IsForm &amp;&amp; (pi.getRecord_ID() &gt; 0 || !Util.isEmpty(pi.getRecord_UU()))		//	Form = one record</span>
+<span class="nc bnc" id="L1259" title="All 2 branches missed.">				&amp;&amp; !TableName.startsWith(&quot;T_&quot;) )	//	Not temporary table - teo_sarca, BF [ 2828886 ]</span>
+		{
+<span class="nc bnc" id="L1261" title="All 2 branches missed.">			if (pi.getRecord_ID() &gt; 0)</span>
+<span class="nc" id="L1262">				query = MQuery.getEqualQuery(TableName + &quot;_ID&quot;, pi.getRecord_ID());</span>
+			else
+<span class="nc" id="L1264">				query = MQuery.getEqualQuery(PO.getUUIDColumnName(TableName), pi.getRecord_UU());</span>
+<span class="nc" id="L1265">		}</span>
+		else
+		{
+<span class="nc" id="L1268">			query = MQuery.get (ctx, pi.getAD_PInstance_ID(), TableName);</span>
+		}
+
+		//	Get Print Format
+<span class="nc" id="L1272">		MPrintFormat format = null;</span>
+<span class="nc" id="L1273">		Object so = pi.getSerializableObject();</span>
+<span class="nc bnc" id="L1274" title="All 2 branches missed.">		if (so instanceof MPrintFormat)</span>
+<span class="nc" id="L1275">			format = (MPrintFormat)so;</span>
+<span class="nc bnc" id="L1276" title="All 4 branches missed.">		if (format == null &amp;&amp; AD_PrintFormat_ID != 0)</span>
+		{
+			//	We have a PrintFormat with the correct Client
+<span class="nc bnc" id="L1279" title="All 2 branches missed.">			if (Client_ID == AD_Client_ID)</span>
+<span class="nc" id="L1280">				format = MPrintFormat.get (ctx, AD_PrintFormat_ID, false);</span>
+			else
+<span class="nc" id="L1282">				format = MPrintFormat.copyToClient (ctx, AD_PrintFormat_ID, AD_Client_ID);</span>
+		}
+<span class="nc bnc" id="L1284" title="All 4 branches missed.">		if (format != null &amp;&amp; format.getItemCount() == 0)</span>
+		{
+<span class="nc bnc" id="L1286" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;No Items - recreating:  &quot; + format);</span>
+<span class="nc" id="L1287">			format.delete(true);</span>
+<span class="nc" id="L1288">			format = null;</span>
+		}
+		//	Create Format
+<span class="nc bnc" id="L1291" title="All 4 branches missed.">		if (format == null &amp;&amp; AD_ReportView_ID != 0)</span>
+<span class="nc" id="L1292">			format = MPrintFormat.createFromReportView(ctx, AD_ReportView_ID, pi.getTitle());</span>
+<span class="nc bnc" id="L1293" title="All 2 branches missed.">		if (format == null)</span>
+<span class="nc" id="L1294">			return null;</span>
+		//
+<span class="nc" id="L1296">		format.setTranslationLanguage(format.getLanguage());</span>
+		//
+<span class="nc" id="L1298">		PrintInfo info = new PrintInfo (pi);</span>
+<span class="nc" id="L1299">		info.setAD_Table_ID(AD_Table_ID);</span>
+		
+<span class="nc" id="L1301">		return new ReportEngine(ctx, format, query, info, pi.isSummary(), pi.getTransactionName(), windowNo);</span>
+	}	//	get
+	
+	/** Order = 0				*/
+	public static final int		ORDER = 0;
+	/** Shipment = 1				*/
+	public static final int		SHIPMENT = 1;
+	/** Invoice = 2				*/
+	public static final int		INVOICE = 2;
+	/** Project = 3				*/
+	public static final int		PROJECT = 3;
+	/** RfQ = 4					*/
+	public static final int		RFQ = 4;
+	/** Remittance = 5			*/
+	public static final int		REMITTANCE = 5;
+	/** Check = 6				*/
+	public static final int		CHECK = 6;
+	/** Dunning = 7				*/
+	public static final int		DUNNING = 7;
+	/** Manufacturing Order = 8  */
+	public static final int		MANUFACTURING_ORDER = 8;
+	/** Distribution Order = 9  */
+	public static final int		DISTRIBUTION_ORDER = 9;
+	/** Physical Inventory = 10  */
+	public static final int		INVENTORY = 10;
+	/** Inventory Move = 11  */
+	public static final int		MOVEMENT = 11;
+	
+<span class="nc" id="L1329">	private static final String[]	DOC_BASETABLES = new String[] {</span>
+<span class="nc" id="L1330">		&quot;C_Order&quot;, &quot;M_InOut&quot;, &quot;C_Invoice&quot;, &quot;C_Project&quot;,</span>
+<span class="nc" id="L1331">		&quot;C_RfQResponse&quot;,</span>
+<span class="nc" id="L1332">		&quot;C_PaySelectionCheck&quot;, &quot;C_PaySelectionCheck&quot;, </span>
+<span class="nc" id="L1333">		&quot;C_DunningRunEntry&quot;,&quot;PP_Order&quot;, &quot;DD_Order&quot;, &quot;M_Inventory&quot;, &quot;M_Movement&quot;};</span>
+<span class="nc" id="L1334">	private static final String[]	DOC_IDS = new String[] {</span>
+<span class="nc" id="L1335">		&quot;C_Order_ID&quot;, &quot;M_InOut_ID&quot;, &quot;C_Invoice_ID&quot;, &quot;C_Project_ID&quot;,</span>
+<span class="nc" id="L1336">		&quot;C_RfQResponse_ID&quot;,</span>
+<span class="nc" id="L1337">		&quot;C_PaySelectionCheck_ID&quot;, &quot;C_PaySelectionCheck_ID&quot;, </span>
+<span class="nc" id="L1338">		&quot;C_DunningRunEntry_ID&quot; , &quot;PP_Order_ID&quot; , &quot;DD_Order_ID&quot;, &quot;M_Inventory_ID&quot;, &quot;M_Movement_ID&quot; };</span>
+<span class="nc" id="L1339">	private static final int[]	DOC_TABLE_ID = new int[] {</span>
+<span class="nc" id="L1340">		MOrder.Table_ID, MInOut.Table_ID, MInvoice.Table_ID, MProject.Table_ID,</span>
+<span class="nc" id="L1341">		MRfQResponse.Table_ID,</span>
+<span class="nc" id="L1342">		MPaySelectionCheck.Table_ID, MPaySelectionCheck.Table_ID, </span>
+<span class="nc" id="L1343">		MDunningRunEntry.Table_ID, X_PP_Order.Table_ID, MDDOrder.Table_ID, MInventory.Table_ID, MMovement.Table_ID };</span>
+
+	/**
+	 * 	Get Document Print Engine for Document Type.
+	 * 	@param ctx context
+	 * 	@param type document type
+	 * 	@param Record_ID id
+	 * 	@return Report Engine or null
+	 */
+	public static ReportEngine get (Properties ctx, int type, int Record_ID)
+	{
+<span class="nc" id="L1354">		return get(ctx, type, Record_ID, null, 0);</span>
+	}
+	
+	/**
+	 * 	Get Document Print Engine for Document Type.
+	 * 	@param ctx context
+	 * 	@param type document type
+	 * 	@param Record_ID id
+	 * 	@return Report Engine or null
+	 */
+	public static ReportEngine get (Properties ctx, int type, int Record_ID, int windowNo)
+	{
+<span class="nc" id="L1366">		return get(ctx, type, Record_ID, null, windowNo);</span>
+	}
+	
+	/**
+	 * 	Get Document Print Engine for Document Type.
+	 * 	@param ctx context
+	 * 	@param type document type
+	 * 	@param Record_ID id
+	 *  @param trxName
+	 * 	@return Report Engine or null
+	 */
+	public static ReportEngine get (Properties ctx, int type, int Record_ID, String trxName)
+	{
+<span class="nc" id="L1379">		return get(ctx, type, Record_ID, trxName, 0);</span>
+	}
+
+	/**
+	 * 	Get Document Print Engine for Document Type.
+	 * 	@param ctx context
+	 * 	@param type document type
+	 * 	@param Record_ID id
+	 *  @param trxName
+	 *  @param windowNo
+	 * 	@return Report Engine or null
+	 */
+	public static ReportEngine get(Properties ctx, int type, int Record_ID, String trxName, int windowNo)
+	{
+<span class="nc bnc" id="L1393" title="All 2 branches missed.">		if (Record_ID &lt; 1)</span>
+		{
+<span class="nc" id="L1395">			log.log(Level.WARNING, &quot;No PrintFormat for Record_ID=&quot; + Record_ID </span>
+<span class="nc" id="L1396">					+ &quot;, Type=&quot; + type);</span>
+<span class="nc" id="L1397">			return null;</span>
+		}
+		//	Order - Print Shipment or Invoice
+<span class="nc bnc" id="L1400" title="All 2 branches missed.">		if (type == ORDER)</span>
+		{
+<span class="nc" id="L1402">			int[] what = getDocumentWhat (Record_ID);</span>
+<span class="nc bnc" id="L1403" title="All 2 branches missed.">			if (what != null)</span>
+			{
+<span class="nc" id="L1405">				type = what[0];</span>
+<span class="nc" id="L1406">				Record_ID = what[1];</span>
+			}
+		}	//	Order
+
+<span class="nc" id="L1410">		int AD_PrintFormat_ID = 0;</span>
+<span class="nc" id="L1411">		int C_BPartner_ID = 0;</span>
+<span class="nc" id="L1412">		String DocumentNo = null;</span>
+<span class="nc" id="L1413">		int copies = 1;</span>
+
+		//	Language
+<span class="nc" id="L1416">		MClient client = MClient.get(ctx);</span>
+<span class="nc" id="L1417">		Language language = client.getLanguage();	</span>
+		//	Get Document Info
+<span class="nc" id="L1419">		StringBuilder sql = null;</span>
+<span class="nc bnc" id="L1420" title="All 2 branches missed.">		if (type == CHECK)</span>
+<span class="nc" id="L1421">			sql = new StringBuilder(&quot;SELECT bad.Check_PrintFormat_ID,&quot;)								//	1</span>
+<span class="nc" id="L1422">				.append(&quot;	c.IsMultiLingualDocument,bp.AD_Language,bp.C_BPartner_ID,d.DocumentNo &quot;)		//	2..5</span>
+<span class="nc" id="L1423">				.append(&quot;FROM C_PaySelectionCheck d&quot;)</span>
+<span class="nc" id="L1424">				.append(&quot; INNER JOIN C_PaySelection ps ON (d.C_PaySelection_ID=ps.C_PaySelection_ID)&quot;)</span>
+<span class="nc" id="L1425">				.append(&quot; INNER JOIN C_BankAccountDoc bad ON (ps.C_BankAccount_ID=bad.C_BankAccount_ID AND d.PaymentRule=bad.PaymentRule)&quot;)</span>
+<span class="nc" id="L1426">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1427">				.append(&quot; INNER JOIN C_BPartner bp ON (d.C_BPartner_ID=bp.C_BPartner_ID) &quot;)</span>
+<span class="nc" id="L1428">				.append(&quot;WHERE d.C_PaySelectionCheck_ID=?&quot;);		//	info from BankAccount</span>
+<span class="nc bnc" id="L1429" title="All 2 branches missed.">		else if (type == DUNNING)</span>
+<span class="nc" id="L1430">			sql = new StringBuilder(&quot;SELECT dl.Dunning_PrintFormat_ID,&quot;)</span>
+<span class="nc" id="L1431">				.append(&quot; c.IsMultiLingualDocument,bp.AD_Language,bp.C_BPartner_ID,dr.DunningDate &quot;)</span>
+<span class="nc" id="L1432">				.append(&quot;FROM C_DunningRunEntry d&quot;)</span>
+<span class="nc" id="L1433">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1434">				.append(&quot; INNER JOIN C_BPartner bp ON (d.C_BPartner_ID=bp.C_BPartner_ID)&quot;)</span>
+<span class="nc" id="L1435">				.append(&quot; INNER JOIN C_DunningRun dr ON (d.C_DunningRun_ID=dr.C_DunningRun_ID)&quot;)</span>
+<span class="nc" id="L1436">				.append(&quot; INNER JOIN C_DunningLevel dl ON (dl.C_DunningLevel_ID=d.C_DunningLevel_ID) &quot;)</span>
+<span class="nc" id="L1437">				.append(&quot;WHERE d.C_DunningRunEntry_ID=?&quot;);			//	info from Dunning</span>
+<span class="nc bnc" id="L1438" title="All 2 branches missed.">		else if (type == REMITTANCE)</span>
+<span class="nc" id="L1439">			sql = new StringBuilder(&quot;SELECT pf.Remittance_PrintFormat_ID,&quot;)</span>
+<span class="nc" id="L1440">				.append(&quot; c.IsMultiLingualDocument,bp.AD_Language,bp.C_BPartner_ID,d.DocumentNo &quot;)</span>
+<span class="nc" id="L1441">				.append(&quot;FROM C_PaySelectionCheck d&quot;)</span>
+<span class="nc" id="L1442">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1443">				.append(&quot; INNER JOIN AD_PrintForm pf ON (c.AD_Client_ID=pf.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1444">				.append(&quot; INNER JOIN C_BPartner bp ON (d.C_BPartner_ID=bp.C_BPartner_ID) &quot;)</span>
+<span class="nc" id="L1445">				.append(&quot;WHERE d.C_PaySelectionCheck_ID=?&quot;)		//	info from PrintForm</span>
+<span class="nc" id="L1446">				.append(&quot; AND pf.AD_Org_ID IN (0,d.AD_Org_ID) ORDER BY pf.AD_Org_ID DESC&quot;);</span>
+<span class="nc bnc" id="L1447" title="All 2 branches missed.">		else if (type == PROJECT)</span>
+<span class="nc" id="L1448">			sql = new StringBuilder(&quot;SELECT pf.Project_PrintFormat_ID,&quot;)</span>
+<span class="nc" id="L1449">				.append(&quot; c.IsMultiLingualDocument,bp.AD_Language,bp.C_BPartner_ID,d.Value &quot;)</span>
+<span class="nc" id="L1450">				.append(&quot;FROM C_Project d&quot;)</span>
+<span class="nc" id="L1451">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1452">				.append(&quot; INNER JOIN AD_PrintForm pf ON (c.AD_Client_ID=pf.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1453">				.append(&quot; LEFT OUTER JOIN C_BPartner bp ON (d.C_BPartner_ID=bp.C_BPartner_ID) &quot;)</span>
+<span class="nc" id="L1454">				.append(&quot;WHERE d.C_Project_ID=?&quot;)					//	info from PrintForm</span>
+<span class="nc" id="L1455">				.append(&quot; AND pf.AD_Org_ID IN (0,d.AD_Org_ID) ORDER BY pf.AD_Org_ID DESC&quot;);</span>
+<span class="nc bnc" id="L1456" title="All 2 branches missed.">		else if (type == MANUFACTURING_ORDER)</span>
+<span class="nc" id="L1457">			sql = new StringBuilder(&quot;SELECT pf.Manuf_Order_PrintFormat_ID,&quot;)</span>
+<span class="nc" id="L1458">				.append(&quot; c.IsMultiLingualDocument,bp.AD_Language, 0 , d.DocumentNo &quot;)</span>
+<span class="nc" id="L1459">				.append(&quot;FROM PP_Order d&quot;)</span>
+<span class="nc" id="L1460">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1461">				.append(&quot; LEFT OUTER JOIN AD_User u ON (u.AD_User_ID=d.Planner_ID)&quot;)</span>
+<span class="nc" id="L1462">				.append(&quot; LEFT OUTER JOIN C_BPartner bp ON (u.C_BPartner_ID=bp.C_BPartner_ID) &quot;)</span>
+<span class="nc" id="L1463">				.append(&quot; INNER JOIN AD_PrintForm pf ON (c.AD_Client_ID=pf.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1464">				.append(&quot;WHERE d.PP_Order_ID=?&quot;)					//	info from PrintForm</span>
+<span class="nc" id="L1465">				.append(&quot; AND pf.AD_Org_ID IN (0,d.AD_Org_ID) ORDER BY pf.AD_Org_ID DESC&quot;);</span>
+<span class="nc bnc" id="L1466" title="All 2 branches missed.">		else if (type == DISTRIBUTION_ORDER)</span>
+<span class="nc" id="L1467">			sql = new StringBuilder(&quot;SELECT pf.Distrib_Order_PrintFormat_ID,&quot;)</span>
+<span class="nc" id="L1468">				.append(&quot; c.IsMultiLingualDocument,bp.AD_Language, bp.C_BPartner_ID , d.DocumentNo &quot;)</span>
+<span class="nc" id="L1469">				.append(&quot;FROM DD_Order d&quot;)</span>
+<span class="nc" id="L1470">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1471">				.append(&quot; INNER JOIN AD_PrintForm pf ON (c.AD_Client_ID=pf.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1472">				.append(&quot; LEFT OUTER JOIN C_BPartner bp ON (d.C_BPartner_ID=bp.C_BPartner_ID) &quot;)</span>
+<span class="nc" id="L1473">				.append(&quot;WHERE d.DD_Order_ID=?&quot;)					//	info from PrintForm</span>
+<span class="nc" id="L1474">				.append(&quot; AND pf.AD_Org_ID IN (0,d.AD_Org_ID) ORDER BY pf.AD_Org_ID DESC&quot;);</span>
+<span class="nc bnc" id="L1475" title="All 2 branches missed.">		else if (type == RFQ)</span>
+<span class="nc" id="L1476">			sql = new StringBuilder(&quot;SELECT COALESCE(t.AD_PrintFormat_ID, pf.AD_PrintFormat_ID),&quot;)</span>
+<span class="nc" id="L1477">				.append(&quot; c.IsMultiLingualDocument,bp.AD_Language,bp.C_BPartner_ID,rr.Name &quot;)</span>
+<span class="nc" id="L1478">				.append(&quot;FROM C_RfQResponse rr&quot;)</span>
+<span class="nc" id="L1479">				.append(&quot; INNER JOIN C_RfQ r ON (rr.C_RfQ_ID=r.C_RfQ_ID)&quot;)</span>
+<span class="nc" id="L1480">				.append(&quot; INNER JOIN C_RfQ_Topic t ON (r.C_RfQ_Topic_ID=t.C_RfQ_Topic_ID)&quot;)</span>
+<span class="nc" id="L1481">				.append(&quot; INNER JOIN AD_Client c ON (rr.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1482">				.append(&quot; INNER JOIN C_BPartner bp ON (rr.C_BPartner_ID=bp.C_BPartner_ID),&quot;)</span>
+<span class="nc" id="L1483">				.append(&quot; AD_PrintFormat pf &quot;)</span>
+<span class="nc" id="L1484">				.append(&quot;WHERE pf.AD_Client_ID IN (0,rr.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1485">				.append(&quot; AND pf.AD_Table_ID=725 AND pf.IsTableBased='N'&quot;)	//	from RfQ PrintFormat</span>
+<span class="nc" id="L1486">				.append(&quot; AND rr.C_RfQResponse_ID=? &quot;)				//	Info from RfQTopic</span>
+<span class="nc" id="L1487">				.append(&quot;ORDER BY t.AD_PrintFormat_ID, pf.AD_Client_ID DESC, pf.AD_Org_ID DESC&quot;);</span>
+		// Fix [2574162] Priority to choose invoice print format not working
+<span class="nc bnc" id="L1489" title="All 4 branches missed.">		else if (type == ORDER || type == INVOICE)</span>
+<span class="nc" id="L1490">			sql = new StringBuilder(&quot;SELECT pf.Order_PrintFormat_ID,pf.Shipment_PrintFormat_ID,&quot;)		//	1..2</span>
+				//	Prio: 1. BPartner 2. DocType, 3. PrintFormat (Org)	//	see InvoicePrint
+<span class="nc" id="L1492">				.append(&quot; COALESCE (bp.Invoice_PrintFormat_ID,dt.AD_PrintFormat_ID,pf.Invoice_PrintFormat_ID),&quot;) // 3</span>
+<span class="nc" id="L1493">				.append(&quot; pf.Project_PrintFormat_ID, pf.Remittance_PrintFormat_ID,&quot;)		//	4..5</span>
+<span class="nc" id="L1494">				.append(&quot; c.IsMultiLingualDocument, bp.AD_Language,&quot;)						//	6..7</span>
+<span class="nc" id="L1495">				.append(&quot; COALESCE(dt.DocumentCopies,0)+COALESCE(bp.DocumentCopies,1), &quot;) 	// 	8</span>
+<span class="nc" id="L1496">				.append(&quot; dt.AD_PrintFormat_ID,bp.C_BPartner_ID,d.DocumentNo &quot;)			//	9..11</span>
+<span class="nc" id="L1497">				.append(&quot;FROM &quot; + DOC_BASETABLES[type] + &quot; d&quot;)</span>
+<span class="nc" id="L1498">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1499">				.append(&quot; INNER JOIN AD_PrintForm pf ON (c.AD_Client_ID=pf.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1500">				.append(&quot; INNER JOIN C_BPartner bp ON (d.C_BPartner_ID=bp.C_BPartner_ID)&quot;)</span>
+<span class="nc" id="L1501">				.append(&quot; LEFT OUTER JOIN C_DocType dt ON ((d.C_DocType_ID&gt;0 AND d.C_DocType_ID=dt.C_DocType_ID) OR (d.C_DocType_ID=0 AND d.C_DocTypeTarget_ID=dt.C_DocType_ID)) &quot;)</span>
+<span class="nc" id="L1502">				.append(&quot;WHERE d.&quot; + DOC_IDS[type] + &quot;=?&quot;)			//	info from PrintForm</span>
+<span class="nc" id="L1503">				.append(&quot; AND pf.AD_Org_ID IN (0,d.AD_Org_ID) &quot;)</span>
+<span class="nc" id="L1504">				.append(&quot;ORDER BY pf.AD_Org_ID DESC&quot;);</span>
+<span class="nc bnc" id="L1505" title="All 4 branches missed.">		else if (type == INVENTORY || type == MOVEMENT)</span>
+<span class="nc" id="L1506">			sql = new StringBuilder(&quot;SELECT COALESCE (dt.AD_PrintFormat_ID, 0), 0,&quot;) 			// 1..2</span>
+<span class="nc" id="L1507">				.append(&quot; NULL, 0 , d.DocumentNo &quot;)				// 3..5</span>
+<span class="nc" id="L1508">				.append(&quot;FROM &quot; + DOC_BASETABLES[type] + &quot; d&quot;)</span>
+<span class="nc" id="L1509">				.append(&quot; LEFT OUTER JOIN C_DocType dt ON (d.C_DocType_ID=dt.C_DocType_ID) &quot;)</span>
+<span class="nc" id="L1510">				.append(&quot;WHERE d.&quot; + DOC_IDS[type] + &quot;=?&quot;);			//	info from PrintForm</span>
+		else	//	Get PrintFormat from Org or 0 of document client
+<span class="nc" id="L1512">			sql = new StringBuilder(&quot;SELECT pf.Order_PrintFormat_ID,pf.Shipment_PrintFormat_ID,&quot;)		//	1..2</span>
+				//	Prio: 1. BPartner 2. DocType, 3. PrintFormat (Org)	//	see InvoicePrint
+<span class="nc" id="L1514">				.append(&quot; COALESCE (bp.Invoice_PrintFormat_ID,dt.AD_PrintFormat_ID,pf.Invoice_PrintFormat_ID),&quot;) // 3</span>
+<span class="nc" id="L1515">				.append(&quot; pf.Project_PrintFormat_ID, pf.Remittance_PrintFormat_ID,&quot;)		//	4..5</span>
+<span class="nc" id="L1516">				.append(&quot; c.IsMultiLingualDocument, bp.AD_Language,&quot;)						//	6..7</span>
+<span class="nc" id="L1517">				.append(&quot; COALESCE(dt.DocumentCopies,0)+COALESCE(bp.DocumentCopies,1), &quot;) 	// 	8</span>
+<span class="nc" id="L1518">				.append(&quot; dt.AD_PrintFormat_ID,bp.C_BPartner_ID,d.DocumentNo, &quot;)			//  9..11 </span>
+<span class="nc" id="L1519">				.append(&quot; pf.Manuf_Order_PrintFormat_ID, pf.Distrib_Order_PrintFormat_ID &quot;)	//	12..13</span>
+<span class="nc" id="L1520">				.append(&quot;FROM &quot; + DOC_BASETABLES[type] + &quot; d&quot;)</span>
+<span class="nc" id="L1521">				.append(&quot; INNER JOIN AD_Client c ON (d.AD_Client_ID=c.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1522">				.append(&quot; INNER JOIN AD_PrintForm pf ON (c.AD_Client_ID=pf.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L1523">				.append(&quot; INNER JOIN C_BPartner bp ON (d.C_BPartner_ID=bp.C_BPartner_ID)&quot;)</span>
+<span class="nc" id="L1524">				.append(&quot; LEFT OUTER JOIN C_DocType dt ON (d.C_DocType_ID=dt.C_DocType_ID) &quot;)</span>
+<span class="nc" id="L1525">				.append(&quot;WHERE d.&quot; + DOC_IDS[type] + &quot;=?&quot;)			//	info from PrintForm</span>
+<span class="nc" id="L1526">				.append(&quot; AND pf.AD_Org_ID IN (0,d.AD_Org_ID) &quot;)</span>
+<span class="nc" id="L1527">				.append(&quot;ORDER BY pf.AD_Org_ID DESC&quot;);</span>
+		//
+<span class="nc" id="L1529">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1530">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1533">			pstmt = DB.prepareStatement(sql.toString(), trxName);</span>
+<span class="nc" id="L1534">			pstmt.setInt(1, Record_ID);</span>
+<span class="nc" id="L1535">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1536" title="All 2 branches missed.">			if (rs.next())	//	first record only</span>
+			{
+<span class="nc bnc" id="L1538" title="All 6 branches missed.">				if (type == CHECK || type == DUNNING || type == REMITTANCE </span>
+<span class="nc bnc" id="L1539" title="All 8 branches missed.">					|| type == PROJECT || type == RFQ || type == MANUFACTURING_ORDER || type == DISTRIBUTION_ORDER </span>
+<span class="nc bnc" id="L1540" title="All 4 branches missed.">					|| type == INVENTORY || type == MOVEMENT)</span>
+				{
+<span class="nc" id="L1542">					AD_PrintFormat_ID = rs.getInt(1);</span>
+<span class="nc" id="L1543">					copies = 1;</span>
+					//	Set Language when enabled
+<span class="nc" id="L1545">					String AD_Language = rs.getString(3);</span>
+<span class="nc bnc" id="L1546" title="All 2 branches missed.">					if (AD_Language != null)// &amp;&amp; &quot;Y&quot;.equals(rs.getString(2)))	//	IsMultiLingualDocument</span>
+<span class="nc" id="L1547">						language = Language.getLanguage(AD_Language);</span>
+<span class="nc" id="L1548">					C_BPartner_ID = rs.getInt(4);</span>
+<span class="nc bnc" id="L1549" title="All 2 branches missed.">					if (type == DUNNING)</span>
+					{
+<span class="nc" id="L1551">						Timestamp ts = rs.getTimestamp(5);</span>
+<span class="nc" id="L1552">						DocumentNo = ts.toString();</span>
+<span class="nc" id="L1553">					}</span>
+					else
+<span class="nc" id="L1555">						DocumentNo = rs.getString(5);</span>
+					
+<span class="nc bnc" id="L1557" title="All 4 branches missed.">					if(AD_PrintFormat_ID == 0 &amp;&amp; type == INVENTORY){</span>
+<span class="nc" id="L1558">						MProcess process = MProcess.get(ctx, PROCESS_RPT_M_INVENTORY);</span>
+<span class="nc" id="L1559">						AD_PrintFormat_ID = process.getAD_PrintFormat_ID();</span>
+					}
+					
+<span class="nc bnc" id="L1562" title="All 4 branches missed.">					if(AD_PrintFormat_ID == 0 &amp;&amp; type == MOVEMENT){</span>
+<span class="nc" id="L1563">						MProcess process = MProcess.get(ctx, PROCESS_RPT_M_MOVEMENT);</span>
+<span class="nc" id="L1564">						AD_PrintFormat_ID = process.getAD_PrintFormat_ID();</span>
+					}
+					
+<span class="nc" id="L1567">				}</span>
+				else
+				{
+					//	Set PrintFormat
+<span class="nc" id="L1571">					AD_PrintFormat_ID = rs.getInt(type+1);</span>
+<span class="nc bnc" id="L1572" title="All 4 branches missed.">					if (type != INVOICE &amp;&amp; rs.getInt(9) != 0)		//	C_DocType.AD_PrintFormat_ID</span>
+<span class="nc" id="L1573">						AD_PrintFormat_ID = rs.getInt(9);</span>
+<span class="nc" id="L1574">					copies = rs.getInt(8);</span>
+					//	Set Language when enabled
+<span class="nc" id="L1576">					String AD_Language = rs.getString(7);</span>
+<span class="nc bnc" id="L1577" title="All 2 branches missed.">					if (AD_Language != null) // &amp;&amp; &quot;Y&quot;.equals(rs.getString(6)))	//	IsMultiLingualDocument</span>
+<span class="nc" id="L1578">						language = Language.getLanguage(AD_Language);</span>
+<span class="nc" id="L1579">					C_BPartner_ID = rs.getInt(10);</span>
+<span class="nc" id="L1580">					DocumentNo = rs.getString(11);</span>
+				}
+			}
+<span class="nc" id="L1583">		}</span>
+<span class="nc" id="L1584">		catch (Exception e)</span>
+		{
+<span class="nc" id="L1586">			log.log(Level.SEVERE, &quot;Record_ID=&quot; + Record_ID + &quot;, SQL=&quot; + sql, e);</span>
+		}
+		finally {
+<span class="nc" id="L1589">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1590">			rs = null; pstmt = null;</span>
+		}
+<span class="nc bnc" id="L1592" title="All 2 branches missed.">		if (AD_PrintFormat_ID == 0)</span>
+		{
+<span class="nc" id="L1594">			log.log(Level.SEVERE, &quot;No PrintFormat found for Type=&quot; + type + &quot;, Record_ID=&quot; + Record_ID);</span>
+<span class="nc" id="L1595">			return null;</span>
+		}
+
+		//	Get Format &amp; Data
+<span class="nc" id="L1599">		MPrintFormat format = MPrintFormat.get (ctx, AD_PrintFormat_ID, false);</span>
+<span class="nc" id="L1600">		format.setLanguage(language);		//	BP Language if Multi-Lingual</span>
+<span class="nc" id="L1601">		format.setTranslationLanguage(language);</span>
+		//	query
+<span class="nc" id="L1603">		MQuery query = new MQuery(format.getAD_Table_ID());</span>
+<span class="nc" id="L1604">		query.addRestriction(DOC_IDS[type], MQuery.EQUAL, Record_ID);</span>
+
+		//
+<span class="nc bnc" id="L1607" title="All 4 branches missed.">		if (DocumentNo == null || DocumentNo.length() == 0)</span>
+<span class="nc" id="L1608">			DocumentNo = &quot;DocPrint&quot;;</span>
+<span class="nc" id="L1609">		PrintInfo info = new PrintInfo(</span>
+<span class="nc" id="L1610">			DocumentNo,</span>
+<span class="nc" id="L1611">			DOC_TABLE_ID[type],</span>
+<span class="nc" id="L1612">			Record_ID,</span>
+<span class="nc" id="L1613">			C_BPartner_ID);</span>
+<span class="nc" id="L1614">		info.setCopies(copies);</span>
+<span class="nc" id="L1615">		info.setDocumentCopy(false);		//	true prints &quot;Copy&quot; on second</span>
+<span class="nc" id="L1616">		info.setPrinterName(format.getPrinterName());</span>
+		
+		//	Engine
+<span class="nc" id="L1619">		ReportEngine re = new ReportEngine(ctx, format, query, info, trxName, windowNo);</span>
+<span class="nc" id="L1620">		return re;</span>
+	}	//	get
+
+	/**
+	 *	Determine what Order document to print.
+	 *  @param C_Order_ID id
+	 *	@return int Array with [ReportEngine constant for type of print(INVOICE, ORDER, etc), record id]
+	 */
+	private static int[] getDocumentWhat (int C_Order_ID)
+	{
+<span class="nc" id="L1630">		int[] what = new int[2];</span>
+<span class="nc" id="L1631">		what[0] = ORDER;</span>
+<span class="nc" id="L1632">		what[1] = C_Order_ID;</span>
+		//
+<span class="nc" id="L1634">		StringBuilder sql = new StringBuilder(&quot;SELECT dt.DocSubTypeSO &quot;)</span>
+<span class="nc" id="L1635">			.append(&quot;FROM C_DocType dt, C_Order o &quot;)</span>
+<span class="nc" id="L1636">			.append(&quot;WHERE o.C_DocType_ID=dt.C_DocType_ID&quot;)</span>
+<span class="nc" id="L1637">			.append(&quot; AND o.C_Order_ID=?&quot;);</span>
+<span class="nc" id="L1638">		String DocSubTypeSO = null;</span>
+<span class="nc" id="L1639">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1640">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1643">			pstmt = DB.prepareStatement(sql.toString(), null);</span>
+<span class="nc" id="L1644">			pstmt.setInt(1, C_Order_ID);</span>
+<span class="nc" id="L1645">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1646" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L1647">				DocSubTypeSO = rs.getString(1);</span>
+			
+			// @Trifon - Order is not completed(C_DoctType_ID=0) then try with C_DocTypeTarget_ID
+			// [ 2819637 ] Wrong print format on non completed order - https://sourceforge.net/p/adempiere/bugs/1977/
+<span class="nc bnc" id="L1651" title="All 4 branches missed.">			if (DocSubTypeSO == null || &quot;&quot;.equals(DocSubTypeSO)) {</span>
+<span class="nc" id="L1652">				sql = new StringBuilder(&quot;SELECT dt.DocSubTypeSO &quot;)</span>
+<span class="nc" id="L1653">					.append(&quot;FROM C_DocType dt, C_Order o &quot;)</span>
+<span class="nc" id="L1654">					.append(&quot;WHERE o.C_DocTypeTarget_ID=dt.C_DocType_ID&quot;)</span>
+<span class="nc" id="L1655">					.append(&quot; AND o.C_Order_ID=?&quot;);</span>
+<span class="nc" id="L1656">				DB.close(rs, pstmt);</span>
+<span class="nc" id="L1657">				rs = null; pstmt = null;</span>
+<span class="nc" id="L1658">				pstmt = DB.prepareStatement(sql.toString(), null);</span>
+<span class="nc" id="L1659">				pstmt.setInt(1, C_Order_ID);</span>
+<span class="nc" id="L1660">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1661" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L1662">					DocSubTypeSO = rs.getString(1);</span>
+				}
+			}
+<span class="nc" id="L1665">		}</span>
+<span class="nc" id="L1666">		catch (SQLException e1)</span>
+		{
+<span class="nc" id="L1668">			log.log(Level.SEVERE, &quot;(1) - &quot; + sql, e1);</span>
+<span class="nc" id="L1669">			return null;		//	error</span>
+		}
+		finally {
+<span class="nc" id="L1672">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1673">			rs = null; pstmt = null;</span>
+		}
+<span class="nc bnc" id="L1675" title="All 2 branches missed.">		if (DocSubTypeSO == null)</span>
+<span class="nc" id="L1676">			DocSubTypeSO = &quot;&quot;;</span>
+		//	WalkIn Receipt, WalkIn Invoice,
+<span class="nc bnc" id="L1678" title="All 4 branches missed.">		if (DocSubTypeSO.equals(MOrder.DocSubTypeSO_POS) || DocSubTypeSO.equals(MOrder.DocSubTypeSO_OnCredit))</span>
+<span class="nc" id="L1679">			what[0] = INVOICE;</span>
+		//	WalkIn Pickup,
+<span class="nc bnc" id="L1681" title="All 2 branches missed.">		else if (DocSubTypeSO.equals(MOrder.DocSubTypeSO_Warehouse))</span>
+<span class="nc" id="L1682">			what[0] = SHIPMENT;</span>
+		//	Offer Binding, Offer Nonbinding, Standard Order
+		else
+<span class="nc" id="L1685">			return what;</span>
+
+		//	Get Record_ID of Invoice/Receipt
+<span class="nc bnc" id="L1688" title="All 2 branches missed.">		if (what[0] == INVOICE)</span>
+<span class="nc" id="L1689">			sql = new StringBuilder(&quot;SELECT C_Invoice_ID REC FROM C_Invoice WHERE C_Order_ID=? AND DocStatus IN ('CO','CL')&quot;)	//	1</span>
+<span class="nc" id="L1690">				.append(&quot; ORDER BY C_Invoice_ID DESC&quot;);</span>
+		else
+<span class="nc" id="L1692">			sql = new StringBuilder(&quot;SELECT M_InOut_ID REC FROM M_InOut WHERE C_Order_ID=? AND DocStatus IN ('CO','CL')&quot;) 	//	1</span>
+<span class="nc" id="L1693">				.append(&quot; ORDER BY M_InOut_ID DESC&quot;);</span>
+		try
+		{
+<span class="nc" id="L1696">			pstmt = DB.prepareStatement(sql.toString(), null);</span>
+<span class="nc" id="L1697">			pstmt.setInt(1, C_Order_ID);</span>
+<span class="nc" id="L1698">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1699" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L1701">				what[1] = rs.getInt(1);</span>
+<span class="nc" id="L1702">			}</span>
+			else	//	No Document Found
+<span class="nc" id="L1704">				what[0] = ORDER;</span>
+<span class="nc" id="L1705">		}</span>
+<span class="nc" id="L1706">		catch (SQLException e2)</span>
+		{
+<span class="nc" id="L1708">			log.log(Level.SEVERE, &quot;(2) - &quot; + sql, e2);</span>
+<span class="nc" id="L1709">			return null;</span>
+		}
+		finally {
+<span class="nc" id="L1712">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1713">			rs = null; pstmt = null;</span>
+		}
+<span class="nc bnc" id="L1715" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Order =&gt; &quot; + what[0] + &quot; ID=&quot; + what[1]);</span>
+<span class="nc" id="L1716">		return what;</span>
+	}	//	getDocumentWhat
+
+	/**
+	 * 	Print Confirm.&lt;br/&gt;
+	 *  Update Date Printed.
+	 * 	@param type report engine document type ({@link #ORDER}, {@link #SHIPMENT}, etc)
+	 * 	@param Record_ID record id
+	 */
+	public static void printConfirm (int type, int Record_ID)
+	{
+<span class="nc" id="L1727">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc bnc" id="L1728" title="All 6 branches missed.">		if (type == ORDER || type == SHIPMENT || type == INVOICE)</span>
+<span class="nc" id="L1729">			sql.append(&quot;UPDATE &quot;).append(DOC_BASETABLES[type])</span>
+<span class="nc" id="L1730">				.append(&quot; SET DatePrinted=getDate(), IsPrinted='Y' WHERE &quot;)</span>
+<span class="nc" id="L1731">				.append(DOC_IDS[type]).append(&quot;=&quot;).append(Record_ID);</span>
+		//
+<span class="nc bnc" id="L1733" title="All 2 branches missed.">		if (sql.length() &gt; 0)</span>
+		{
+<span class="nc" id="L1735">			int no = DB.executeUpdate(sql.toString(), null);</span>
+<span class="nc bnc" id="L1736" title="All 2 branches missed.">			if (no != 1)</span>
+<span class="nc" id="L1737">				log.log(Level.SEVERE, &quot;Updated records=&quot; + no + &quot; - should be just one&quot;);</span>
+		}
+<span class="nc" id="L1739">	}	//	printConfirm</span>
+
+	/**
+	 * Set extended where clause
+	 * @param whereExtended
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public void setWhereExtended(String whereExtended) {
+<span class="nc" id="L1747">		m_extendedFilter = new SQLFragment(whereExtended);</span>
+<span class="nc" id="L1748">	}</span>
+
+	/**
+	 * Get extended where clause
+	 * @return extended where clause
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public String getWhereExtended() {
+<span class="nc bnc" id="L1756" title="All 2 branches missed.">		return m_extendedFilter != null ? m_extendedFilter.toSQLWithParameters() : null;</span>
+	}
+	
+	/**
+	 * Set extended filter
+	 * @param filter
+	 */
+	public void setExtendedFilter(SQLFragment filter) {
+<span class="nc" id="L1764">		m_extendedFilter = filter;</span>
+<span class="nc" id="L1765">	}</span>
+	
+	/**
+	 * Get extended filter
+	 * @return extended filter
+	 */
+	public SQLFragment getExtendedFilter() {
+<span class="nc" id="L1772">		return m_extendedFilter;</span>
+	}
+
+	/**
+	 * Set windowNo of the report to parse the context 
+	 */
+	public void setWindowNo(int windowNo) {
+<span class="nc" id="L1779">		m_windowNo = windowNo;</span>
+<span class="nc" id="L1780">	}</span>
+	
+	/**
+	 * Get window no
+	 * @return window no
+	 */
+	public int getWindowNo() {
+<span class="nc" id="L1787">		return m_windowNo;</span>
+	}
+
+	/**
+	 * Set summary report
+	 * @param summary
+	 */
+	public void setSummary(boolean summary)
+	{
+<span class="nc" id="L1796">		m_summary = summary;</span>
+<span class="nc" id="L1797">	}</span>
+
+	/**
+	 * Is summary report
+	 * @return true if it is a summary report
+	 */
+	public boolean isSummary()
+	{
+<span class="nc" id="L1805">		return m_summary;</span>
+	}
+	
+	/**
+	 * Set language id
+	 * @param languageID
+	 */
+	public void setLanguageID(int languageID)
+	{
+<span class="nc" id="L1814">		m_language_id = languageID;</span>
+<span class="nc" id="L1815">	}</span>
+
+	/**
+	 * Get language id
+	 * @return language id
+	 */
+	public int getLanguageID()
+	{
+<span class="nc" id="L1823">		return m_language_id;</span>
+	}
+	
+	private String reportType;
+	
+	/**
+	 * Set report output type 
+	 * @param type output type (pdf, html, etc)
+	 */
+	public void setReportType(String type)
+	{
+<span class="nc" id="L1834">		reportType = type;</span>
+<span class="nc" id="L1835">	}</span>
+	
+	/**
+	 * Get report output type
+	 * @return report output type (pdf, html, etc)
+	 */
+	public String getReportType()
+	{
+<span class="nc" id="L1843">		return reportType;</span>
+	}
+	
+	/**
+	 * Determines, if current tab content should be replaced, or a new tab should be opened
+	 * @return true if it is to replace content of current active tab
+	 */
+	public boolean isReplaceTabContent() {
+<span class="nc" id="L1851">		return m_isReplaceTabContent;</span>
+	}
+
+	/**
+	 * Sets, if current tab content should be replaced, or a new tab should be opened
+	 * @param m_isReplaceTabContent
+	 */
+	public void setIsReplaceTabContent(boolean m_isReplaceTabContent) {
+<span class="nc" id="L1859">		this.m_isReplaceTabContent = m_isReplaceTabContent;</span>
+<span class="nc" id="L1860">	}</span>
+	
+	/**
+	 * Get Report Engine Type from Table_ID
+	 * @param tableID
+	 * @return Report Engine Type 
+	 * -1 if Report Engine Type was not found
+	 */
+	public static int getReportEngineType(int tableID) {
+<span class="nc bnc" id="L1869" title="All 2 branches missed.">		for(int i = 0; i &lt; DOC_TABLE_ID.length; i++) {</span>
+<span class="nc bnc" id="L1870" title="All 2 branches missed.">			if(DOC_TABLE_ID[i] == tableID)</span>
+<span class="nc" id="L1871">				return i;</span>
+		}
+<span class="nc" id="L1873">		return -1;</span>
+	}
+	
+	/**
+	 * Update AD_PInstance with default report output type (if it is not set)
+	 * @param ctx
+	 * @param instance
+	 * @param printFormatID
+	 */
+	public static void setDefaultReportTypeToPInstance(Properties ctx, MPInstance instance, int printFormatID) {
+<span class="nc bnc" id="L1883" title="All 2 branches missed.">		if(Util.isEmpty(instance.getReportType())) {</span>
+<span class="nc" id="L1884">			MPrintFormat pf = new MPrintFormat(ctx, printFormatID, null);</span>
+<span class="nc bnc" id="L1885" title="All 2 branches missed.">			String type = pf.isForm()</span>
+				// a42niem - provide explicit default and check on client/org specifics
+<span class="nc" id="L1887">				? MSysConfig.getValue(MSysConfig.ZK_REPORT_FORM_OUTPUT_TYPE,&quot;PDF&quot;,Env.getAD_Client_ID(ctx),Env.getAD_Org_ID(ctx))</span>
+<span class="nc" id="L1888">				: MSysConfig.getValue(MSysConfig.ZK_REPORT_TABLE_OUTPUT_TYPE,&quot;PDF&quot;,Env.getAD_Client_ID(ctx),Env.getAD_Org_ID(ctx));</span>
+<span class="nc" id="L1889">			instance.setReportType(type);</span>
+		}
+<span class="nc" id="L1891">	}</span>
+	
+<span class="nc" id="L1893">	private ProcessInfo m_pi = null;</span>
+	
+	/**
+	 * @param pi
+	 */
+	public void setProcessInfo(ProcessInfo pi) {
+<span class="nc" id="L1899">		m_pi = pi;</span>
+<span class="nc" id="L1900">	}</span>
+	
+	/**
+	 * @return ProcessInfo
+	 */
+	public ProcessInfo getProcessInfo() {
+<span class="nc" id="L1906">		return m_pi;</span>
+	}
+	
+	/**
+	 * Evaluate display logic of a print format item
+	 * @param printData data for display logic evaluation
+	 * @param item print format item
+	 * @return true if item has no display logic or display logic evaluate to true
+	 */
+	public static boolean isDisplayPFItem(PrintData printData, MPrintFormatItem item)
+	{
+<span class="nc bnc" id="L1917" title="All 2 branches missed.">		if(Util.isEmpty(item.getDisplayLogic()))</span>
+<span class="nc" id="L1918">			return true;</span>
+		
+<span class="nc" id="L1920">		return Evaluator.evaluateLogic(new PrintDataEvaluatee(null, printData), item.getDisplayLogic());</span>
+	}
+}	//	ReportEngine
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

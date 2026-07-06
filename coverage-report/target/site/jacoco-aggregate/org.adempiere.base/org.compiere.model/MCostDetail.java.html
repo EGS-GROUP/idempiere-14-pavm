@@ -1,0 +1,2124 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MCostDetail.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MCostDetail.java</span></div><h1>MCostDetail.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.DBException;
+import org.adempiere.exceptions.PeriodClosedException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+import org.idempiere.acct.IDoc;
+
+/**
+ * 	Cost Detail Model
+ *	
+ *  @author Jorg Janke
+ *  @author Armen Rizal, Goodwill Consulting
+ *  	&lt;li&gt;BF: 2431123 Return Trx changes weighted average cost
+ *  	&lt;li&gt;BF: 1568752 Average invoice costing: landed costs incorrectly applied
+ *  @author Armen Rizal and Bayu Cahya
+ *  	&lt;li&gt;BF [ 2129781 ] Cost Detail not created properly for multi acc schema
+ *  @author Teo Sarca
+ *  	&lt;li&gt;BF [ 2847648 ] Manufacture and shipment cost errors
+ *  		https://sourceforge.net/p/adempiere/libero/237/
+ * 	@author red1 FR: [ 2214883 ] Remove SQL code and Replace for Query
+ *  @version $Id: MCostDetail.java,v 1.3 2006/07/30 00:51:05 jjanke Exp $
+ *  
+ */
+public class MCostDetail extends X_M_CostDetail
+{	
+	private static final long serialVersionUID = -7909571771846993407L;
+	
+	protected static final String INOUTLINE_DOCBASETYPE_SQL =
+		    &quot;SELECT c.DocBaseType From M_InOut io &quot; +
+			&quot;INNER JOIN M_InOutLine iol ON io.M_InOut_ID=iol.M_InOut_ID &quot; +
+			&quot;INNER JOIN C_DocType c ON io.C_DocType_ID=c.C_DocType_ID &quot; +
+			&quot;WHERE iol.M_InOutLine_ID=?&quot;;
+			
+	/**
+	 * 	Create New Cost Detail record for Purchase Orders.
+	 * 	Called from Doc_MatchPO.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param C_OrderLine_ID order
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param trxName transaction
+	 *	@return true if created
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createOrder (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int C_OrderLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, String trxName)
+	{
+<span class="nc" id="L90">		return createOrder (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, C_OrderLine_ID, M_CostElement_ID, </span>
+<span class="nc" id="L91">				Amt, Qty, Description, null, 0, trxName);</span>
+	}
+	
+	/**
+	 * 	Create New Cost Detail record for Purchase Orders.
+	 * 	Called from Doc_MatchPO.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param C_OrderLine_ID order
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName transaction
+	 *	@return true if created
+	 */
+	public static boolean createOrder (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int C_OrderLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L117">		MCostDetail cd = getOrder (as, M_Product_ID, M_AttributeSetInstance_ID, C_OrderLine_ID, M_CostElement_ID, DateAcct, trxName);</span>
+<span class="nc bnc" id="L118" title="All 6 branches missed.">		if (cd != null &amp;&amp; !cd.isDelta() &amp;&amp; Ref_CostDetail_ID &gt; 0)</span>
+<span class="nc" id="L119">			cd.setIsBackDate(true);</span>
+		//
+<span class="nc bnc" id="L121" title="All 2 branches missed.">		if (cd == null)		//	createNew </span>
+		{
+<span class="nc" id="L123">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L124">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L125">				M_CostElement_ID, </span>
+<span class="nc" id="L126">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L127">			cd.setC_OrderLine_ID (C_OrderLine_ID);</span>
+<span class="nc" id="L128">		}</span>
+		else
+		{
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+				// set deltaAmt=Amt, deltaQty=qty, and set Cost Detail for Amt and Qty	 
+<span class="nc" id="L134">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L135">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L136">			}</span>
+			else
+			{
+<span class="nc" id="L139">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L140">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L141">				cd.setAmt(Amt);</span>
+<span class="nc" id="L142">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L144" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L146">				cd.setProcessed(false);</span>
+<span class="nc" id="L147">				cd.setAmt(Amt);</span>
+<span class="nc" id="L148">				cd.setQty(Qty);</span>
+<span class="nc" id="L149">			}</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L151">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L153">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L154" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L156">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L159">		return ok;</span>
+	}	//	createOrder
+	
+	/**
+	 * 	Create New Cost Detail record for AP Invoices.
+	 * 	Called from Doc_Invoice - for Invoice Adjustments.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param C_InvoiceLine_ID invoice
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param trxName transaction
+	 *	@return true if created
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createInvoice (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int C_InvoiceLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, String trxName)
+	{
+<span class="nc" id="L185">		return createInvoice (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, C_InvoiceLine_ID, M_CostElement_ID, </span>
+<span class="nc" id="L186">				Amt, Qty, Description, null, 0, trxName);</span>
+	}
+	
+	/**
+	 * 	Create New Cost Detail record for AP Invoices.
+	 * 	Called from Doc_Invoice - for Invoice Adjustments.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param C_InvoiceLine_ID invoice
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName transaction
+	 *	@return true if created
+	 */
+	public static boolean createInvoice (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int C_InvoiceLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L212">		MCostDetail cd = getInvoice (as, M_Product_ID, M_AttributeSetInstance_ID, C_InvoiceLine_ID, M_CostElement_ID, DateAcct, trxName);</span>
+<span class="nc bnc" id="L213" title="All 6 branches missed.">		if (cd != null &amp;&amp; !cd.isDelta() &amp;&amp; Ref_CostDetail_ID &gt; 0)</span>
+<span class="nc" id="L214">			cd.setIsBackDate(true);</span>
+		//
+<span class="nc bnc" id="L216" title="All 2 branches missed.">		if (cd == null)		//	createNew</span>
+		{
+<span class="nc" id="L218">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L219">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L220">				M_CostElement_ID, </span>
+<span class="nc" id="L221">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L222">			cd.setC_InvoiceLine_ID (C_InvoiceLine_ID);</span>
+<span class="nc" id="L223">		}</span>
+		else
+		{
+<span class="nc bnc" id="L226" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+				// set deltaAmt=Amt, deltaQty=qty, and set Cost Detail for Amt and Qty	 
+<span class="nc" id="L229">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L230">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L231">			}</span>
+			else
+			{
+<span class="nc" id="L234">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L235">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L236">				cd.setAmt(Amt);</span>
+<span class="nc" id="L237">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L239" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L241">				cd.setProcessed(false);</span>
+<span class="nc" id="L242">				cd.setAmt(Amt);</span>
+<span class="nc" id="L243">				cd.setQty(Qty);</span>
+<span class="nc" id="L244">			}</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L246">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L248">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L249" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L251">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L253" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L254">		return ok;</span>
+	}	//	createInvoice
+	
+	/**
+	 * 	Create New Cost Detail record for SO Shipments.
+	 * 	Called from Doc_MInOut - for SO Shipments.  
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_InOutLine_ID shipment
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param IsSOTrx sales order
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createShipment (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_InOutLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, boolean IsSOTrx, String trxName)
+	{
+<span class="nc" id="L281">		return createShipment (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, M_InOutLine_ID, M_CostElement_ID, </span>
+<span class="nc" id="L282">				Amt, Qty, Description, IsSOTrx, null, 0, trxName);</span>
+	}
+	
+	/**
+	 * 	Create New Cost Detail record for SO Shipments.
+	 * 	Called from Doc_MInOut - for SO Shipments.  
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_InOutLine_ID shipment
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param IsSOTrx sales order
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 */
+	public static boolean createShipment (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_InOutLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, boolean IsSOTrx, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L309">		MCostDetail cd = getShipment (as, M_Product_ID, M_AttributeSetInstance_ID, M_InOutLine_ID, M_CostElement_ID, trxName);</span>
+		//
+<span class="nc bnc" id="L311" title="All 2 branches missed.">		if (cd == null)		//	createNew</span>
+		{
+<span class="nc" id="L313">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L314">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L315">				M_CostElement_ID, </span>
+<span class="nc" id="L316">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L317">			cd.setM_InOutLine_ID(M_InOutLine_ID);</span>
+<span class="nc" id="L318">			cd.setIsSOTrx(IsSOTrx);</span>
+<span class="nc" id="L319">		}</span>
+		else
+		{
+<span class="nc bnc" id="L322" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+			    // set deltaAmt=Amt, deltaQty=qty, and set Cost Detail for Amt and Qty	 
+<span class="nc" id="L325">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L326">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L327">			}</span>
+			else
+			{
+<span class="nc" id="L330">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L331">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L332">				cd.setAmt(Amt);</span>
+<span class="nc" id="L333">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L335" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L337">				cd.setProcessed(false);</span>
+<span class="nc" id="L338">				cd.setAmt(Amt);</span>
+<span class="nc" id="L339">				cd.setQty(Qty);</span>
+<span class="nc" id="L340">			}</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L342">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L344">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L345" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L347">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L349" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L350">		return ok;</span>
+	}	//	createShipment
+
+	/**
+	 * 	Create New Cost Detail record for Physical Inventory.
+	 * 	Called from Doc_Inventory.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_InventoryLine_ID order
+	 *	@param M_CostElement_ID optional cost element
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createInventory (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_InventoryLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, String trxName)
+	{
+<span class="nc" id="L376">		return createInventory (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, M_InventoryLine_ID, M_CostElement_ID, </span>
+<span class="nc" id="L377">				Amt, Qty, Description, null, 0, trxName);</span>
+	}
+	
+	/**
+	 * 	Create New Cost Detail record for Physical Inventory.
+	 * 	Called from Doc_Inventory.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_InventoryLine_ID order
+	 *	@param M_CostElement_ID optional cost element
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 */
+	public static boolean createInventory (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_InventoryLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L403">		MCostDetail cd = getInventory (as, M_Product_ID, M_AttributeSetInstance_ID, M_InventoryLine_ID, M_CostElement_ID, trxName);</span>
+		//
+<span class="nc bnc" id="L405" title="All 2 branches missed.">		if (cd == null)		//	createNew</span>
+		{
+<span class="nc" id="L407">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L408">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L409">				M_CostElement_ID, </span>
+<span class="nc" id="L410">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L411">			cd.setM_InventoryLine_ID(M_InventoryLine_ID);</span>
+<span class="nc" id="L412">		}</span>
+		else
+		{
+<span class="nc bnc" id="L415" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+				// set deltaAmt=Amt, deltaQty=qty, and set Cost Detail for Amt and Qty	
+<span class="nc" id="L418">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L419">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L420">			}</span>
+			else
+			{
+<span class="nc" id="L423">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L424">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L425">				cd.setAmt(Amt);</span>
+<span class="nc" id="L426">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L428" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L430">				cd.setProcessed(false);</span>
+<span class="nc" id="L431">				cd.setAmt(Amt);</span>
+<span class="nc" id="L432">				cd.setQty(Qty);</span>
+<span class="nc" id="L433">			}</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L435">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L437">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L438" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L440">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L443">		return ok;</span>
+	}	//	createInventory
+	
+	/**
+	 * 	Create New Cost Detail record for Inventory Movements.
+	 * 	Called from Doc_Movement.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_MovementLine_ID movement
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param from if true the from (reduction)
+	 *	@param Description optional description
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createMovement (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_MovementLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty, boolean from,
+		String Description, String trxName)
+	{
+<span class="nc" id="L470">		return createMovement (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, M_MovementLine_ID, M_CostElement_ID, </span>
+<span class="nc" id="L471">				Amt, Qty, from, Description, null, 0, trxName);</span>
+	}
+	
+	/**
+	 * 	Create New Cost Detail record for Inventory Movements.
+	 * 	Called from Doc_Movement.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_MovementLine_ID movement
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param from if true the from (reduction)
+	 *	@param Description optional description
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 */
+	public static boolean createMovement (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_MovementLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty, boolean from,
+		String Description, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L498">		MCostDetail cd = getMovement (as, M_Product_ID, M_AttributeSetInstance_ID, M_MovementLine_ID, M_CostElement_ID, from, trxName);</span>
+
+		//
+<span class="nc bnc" id="L501" title="All 2 branches missed.">		if (cd == null)		//	createNew</span>
+		{
+<span class="nc" id="L503">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L504">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L505">				M_CostElement_ID, </span>
+<span class="nc" id="L506">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L507">			cd.setM_MovementLine_ID (M_MovementLine_ID);</span>
+<span class="nc" id="L508">			cd.setIsSOTrx(from);</span>
+<span class="nc" id="L509">		}</span>
+		else
+		{
+<span class="nc bnc" id="L512" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+				// set deltaAmt=Amt, deltaQty=qty, and set Cost Detail for Amt and Qty	
+<span class="nc" id="L515">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L516">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L517">			}</span>
+			else
+			{
+<span class="nc" id="L520">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L521">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L522">				cd.setAmt(Amt);</span>
+<span class="nc" id="L523">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L525" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L527">				cd.setProcessed(false);</span>
+<span class="nc" id="L528">				cd.setAmt(Amt);</span>
+<span class="nc" id="L529">				cd.setQty(Qty);</span>
+<span class="nc" id="L530">			}</span>
+<span class="nc bnc" id="L531" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L532">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L534">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L535" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L537">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L539" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L540">		return ok;</span>
+	}	//	createMovement
+
+	/**
+	 * 	Create New Cost Detail record for Production.
+	 * 	Called from Doc_Production.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_ProductionLine_ID production line
+	 *	@param M_CostElement_ID optional cost element
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createProduction (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_ProductionLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, String trxName)
+	{
+<span class="nc" id="L566">		return createProduction (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, M_ProductionLine_ID, M_CostElement_ID,</span>
+<span class="nc" id="L567">				Amt, Qty, Description, null, 0, trxName);</span>
+	}
+	
+	/**
+	 * 	Create New Cost Detail record for Production.
+	 * 	Called from Doc_Production.
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_ProductionLine_ID production line
+	 *	@param M_CostElement_ID optional cost element
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 */
+	public static boolean createProduction (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_ProductionLine_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L593">		MCostDetail cd = getProduction (as, M_Product_ID, M_AttributeSetInstance_ID, M_ProductionLine_ID, M_CostElement_ID, trxName);</span>
+		//
+<span class="nc bnc" id="L595" title="All 2 branches missed.">		if (cd == null)		//	createNew</span>
+		{
+<span class="nc" id="L597">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L598">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L599">				M_CostElement_ID, </span>
+<span class="nc" id="L600">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L601">			cd.setM_ProductionLine_ID(M_ProductionLine_ID);</span>
+<span class="nc" id="L602">		}</span>
+		else
+		{
+<span class="nc bnc" id="L605" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+				// set deltaAmt=Amt, deltaQty=qty, and set Cost Detail for Amt and Qty	 
+<span class="nc" id="L608">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L609">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L610">			}</span>
+			else
+			{
+<span class="nc" id="L613">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L614">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L615">				cd.setAmt(Amt);</span>
+<span class="nc" id="L616">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L618" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L620">				cd.setProcessed(false);</span>
+<span class="nc" id="L621">				cd.setAmt(Amt);</span>
+<span class="nc" id="L622">				cd.setQty(Qty);</span>
+<span class="nc" id="L623">			}</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L625">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L627">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L628" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L630">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L632" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L633">		return ok;</span>
+	}	//	createProduction
+	
+	/**
+	 *	Create cost detail record for Match Invoice (M_MatchInv).
+	 *	@param as
+	 *	@param AD_Org_ID
+	 *	@param M_Product_ID
+	 *	@param M_AttributeSetInstance_ID
+	 *	@param M_MatchInv_ID
+	 *	@param M_CostElement_ID
+	 *	@param Amt
+	 *	@param Qty
+	 *	@param Description
+	 *	@param trxName
+	 *	@return true if no error
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createMatchInvoice (MAcctSchema as, int AD_Org_ID, 
+			int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_MatchInv_ID, int M_CostElement_ID, 
+			BigDecimal Amt, BigDecimal Qty,
+			String Description, String trxName)
+	{
+<span class="nc" id="L658">		return createMatchInvoice (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, M_MatchInv_ID, M_CostElement_ID,</span>
+<span class="nc" id="L659">				Amt, Qty, Description, null, 0, trxName);</span>
+	}
+	
+	/**
+	 *	Create cost detail record for Match Invoice (M_MatchInv).
+	 *	@param as
+	 *	@param AD_Org_ID
+	 *	@param M_Product_ID
+	 *	@param M_AttributeSetInstance_ID
+	 *	@param M_MatchInv_ID
+	 *	@param M_CostElement_ID
+	 *	@param Amt
+	 *	@param Qty
+	 *	@param Description
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName
+	 *	@return true if no error
+	 */
+	public static boolean createMatchInvoice (MAcctSchema as, int AD_Org_ID, 
+			int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_MatchInv_ID, int M_CostElement_ID, 
+			BigDecimal Amt, BigDecimal Qty,
+			String Description, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L684">		MCostDetail cd = getMatchInvoice (as, M_Product_ID, M_AttributeSetInstance_ID, M_MatchInv_ID, M_CostElement_ID, trxName);</span>
+
+		//
+<span class="nc bnc" id="L687" title="All 2 branches missed.">		if (cd == null)		//	createNew</span>
+		{
+<span class="nc" id="L689">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L690">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L691">				M_CostElement_ID, </span>
+<span class="nc" id="L692">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L693">			cd.setM_MatchInv_ID(M_MatchInv_ID);</span>
+<span class="nc" id="L694">		}</span>
+		else
+		{
+<span class="nc bnc" id="L697" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+<span class="nc" id="L699">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L700">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L701">			}</span>
+			else
+			{
+<span class="nc" id="L704">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L705">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L706">				cd.setAmt(Amt);</span>
+<span class="nc" id="L707">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L709" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L711">				cd.setProcessed(false);</span>
+<span class="nc" id="L712">				cd.setAmt(Amt);</span>
+<span class="nc" id="L713">				cd.setQty(Qty);</span>
+<span class="nc" id="L714">			}</span>
+<span class="nc bnc" id="L715" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L716">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L718">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L719" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L721">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L723" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L724">		return ok;</span>
+	}	//	createMatchInvoice
+	
+	/**
+	 * 	Create Cost Detail for Project Issue (C_ProjectIssue).
+	 * 	Called from Doc_ProjectIssue
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param C_ProjectIssue_ID project issue line
+	 *	@param M_CostElement_ID optional cost element
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static boolean createProjectIssue (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int C_ProjectIssue_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, String trxName)
+	{
+<span class="nc" id="L750">		return createProjectIssue (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, C_ProjectIssue_ID, M_CostElement_ID,</span>
+<span class="nc" id="L751">				Amt, Qty, Description, null, 0, trxName);</span>
+	}
+	
+	/**
+	 * 	Create Cost Detail for Project Issue (C_ProjectIssue).
+	 * 	Called from Doc_ProjectIssue
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param C_ProjectIssue_ID project issue line
+	 *	@param M_CostElement_ID optional cost element
+	 *	@param Amt amt total amount
+	 *	@param Qty qty
+	 *	@param Description optional description
+	 *	@param DateAcct account date
+	 *	@param Ref_CostDetail_ID reference cost detail
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 */
+	public static boolean createProjectIssue (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int C_ProjectIssue_ID, int M_CostElement_ID, 
+		BigDecimal Amt, BigDecimal Qty,
+		String Description, Timestamp DateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L777">		MCostDetail cd = getProjectIssue (as, M_Product_ID, M_AttributeSetInstance_ID, C_ProjectIssue_ID, M_CostElement_ID, trxName);</span>
+		//
+<span class="nc bnc" id="L779" title="All 2 branches missed.">		if (cd == null)		//	createNew</span>
+		{
+<span class="nc" id="L781">			cd = new MCostDetail (as, AD_Org_ID, </span>
+<span class="nc" id="L782">				M_Product_ID, M_AttributeSetInstance_ID, </span>
+<span class="nc" id="L783">				M_CostElement_ID, </span>
+<span class="nc" id="L784">				Amt, Qty, Description, DateAcct, Ref_CostDetail_ID, trxName);</span>
+<span class="nc" id="L785">			cd.setC_ProjectIssue_ID(C_ProjectIssue_ID);</span>
+<span class="nc" id="L786">		}</span>
+		else
+		{
+<span class="nc bnc" id="L789" title="All 2 branches missed.">			if (cd.isProcessed())</span>
+			{
+<span class="nc" id="L791">				cd.setDeltaAmt(Amt.subtract(cd.getAmt()));</span>
+<span class="nc" id="L792">				cd.setDeltaQty(Qty.subtract(cd.getQty()));</span>
+<span class="nc" id="L793">			}</span>
+			else
+			{
+<span class="nc" id="L796">				cd.setDeltaAmt(BigDecimal.ZERO);</span>
+<span class="nc" id="L797">				cd.setDeltaQty(BigDecimal.ZERO);</span>
+<span class="nc" id="L798">				cd.setAmt(Amt);</span>
+<span class="nc" id="L799">				cd.setQty(Qty);</span>
+			}
+<span class="nc bnc" id="L801" title="All 2 branches missed.">			if (cd.isDelta())</span>
+			{
+<span class="nc" id="L803">				cd.setProcessed(false);</span>
+<span class="nc" id="L804">				cd.setAmt(Amt);</span>
+<span class="nc" id="L805">				cd.setQty(Qty);</span>
+<span class="nc" id="L806">			}</span>
+<span class="nc bnc" id="L807" title="All 2 branches missed.">			else if (cd.isProcessed())</span>
+<span class="nc" id="L808">				return true;	//	nothing to do</span>
+		}
+<span class="nc" id="L810">		boolean ok = cd.save();</span>
+<span class="nc bnc" id="L811" title="All 4 branches missed.">		if (ok &amp;&amp; !cd.isProcessed())</span>
+		{
+<span class="nc" id="L813">			ok = cd.process();</span>
+		}
+<span class="nc bnc" id="L815" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;(&quot; + ok + &quot;) &quot; + cd);</span>
+<span class="nc" id="L816">		return ok;</span>
+	}	//	createProjectIssue
+	
+	public static MCostDetail getOrder (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int C_OrderLine_ID, int M_CostElement_ID, Timestamp DateAcct, String trxName) {
+<span class="nc" id="L821">		MCostDetail cd = get (as.getCtx(), &quot;C_OrderLine_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID</span>
+<span class="nc" id="L822">				+&quot; AND TRUNC(DateAcct)=&quot;+DB.TO_DATE(DateAcct, true), </span>
+<span class="nc" id="L823">			C_OrderLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+<span class="nc bnc" id="L824" title="All 2 branches missed.">		if (cd == null) {</span>
+<span class="nc" id="L825">			cd = get (as.getCtx(), &quot;C_OrderLine_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID,</span>
+<span class="nc" id="L826">					C_OrderLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+<span class="nc bnc" id="L827" title="All 4 branches missed.">			if (cd != null &amp;&amp; !cd.isDelta())</span>
+<span class="nc" id="L828">				cd = null;</span>
+		}
+<span class="nc" id="L830">		return cd;</span>
+	}
+	
+	public static MCostDetail getInvoice (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int C_InvoiceLine_ID, int M_CostElement_ID, Timestamp DateAcct, String trxName) {
+<span class="nc" id="L835">		MCostDetail cd = get (as.getCtx(), &quot;C_InvoiceLine_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID+&quot; AND M_Product_ID=&quot;+M_Product_ID</span>
+<span class="nc" id="L836">				+&quot; AND TRUNC(DateAcct)=&quot;+DB.TO_DATE(DateAcct, true), </span>
+<span class="nc" id="L837">				C_InvoiceLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+<span class="nc bnc" id="L838" title="All 2 branches missed.">		if (cd == null) {</span>
+<span class="nc" id="L839">			cd = get (as.getCtx(), &quot;C_InvoiceLine_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID+&quot; AND M_Product_ID=&quot;+M_Product_ID, </span>
+<span class="nc" id="L840">					C_InvoiceLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+<span class="nc bnc" id="L841" title="All 4 branches missed.">			if (cd != null &amp;&amp; !cd.isDelta())</span>
+<span class="nc" id="L842">				cd = null;</span>
+		}
+<span class="nc" id="L844">		return cd;</span>
+	}
+	
+	public static MCostDetail getShipment (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_InOutLine_ID, int M_CostElement_ID, String trxName) {
+<span class="nc" id="L849">		return get (as.getCtx(), &quot;M_InOutLine_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID, </span>
+<span class="nc" id="L850">				M_InOutLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+	}
+	
+	public static MCostDetail getInventory (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_InventoryLine_ID, int M_CostElement_ID, String trxName) {
+<span class="nc" id="L855">		return get (as.getCtx(), &quot;M_InventoryLine_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID+&quot; AND M_Product_ID=&quot;+M_Product_ID, </span>
+<span class="nc" id="L856">				M_InventoryLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+	}
+	
+	public static MCostDetail getMovement (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_MovementLine_ID, int M_CostElement_ID, boolean from, String trxName) {
+<span class="nc" id="L861">		StringBuilder msget = new StringBuilder( &quot;M_MovementLine_ID=? AND IsSOTrx=&quot;) </span>
+<span class="nc bnc" id="L862" title="All 2 branches missed.">				.append((from ? &quot;'Y'&quot; : &quot;'N'&quot;)).append(&quot; AND Coalesce(M_CostElement_ID,0)=&quot;).append(M_CostElement_ID);</span>
+<span class="nc" id="L863">		return get (as.getCtx(),msget.toString(), </span>
+<span class="nc" id="L864">			M_MovementLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+	}
+	
+	public static MCostDetail getProduction (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_ProductionLine_ID, String trxName) {
+<span class="nc" id="L869">		return get (as.getCtx(), &quot;M_ProductionLine_ID=?&quot;, </span>
+<span class="nc" id="L870">				M_ProductionLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+	}
+	
+	public static MCostDetail getProduction (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_ProductionLine_ID, int M_CostElement_ID, String trxName) {
+<span class="nc" id="L875">		return get (as.getCtx(), &quot;M_ProductionLine_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID, </span>
+<span class="nc" id="L876">				M_ProductionLine_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+	}
+	
+	public static MCostDetail getMatchInvoice (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int M_MatchInv_ID, int M_CostElement_ID, String trxName) {
+<span class="nc" id="L881">		return get (as.getCtx(), &quot;M_MatchInv_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID, </span>
+<span class="nc" id="L882">				M_MatchInv_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+	}
+	
+	public static MCostDetail getProjectIssue (MAcctSchema as, int M_Product_ID, int M_AttributeSetInstance_ID,
+			int C_ProjectIssue_ID, int M_CostElement_ID, String trxName) {
+<span class="nc" id="L887">		return get (as.getCtx(), &quot;C_ProjectIssue_ID=? AND Coalesce(M_CostElement_ID,0)=&quot;+M_CostElement_ID, </span>
+<span class="nc" id="L888">				C_ProjectIssue_ID, M_AttributeSetInstance_ID, as.getC_AcctSchema_ID(), trxName);</span>
+	}
+	
+	
+	/**
+	 * 	Get Cost Detail
+	 *	@param ctx context
+	 *	@param whereClause where clause
+	 *	@param ID 1st parameter
+	 *  @param M_AttributeSetInstance_ID ASI
+	 *	@param trxName trx
+	 *	@return cost detail
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public static MCostDetail get (Properties ctx, String whereClause,
+		int ID, int M_AttributeSetInstance_ID, String trxName)
+	{
+<span class="nc" id="L906">		StringBuilder sql = new StringBuilder(&quot;SELECT * FROM M_CostDetail WHERE &quot;).append(whereClause);</span>
+
+<span class="nc" id="L908">		MClientInfo clientInfo = MClientInfo.get(ctx);</span>
+<span class="nc" id="L909">		MAcctSchema primary = clientInfo.getMAcctSchema1();</span>
+<span class="nc bnc" id="L910" title="All 2 branches missed.">		int C_AcctSchema_ID = primary != null ? primary.getC_AcctSchema_ID() : 0;</span>
+<span class="nc bnc" id="L911" title="All 2 branches missed.">		if (C_AcctSchema_ID &gt; 0)</span>
+		{
+<span class="nc" id="L913">			sql.append(&quot; AND C_AcctSchema_ID=?&quot;);</span>
+		}
+<span class="nc" id="L915">		MCostDetail retValue = null;</span>
+<span class="nc" id="L916">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L917">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L920">			pstmt = DB.prepareStatement (sql.toString(), null);</span>
+<span class="nc" id="L921">			pstmt.setInt (1, ID);</span>
+<span class="nc" id="L922">			pstmt.setInt (2, M_AttributeSetInstance_ID);</span>
+<span class="nc bnc" id="L923" title="All 2 branches missed.">			if (C_AcctSchema_ID &gt; 0)</span>
+			{
+<span class="nc" id="L925">				pstmt.setInt (3, C_AcctSchema_ID);</span>
+			}
+<span class="nc" id="L927">			rs = pstmt.executeQuery ();</span>
+<span class="nc bnc" id="L928" title="All 2 branches missed.">			if (rs.next ())</span>
+<span class="nc" id="L929">				retValue = new MCostDetail (ctx, rs, trxName);</span>
+<span class="nc" id="L930">		}</span>
+<span class="nc" id="L931">		catch (Exception e)</span>
+		{
+<span class="nc" id="L933">			s_log.log (Level.SEVERE, sql + &quot; - &quot; + ID, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L937">			DB.close(rs, pstmt);</span>
+		}
+<span class="nc" id="L939">		return retValue;</span>
+	}
+	
+	/**
+	 * 	Get Cost Detail
+	 *	@param ctx context
+	 *	@param whereClause where clause for record id (1st parameter)
+	 *	@param ID record id (1st parameter)
+	 *  @param M_AttributeSetInstance_ID ASI (2nd parameter)
+	 *  @param C_AcctSchema_ID accounting schema (3rd parameter)
+	 *	@param trxName trx
+	 *	@return cost detail
+	 */
+	public static MCostDetail get (Properties ctx, String whereClause, 
+		int ID, int M_AttributeSetInstance_ID, int C_AcctSchema_ID, String trxName)
+	{
+<span class="nc" id="L955">		StringBuilder localWhereClause = new StringBuilder(whereClause)</span>
+<span class="nc" id="L956">			.append(&quot; AND M_AttributeSetInstance_ID=?&quot;)</span>
+<span class="nc" id="L957">			.append(&quot; AND C_AcctSchema_ID=?&quot;);</span>
+<span class="nc" id="L958">		MCostDetail retValue = new Query(ctx,I_M_CostDetail.Table_Name,localWhereClause.toString(),trxName)</span>
+<span class="nc" id="L959">		.setParameters(ID,M_AttributeSetInstance_ID,C_AcctSchema_ID)</span>
+<span class="nc" id="L960">		.first();</span>
+<span class="nc" id="L961">		return retValue;</span>
+	}	//	get
+	
+	/**
+	 * 	Get Cost Detail Records
+	 *	@param ctx context
+	 *	@param whereClause where clause for record id (1st parameter)
+	 *	@param ID record id (1st parameter)
+	 *  @param M_AttributeSetInstance_ID ASI (2nd parameter)
+	 *  @param C_AcctSchema_ID accounting schema (3rd parameter)
+	 *	@param trxName trx
+	 *	@return list of cost detail record
+	 */
+	public static List&lt;MCostDetail&gt; list (Properties ctx, String whereClause, 
+		int ID, int M_AttributeSetInstance_ID, int C_AcctSchema_ID, String trxName)
+	{
+<span class="nc" id="L977">		StringBuilder localWhereClause = new StringBuilder(whereClause)</span>
+<span class="nc" id="L978">			.append(&quot; AND M_AttributeSetInstance_ID=?&quot;)</span>
+<span class="nc" id="L979">			.append(&quot; AND C_AcctSchema_ID=?&quot;);</span>
+<span class="nc" id="L980">		List&lt;MCostDetail&gt; retValue = new Query(ctx,I_M_CostDetail.Table_Name,localWhereClause.toString(),trxName)</span>
+<span class="nc" id="L981">		.setParameters(ID,M_AttributeSetInstance_ID,C_AcctSchema_ID)</span>
+<span class="nc" id="L982">		.list();</span>
+<span class="nc" id="L983">		return retValue;</span>
+	}	//	get
+	
+	/**
+	 * 	Process Cost Details for product
+	 *	@param product product
+	 *	@param trxName transaction
+	 *	@return true if no error
+	 */
+	public static boolean processProduct (MProduct product, String trxName)
+	{
+<span class="nc" id="L994">		final String whereClause = I_M_CostDetail.Table_Name + &quot;.&quot; + I_M_CostDetail.COLUMNNAME_M_Product_ID + &quot;=?&quot;</span>
+			+ &quot; AND &quot; + I_M_CostDetail.Table_Name + &quot;.&quot; + I_M_CostDetail.COLUMNNAME_Processed + &quot;=?&quot;;
+<span class="nc" id="L996">		int counterOK = 0;</span>
+<span class="nc" id="L997">		int counterError = 0;</span>
+<span class="nc" id="L998">		List&lt;MCostDetail&gt; list = new Query(product.getCtx(),I_M_CostDetail.Table_Name,whereClause,trxName)</span>
+<span class="nc" id="L999">		.addJoinClause(&quot; LEFT JOIN M_CostDetail refcd ON (refcd.M_CostDetail_ID=M_CostDetail.Ref_CostDetail_ID) &quot;)</span>
+<span class="nc" id="L1000">		.setParameters(product.getM_Product_ID(),false)</span>
+<span class="nc" id="L1001">		.setOrderBy(&quot;M_CostDetail.C_AcctSchema_ID, M_CostDetail.AD_Org_ID, M_CostDetail.M_AttributeSetInstance_ID, M_CostDetail.DateAcct, &quot;</span>
+				+ &quot;CASE WHEN COALESCE(refcd.DateAcct,M_CostDetail.DateAcct) = M_CostDetail.DateAcct THEN COALESCE(M_CostDetail.Ref_CostDetail_ID,M_CostDetail.M_CostDetail_ID) ELSE M_CostDetail.M_CostDetail_ID END, &quot;
+				+ &quot;M_CostDetail.M_CostDetail_ID&quot;)
+<span class="nc" id="L1004">		.list();</span>
+<span class="nc bnc" id="L1005" title="All 2 branches missed.">		for (MCostDetail cd : list) {</span>
+<span class="nc bnc" id="L1006" title="All 2 branches missed.">			if (cd.process())	//	saves</span>
+<span class="nc" id="L1007">				counterOK++;</span>
+			else
+<span class="nc" id="L1009">				counterError++;</span>
+		}
+<span class="nc bnc" id="L1011" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;OK=&quot; + counterOK + &quot;, Errors=&quot; + counterError);</span>
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">		return counterError == 0;</span>
+	}	//	processProduct
+	
+	/**
+	 * Process Cost Details for product
+	 * @param as accounting schema
+	 * @param product product
+	 * @param dateAcct account date
+	 * @param trxName transaction
+	 * @return true if no error
+	 */
+	public static boolean processProduct(MAcctSchema as, MProduct product, Timestamp dateAcct, String trxName)
+	{
+<span class="nc bnc" id="L1025" title="All 2 branches missed.">		if (dateAcct == null)</span>
+<span class="nc" id="L1026">			dateAcct = TimeUtil.getDay(System.currentTimeMillis());</span>
+		
+<span class="nc" id="L1028">		final String whereClause = I_M_CostDetail.Table_Name + &quot;.&quot; + I_M_CostDetail.COLUMNNAME_C_AcctSchema_ID + &quot;=?&quot;</span>
+				+ &quot; AND &quot; + I_M_CostDetail.Table_Name + &quot;.&quot; + I_M_CostDetail.COLUMNNAME_M_Product_ID + &quot;=?&quot;
+				+ &quot; AND &quot; + I_M_CostDetail.Table_Name + &quot;.&quot; + I_M_CostDetail.COLUMNNAME_DateAcct + &quot;&lt;=?&quot;
+				+ &quot; AND &quot; + I_M_CostDetail.Table_Name + &quot;.&quot; + I_M_CostDetail.COLUMNNAME_Processed + &quot;=?&quot;;
+<span class="nc" id="L1032">		int counterOK = 0;</span>
+<span class="nc" id="L1033">		int counterError = 0;</span>
+<span class="nc" id="L1034">		List&lt;MCostDetail&gt; list = new Query(product.getCtx(),I_M_CostDetail.Table_Name,whereClause,trxName)</span>
+<span class="nc" id="L1035">		.addJoinClause(&quot; LEFT JOIN M_CostDetail refcd ON (refcd.M_CostDetail_ID=M_CostDetail.Ref_CostDetail_ID) &quot;)</span>
+<span class="nc" id="L1036">		.setParameters(as.getC_AcctSchema_ID(), product.getM_Product_ID(), dateAcct, false)</span>
+<span class="nc" id="L1037">		.setOrderBy(&quot;M_CostDetail.AD_Org_ID, M_CostDetail.M_AttributeSetInstance_ID, M_CostDetail.DateAcct, &quot;</span>
+				+ &quot;CASE WHEN COALESCE(refcd.DateAcct,M_CostDetail.DateAcct) = M_CostDetail.DateAcct THEN COALESCE(M_CostDetail.Ref_CostDetail_ID,M_CostDetail.M_CostDetail_ID) ELSE M_CostDetail.M_CostDetail_ID END, &quot;
+				+ &quot;M_CostDetail.M_CostDetail_ID&quot;)
+<span class="nc" id="L1040">		.list();</span>
+<span class="nc bnc" id="L1041" title="All 2 branches missed.">		for (MCostDetail cd : list) {</span>
+<span class="nc bnc" id="L1042" title="All 2 branches missed.">			if (cd.process())	//	saves</span>
+<span class="nc" id="L1043">				counterOK++;</span>
+			else
+<span class="nc" id="L1045">				counterError++;</span>
+		}
+<span class="nc bnc" id="L1047" title="All 2 branches missed.">		if (s_log.isLoggable(Level.CONFIG)) s_log.config(&quot;OK=&quot; + counterOK + &quot;, Errors=&quot; + counterError);</span>
+<span class="nc bnc" id="L1048" title="All 2 branches missed.">		return counterError == 0;</span>
+	}	//	processProduct
+	
+	/**	Logger	*/
+<span class="nc" id="L1052">	private static CLogger 	s_log = CLogger.getCLogger (MCostDetail.class);</span>
+		
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param M_CostDetail_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MCostDetail(Properties ctx, String M_CostDetail_UU, String trxName) {
+<span class="nc" id="L1061">        super(ctx, M_CostDetail_UU, trxName);</span>
+<span class="nc bnc" id="L1062" title="All 2 branches missed.">		if (Util.isEmpty(M_CostDetail_UU))</span>
+<span class="nc" id="L1063">			setInitialDefaults();</span>
+<span class="nc" id="L1064">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param M_CostDetail_ID id
+	 *	@param trxName trx
+	 */
+	public MCostDetail (Properties ctx, int M_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L1074">		super (ctx, M_CostDetail_ID, trxName);</span>
+<span class="nc bnc" id="L1075" title="All 2 branches missed.">		if (M_CostDetail_ID == 0)</span>
+<span class="nc" id="L1076">			setInitialDefaults();</span>
+<span class="nc" id="L1077">	}	//	MCostDetail</span>
+
+	/**
+	 * Set the initial defaults for a new record
+	 */
+	private void setInitialDefaults() {
+<span class="nc" id="L1083">		setM_AttributeSetInstance_ID (0);</span>
+<span class="nc" id="L1084">		setProcessed (false);</span>
+<span class="nc" id="L1085">		setAmt (Env.ZERO);</span>
+<span class="nc" id="L1086">		setQty (Env.ZERO);</span>
+<span class="nc" id="L1087">		setIsSOTrx (false);</span>
+<span class="nc" id="L1088">		setDeltaAmt (Env.ZERO);</span>
+<span class="nc" id="L1089">		setDeltaQty (Env.ZERO);</span>
+<span class="nc" id="L1090">	}</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName trx
+	 */
+	public MCostDetail (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L1100">		super (ctx, rs, trxName);</span>
+<span class="nc" id="L1101">	}	//	MCostDetail</span>
+
+	/**
+	 * 	New Constructor
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param amt Amount
+	 *	@param qty Quantity
+	 *	@param description optional description
+	 *	@param trxName transaction
+	 *	@deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public MCostDetail (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_CostElement_ID, BigDecimal amt, BigDecimal qty,
+		String description, String trxName)
+	{
+<span class="nc" id="L1122">		this (as, AD_Org_ID, M_Product_ID, M_AttributeSetInstance_ID, M_CostElement_ID, amt, qty, description, null, 0, trxName);</span>
+<span class="nc" id="L1123">	}</span>
+	
+	/**
+	 * 	New Constructor
+	 *	@param as accounting schema
+	 *	@param AD_Org_ID org
+	 *	@param M_Product_ID product
+	 *	@param M_AttributeSetInstance_ID asi
+	 *	@param M_CostElement_ID optional cost element for Freight
+	 *	@param amt Amount
+	 *	@param qty Quantity
+	 *	@param description optional description
+	 *	@param dateAcct account date
+	 *	@param Ref_CostDetail_ID referenced cost detail
+	 *	@param trxName transaction
+	 */
+	public MCostDetail (MAcctSchema as, int AD_Org_ID, 
+		int M_Product_ID, int M_AttributeSetInstance_ID,
+		int M_CostElement_ID, BigDecimal amt, BigDecimal qty,
+		String description, Timestamp dateAcct, int Ref_CostDetail_ID, String trxName)
+	{
+<span class="nc" id="L1144">		this (as.getCtx(), 0, trxName);</span>
+<span class="nc" id="L1145">		setClientOrg(as.getAD_Client_ID(), AD_Org_ID);</span>
+<span class="nc" id="L1146">		setC_AcctSchema_ID (as.getC_AcctSchema_ID());</span>
+<span class="nc" id="L1147">		setM_Product_ID (M_Product_ID);</span>
+<span class="nc" id="L1148">		setM_AttributeSetInstance_ID (M_AttributeSetInstance_ID);</span>
+		//
+<span class="nc" id="L1150">		setM_CostElement_ID(M_CostElement_ID);		</span>
+<span class="nc" id="L1151">		setAmt (amt);</span>
+<span class="nc" id="L1152">		setQty (qty);</span>
+<span class="nc" id="L1153">		setDescription(description);</span>
+		
+<span class="nc" id="L1155">		setDateAcct(dateAcct);		</span>
+<span class="nc bnc" id="L1156" title="All 2 branches missed.">		if (Ref_CostDetail_ID &gt; 0)</span>
+<span class="nc" id="L1157">			setRef_CostDetail_ID(Ref_CostDetail_ID);</span>
+<span class="nc" id="L1158">	}	//	MCostDetail</span>
+	
+	/**
+	 * 	Set Amt
+	 *	@param Amt amt
+	 */
+	@Override
+	public void setAmt (BigDecimal Amt)
+	{
+<span class="nc bnc" id="L1167" title="All 2 branches missed.">		if (isProcessed())</span>
+<span class="nc" id="L1168">			throw new IllegalStateException(&quot;Cannot change Amt - processed&quot;);</span>
+<span class="nc bnc" id="L1169" title="All 2 branches missed.">		if (Amt == null)</span>
+<span class="nc" id="L1170">			super.setAmt (Env.ZERO);</span>
+		else
+<span class="nc" id="L1172">			super.setAmt (Amt);</span>
+<span class="nc" id="L1173">	}	//	setAmt</span>
+	
+	/**
+	 * 	Set Qty
+	 *	@param Qty qty
+	 */
+	@Override
+	public void setQty (BigDecimal Qty)
+	{
+<span class="nc bnc" id="L1182" title="All 2 branches missed.">		if (isProcessed())</span>
+<span class="nc" id="L1183">			throw new IllegalStateException(&quot;Cannot change Qty - processed&quot;);</span>
+<span class="nc bnc" id="L1184" title="All 2 branches missed.">		if (Qty == null)</span>
+<span class="nc" id="L1185">			super.setQty (Env.ZERO);</span>
+		else
+<span class="nc" id="L1187">			super.setQty (Qty);</span>
+<span class="nc" id="L1188">	}	//	setQty</span>
+
+	/**
+	 * 	Is Order
+	 *	@return true if has order line
+	 */
+	public boolean isOrder()
+	{
+<span class="nc bnc" id="L1196" title="All 2 branches missed.">		return getC_OrderLine_ID() != 0;</span>
+	}	//	isOrder
+
+	/**
+	 * 	Is Invoice
+	 *	@return true if has invoice line
+	 */
+	public boolean isInvoice()
+	{
+<span class="nc bnc" id="L1205" title="All 2 branches missed.">		return getC_InvoiceLine_ID() != 0;</span>
+	}	//	isInvoice
+
+	/**
+	 * 	Is Shipment
+	 *	@return true if has sales order shipment line
+	 */
+	public boolean isShipment()
+	{
+<span class="nc bnc" id="L1214" title="All 4 branches missed.">		return isSOTrx() &amp;&amp; getM_InOutLine_ID() != 0;</span>
+	}	//	isShipment
+	
+	/**
+	 * @return true if shipment line belongs to return to vendor (vendor RMA)
+	 */
+	public boolean isVendorRMA()
+	{
+<span class="nc bnc" id="L1222" title="All 4 branches missed.">		if (!isSOTrx() &amp;&amp; getM_InOutLine_ID() &gt; 0)</span>
+		{
+<span class="nc" id="L1224">			String docBaseType = DB.getSQLValueString((String)null, </span>
+<span class="nc" id="L1225">					INOUTLINE_DOCBASETYPE_SQL, getM_InOutLine_ID());</span>
+<span class="nc" id="L1226">			return IDoc.DOCTYPE_MatShipment.equals(docBaseType);</span>
+		}
+<span class="nc" id="L1228">		return false;</span>
+	}
+	
+	/**
+	 * 	Is this a Delta Record (previously processed)?
+	 *	@return true if delta is not null
+	 */
+	public boolean isDelta()
+	{
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">		return !(getDeltaAmt().signum() == 0 </span>
+<span class="nc bnc" id="L1238" title="All 2 branches missed.">			&amp;&amp; getDeltaQty().signum() == 0);</span>
+	}	//	isDelta
+
+	
+	@Override
+	protected boolean beforeSave(boolean newRecord) {
+<span class="nc bnc" id="L1244" title="All 2 branches missed.">		if (newRecord) {</span>
+<span class="nc" id="L1245">			Timestamp today = TimeUtil.getDay(System.currentTimeMillis());</span>
+<span class="nc" id="L1246">			Timestamp dateAcct = getDateAcct();</span>
+<span class="nc bnc" id="L1247" title="All 2 branches missed.">			if (dateAcct == null)</span>
+			{
+<span class="nc" id="L1249">				setDateAcct(today);</span>
+<span class="nc" id="L1250">				setIsBackDate(false);</span>
+<span class="nc" id="L1251">			}</span>
+			else
+			{
+<span class="nc" id="L1254">				int Ref_CostDetail_ID = getRef_CostDetail_ID();</span>
+<span class="nc bnc" id="L1255" title="All 2 branches missed.">				if (Ref_CostDetail_ID &gt; 0)</span>
+				{
+<span class="nc" id="L1257">					setDateAcct(dateAcct);</span>
+<span class="nc" id="L1258">					setIsBackDate(true);</span>
+<span class="nc" id="L1259">				}</span>
+				else
+				{
+<span class="nc" id="L1262">					final String sql = &quot;SELECT MAX(DateAcct) FROM M_CostDetail WHERE M_Product_ID=? AND Processed='Y'&quot;;</span>
+<span class="nc" id="L1263">					Timestamp MaxDateAcct = DB.getSQLValueTS(get_TrxName(), sql, getM_Product_ID());</span>
+<span class="nc bnc" id="L1264" title="All 4 branches missed.">					if (MaxDateAcct != null &amp;&amp; MaxDateAcct.after(today))</span>
+<span class="nc" id="L1265">						today = MaxDateAcct;</span>
+<span class="nc" id="L1266">					setDateAcct(dateAcct);</span>
+<span class="nc" id="L1267">					setIsBackDate(dateAcct.before(today));</span>
+				}
+			}
+<span class="nc" id="L1270">		} else {</span>
+<span class="nc bnc" id="L1271" title="All 2 branches missed.">			if (is_ValueChanged(COLUMNNAME_DateAcct))</span>
+			{
+<span class="nc" id="L1273">				log.saveError(&quot;Error&quot;, Msg.getMsg(getCtx(), &quot;CannotChangeAccountDate&quot;));</span>
+<span class="nc" id="L1274">				return false;</span>
+			}
+		}
+		
+<span class="nc" id="L1278">		return super.beforeSave(newRecord);</span>
+	}
+
+	@Override
+	protected boolean beforeDelete ()
+	{
+<span class="nc bnc" id="L1284" title="All 2 branches missed.">		return !isProcessed();</span>
+	}	//	beforeDelete
+	
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L1295">		StringBuilder sb = new StringBuilder (&quot;MCostDetail[&quot;);</span>
+<span class="nc" id="L1296">		sb.append (get_ID());</span>
+<span class="nc bnc" id="L1297" title="All 2 branches missed.">		if (getC_OrderLine_ID() != 0)</span>
+<span class="nc" id="L1298">			sb.append (&quot;,C_OrderLine_ID=&quot;).append (getC_OrderLine_ID());</span>
+<span class="nc bnc" id="L1299" title="All 2 branches missed.">		if (getM_InOutLine_ID() != 0)</span>
+<span class="nc" id="L1300">			sb.append (&quot;,M_InOutLine_ID=&quot;).append (getM_InOutLine_ID());</span>
+<span class="nc bnc" id="L1301" title="All 2 branches missed.">		if (getC_InvoiceLine_ID() != 0)</span>
+<span class="nc" id="L1302">			sb.append (&quot;,C_InvoiceLine_ID=&quot;).append (getC_InvoiceLine_ID());</span>
+<span class="nc bnc" id="L1303" title="All 2 branches missed.">		if (getC_ProjectIssue_ID() != 0)</span>
+<span class="nc" id="L1304">			sb.append (&quot;,C_ProjectIssue_ID=&quot;).append (getC_ProjectIssue_ID());</span>
+<span class="nc bnc" id="L1305" title="All 2 branches missed.">		if (getM_MovementLine_ID() != 0)</span>
+<span class="nc" id="L1306">			sb.append (&quot;,M_MovementLine_ID=&quot;).append (getM_MovementLine_ID());</span>
+<span class="nc bnc" id="L1307" title="All 2 branches missed.">		if (getM_InventoryLine_ID() != 0)</span>
+<span class="nc" id="L1308">			sb.append (&quot;,M_InventoryLine_ID=&quot;).append (getM_InventoryLine_ID());</span>
+<span class="nc bnc" id="L1309" title="All 2 branches missed.">		if (getM_ProductionLine_ID() != 0)</span>
+<span class="nc" id="L1310">			sb.append (&quot;,M_ProductionLine_ID=&quot;).append (getM_ProductionLine_ID());</span>
+<span class="nc bnc" id="L1311" title="All 2 branches missed.">		if (getM_MatchInv_ID() != 0)</span>
+<span class="nc" id="L1312">			sb.append (&quot;,M_MatchInv_ID=&quot;).append (getM_MatchInv_ID());</span>
+<span class="nc" id="L1313">		sb.append(&quot;,Amt=&quot;).append(getAmt())</span>
+<span class="nc" id="L1314">			.append(&quot;,Qty=&quot;).append(getQty());</span>
+<span class="nc bnc" id="L1315" title="All 2 branches missed.">		if (isDelta())</span>
+<span class="nc" id="L1316">			sb.append(&quot;,DeltaAmt=&quot;).append(getDeltaAmt())</span>
+<span class="nc" id="L1317">				.append(&quot;,DeltaQty=&quot;).append(getDeltaQty());</span>
+<span class="nc" id="L1318">		sb.append (&quot;]&quot;);</span>
+<span class="nc" id="L1319">		return sb.toString ();</span>
+	}	//	toString
+		
+	/**
+	 * 	Process Cost Detail Record.
+	 * 	The record is saved if processed.
+	 *	@return true if processed
+	 */
+	public synchronized boolean process()
+	{
+<span class="nc bnc" id="L1329" title="All 2 branches missed.">		if (isProcessed())</span>
+		{
+<span class="nc" id="L1331">			log.info(&quot;Already processed&quot;);</span>
+<span class="nc" id="L1332">			return true;</span>
+		}
+<span class="nc" id="L1334">		boolean ok = false;</span>
+
+		//	get costing level for product
+<span class="nc" id="L1337">		MAcctSchema as = MAcctSchema.get(getCtx(), getC_AcctSchema_ID());</span>
+<span class="nc" id="L1338">		MProduct product = new MProduct(getCtx(), getM_Product_ID(), get_TrxName());</span>
+<span class="nc" id="L1339">		String CostingLevel = product.getCostingLevel(as);</span>
+		//	Org Element
+<span class="nc" id="L1341">		int Org_ID = getAD_Org_ID();</span>
+<span class="nc" id="L1342">		int M_ASI_ID = getM_AttributeSetInstance_ID();</span>
+<span class="nc bnc" id="L1343" title="All 2 branches missed.">		if (MAcctSchema.COSTINGLEVEL_Client.equals(CostingLevel))</span>
+		{
+<span class="nc" id="L1345">			Org_ID = 0;</span>
+<span class="nc" id="L1346">			M_ASI_ID = 0;</span>
+<span class="nc" id="L1347">		}</span>
+<span class="nc bnc" id="L1348" title="All 2 branches missed.">		else if (MAcctSchema.COSTINGLEVEL_Organization.equals(CostingLevel))</span>
+<span class="nc" id="L1349">			M_ASI_ID = 0;</span>
+<span class="nc bnc" id="L1350" title="All 2 branches missed.">		else if (MAcctSchema.COSTINGLEVEL_BatchLot.equals(CostingLevel))</span>
+<span class="nc" id="L1351">			Org_ID = 0;</span>
+
+		//	Create Material Cost elements
+<span class="nc bnc" id="L1354" title="All 2 branches missed.">		if (getM_CostElement_ID() == 0)</span>
+		{
+<span class="nc" id="L1356">			MCostElement[] ces = MCostElement.getCostingMethods(this);</span>
+<span class="nc bnc" id="L1357" title="All 2 branches missed.">			for (int i = 0; i &lt; ces.length; i++)</span>
+			{
+<span class="nc" id="L1359">				MCostElement ce = ces[i];</span>
+<span class="nc bnc" id="L1360" title="All 8 branches missed.">				if (ce.isAverageInvoice() || ce.isAveragePO() || ce.isLifo() || ce.isFifo())</span>
+				{
+<span class="nc bnc" id="L1362" title="All 2 branches missed.">					if (!product.isStocked())</span>
+<span class="nc" id="L1363">						continue;</span>
+				}
+<span class="nc" id="L1365">				ok = process (as, product, ce, Org_ID, M_ASI_ID);</span>
+<span class="nc bnc" id="L1366" title="All 2 branches missed.">				if (!ok)</span>
+<span class="nc" id="L1367">					break;</span>
+			}
+<span class="nc" id="L1369">		}	//	Material Cost elements</span>
+		else
+		{
+<span class="nc" id="L1372">			MCostElement ce = MCostElement.get(getCtx(), getM_CostElement_ID());</span>
+<span class="nc bnc" id="L1373" title="All 2 branches missed.">			if (ce.getCostingMethod() == null) </span>
+			{
+<span class="nc" id="L1375">				MCostElement[] ces = MCostElement.getCostingMethods(this);</span>
+<span class="nc bnc" id="L1376" title="All 2 branches missed.">				for (MCostElement costingElement : ces)</span>
+				{
+<span class="nc bnc" id="L1378" title="All 8 branches missed.">					if (costingElement.isAverageInvoice() || costingElement.isAveragePO() || costingElement.isLifo() || costingElement.isFifo())</span>
+					{
+<span class="nc bnc" id="L1380" title="All 2 branches missed.">						if (!product.isStocked())</span>
+<span class="nc" id="L1381">							continue;</span>
+					}					
+<span class="nc" id="L1383">					ok = process (as, product, costingElement, Org_ID, M_ASI_ID);</span>
+<span class="nc bnc" id="L1384" title="All 2 branches missed.">					if (!ok)</span>
+<span class="nc" id="L1385">						break;</span>
+				}
+<span class="nc" id="L1387">			}</span>
+			else
+			{
+<span class="nc bnc" id="L1390" title="All 8 branches missed.">				if (ce.isAverageInvoice() || ce.isAveragePO() || ce.isLifo() || ce.isFifo())</span>
+				{
+<span class="nc bnc" id="L1392" title="All 2 branches missed.">					if (product.isStocked())</span>
+<span class="nc" id="L1393">						ok = process (as, product, ce, Org_ID, M_ASI_ID);</span>
+<span class="nc" id="L1394">				}</span>
+				else
+				{
+<span class="nc" id="L1397">					ok = process (as, product, ce, Org_ID, M_ASI_ID);</span>
+				}
+			}
+		}
+		
+		//	Save it
+<span class="nc bnc" id="L1403" title="All 2 branches missed.">		if (ok)</span>
+		{
+<span class="nc" id="L1405">			setDeltaAmt(null);</span>
+<span class="nc" id="L1406">			setDeltaQty(null);</span>
+<span class="nc" id="L1407">			setProcessed(true);</span>
+<span class="nc" id="L1408">			ok = save();</span>
+		}
+<span class="nc bnc" id="L1410" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(ok + &quot; - &quot; + toString());</span>
+<span class="nc" id="L1411">		return ok;</span>
+	}	//	process
+	
+	/**
+	 * 	Process cost detail record
+	 *	@param as accounting schema
+	 *	@param product product
+	 *	@param ce cost element
+	 *	@param Org_ID org - corrected for costing level
+	 *	@param M_ASI_ID - asi corrected for costing level
+	 *	@return true if cost ok
+	 */
+	protected boolean process (MAcctSchema as, MProduct product, MCostElement ce, 
+		int Org_ID, int M_ASI_ID)
+	{
+		//handle compatibility issue between average invoice and average po
+<span class="nc" id="L1427">		String costingMethod = product.getCostingMethod(as);</span>
+<span class="nc bnc" id="L1428" title="All 2 branches missed.">		if (X_M_Cost.COSTINGMETHOD_AverageInvoice.equals(costingMethod)) {</span>
+<span class="nc bnc" id="L1429" title="All 2 branches missed.">			if (ce.isAveragePO())</span>
+<span class="nc" id="L1430">				return true;</span>
+<span class="nc bnc" id="L1431" title="All 2 branches missed.">		} else if (X_M_Cost.COSTINGMETHOD_AveragePO.equals(costingMethod)) {</span>
+<span class="nc bnc" id="L1432" title="All 2 branches missed.">			if (ce.isAverageInvoice())</span>
+<span class="nc" id="L1433">				return true;</span>
+		}
+
+<span class="nc" id="L1436">		MCost cost = MCost.get(product, M_ASI_ID, as, Org_ID, ce.getM_CostElement_ID(), get_TrxName());</span>
+<span class="nc" id="L1437">		MCostDetail cd = null;</span>
+<span class="nc bnc" id="L1438" title="All 4 branches missed.">		boolean isOrderLandedCost = getC_OrderLine_ID() &gt; 0 &amp;&amp; getM_CostElement_ID() &gt; 0;</span>
+<span class="nc bnc" id="L1439" title="All 2 branches missed.">		boolean isReversedOrderLandedCost = isOrderLandedCost </span>
+<span class="nc bnc" id="L1440" title="All 6 branches missed.">				&amp;&amp; isDelta() &amp;&amp; getDeltaQty().signum() == -1 &amp;&amp; getDeltaAmt().signum() == -1</span>
+<span class="nc bnc" id="L1441" title="All 4 branches missed.">				&amp;&amp; (ce.isAveragePO() || ce.isAverageInvoice());</span>
+<span class="nc bnc" id="L1442" title="All 4 branches missed.">		if (isOrderLandedCost &amp;&amp; !isReversedOrderLandedCost) {	</span>
+			// order landed cost, get the cost info from previous order or order landed cost
+<span class="nc" id="L1444">			StringBuilder whereClause = new StringBuilder();</span>
+<span class="nc" id="L1445">			whereClause.append(&quot;C_OrderLine_ID = ? &quot;);</span>
+<span class="nc" id="L1446">			whereClause.append(&quot; AND TRUNC(DateAcct) = &quot;+DB.TO_DATE(getDateAcct(), true));</span>
+<span class="nc" id="L1447">			whereClause.append(&quot; AND M_Product_ID = ?&quot;);</span>
+<span class="nc" id="L1448">			whereClause.append(&quot; AND M_AttributeSetInstance_ID = ?&quot;);</span>
+<span class="nc" id="L1449">			whereClause.append(&quot; AND C_AcctSchema_ID = ?&quot;);</span>
+<span class="nc" id="L1450">			whereClause.append(&quot; AND M_CostDetail_ID &lt; ?&quot;);</span>
+<span class="nc" id="L1451">			cd = new Query(as.getCtx(), I_M_CostDetail.Table_Name, whereClause.toString(), get_TrxName())</span>
+<span class="nc" id="L1452">					.setParameters(getC_OrderLine_ID(), product.get_ID(), M_ASI_ID, as.get_ID(), this.get_ID())</span>
+<span class="nc" id="L1453">					.setOrderBy(&quot;M_CostDetail_ID DESC&quot;)</span>
+<span class="nc" id="L1454">					.first();</span>
+		}
+		
+<span class="nc bnc" id="L1457" title="All 4 branches missed.">		if (getC_InvoiceLine_ID() &gt; 0 &amp;&amp; getM_CostElement_ID() == 0) {</span>
+<span class="nc" id="L1458">			MInvoiceLine il = new MInvoiceLine(getCtx(), getC_InvoiceLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1459">			MInvoice i = new MInvoice(getCtx(), il.getC_Invoice_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1460" title="All 2 branches missed.">			if (!i.isSOTrx()) {</span>
+<span class="nc" id="L1461">				MMatchPO[] mpoList = MMatchPO.getInvoice(Env.getCtx(), i.getC_Invoice_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1462" title="All 2 branches missed.">				for (MMatchPO mpo : mpoList) {</span>
+					// more than one match po for the same invoice line and account date
+<span class="nc bnc" id="L1464" title="All 2 branches missed.">					if (mpo.getC_InvoiceLine_ID() == getC_InvoiceLine_ID() </span>
+<span class="nc bnc" id="L1465" title="All 2 branches missed.">							&amp;&amp; mpo.getDateAcct().compareTo(getDateAcct()) == 0</span>
+<span class="nc bnc" id="L1466" title="All 2 branches missed.">							&amp;&amp; mpo.getQty().compareTo(il.getQtyInvoiced()) != 0) { </span>
+						// get the cost info from previous cost detail
+<span class="nc" id="L1468">						StringBuilder whereClause = new StringBuilder();</span>
+<span class="nc" id="L1469">						whereClause.append(&quot;TRUNC(DateAcct) = &quot;+DB.TO_DATE(getDateAcct(), true));</span>
+<span class="nc" id="L1470">						whereClause.append(&quot; AND M_Product_ID = ?&quot;);</span>
+<span class="nc" id="L1471">						whereClause.append(&quot; AND M_AttributeSetInstance_ID = ?&quot;);</span>
+<span class="nc" id="L1472">						whereClause.append(&quot; AND C_AcctSchema_ID = ?&quot;);</span>
+<span class="nc" id="L1473">						whereClause.append(&quot; AND M_CostDetail_ID &lt; ?&quot;);</span>
+<span class="nc" id="L1474">						cd = new Query(as.getCtx(), I_M_CostDetail.Table_Name, whereClause.toString(), get_TrxName())</span>
+<span class="nc" id="L1475">								.setParameters(product.get_ID(), M_ASI_ID, as.get_ID(), this.get_ID())</span>
+<span class="nc" id="L1476">								.setOrderBy(&quot;M_CostDetail_ID DESC&quot;)</span>
+<span class="nc" id="L1477">								.first();</span>
+<span class="nc" id="L1478">						break;</span>
+					}
+				}
+			}
+		}
+		
+<span class="nc bnc" id="L1484" title="All 2 branches missed.">		if (getM_InOutLine_ID() &gt; 0) { // skip average costing qty check for reversed shipment</span>
+<span class="nc" id="L1485">			MInOutLine iol = new MInOutLine(getCtx(), getM_InOutLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1486">			MInOut io = new MInOut(getCtx(), iol.getM_InOut_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1487" title="All 2 branches missed.">			if (io.getReversal_ID() &gt; 0)</span>
+<span class="nc bnc" id="L1488" title="All 2 branches missed.">				cost.setSkipAverageCostingQtyCheck(io.getReversal_ID() &gt; 0);</span>
+			else { // skip average costing qty check for drop shipment
+<span class="nc" id="L1490">				int C_Order_ID = io.getC_Order_ID();</span>
+<span class="nc bnc" id="L1491" title="All 2 branches missed.">				if (C_Order_ID &gt; 0) {</span>
+<span class="nc" id="L1492">					MOrder sOrder = new MOrder(getCtx(), C_Order_ID, get_TrxName());</span>
+<span class="nc" id="L1493">					int Link_Order_ID = sOrder.getLink_Order_ID();</span>
+<span class="nc bnc" id="L1494" title="All 2 branches missed.">					if (Link_Order_ID &gt; 0) {</span>
+<span class="nc" id="L1495">						MOrder lOrder = new MOrder(getCtx(), Link_Order_ID, get_TrxName());</span>
+<span class="nc" id="L1496">						cost.setSkipAverageCostingQtyCheck(lOrder.isDropShip());</span>
+					}
+				}
+			}
+<span class="nc bnc" id="L1500" title="All 2 branches missed.">		} else if (getC_ProjectIssue_ID() &gt; 0) { // skip average costing qty check for reversed project issue</span>
+<span class="nc" id="L1501">			MProjectIssue pi = new MProjectIssue(getCtx(), getC_ProjectIssue_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1502" title="All 2 branches missed.">			cost.setSkipAverageCostingQtyCheck(pi.getReversal_ID() &gt; 0);</span>
+<span class="nc bnc" id="L1503" title="All 2 branches missed.">		} else if (getM_InventoryLine_ID() &gt; 0) { // skip average costing qty check for reversed inventory</span>
+<span class="nc" id="L1504">			MInventoryLine il = new MInventoryLine(getCtx(), getM_InventoryLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1505">			MInventory i = new MInventory(getCtx(), il.getM_Inventory_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1506" title="All 2 branches missed.">			cost.setSkipAverageCostingQtyCheck(i.getReversal_ID() &gt; 0);</span>
+		}
+		
+<span class="nc" id="L1509">		ICostInfo costInfo = MCost.getCostInfo(product.getCtx(), product.getAD_Client_ID(), Org_ID, product.getM_Product_ID(), </span>
+<span class="nc" id="L1510">					as.getM_CostType_ID(), as.getC_AcctSchema_ID(), ce.getM_CostElement_ID(), M_ASI_ID, getDateAcct(), </span>
+<span class="nc bnc" id="L1511" title="All 2 branches missed.">					cd != null ? cd : this, get_TrxName());</span>
+<span class="nc bnc" id="L1512" title="All 2 branches missed.">		if (costInfo != null)</span>
+		{
+<span class="nc" id="L1514">			cost.setCurrentQty(costInfo.getCurrentQty());</span>
+<span class="nc" id="L1515">			cost.setCurrentCostPrice(costInfo.getCurrentCostPrice());</span>
+<span class="nc" id="L1516">			cost.setCumulatedQty(costInfo.getCumulatedQty());</span>
+<span class="nc" id="L1517">			cost.setCumulatedAmt(costInfo.getCumulatedAmt());</span>
+		}
+		
+<span class="nc" id="L1520">		DB.getDatabase().forUpdate(cost, 120);</span>
+		
+		//save history for m_cost
+<span class="nc" id="L1523">		MCostHistory history = new MCostHistory(this, cost, ce);</span>
+		
+		// MZ Goodwill
+		// used deltaQty and deltaAmt if exist 
+<span class="nc" id="L1527">		BigDecimal qty = Env.ZERO;</span>
+<span class="nc" id="L1528">		BigDecimal amt = Env.ZERO;</span>
+<span class="nc bnc" id="L1529" title="All 2 branches missed.">		if (isDelta())</span>
+		{
+<span class="nc bnc" id="L1531" title="All 2 branches missed.">			if (!isOrderLandedCost) {</span>
+<span class="nc" id="L1532">				qty = getDeltaQty();</span>
+<span class="nc" id="L1533">				amt = getDeltaAmt();</span>
+<span class="nc" id="L1534">			} else {</span>
+<span class="nc bnc" id="L1535" title="All 2 branches missed.">				if (isReversedOrderLandedCost) {</span>
+<span class="nc" id="L1536">					qty = getDeltaQty();</span>
+<span class="nc" id="L1537">					amt = getDeltaAmt();</span>
+<span class="nc" id="L1538">				} else {</span>
+<span class="nc" id="L1539">					qty = getQty();</span>
+<span class="nc" id="L1540">					amt = getAmt();</span>
+				}
+			}
+<span class="nc" id="L1543">		}</span>
+		else
+		{
+<span class="nc" id="L1546">			qty = getQty();</span>
+<span class="nc" id="L1547">			amt = getAmt();</span>
+		}
+		// end MZ
+
+		//determine whether this is cost only adjustment entry
+<span class="nc" id="L1552">		boolean costAdjustment = false;</span>
+<span class="nc bnc" id="L1553" title="All 6 branches missed.">		if (this.getM_CostElement_ID() &gt; 0 &amp;&amp; this.getM_CostElement_ID() != ce.getM_CostElement_ID() &amp;&amp; !isReversedOrderLandedCost)</span>
+		{
+<span class="nc" id="L1555">			MCostElement thisCostElement = MCostElement.get(getCtx(), getM_CostElement_ID());</span>
+<span class="nc bnc" id="L1556" title="All 4 branches missed.">			if (thisCostElement.getCostingMethod() == null &amp;&amp; ce.getCostingMethod() != null)</span>
+			{
+<span class="nc" id="L1558">				qty = BigDecimal.ZERO;</span>
+<span class="nc" id="L1559">				costAdjustment = true;</span>
+			}
+		}
+		
+<span class="nc" id="L1563">		int precision = as.getCostingPrecision();</span>
+<span class="nc" id="L1564">		BigDecimal price = amt;</span>
+<span class="nc bnc" id="L1565" title="All 2 branches missed.">		if (qty.signum() != 0)</span>
+<span class="nc" id="L1566">			price = amt.divide(qty, precision, RoundingMode.HALF_UP);</span>
+		
+		//	*** Purchase Order Detail Record ***
+<span class="nc bnc" id="L1569" title="All 2 branches missed.">		if (getC_OrderLine_ID() != 0)</span>
+		{		
+<span class="nc bnc" id="L1571" title="All 2 branches missed.">			boolean isReturnTrx = qty.signum() &lt; 0;</span>
+			
+<span class="nc bnc" id="L1573" title="All 2 branches missed.">			if (ce.isAveragePO())</span>
+			{
+<span class="nc bnc" id="L1575" title="All 4 branches missed.">				if (!(qty.signum() == 0 &amp;&amp; cost.getCurrentQty().signum() &lt;= 0))</span>
+<span class="nc" id="L1576">					cost.setWeightedAverage(amt, qty);</span>
+<span class="nc bnc" id="L1577" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;PO - AveragePO - &quot; + cost);</span>
+<span class="nc" id="L1578">			}</span>
+<span class="nc bnc" id="L1579" title="All 4 branches missed.">			else if (ce.isLastPOPrice() &amp;&amp; !costAdjustment)</span>
+			{
+<span class="nc bnc" id="L1581" title="All 2 branches missed.">				if(!isReturnTrx)</span>
+				{
+<span class="nc bnc" id="L1583" title="All 2 branches missed.">					if (qty.signum() != 0)</span>
+<span class="nc" id="L1584">						cost.setCurrentCostPrice(price);</span>
+					else
+					{
+<span class="nc" id="L1587">						BigDecimal cCosts = cost.getCurrentCostPrice().add(amt);</span>
+<span class="nc" id="L1588">						cost.setCurrentCostPrice(cCosts);</span>
+					}
+				}
+<span class="nc" id="L1591">				cost.add(amt, qty);</span>
+<span class="nc bnc" id="L1592" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;PO - LastPO - &quot; + cost);</span>
+<span class="nc" id="L1593">			}</span>
+<span class="nc bnc" id="L1594" title="All 4 branches missed.">			else if (ce.isStandardCosting() &amp;&amp; !costAdjustment)</span>
+			{								
+				// Update cost record only if it is zero
+<span class="nc bnc" id="L1597" title="All 2 branches missed.">				if (cost.getCurrentCostPrice().signum() == 0</span>
+<span class="nc bnc" id="L1598" title="All 2 branches missed.">						&amp;&amp; cost.getCurrentCostPriceLL().signum() == 0)</span>
+				{
+<span class="nc" id="L1600">					cost.setCurrentCostPrice(price);</span>
+<span class="nc bnc" id="L1601" title="All 2 branches missed.">					if (cost.getCurrentCostPrice().signum() == 0)</span>
+					{
+<span class="nc" id="L1603">						cost.setCurrentCostPrice(MCost.getSeedCosts(product, M_ASI_ID, </span>
+<span class="nc" id="L1604">								as, Org_ID, ce.getCostingMethod(), getC_OrderLine_ID()));</span>
+					}
+<span class="nc bnc" id="L1606" title="All 2 branches missed.">					if (log.isLoggable(Level.FINEST)) log.finest(&quot;PO - Standard - CurrentCostPrice(seed)=&quot;+cost.getCurrentCostPrice()+&quot;, price=&quot;+price);</span>
+				}
+<span class="nc" id="L1608">				cost.add(amt, qty);</span>
+<span class="nc bnc" id="L1609" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;PO - Standard - &quot; + cost);</span>
+<span class="nc" id="L1610">			}</span>
+<span class="nc bnc" id="L1611" title="All 2 branches missed.">			else if (ce.isUserDefined())</span>
+			{
+				//	Interface
+<span class="nc bnc" id="L1614" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;PO - UserDef - &quot; + cost);</span>
+<span class="nc" id="L1615">			}</span>
+<span class="nc bnc" id="L1616" title="All 2 branches missed.">			else if (!ce.isCostingMethod())</span>
+			{
+<span class="nc bnc" id="L1618" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;PO - &quot; + ce + &quot; - &quot; + cost);</span>
+			}
+<span class="nc" id="L1620">		}</span>
+		
+		//	*** AP Invoice Detail Record ***
+<span class="nc bnc" id="L1623" title="All 2 branches missed.">		else if (getC_InvoiceLine_ID() != 0)</span>
+		{
+<span class="nc bnc" id="L1625" title="All 2 branches missed.">			boolean isReturnTrx = qty.signum() &lt; 0;</span>
+			
+<span class="nc bnc" id="L1627" title="All 2 branches missed.">			if (ce.isAverageInvoice())</span>
+			{
+<span class="nc" id="L1629">				cost.setWeightedAverage(amt, qty);</span>
+<span class="nc bnc" id="L1630" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;Inv - AverageInv - &quot; + cost);</span>
+<span class="nc" id="L1631">			}</span>
+<span class="nc bnc" id="L1632" title="All 4 branches missed.">			else if (ce.isAveragePO() &amp;&amp; costAdjustment)</span>
+			{
+<span class="nc" id="L1634">				cost.setWeightedAverage(amt, qty);</span>
+<span class="nc" id="L1635">			}</span>
+<span class="nc bnc" id="L1636" title="All 4 branches missed.">			else if ((ce.isFifo() || ce.isLifo()))</span>
+			{
+				//	Real ASI - costing level Org
+<span class="nc" id="L1639">				MCostQueue cq = MCostQueue.get(product, getM_AttributeSetInstance_ID(), </span>
+<span class="nc" id="L1640">					as, Org_ID, ce.getM_CostElement_ID(), get_TrxName());</span>
+<span class="nc" id="L1641">				cq.setCosts(amt, qty, precision);</span>
+<span class="nc" id="L1642">				cq.saveEx();</span>
+				//	Get Costs - costing level Org/ASI
+<span class="nc" id="L1644">				MCostQueue[] cQueue = MCostQueue.getQueue(product, M_ASI_ID, </span>
+<span class="nc" id="L1645">					as, Org_ID, ce, get_TrxName());</span>
+<span class="nc bnc" id="L1646" title="All 4 branches missed.">				if (cQueue != null &amp;&amp; cQueue.length &gt; 0)</span>
+<span class="nc" id="L1647">					cost.setCurrentCostPrice(cQueue[0].getCurrentCostPrice());</span>
+<span class="nc" id="L1648">				cost.add(amt, qty);</span>
+<span class="nc bnc" id="L1649" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;Inv - FiFo/LiFo - &quot; + cost);</span>
+<span class="nc" id="L1650">			}</span>
+<span class="nc bnc" id="L1651" title="All 4 branches missed.">			else if (ce.isLastInvoice() &amp;&amp; !costAdjustment)</span>
+			{
+<span class="nc bnc" id="L1653" title="All 2 branches missed.">				if (!isReturnTrx)</span>
+				{
+<span class="nc bnc" id="L1655" title="All 2 branches missed.">					if (qty.signum() != 0)</span>
+<span class="nc" id="L1656">						cost.setCurrentCostPrice(price);</span>
+					else
+					{
+<span class="nc" id="L1659">						BigDecimal cCosts = cost.getCurrentCostPrice().add(amt);</span>
+<span class="nc" id="L1660">						cost.setCurrentCostPrice(cCosts);</span>
+					}
+				}
+<span class="nc" id="L1663">				cost.add(amt, qty);</span>
+<span class="nc bnc" id="L1664" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;Inv - LastInv - &quot; + cost);</span>
+<span class="nc" id="L1665">			}</span>
+<span class="nc bnc" id="L1666" title="All 4 branches missed.">			else if (ce.isStandardCosting() &amp;&amp; !costAdjustment)</span>
+			{
+				// Update cost record only if it is zero
+<span class="nc bnc" id="L1669" title="All 2 branches missed.">				if (cost.getCurrentCostPrice().signum() == 0</span>
+<span class="nc bnc" id="L1670" title="All 2 branches missed.">						&amp;&amp; cost.getCurrentCostPriceLL().signum() == 0)</span>
+				{
+<span class="nc" id="L1672">					cost.setCurrentCostPrice(price);</span>
+					//	seed initial price
+<span class="nc bnc" id="L1674" title="All 2 branches missed.">					if (cost.getCurrentCostPrice().signum() == 0)</span>
+					{
+<span class="nc" id="L1676">						cost.setCurrentCostPrice(MCost.getSeedCosts(product, M_ASI_ID, </span>
+<span class="nc" id="L1677">								as, Org_ID, ce.getCostingMethod(), getC_OrderLine_ID()));</span>
+<span class="nc bnc" id="L1678" title="All 2 branches missed.">						if (log.isLoggable(Level.FINEST)) log.finest(&quot;Inv - Standard - CurrentCostPrice(seed)=&quot;+cost.getCurrentCostPrice()+&quot;, price=&quot;+price);</span>
+					}
+<span class="nc" id="L1680">					cost.add(amt, qty);</span>
+				}				
+<span class="nc bnc" id="L1682" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;Inv - Standard - &quot; + cost);</span>
+<span class="nc" id="L1683">			}</span>
+<span class="nc bnc" id="L1684" title="All 2 branches missed.">			else if (ce.isUserDefined())</span>
+			{
+				//	Interface
+<span class="nc" id="L1687">				cost.add(amt, qty);</span>
+<span class="nc bnc" id="L1688" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;Inv - UserDef - &quot; + cost);</span>
+			}			
+<span class="nc" id="L1690">		}</span>
+<span class="nc bnc" id="L1691" title="All 4 branches missed.">		else if (getM_InOutLine_ID() != 0 &amp;&amp; costAdjustment)</span>
+		{
+<span class="nc bnc" id="L1693" title="All 2 branches missed.">			if (ce.isAverageInvoice())</span>
+			{
+<span class="nc" id="L1695">				cost.setWeightedAverage(amt, qty);</span>
+			}
+<span class="nc" id="L1697">		}</span>
+		//	*** Qty Adjustment Detail Record ***
+<span class="nc bnc" id="L1699" title="All 2 branches missed.">		else if (getM_InOutLine_ID() != 0 		//	AR Shipment Detail Record  </span>
+<span class="nc bnc" id="L1700" title="All 2 branches missed.">			|| getM_MovementLine_ID() != 0 </span>
+<span class="nc bnc" id="L1701" title="All 2 branches missed.">			|| getM_InventoryLine_ID() != 0</span>
+<span class="nc bnc" id="L1702" title="All 2 branches missed.">			|| getM_ProductionLine_ID() != 0</span>
+<span class="nc bnc" id="L1703" title="All 2 branches missed.">			|| getC_ProjectIssue_ID() != 0</span>
+<span class="nc bnc" id="L1704" title="All 2 branches missed.">			|| getPP_Cost_Collector_ID() != 0)</span>
+		{
+<span class="nc bnc" id="L1706" title="All 2 branches missed.">			boolean addition = qty.signum() &gt; 0;</span>
+<span class="nc bnc" id="L1707" title="All 6 branches missed.">			boolean adjustment = getM_InventoryLine_ID() &gt; 0 &amp;&amp; qty.signum() == 0 &amp;&amp; amt.signum() != 0;</span>
+<span class="nc" id="L1708">			boolean isVendorRMA = isVendorRMA();</span>
+			
+			//If not import and it is due to inventory then don't mark as addition
+<span class="nc bnc" id="L1711" title="All 4 branches missed.">			if(addition &amp;&amp; getM_InventoryLine_ID() != 0) {</span>
+<span class="nc" id="L1712">				MInventoryLine invLine = new MInventoryLine(getCtx(), getM_InventoryLine_ID(), get_TrxName());</span>
+				// Only apply import-line check for Physical Inventory, not Internal Use
+<span class="nc bnc" id="L1714" title="All 2 branches missed.">				if (!invLine.isInternalUseInventory()) {</span>
+<span class="nc" id="L1715">					int I_Inventory_ID = MInventoryLine.getImportLine_ID(getM_InventoryLine_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L1716" title="All 2 branches missed.">					if (I_Inventory_ID &lt;= 0)</span>
+<span class="nc" id="L1717">						addition = false;</span>
+				}
+			}
+			
+			//
+<span class="nc bnc" id="L1722" title="All 2 branches missed.">			if (ce.isAverageInvoice())</span>
+			{
+<span class="nc bnc" id="L1724" title="All 2 branches missed.">				if (!isVendorRMA)</span>
+				{
+<span class="nc bnc" id="L1726" title="All 2 branches missed.">					if (adjustment)</span>
+					{
+<span class="nc" id="L1728">						MInventoryLine invLine = new MInventoryLine(getCtx(), getM_InventoryLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1729">						costingMethod = invLine.getParent().getCostingMethod();</span>
+<span class="nc bnc" id="L1730" title="All 2 branches missed.">						if (MCostElement.COSTINGMETHOD_AverageInvoice.equals(costingMethod))</span>
+						{
+<span class="nc bnc" id="L1732" title="All 4 branches missed.">							if (cost.getCurrentQty().signum() == 0 &amp;&amp; qty.signum() == 0) {</span>
+								// IDEMPIERE-2057 - this is a cost adjustment when there is no qty - setting the initial cost								
+<span class="nc" id="L1734">								cost.setWeightedAverageInitial(amt);</span>
+<span class="nc" id="L1735">							} else {</span>
+<span class="nc" id="L1736">								cost.setWeightedAverage(amt.multiply(cost.getCurrentQty()), qty);</span>
+							}
+						}
+<span class="nc" id="L1739">					}</span>
+<span class="nc bnc" id="L1740" title="All 2 branches missed.">					else if (addition)</span>
+					{
+<span class="nc" id="L1742">						cost.setWeightedAverage(amt, qty);</span>
+						//shouldn't accumulate reversal of customer shipment qty and amt
+<span class="nc bnc" id="L1744" title="All 2 branches missed.">						if (isShipment())</span>
+						{
+<span class="nc" id="L1746">							cost.setCumulatedQty(history.getOldCQty());</span>
+<span class="nc" id="L1747">							cost.setCumulatedAmt(history.getOldCAmt());</span>
+						}
+<span class="nc" id="L1749">					}</span>
+					else
+<span class="nc" id="L1751">						cost.setCurrentQty(cost.getCurrentQty().add(qty));</span>
+<span class="nc bnc" id="L1752" title="All 2 branches missed.">					if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - AverageInv - &quot; + cost);</span>
+				}
+<span class="nc" id="L1754">			}</span>
+<span class="nc bnc" id="L1755" title="All 2 branches missed.">			else if (ce.isAveragePO())</span>
+			{
+<span class="nc bnc" id="L1757" title="All 2 branches missed.">				if (adjustment)</span>
+				{
+<span class="nc" id="L1759">					MInventoryLine invLine = new MInventoryLine(getCtx(), getM_InventoryLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1760">					costingMethod = invLine.getParent().getCostingMethod();</span>
+<span class="nc bnc" id="L1761" title="All 2 branches missed.">					if (MCostElement.COSTINGMETHOD_AveragePO.equals(costingMethod))</span>
+					{
+<span class="nc bnc" id="L1763" title="All 4 branches missed.">						if (cost.getCurrentQty().signum() == 0 &amp;&amp; qty.signum() == 0) {</span>
+							// IDEMPIERE-2057 - this is a cost adjustment when there is no qty - setting the initial cost								
+<span class="nc" id="L1765">							cost.setWeightedAverageInitial(amt);</span>
+<span class="nc" id="L1766">						} else {</span>
+<span class="nc" id="L1767">							cost.setWeightedAverage(amt.multiply(cost.getCurrentQty()), qty);</span>
+						}
+					}
+<span class="nc" id="L1770">				}</span>
+<span class="nc bnc" id="L1771" title="All 2 branches missed.">				else if (addition)</span>
+				{					
+<span class="nc" id="L1773">					cost.setWeightedAverage(amt, qty);</span>
+					//shouldn't accumulate reversal of customer shipment qty and amt
+<span class="nc bnc" id="L1775" title="All 4 branches missed.">					if (isShipment() &amp;&amp; !isVendorRMA())</span>
+					{
+<span class="nc" id="L1777">						cost.setCumulatedQty(history.getOldCQty());</span>
+<span class="nc" id="L1778">						cost.setCumulatedAmt(history.getOldCAmt());</span>
+					}
+<span class="nc" id="L1780">				}</span>
+				else
+				{
+<span class="nc bnc" id="L1783" title="All 2 branches missed.">					if (isVendorRMA)</span>
+					{
+<span class="nc" id="L1785">						cost.setWeightedAverage(amt, qty);</span>
+<span class="nc" id="L1786">					}</span>
+					else
+					{
+<span class="nc" id="L1789">						cost.setCurrentQty(cost.getCurrentQty().add(qty));</span>
+					}
+				}
+<span class="nc bnc" id="L1792" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - AveragePO - &quot; + cost);</span>
+<span class="nc" id="L1793">			}</span>
+<span class="nc bnc" id="L1794" title="All 4 branches missed.">			else if (ce.isFifo() || ce.isLifo())</span>
+			{
+<span class="nc bnc" id="L1796" title="All 4 branches missed.">				if (!isVendorRMA &amp;&amp; !adjustment)</span>
+				{
+<span class="nc bnc" id="L1798" title="All 2 branches missed.">					if (addition)</span>
+					{
+						//	Real ASI - costing level Org
+<span class="nc" id="L1801">						MCostQueue cq = MCostQueue.get(product, getM_AttributeSetInstance_ID(), </span>
+<span class="nc" id="L1802">							as, Org_ID, ce.getM_CostElement_ID(), get_TrxName());</span>
+<span class="nc" id="L1803">						cq.setCosts(amt, qty, precision);</span>
+<span class="nc" id="L1804">						cq.saveEx();</span>
+<span class="nc" id="L1805">					}</span>
+					else
+					{
+						//	Adjust Queue - costing level Org/ASI
+<span class="nc" id="L1809">						MCostQueue.adjustQty(product, M_ASI_ID, </span>
+<span class="nc" id="L1810">							as, Org_ID, ce, qty.negate(), get_TrxName());</span>
+					}
+					//	Get Costs - costing level Org/ASI
+<span class="nc" id="L1813">					MCostQueue[] cQueue = MCostQueue.getQueue(product, M_ASI_ID, </span>
+<span class="nc" id="L1814">						as, Org_ID, ce, get_TrxName());</span>
+<span class="nc bnc" id="L1815" title="All 4 branches missed.">					if (cQueue != null &amp;&amp; cQueue.length &gt; 0)</span>
+<span class="nc" id="L1816">						cost.setCurrentCostPrice(cQueue[0].getCurrentCostPrice());</span>
+<span class="nc" id="L1817">					cost.setCurrentQty(cost.getCurrentQty().add(qty));</span>
+<span class="nc bnc" id="L1818" title="All 2 branches missed.">					if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - FiFo/Lifo - &quot; + cost);</span>
+				}
+<span class="nc" id="L1820">			}</span>
+<span class="nc bnc" id="L1821" title="All 6 branches missed.">			else if (ce.isLastInvoice() &amp;&amp; !isVendorRMA &amp;&amp; !adjustment)</span>
+			{
+<span class="nc" id="L1823">				cost.setCurrentQty(cost.getCurrentQty().add(qty));</span>
+<span class="nc bnc" id="L1824" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - LastInv - &quot; + cost);</span>
+<span class="nc" id="L1825">			}</span>
+<span class="nc bnc" id="L1826" title="All 6 branches missed.">			else if (ce.isLastPOPrice() &amp;&amp; !isVendorRMA &amp;&amp; !adjustment)</span>
+			{
+<span class="nc" id="L1828">				cost.setCurrentQty(cost.getCurrentQty().add(qty));</span>
+<span class="nc bnc" id="L1829" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - LastPO - &quot; + cost);</span>
+<span class="nc" id="L1830">			}</span>
+<span class="nc bnc" id="L1831" title="All 4 branches missed.">			else if (ce.isStandardCosting() &amp;&amp; !isVendorRMA)</span>
+			{
+<span class="nc bnc" id="L1833" title="All 2 branches missed.">				if (adjustment)</span>
+				{
+<span class="nc" id="L1835">					MInventoryLine invLine = new MInventoryLine(getCtx(), getM_InventoryLine_ID(), get_TrxName());</span>
+<span class="nc" id="L1836">					costingMethod = invLine.getParent().getCostingMethod();</span>
+<span class="nc bnc" id="L1837" title="All 2 branches missed.">					if (MCostElement.COSTINGMETHOD_StandardCosting.equals(costingMethod))</span>
+					{
+<span class="nc" id="L1839">						cost.add(amt.multiply(cost.getCurrentQty()), qty);					</span>
+<span class="nc" id="L1840">						cost.setCurrentCostPrice(cost.getCurrentCostPrice().add(amt));</span>
+					}
+<span class="nc" id="L1842">				}</span>
+<span class="nc bnc" id="L1843" title="All 2 branches missed.">				else if (addition)</span>
+				{
+<span class="nc bnc" id="L1845" title="All 2 branches missed.">					MProductionLine productionLine = getM_ProductionLine_ID() &gt; 0 ? new MProductionLine(getCtx(), getM_ProductionLine_ID(), get_TrxName()) : null;</span>
+<span class="nc bnc" id="L1846" title="All 4 branches missed.">					if (productionLine != null &amp;&amp; productionLine.getProductionReversalId() &gt; 0)</span>
+<span class="nc" id="L1847">						cost.setCurrentQty(cost.getCurrentQty().add(qty));						</span>
+					else
+<span class="nc" id="L1849">						cost.add(amt, qty);</span>
+
+					//	Initial
+<span class="nc bnc" id="L1852" title="All 2 branches missed.">					if (cost.getCurrentCostPrice().signum() == 0</span>
+<span class="nc bnc" id="L1853" title="All 2 branches missed.">						&amp;&amp; cost.getCurrentCostPriceLL().signum() == 0</span>
+<span class="nc bnc" id="L1854" title="All 2 branches missed.">						&amp;&amp; cost.is_new())</span>
+					{
+<span class="nc" id="L1856">						cost.setCurrentCostPrice(price);</span>
+<span class="nc bnc" id="L1857" title="All 2 branches missed.">						if (log.isLoggable(Level.FINEST)) log.finest(&quot;QtyAdjust - Standard - CurrentCostPrice=&quot;+price);</span>
+					}
+<span class="nc" id="L1859">				}</span>
+				else
+				{
+<span class="nc" id="L1862">					cost.setCurrentQty(cost.getCurrentQty().add(qty));</span>
+				}
+<span class="nc bnc" id="L1864" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - Standard - &quot; + cost);</span>
+<span class="nc" id="L1865">			}</span>
+<span class="nc bnc" id="L1866" title="All 6 branches missed.">			else if (ce.isUserDefined() &amp;&amp; !isVendorRMA &amp;&amp; !adjustment)</span>
+			{
+				//	Interface
+<span class="nc bnc" id="L1869" title="All 2 branches missed.">				if (addition)</span>
+<span class="nc" id="L1870">					cost.add(amt, qty);</span>
+				else
+<span class="nc" id="L1872">					cost.setCurrentQty(cost.getCurrentQty().add(qty));</span>
+<span class="nc bnc" id="L1873" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - UserDef - &quot; + cost);</span>
+<span class="nc" id="L1874">			}</span>
+<span class="nc bnc" id="L1875" title="All 2 branches missed.">			else if (!ce.isCostingMethod())</span>
+			{
+				//Should not happen
+<span class="nc bnc" id="L1878" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;QtyAdjust - ?none? - &quot; + cost);</span>
+<span class="nc" id="L1879">			} </span>
+<span class="nc bnc" id="L1880" title="All 4 branches missed.">			else if (ce.isStandardCosting() &amp;&amp; isVendorRMA)</span>
+			{
+<span class="nc" id="L1882">				cost.add(amt, qty);</span>
+
+<span class="nc" id="L1884">			}</span>
+			else
+<span class="nc" id="L1886">				log.warning(&quot;QtyAdjust - &quot; + ce + &quot; - &quot; + cost);</span>
+			
+<span class="nc" id="L1888">		}</span>
+<span class="nc bnc" id="L1889" title="All 2 branches missed.">		else if (getM_MatchInv_ID() &gt; 0)</span>
+		{
+<span class="nc bnc" id="L1891" title="All 2 branches missed.">			if (ce.isAveragePO())</span>
+			{
+<span class="nc bnc" id="L1893" title="All 4 branches missed.">				if (!(qty.signum() == 0 &amp;&amp; cost.getCurrentQty().signum() &lt;= 0))</span>
+<span class="nc" id="L1894">					cost.setWeightedAverage(amt, qty);</span>
+			}			
+<span class="nc" id="L1896">		}</span>
+		else	//	unknown or no id
+		{
+<span class="nc" id="L1899">			log.warning(&quot;Unknown Type: &quot; + toString());</span>
+<span class="nc" id="L1900">			return false;</span>
+		}
+		
+		//Should only update cost detail with value from as costing method
+<span class="nc bnc" id="L1904" title="All 2 branches missed.">		if(as.getCostingMethod().equals(ce.getCostingMethod())) {</span>
+<span class="nc" id="L1905">			setCurrentCostPrice(cost.getCurrentCostPrice());</span>
+<span class="nc" id="L1906">			setCurrentQty(cost.getCurrentQty());</span>
+<span class="nc" id="L1907">			setCumulatedAmt(cost.getCumulatedAmt());</span>
+<span class="nc" id="L1908">			setCumulatedQty(cost.getCumulatedQty());</span>
+		}
+		
+		//update history
+<span class="nc" id="L1912">		history.setNewQty(cost.getCurrentQty());</span>
+<span class="nc" id="L1913">		history.setNewCostPrice(cost.getCurrentCostPrice());</span>
+<span class="nc" id="L1914">		history.setNewCAmt(cost.getCumulatedAmt());</span>
+<span class="nc" id="L1915">		history.setNewCQty(cost.getCumulatedQty());</span>
+		//save history if there are movement of qty or costprice
+		//save history if the costing method is average po or average invoice
+<span class="nc bnc" id="L1918" title="All 2 branches missed.">		if (history.getNewQty().compareTo(history.getOldQty()) != 0 </span>
+<span class="nc bnc" id="L1919" title="All 2 branches missed.">				|| history.getNewCostPrice().compareTo(history.getOldCostPrice()) != 0</span>
+<span class="nc bnc" id="L1920" title="All 4 branches missed.">				|| (ce.isAveragePO() || ce.isAverageInvoice()))</span>
+		{
+<span class="nc bnc" id="L1922" title="All 2 branches missed.">			if (!history.save())</span>
+<span class="nc" id="L1923">				return false;</span>
+		}
+		
+<span class="nc" id="L1926">		return cost.save();</span>
+	}	//	process
+	
+	/**
+	 * Period Closed Check for Documents after the Back-Date Transaction
+	 * @param AD_Client_ID		Client of the back-date transaction
+	 * @param C_AcctSchema_ID	Accounting schema of the back-date transaction
+	 * @param M_Product_ID		Product of the back-date transaction
+	 * @param M_CostDetail_ID	Cost detail of the back-date transaction
+	 * @param DateAcct			Account date of the back-date transaction
+	 * @param trxName			Transaction name
+	 */
+	public static void periodClosedCheckForDocsAfterBackDateTrx(int AD_Client_ID, int C_AcctSchema_ID, int M_Product_ID, 
+			int M_CostDetail_ID, Timestamp DateAcct, String trxName) {
+<span class="nc" id="L1940">		List&lt;String&gt; repostedRecordIds = new ArrayList&lt;String&gt;();</span>
+		
+<span class="nc" id="L1942">		StringBuilder selectSql = new StringBuilder();</span>
+<span class="nc" id="L1943">		selectSql.append(&quot;WITH base_cd AS (&quot;);</span>
+<span class="nc" id="L1944">		selectSql.append(&quot; SELECT cd.DateAcct, &quot;);</span>
+<span class="nc" id="L1945">		selectSql.append(&quot; CASE WHEN COALESCE(refcd.DateAcct,cd.DateAcct) = cd.DateAcct &quot;);</span>
+<span class="nc" id="L1946">		selectSql.append(&quot; THEN COALESCE(cd.Ref_CostDetail_ID,cd.M_CostDetail_ID) ELSE cd.M_CostDetail_ID END AS Ref_CostDetail_ID, &quot;);</span>
+<span class="nc" id="L1947">		selectSql.append(&quot; cd.M_CostDetail_ID &quot;);</span>
+<span class="nc" id="L1948">		selectSql.append(&quot; FROM M_CostDetail cd &quot;);</span>
+<span class="nc" id="L1949">		selectSql.append(&quot; LEFT JOIN M_CostDetail refcd ON (refcd.M_CostDetail_ID=cd.Ref_CostDetail_ID) &quot;);</span>
+<span class="nc" id="L1950">		selectSql.append(&quot; WHERE cd.M_CostDetail_ID=? &quot;);</span>
+<span class="nc" id="L1951">		selectSql.append(&quot;) &quot;);</span>
+<span class="nc" id="L1952">		selectSql.append(&quot;SELECT mpo.M_MatchPO_ID, il.C_Invoice_ID, iol.M_InOut_ID, mi.M_MatchInv_ID, invl.M_Inventory_ID, &quot;);</span>
+<span class="nc" id="L1953">		selectSql.append(&quot;ml.M_Movement_ID, pl.M_Production_ID, pi.C_ProjectIssue_ID &quot;);</span>
+<span class="nc" id="L1954">		selectSql.append(&quot;FROM M_CostDetail cd &quot;);</span>
+<span class="nc" id="L1955">		selectSql.append(&quot;LEFT JOIN M_CostDetail refcd ON (refcd.M_CostDetail_ID=cd.Ref_CostDetail_ID) &quot;);</span>
+<span class="nc" id="L1956">		selectSql.append(&quot;LEFT JOIN M_MatchPO mpo ON (mpo.C_OrderLine_ID = cd.C_OrderLine_ID AND mpo.DateAcct = cd.DateAcct) &quot;);</span>
+<span class="nc" id="L1957">		selectSql.append(&quot;LEFT JOIN C_InvoiceLine il ON (il.C_InvoiceLine_ID = cd.C_InvoiceLine_ID) &quot;);</span>
+<span class="nc" id="L1958">		selectSql.append(&quot;LEFT JOIN M_InOutLine iol ON (iol.M_InOutLine_ID = cd.M_InOutLine_ID) &quot;);</span>
+<span class="nc" id="L1959">		selectSql.append(&quot;LEFT JOIN M_MatchInv mi ON (mi.M_MatchInv_ID = cd.M_MatchInv_ID) &quot;);</span>
+<span class="nc" id="L1960">		selectSql.append(&quot;LEFT JOIN M_InventoryLine invl ON (invl.M_InventoryLine_ID = cd.M_InventoryLine_ID) &quot;);</span>
+<span class="nc" id="L1961">		selectSql.append(&quot;LEFT JOIN M_MovementLine ml ON (ml.M_MovementLine_ID = cd.M_MovementLine_ID) &quot;);</span>
+<span class="nc" id="L1962">		selectSql.append(&quot;LEFT JOIN M_ProductionLine pl ON (pl.M_ProductionLine_ID = cd.M_ProductionLine_ID) &quot;);</span>
+<span class="nc" id="L1963">		selectSql.append(&quot;LEFT JOIN C_ProjectIssue pi ON (pi.C_ProjectIssue_ID = cd.C_ProjectIssue_ID) &quot;);</span>
+<span class="nc" id="L1964">		selectSql.append(&quot;WHERE cd.AD_Client_ID=? &quot;);</span>
+<span class="nc" id="L1965">		selectSql.append(&quot;AND cd.C_AcctSchema_ID=? &quot;);</span>
+<span class="nc" id="L1966">		selectSql.append(&quot;AND cd.M_Product_ID=? &quot;);</span>
+<span class="nc" id="L1967">		selectSql.append(&quot;AND (cd.DateAcct &gt; (SELECT DateAcct FROM base_cd)&quot;);</span>
+<span class="nc" id="L1968">		selectSql.append(&quot; OR (&quot;);</span>
+<span class="nc" id="L1969">		selectSql.append(&quot;   cd.DateAcct = (SELECT DateAcct FROM base_cd) &quot;);</span>
+<span class="nc" id="L1970">		selectSql.append(&quot;   AND COALESCE(cd.Ref_CostDetail_ID,cd.M_CostDetail_ID) &gt; (SELECT Ref_CostDetail_ID FROM base_cd) &quot;);</span>
+<span class="nc" id="L1971">		selectSql.append(&quot; ) &quot;);</span>
+<span class="nc" id="L1972">		selectSql.append(&quot; OR (&quot;);</span>
+<span class="nc" id="L1973">		selectSql.append(&quot;   cd.DateAcct = (SELECT DateAcct FROM base_cd) &quot;);</span>
+<span class="nc" id="L1974">		selectSql.append(&quot;   AND COALESCE(cd.Ref_CostDetail_ID,cd.M_CostDetail_ID) = (SELECT Ref_CostDetail_ID FROM base_cd) &quot;);</span>
+<span class="nc" id="L1975">		selectSql.append(&quot;   AND cd.M_CostDetail_ID &gt; (SELECT M_CostDetail_ID FROM base_cd) &quot;);</span>
+<span class="nc" id="L1976">		selectSql.append(&quot; ) &quot;);</span>
+<span class="nc" id="L1977">		selectSql.append(&quot;) &quot;);</span>
+<span class="nc" id="L1978">		selectSql.append(&quot;AND cd.DateAcct &gt;= ? &quot;); </span>
+<span class="nc" id="L1979">		selectSql.append(&quot;AND cd.Processed='Y' &quot;);</span>
+<span class="nc" id="L1980">		selectSql.append(&quot;ORDER BY cd.DateAcct, &quot;);</span>
+<span class="nc" id="L1981">		selectSql.append(&quot;CASE WHEN COALESCE(refcd.DateAcct,cd.DateAcct) = cd.DateAcct &quot;);</span>
+<span class="nc" id="L1982">		selectSql.append(&quot;THEN COALESCE(cd.Ref_CostDetail_ID,cd.M_CostDetail_ID) ELSE cd.M_CostDetail_ID END, &quot;);</span>
+<span class="nc" id="L1983">		selectSql.append(&quot;cd.M_CostDetail_ID &quot;);</span>
+		
+<span class="nc" id="L1985">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1986">    	ResultSet rs = null;</span>
+    	try
+    	{
+<span class="nc" id="L1989">    		pstmt = DB.prepareStatement(selectSql.toString(), trxName);</span>
+<span class="nc" id="L1990">    		DB.setParameters(pstmt, new Object[] {M_CostDetail_ID, AD_Client_ID, C_AcctSchema_ID, M_Product_ID, DateAcct});</span>
+<span class="nc" id="L1991">    		rs = pstmt.executeQuery();</span>
+<span class="nc" id="L1992">			ResultSetMetaData rsmd = rs.getMetaData();</span>
+<span class="nc bnc" id="L1993" title="All 2 branches missed.">    		while (rs.next()) {</span>
+<span class="nc" id="L1994">				int tableID = 0;</span>
+<span class="nc" id="L1995">				int recordID = 0;</span>
+<span class="nc bnc" id="L1996" title="All 2 branches missed.">    			for (int i = 1; i &lt;= rsmd.getColumnCount(); i++) {</span>
+<span class="nc" id="L1997">    				String key = rsmd.getColumnName(i);</span>
+<span class="nc" id="L1998">    				Object value = rs.getObject(i);</span>
+<span class="nc bnc" id="L1999" title="All 4 branches missed.">					if (value == null || !(value instanceof Number))</span>
+<span class="nc" id="L2000">						continue;</span>
+<span class="nc" id="L2001">					MTable docTable = MTable.get(Env.getCtx(), key.substring(0, key.length()-3));</span>
+<span class="nc bnc" id="L2002" title="All 2 branches missed.">					if (docTable == null)</span>
+<span class="nc" id="L2003">						continue;</span>
+<span class="nc" id="L2004">					tableID = docTable.getAD_Table_ID();</span>
+<span class="nc" id="L2005">					recordID = ((Number) value).intValue();</span>
+<span class="nc" id="L2006">					break;</span>
+    			}
+<span class="nc bnc" id="L2008" title="All 4 branches missed.">    			if (tableID == 0 || recordID == 0)</span>
+<span class="nc" id="L2009">    				continue;</span>
+    			
+<span class="nc" id="L2011">    			Timestamp dateAcct = MCostDetail.getDateAcct(tableID, recordID, trxName);</span>
+<span class="nc bnc" id="L2012" title="All 2 branches missed.">				if (dateAcct == null)</span>
+<span class="nc" id="L2013">					continue;</span>
+				
+<span class="nc" id="L2015">				MTable table = MTable.get(Env.getCtx(), tableID);</span>
+<span class="nc" id="L2016">				PO po = table.getPO(recordID, trxName);</span>
+<span class="nc" id="L2017">				int index = po.get_ColumnIndex(&quot;C_DocType_ID&quot;);</span>
+<span class="nc" id="L2018">				String docBaseType = null;</span>
+<span class="nc bnc" id="L2019" title="All 2 branches missed.">				if (index &lt; 0) {</span>
+<span class="nc bnc" id="L2020" title="All 2 branches missed.">					if (tableID == MMatchInv.Table_ID) {</span>
+<span class="nc" id="L2021">						docBaseType = MDocType.DOCBASETYPE_MatchInvoice;</span>
+<span class="nc bnc" id="L2022" title="All 2 branches missed.">					} else if (tableID == MMatchPO.Table_ID) {</span>
+<span class="nc" id="L2023">						docBaseType = MDocType.DOCBASETYPE_MatchPO;</span>
+<span class="nc bnc" id="L2024" title="All 2 branches missed.">					} else if (tableID == MProjectIssue.Table_ID) {</span>
+<span class="nc" id="L2025">						docBaseType = MDocType.DOCBASETYPE_ProjectIssue;</span>
+					} else {
+						continue;
+					}
+<span class="nc" id="L2029">				} else {</span>
+<span class="nc" id="L2030">					int C_DocType_ID = 0;</span>
+<span class="nc" id="L2031">					Object objts = po.get_Value(index);</span>
+<span class="nc bnc" id="L2032" title="All 4 branches missed.">					if (objts != null &amp;&amp; objts instanceof Number) {</span>
+<span class="nc" id="L2033">						C_DocType_ID = ((Number) objts).intValue();</span>
+					}
+<span class="nc" id="L2035">					MDocType dt = MDocType.get(Env.getCtx(), C_DocType_ID);</span>
+<span class="nc" id="L2036">					docBaseType = dt.getDocBaseType();</span>
+				}
+<span class="nc bnc" id="L2038" title="All 2 branches missed.">				if (docBaseType == null)</span>
+<span class="nc" id="L2039">					continue;</span>
+				
+<span class="nc" id="L2041">				String repostedRecordId = tableID + &quot;_&quot; + recordID;</span>
+<span class="nc bnc" id="L2042" title="All 2 branches missed.">				if (repostedRecordIds.contains(repostedRecordId))</span>
+<span class="nc" id="L2043">					continue;</span>
+<span class="nc" id="L2044">				repostedRecordIds.add(repostedRecordId);</span>
+				
+<span class="nc" id="L2046">				boolean skipPosting = false;</span>
+<span class="nc bnc" id="L2047" title="All 2 branches missed.">				if (tableID == MInvoice.Table_ID) {</span>
+<span class="nc" id="L2048">					MInvoice i = new MInvoice(Env.getCtx(), recordID, trxName);</span>
+<span class="nc bnc" id="L2049" title="All 2 branches missed.">					if (!i.isSOTrx())</span>
+<span class="nc bnc" id="L2050" title="All 2 branches missed.">						if (i.getDateAcct().compareTo(DateAcct) &lt; 0)</span>
+<span class="nc" id="L2051">							skipPosting = true;</span>
+				}
+				
+<span class="nc bnc" id="L2054" title="All 2 branches missed.">				if (!skipPosting) {</span>
+<span class="nc bnc" id="L2055" title="All 2 branches missed.">					if (!MPeriod.isOpen(Env.getCtx(), dateAcct, docBaseType, po.getAD_Org_ID(), true)) {</span>
+<span class="nc" id="L2056">						throw new PeriodClosedException(dateAcct, docBaseType);</span>
+					}
+				}
+				
+<span class="nc bnc" id="L2060" title="All 2 branches missed.">				if (tableID == MInvoice.Table_ID) {</span>
+<span class="nc" id="L2061">					MMatchInv[] miList = MMatchInv.getInvoice(Env.getCtx(), recordID, trxName);</span>
+<span class="nc bnc" id="L2062" title="All 2 branches missed.">					for (MMatchInv mi : miList) {</span>
+<span class="nc bnc" id="L2063" title="All 2 branches missed.">						if (mi.getDateAcct().compareTo(DateAcct) &lt; 0)</span>
+<span class="nc" id="L2064">							continue;</span>
+<span class="nc" id="L2065">						repostedRecordId = MMatchInv.Table_ID + &quot;_&quot; + mi.get_ID();</span>
+<span class="nc bnc" id="L2066" title="All 2 branches missed.">						if (repostedRecordIds.contains(repostedRecordId))</span>
+<span class="nc" id="L2067">							continue;</span>
+<span class="nc" id="L2068">						repostedRecordIds.add(repostedRecordId);</span>
+						
+<span class="nc" id="L2070">						dateAcct = mi.getDateAcct();</span>
+<span class="nc" id="L2071">						docBaseType = MDocType.DOCBASETYPE_MatchInvoice;</span>
+<span class="nc bnc" id="L2072" title="All 2 branches missed.">						if (!MPeriod.isOpen(Env.getCtx(), dateAcct, docBaseType, mi.getAD_Org_ID(), true)) {</span>
+<span class="nc" id="L2073">							throw new PeriodClosedException(dateAcct, docBaseType);</span>
+						}
+					}
+				}
+    		}
+<span class="nc" id="L2078">    	}</span>
+<span class="nc" id="L2079">    	catch (SQLException e)</span>
+    	{
+<span class="nc" id="L2081">    		throw new DBException(e, selectSql.toString());</span>
+    	}
+    	finally
+    	{
+<span class="nc" id="L2085">    		DB.close(rs, pstmt);</span>
+<span class="nc" id="L2086">    		rs = null; pstmt = null;</span>
+    	}
+<span class="nc" id="L2088">	}</span>
+	
+	/**
+	 * Get Account Date
+	 * @param tableID	Transaction table
+	 * @param recordID	Record ID of this document
+	 * @param trxName	Transaction name
+	 * @return accounting date
+	 */
+	public static Timestamp getDateAcct(int tableID, int recordID, String trxName) {
+<span class="nc" id="L2098">		MTable table = MTable.get(Env.getCtx(), tableID);</span>
+<span class="nc" id="L2099">		PO po = table.getPO(recordID, trxName);</span>
+		
+<span class="nc" id="L2101">		int index = -1;</span>
+<span class="nc bnc" id="L2102" title="All 2 branches missed.">		if (tableID == MInventory.Table_ID</span>
+<span class="nc bnc" id="L2103" title="All 2 branches missed.">				|| tableID == MMovement.Table_ID</span>
+<span class="nc bnc" id="L2104" title="All 2 branches missed.">				|| tableID == MProduction.Table_ID</span>
+<span class="nc bnc" id="L2105" title="All 2 branches missed.">				|| tableID == MProjectIssue.Table_ID) {</span>
+<span class="nc" id="L2106">			index = po.get_ColumnIndex(&quot;MovementDate&quot;);</span>
+<span class="nc bnc" id="L2107" title="All 2 branches missed.">		} else if (tableID == MMatchPO.Table_ID</span>
+<span class="nc bnc" id="L2108" title="All 2 branches missed.">				|| tableID == MInvoice.Table_ID</span>
+<span class="nc bnc" id="L2109" title="All 2 branches missed.">				|| tableID == MInOut.Table_ID</span>
+<span class="nc bnc" id="L2110" title="All 2 branches missed.">				|| tableID == MMatchInv.Table_ID) {</span>
+<span class="nc" id="L2111">			index = po.get_ColumnIndex(&quot;DateAcct&quot;);</span>
+		}
+<span class="nc bnc" id="L2113" title="All 2 branches missed.">		if (index &lt; 0)</span>
+<span class="nc" id="L2114">			return null;</span>
+<span class="nc" id="L2115">		Timestamp dateAcct = null;</span>
+<span class="nc" id="L2116">		Object objts = po.get_Value(index);</span>
+<span class="nc bnc" id="L2117" title="All 4 branches missed.">		if (objts != null &amp;&amp; objts instanceof Timestamp) {</span>
+<span class="nc" id="L2118">			dateAcct = (Timestamp) objts;</span>
+		}
+		
+<span class="nc" id="L2121">		return dateAcct;</span>
+	}
+}	//	MCostDetail
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

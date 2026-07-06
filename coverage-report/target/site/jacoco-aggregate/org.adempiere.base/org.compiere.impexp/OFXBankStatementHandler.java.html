@@ -1,0 +1,901 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>OFXBankStatementHandler.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.impexp</a> &gt; <span class="el_source">OFXBankStatementHandler.java</span></div><h1>OFXBankStatementHandler.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.impexp;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.text.ParseException;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.StringTokenizer;
+import java.util.TimeZone;
+
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.parsers.SAXParser;
+import javax.xml.parsers.SAXParserFactory;
+
+import org.compiere.model.MBankStatementLoader;
+import org.compiere.util.Env;
+import org.xml.sax.Attributes;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
+
+
+/**
+ *	Parser for OFX bank statements.
+ *  &lt;p&gt;
+ *  This class is a parser for OFX bankstatements. OFX versions from 102 to 202 
+ *  and MS-Money OFC message sets are supported.&lt;br/&gt;
+ *  Only fully XML compliant OFX data is supported. Files that are not XML
+ *  compliant, e.g. OFX versions older then 200, will be preprocessed by
+ *  the OFX1ToXML class before parsing.&lt;br/&gt;
+ *  This class should be extended by a class that obtains the data to be parsed
+ *  for example from a file, or using HTTP.
+ *
+ *	@author Eldir Tomassen
+ *	@version $Id: OFXBankStatementHandler.java,v 1.3 2006/07/30 00:51:05 jjanke Exp $
+ */
+
+<span class="nc" id="L59">public abstract class OFXBankStatementHandler extends DefaultHandler</span>
+{
+
+	protected MBankStatementLoader 	m_controller;
+	protected StringBuffer			m_errorMessage;
+	protected StringBuffer			m_errorDescription;
+<span class="nc" id="L65">	protected BufferedReader 		m_reader = null;</span>
+	
+	protected SAXParser 			m_parser;
+<span class="nc" id="L68">	protected boolean 				m_success = false;</span>
+	//private boolean m_valid = false;
+
+	protected StatementLine 		m_line;
+<span class="nc" id="L72">	protected String 				m_routingNo = &quot;0&quot;;</span>
+<span class="nc" id="L73">	protected String 				m_bankAccountNo = null;</span>
+<span class="nc" id="L74">	protected String 				m_currency = null;</span>
+<span class="nc" id="L75">	protected int 					HEADER_SIZE = 20;</span>
+	
+<span class="nc" id="L77">	protected boolean 				m_test = false;</span>
+<span class="nc" id="L78">	protected Timestamp 			m_dateLastRun = null;</span>
+<span class="nc" id="L79">	protected Timestamp 			m_statementDate = null;</span>
+
+<span class="nc" id="L81">	protected StringBuffer 			m_valueBuffer = new StringBuffer();</span>
+	
+	/**	XML OFX Tag					*/
+	public static final String	XML_OFX_TAG = &quot;OFX&quot;;
+	
+	/**	XML SIGNONMSGSRSV2 Tag				*/
+	public static final String	XML_SIGNONMSGSRSV2_TAG = &quot;SIGNONMSGSRSV2&quot;;
+	/**	XML SIGNONMSGSRSV1 Tag				*/
+	public static final String	XML_SIGNONMSGSRSV1_TAG = &quot;SIGNONMSGSRSV1&quot;;
+	
+	/**	Record-response aggregate			*/
+	public static final String	XML_SONRS_TAG = &quot;SONRS&quot;;
+	/**	Date and time of the server response		*/
+	public static final String	XML_DTSERVER_TAG = &quot;DTSERVER&quot;;	
+	/**	Use USERKEY instead of USERID and USEPASS	*/
+	public static final String	XML_USERKEY_TAG = &quot;USERKEY&quot;;	
+	/**	Date and time that USERKEY expires		*/
+	public static final String	XML_TSKEYEXPIRE_TAG = &quot;TSKEYEXPIRE&quot;;	
+	/**	Language					*/
+	public static final String	XML_LANGUAGE_TAG = &quot;LANGUAGE&quot;;
+	/**	Date and rime last update to profile information*/
+	public static final String	XML_DTPROFUP_TAG = &quot;DTPROFUP&quot;;
+		
+	/**	Status aggregate				*/
+	public static final String	XML_STATUS_TAG = &quot;STATUS&quot;;
+		
+	/**	Statement-response aggregate			*/
+	public static final String	XML_STMTRS_TAG = &quot;STMTRS&quot;;
+	/**	XML CURDEF Tag					*/
+	public static final String	XML_CURDEF_TAG = &quot;CURDEF&quot;;
+	
+	/**	Account-from aggregate				*/
+	public static final String	XML_BANKACCTFROM_TAG = &quot;BANKACCTFROM&quot;;
+	/**	Bank identifier					*/
+	public static final String	XML_BANKID_TAG = &quot;BANKID&quot;;
+	/**	Branch identifier				*/
+	public static final String	XML_BRANCHID_TAG = &quot;BRANCHID&quot;;
+	/**	XML ACCTID Tag					*/
+	public static final String	XML_ACCTID_TAG = &quot;ACCTID&quot;;
+	/**	Type of account					*/
+	public static final String	XML_ACCTTYPE_TAG = &quot;ACCTTYPE&quot;;
+	/**	Type of account					*/
+	public static final String	XML_ACCTTYPE2_TAG = &quot;ACCTTYPE2&quot;;
+	/**	Checksum					*/
+	public static final String	XML_ACCTKEY_TAG = &quot;ACCTKEY&quot;;
+	
+	/**	XML BANKTRANLIST Tag				*/
+	public static final String	XML_BANKTRANLIST_TAG = &quot;BANKTRANLIST&quot;;
+	/**	XML DTSTART Tag					*/
+	public static final String	XML_DTSTART_TAG = &quot;DTSTART&quot;;
+	/**	XML DTEND Tag					*/
+	public static final String	XML_DTEND_TAG = &quot;DTEND&quot;;
+	/**	XML STMTTRN Tag					*/
+	public static final String	XML_STMTTRN_TAG = &quot;STMTTRN&quot;;
+	/**	XML TRNTYPE Tag					*/
+	public static final String	XML_TRNTYPE_TAG = &quot;TRNTYPE&quot;;
+	/**	XML TRNAMT Tag					*/
+	public static final String	XML_TRNAMT_TAG = &quot;TRNAMT&quot;;
+	/**	Transaction date				*/
+	public static final String	XML_DTPOSTED_TAG = &quot;DTPOSTED&quot;;
+	/**	Effective date				*/
+	public static final String	XML_DTAVAIL_TAG = &quot;DTAVAIL&quot;;
+	/**	XML FITID Tag					*/
+	public static final String	XML_FITID_TAG = &quot;FITID&quot;;
+	/**	XML CHECKNUM Tag 				*/
+	public static final String	XML_CHECKNUM_TAG = &quot;CHECKNUM&quot;;
+	/**	XML CHKNUM Tag (MS-Money OFC)			*/
+	public static final String	XML_CHKNUM_TAG = &quot;CHKNUM&quot;;
+	/**	XML REFNUM Tag		*/
+	public static final String	XML_REFNUM_TAG = &quot;REFNUM&quot;;	
+	/**	Transaction Memo				*/
+	public static final String	XML_MEMO_TAG = &quot;MEMO&quot;;
+	/**	XML NAME Tag				*/
+	public static final String	XML_NAME_TAG = &quot;NAME&quot;;
+	/**	XML PAYEEID Tag				*/
+	public static final String	XML_PAYEEID_TAG = &quot;PAYEEID&quot;;
+	/**	TXML PAYEE Tag				*/
+	public static final String	XML_PAYEE_TAG = &quot;PAYEE&quot;;
+	
+	/**	XML LEDGERBAL Tag				*/
+	public static final String	XML_LEDGERBAL_TAG = &quot;LEDGERBAL&quot;;		
+	/**	XML BALAMT Tag					*/
+	public static final String	XML_BALAMT_TAG = &quot;BALAMT&quot;;		
+	/**	XML DTASOF Tag					*/
+	public static final String	XML_DTASOF_TAG = &quot;DTASOF&quot;;	
+	/**	XML AVAILBAL Tag				*/
+	public static final String	XML_AVAILBAL_TAG = &quot;AVAILBAL&quot;;	
+	/**	XML MKTGINFO Tag				*/
+	public static final String	XML_MKTGINFO_TAG = &quot;MKTGINFO&quot;;	
+	
+	/**
+	 * 	Initialize the loader
+	 * 	@param controller Reference to the BankStatementLoaderController
+	 *  @return Initialized successfully
+	 */
+	protected boolean init(MBankStatementLoader controller)
+	{
+<span class="nc" id="L178">		boolean result = false;</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">		if (controller == null)</span>
+		{
+<span class="nc" id="L181">			m_errorMessage = new StringBuffer(&quot;ErrorInitializingParser&quot;);</span>
+<span class="nc" id="L182">			m_errorDescription = new StringBuffer(&quot;ImportController is a null reference&quot;);</span>
+<span class="nc" id="L183">			return result;</span>
+		}
+<span class="nc" id="L185">		this.m_controller = controller;</span>
+		try
+		{
+<span class="nc" id="L188">			SAXParserFactory factory = SAXParserFactory.newInstance();</span>
+<span class="nc" id="L189">			m_parser = factory.newSAXParser();</span>
+<span class="nc" id="L190">			result = true;</span>
+<span class="nc" id="L191">		}</span>
+<span class="nc" id="L192">		catch(ParserConfigurationException e)</span>
+		{
+<span class="nc" id="L194">			m_errorMessage = new StringBuffer(&quot;ErrorInitializingParser&quot;);</span>
+<span class="nc" id="L195">			m_errorDescription = new StringBuffer(&quot;Unable to configure SAX parser: &quot;).append(e.getMessage());</span>
+		}
+<span class="nc" id="L197">		catch(SAXException e)</span>
+		{
+<span class="nc" id="L199">			m_errorMessage = new StringBuffer(&quot;ErrorInitializingParser&quot;);</span>
+<span class="nc" id="L200">			m_errorDescription = new StringBuffer(&quot;Unable to initialize SAX parser: &quot;).append(e.getMessage());</span>
+		}
+		
+<span class="nc bnc" id="L203" title="All 2 branches missed.">		if (!result)</span>
+<span class="nc" id="L204">			closeBufferedReader();</span>
+		
+<span class="nc" id="L206">		return result;</span>
+	}	//	init
+	
+	/**
+	 * 	Attach OFX input source, detect whether we are dealing with OFX1
+	 *	(SGML) or OFX2 (XML). In case of OFX1, process the data to create 
+	 *	valid XML.
+	 *	@param is Reference to the BankStatementLoaderController
+	 *	@return true if input is valid OFX data
+	 */
+	protected boolean attachInput(InputStream is)
+	{
+<span class="nc" id="L218">		boolean isOfx1 = true;</span>
+<span class="nc" id="L219">		boolean result = false;</span>
+		
+		try
+		{
+<span class="nc" id="L223">			BufferedReader reader = new BufferedReader(new InputStreamReader(is));</span>
+<span class="nc" id="L224">			reader.mark(HEADER_SIZE + 20000);</span>
+<span class="nc" id="L225">			StringBuilder header = new StringBuilder();</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">			for (int i = 0; i &lt; HEADER_SIZE; i++)</span>
+			{
+<span class="nc" id="L228">				header.append(reader.readLine());</span>
+			}
+<span class="nc bnc" id="L230" title="All 4 branches missed.">			if ((header.indexOf(&quot;&lt;?OFX&quot;) != -1) || (header.indexOf(&quot;&lt;?ofx&quot;) != -1))</span>
+			{
+<span class="nc" id="L232">				isOfx1 = false;</span>
+<span class="nc" id="L233">			}</span>
+<span class="nc bnc" id="L234" title="All 4 branches missed.">			else if ((header.indexOf(&quot;&lt;?XML&quot;) != -1) || (header.indexOf(&quot;&lt;?xml&quot;) != -1))</span>
+			{
+<span class="nc" id="L236">				isOfx1 = false;</span>
+				//deted specific OFX version
+<span class="nc" id="L238">			}</span>
+			else 
+			{
+<span class="nc" id="L241">				isOfx1 = true;</span>
+				//detect specific OFX version
+			}
+<span class="nc" id="L244">			reader.reset();</span>
+			
+<span class="nc bnc" id="L246" title="All 2 branches missed.">			if (isOfx1)</span>
+			{
+<span class="nc" id="L248">				OFX1ToXML in = new OFX1ToXML(reader);</span>
+<span class="nc" id="L249">				m_reader = new BufferedReader(new InputStreamReader(in));</span>
+<span class="nc" id="L250">			}</span>
+			else
+			{
+<span class="nc" id="L253">				m_reader = reader;</span>
+			}
+<span class="nc" id="L255">			result = true;</span>
+<span class="nc" id="L256">		}</span>
+<span class="nc" id="L257">		catch(IOException e)</span>
+		{
+<span class="nc" id="L259">			m_errorMessage = new StringBuffer(&quot;ErrorReadingData&quot;);</span>
+<span class="nc" id="L260">			m_errorDescription = new StringBuffer(e.getMessage());</span>
+<span class="nc" id="L261">			return result;</span>
+		}
+		finally
+		{
+<span class="nc bnc" id="L265" title="All 2 branches missed.">			if (!result)</span>
+<span class="nc" id="L266">				closeBufferedReader();</span>
+		}
+
+<span class="nc" id="L269">		return result;</span>
+	}	//	attachInput
+	
+	/**	
+	 * Verify the validity of the OFX data
+	 * @return true if input is valid OFX data
+	 */
+	public boolean isValid()
+	{
+<span class="nc" id="L278">		boolean result = true;</span>
+		/*
+		try
+		{
+			if (loadLines())
+			{
+				result = true;
+				test = false;
+			}
+			m_reader.reset();
+		}
+		catch(IOException e)
+		{
+			m_errorMessage = &quot;ErrorReadingData&quot;;
+			m_errorDescription = e.getMessage();			
+		}
+		*/
+<span class="nc" id="L295">		return result;</span>
+	}	//isValid
+
+	/**	
+	 * Check whether the import was successful
+	 * @return true if all statement lines have been imported successfully
+	 */
+	public boolean importSuccessfull()
+	{
+		/*
+		 * Currently there are no checks after the statement lines are read.
+		 * Once all lines are read correctly a successful import is assumed.
+		 */
+<span class="nc" id="L308">		return m_success;</span>
+	}	//	importSuccessfull
+	
+	/**
+	 * Read statementlines from InputStream.&lt;br/&gt;
+	 * This method will be invoked from ImportController.
+	 * @return load success
+	 */
+	public boolean loadLines()
+	{
+<span class="nc" id="L318">		boolean result = false;</span>
+		try
+		{
+<span class="nc" id="L321">			m_parser.parse(new InputSource(m_reader), this);</span>
+<span class="nc" id="L322">			result = true;</span>
+<span class="nc" id="L323">			m_success = true;</span>
+<span class="nc" id="L324">		}</span>
+<span class="nc" id="L325">		catch(SAXException e)</span>
+		{
+<span class="nc" id="L327">			m_errorMessage = new StringBuffer(&quot;ErrorParsingData&quot;);</span>
+<span class="nc" id="L328">			m_errorDescription = new StringBuffer(e.getMessage());</span>
+		}
+<span class="nc" id="L330">		catch(IOException e)</span>
+		{
+<span class="nc" id="L332">			m_errorMessage = new StringBuffer(&quot;ErrorReadingData&quot;);</span>
+<span class="nc" id="L333">			m_errorDescription = new StringBuffer(e.getMessage());</span>
+		} finally {
+<span class="nc" id="L335">			closeBufferedReader();</span>
+		}
+<span class="nc" id="L337">		return result;</span>
+		
+	}	//	loadLines
+	
+	/**
+	 * Close {@link #m_reader}
+	 */
+	private void closeBufferedReader() {
+<span class="nc bnc" id="L345" title="All 2 branches missed.">		if (m_reader != null)</span>
+			try {
+<span class="nc" id="L347">				m_reader.close();</span>
+<span class="nc" id="L348">				m_reader = null;</span>
+<span class="nc" id="L349">			} catch (IOException e) {</span>
+<span class="nc" id="L350">				e.printStackTrace();</span>
+			}
+<span class="nc" id="L352">	}</span>
+	
+	/**
+	 * @return last run date
+	 */
+	public Timestamp getDateLastRun()
+	{
+<span class="nc" id="L359">		return m_dateLastRun;</span>
+	}
+	
+	/**
+	 * @return routing number
+	 */
+	public String getRoutingNo()
+	{
+<span class="nc" id="L367">		return m_line.routingNo;</span>
+	}
+	
+	/**
+	 * @return line bank account number
+	 */
+	public String getBankAccountNo()
+	{
+<span class="nc" id="L375">		return m_line.bankAccountNo;</span>
+	}
+	
+	/**
+	 * @return IBAN
+	 */
+	public String getIBAN() {
+<span class="nc" id="L382">		return null;</span>
+	}
+	
+	/**
+	 * @return line statement reference
+	 */
+	public String getStatementReference()
+	{
+<span class="nc" id="L390">		return m_line.statementReference;</span>
+	}
+	
+	/**
+	 * @return statement date
+	 */
+	public Timestamp getStatementDate()
+	{
+<span class="nc" id="L398">		return m_statementDate;</span>
+	}
+	
+	/**
+	 * @return line reference
+	 */
+	public String getReference()
+	{
+<span class="nc" id="L406">		return m_line.reference;</span>
+	}
+	
+	/**
+	 * @return line statement date
+	 */
+	public Timestamp getStatementLineDate()
+	{
+<span class="nc" id="L414">		return m_line.statementLineDate;</span>
+	}
+	
+	/**
+	 * @return line valuta date
+	 */
+	public Timestamp getValutaDate()
+	{
+<span class="nc" id="L422">		return m_line.valutaDate;</span>
+	}
+	
+	/**
+	 * @return line trx type
+	 */
+	public String getTrxType()
+	{
+<span class="nc" id="L430">		return m_line.trxType;</span>
+	}
+	
+	/**
+	 * @return true if line is reversal
+	 */
+	public boolean getIsReversal()
+	{
+<span class="nc" id="L438">		return m_line.isReversal;</span>
+	}
+	
+	/**
+	 * @return line currency
+	 */
+	public String getCurrency()
+	{
+<span class="nc" id="L446">		return m_line.currency;</span>
+	}
+	
+	/**
+	 * @return line statement amount
+	 */
+	public BigDecimal getStmtAmt()
+	{
+<span class="nc" id="L454">		return m_line.stmtAmt;</span>
+	}
+	
+	/**
+	 * @return Line Transaction Amount
+	 */
+	public BigDecimal getTrxAmt()
+	{
+		/* assume total amount = transaction amount
+		 * todo: detect interest &amp; charge amount
+		 */
+<span class="nc" id="L465">		return m_line.stmtAmt;</span>
+	}
+	
+	/**
+	 * @return Interest Amount
+	 */
+	public BigDecimal getInterestAmt()
+	{
+<span class="nc" id="L473">		return Env.ZERO;</span>
+	}
+	
+	
+	/**
+	 * @return line memo
+	 */
+	public String getMemo()
+	{
+<span class="nc" id="L482">		return m_line.memo;</span>
+	}
+	
+	/**
+	 * @return line charge name
+	 */
+	public String getChargeName()
+	{
+<span class="nc" id="L490">		return m_line.chargeName;</span>
+	}
+	
+	/**
+	 * @return line charge amount
+	 */
+	public BigDecimal getChargeAmt()
+	{
+<span class="nc" id="L498">		return m_line.chargeAmt;</span>
+	}
+	
+	/**
+	 * @return line transaction id
+	 */
+	public String getTrxID()
+	{
+<span class="nc" id="L506">		return m_line.trxID;</span>
+	}
+	
+	/**
+	 * @return line payee account number
+	 */
+	public String getPayeeAccountNo()
+	{
+<span class="nc" id="L514">		return m_line.payeeAccountNo;</span>
+	}
+	
+	/**
+	 * @return line payee name
+	 */
+	public String getPayeeName()
+	{
+<span class="nc" id="L522">		return m_line.payeeName;</span>
+	}
+	
+	/**
+	 * @return line check number
+	 */
+	public String getCheckNo()
+	{
+<span class="nc" id="L530">		return m_line.checkNo;</span>
+	}
+	
+	
+	/**
+	 * New XML element detected. The XML nesting
+	 * structure is saved on the m_context stack.
+	 * @param uri String
+	 * @param localName String
+	 * @param qName String
+	 * @param attributes Attributes
+	 * @throws org.xml.sax.SAXException
+	 * @see org.xml.sax.ContentHandler#startElement(String, String, String, Attributes)
+	 */
+	@Override
+	public void startElement (String uri, String localName, String qName, Attributes attributes)
+		throws org.xml.sax.SAXException
+	{
+<span class="nc" id="L548">		boolean validOFX = true;</span>
+		/*
+		 * Currently no validating is being done, valid OFX structure is assumed.
+		 */
+<span class="nc bnc" id="L552" title="All 2 branches missed.">		if (!validOFX)</span>
+		{
+<span class="nc" id="L554">			m_errorDescription = new StringBuffer(&quot;Invalid OFX syntax: &quot;).append(qName);</span>
+<span class="nc" id="L555">			throw new SAXException(&quot;Invalid OFX syntax: &quot; + qName);</span>
+		}
+<span class="nc bnc" id="L557" title="All 2 branches missed.">		if (qName.equals(XML_STMTTRN_TAG))</span>
+		{
+<span class="nc" id="L559">			m_line = new StatementLine(m_routingNo, m_bankAccountNo, m_currency);</span>
+		}
+		
+<span class="nc" id="L562">		m_valueBuffer=new StringBuffer();</span>
+		
+<span class="nc" id="L564">	}	//	startElement</span>
+	
+	/**
+	 * Characters read from XML are assigned to a variable, based on the current m_context.
+	 * No checks are being done, it is assumed that the context is correct.
+	 * @param ch char[]
+	 * @param start int
+	 * @param length int
+	 * @throws SAXException
+	 * @see org.xml.sax.ContentHandler#characters(char[], int, int)
+	 */
+	@Override
+	public void characters (char ch[], int start, int length) throws SAXException
+	{
+
+<span class="nc" id="L579">		m_valueBuffer.append(ch,start,length);</span>
+		
+<span class="nc" id="L581">	}	//	characters</span>
+	
+	
+	/**
+	 * Check for valid XML structure. (all tags are properly ended).
+	 * The statements are passed to ImportController when the statement end (&amp;lt;/STMTTRN&amp;gt;) 
+	 * is detected.
+	 * @param uri String
+	 * @param localName String
+	 * @param qName String
+	 * @throws SAXException
+	 * @see org.xml.sax.ContentHandler#endElement(String, String, String)
+	 */
+	@Override
+	public void endElement (String uri, String localName, String qName) throws SAXException
+	{
+		
+<span class="nc" id="L598">		String XML_TAG=qName;</span>
+<span class="nc" id="L599">		String value=m_valueBuffer.toString();</span>
+		
+		try
+		{
+			//Read statment level data
+			
+			/*
+			 * Default currency for this set of statement lines
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;
+			 */
+<span class="nc bnc" id="L609" title="All 2 branches missed.">			if (XML_TAG.equals(XML_CURDEF_TAG))</span>
+			{
+<span class="nc" id="L611">				m_currency = value;</span>
+<span class="nc" id="L612">			}</span>
+			
+			/* Routing Number (or SWIFT Code) for this set of statement lines
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKACCTFROM&gt;
+			 */
+<span class="nc bnc" id="L617" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_BANKID_TAG))</span>
+			{
+<span class="nc" id="L619">				m_routingNo = value;</span>
+<span class="nc" id="L620">			}</span>
+			
+			/*
+			 * Bank Account Number for this set of bank statement lines
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKACCTFROM&gt;
+			 */
+<span class="nc bnc" id="L626" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_ACCTID_TAG))</span>
+			{
+<span class="nc" id="L628">				m_bankAccountNo = value;</span>
+<span class="nc" id="L629">			}</span>
+			
+			/*
+			 * Last date for this set of statement lines
+			 * This is the date that should be specified as the &lt;DTSTART&gt;
+			 * for the next batch of statement lines, in order not to miss any 
+			 * transactions.
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;
+			 */
+<span class="nc bnc" id="L638" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_DTEND_TAG))</span>
+			{
+<span class="nc" id="L640">				m_dateLastRun = parseOfxDate(value);</span>
+<span class="nc" id="L641">			}</span>
+			
+			/*
+			 *
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;AVAILBAL&gt;
+			 */
+<span class="nc bnc" id="L647" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_DTASOF_TAG))</span>
+			{
+<span class="nc" id="L649">				m_statementDate = parseOfxDate(value);</span>
+<span class="nc" id="L650">			}</span>
+			
+			
+			//Read statement line level data
+			
+			/*
+			 * Transaction type, e.g. DEBIT, CREDIT, SRVCHG
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L659" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_TRNTYPE_TAG))</span>
+			{
+<span class="nc" id="L661">				m_line.trxType = value;</span>
+<span class="nc" id="L662">			}</span>
+			
+			/*
+			 * Statement line date
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L668" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_DTPOSTED_TAG))</span>
+			{
+<span class="nc" id="L670">				m_line.statementLineDate = parseOfxDate(value);</span>
+<span class="nc" id="L671">			}</span>
+			
+			/*
+			 * Valuta date
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L677" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_DTAVAIL_TAG))</span>
+			{
+<span class="nc" id="L679">				m_line.valutaDate = parseOfxDate(value);</span>
+<span class="nc" id="L680">			}</span>
+			
+			/*
+			 * Total statement line amount
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L686" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_TRNAMT_TAG))</span>
+			{
+<span class="nc" id="L688">				m_line.stmtAmt = new BigDecimal(value);</span>
+<span class="nc" id="L689">			}</span>
+			
+			/*
+			 * Transaction Identification
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L695" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_FITID_TAG))</span>
+			{
+<span class="nc" id="L697">				m_line.trxID = value;</span>
+<span class="nc" id="L698">			}</span>
+			
+			/*
+			 * Check number for check transactions
+			 * CHECKNUM for generic OFX, CHKNUM for MS-Money OFC
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L705" title="All 4 branches missed.">			else if ((XML_TAG.equals(XML_CHECKNUM_TAG)) || (XML_TAG.equals(XML_CHKNUM_TAG)))</span>
+			{
+<span class="nc" id="L707">				m_line.checkNo = value;</span>
+<span class="nc" id="L708">			}</span>
+			
+			/*
+			 * Statement line reference
+			 * Additional transaction reference information
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L715" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_REFNUM_TAG))</span>
+			{
+<span class="nc" id="L717">				m_line.reference = value;</span>
+<span class="nc" id="L718">			}</span>
+			
+			/*
+			 * Transaction memo
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L724" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_MEMO_TAG))</span>
+			{
+<span class="nc" id="L726">				m_line.memo = value;</span>
+<span class="nc" id="L727">			}</span>
+			
+			/*
+			 * Payee Name
+			 * &lt;OFX&gt;-&lt;BANKMSGSRSV2&gt;-&lt;STMTTRNRS&gt;-&lt;STMTRS&gt;-&lt;BANKTRANLIST&gt;&lt;STMTTRN&gt;
+			 */
+<span class="nc bnc" id="L733" title="All 2 branches missed.">			else if (XML_TAG.equals(XML_NAME_TAG))</span>
+			{
+<span class="nc" id="L735">				m_line.payeeName = value;</span>
+			}
+<span class="nc" id="L737">		}</span>
+<span class="nc" id="L738">		catch(Exception e)</span>
+		{
+			
+<span class="nc" id="L741">			m_errorDescription = new StringBuffer(&quot;Invalid data: &quot;).append(value).append(&quot; &lt;-&gt; &quot;).append(e.getMessage());</span>
+<span class="nc" id="L742">			throw new SAXException(&quot;Invalid data: &quot; + value);</span>
+		}
+		
+<span class="nc bnc" id="L745" title="All 2 branches missed.">		if (qName.equals(XML_STMTTRN_TAG))</span>
+		{
+<span class="nc bnc" id="L747" title="All 2 branches missed.">			if (!m_test)</span>
+			{
+<span class="nc bnc" id="L749" title="All 2 branches missed.">				if (!m_controller.saveLine())</span>
+				{
+<span class="nc" id="L751">					m_errorMessage = new StringBuffer().append(m_controller.getErrorMessage());</span>
+<span class="nc" id="L752">						m_errorDescription = new StringBuffer(m_controller.getErrorDescription());</span>
+<span class="nc" id="L753">					throw new SAXException(m_errorMessage.toString());</span>
+				}
+			}
+		}
+<span class="nc" id="L757">	}	//	endElement</span>
+		
+	/**
+	 * source: https://github.com/stoicflame/ofx4j/blob/a604e4f6ffefea61403434cf853bbd1b20740386/src/main/java/com/webcohesion/ofx4j/io/DefaultStringConversion.java
+	 * &lt;p&gt;
+	 * Parse the timezone offset of the form [HOURS_OFF_GMT:TZ_ID]
+	 *
+	 * @param tzoffset The offset pattern.
+	 * @return The timezone.
+	 */
+	protected TimeZone parseTimeZone(String tzoffset) {
+<span class="nc" id="L768">	    StringTokenizer tokenizer = new StringTokenizer(tzoffset, &quot;[]:&quot;);</span>
+<span class="nc" id="L769">	    TimeZone tz = GMT_TIME_ZONE;</span>
+<span class="nc bnc" id="L770" title="All 2 branches missed.">	    if (tokenizer.hasMoreTokens()) {</span>
+<span class="nc" id="L771">	      String hoursOff = tokenizer.nextToken();</span>
+<span class="nc" id="L772">	      tz = TimeZone.getTimeZone(&quot;GMT&quot; + hoursOff);</span>
+	    }
+
+<span class="nc" id="L775">	    return tz;</span>
+	}	
+	
+<span class="nc" id="L778">	public static final TimeZone GMT_TIME_ZONE = TimeZone.getTimeZone(&quot;GMT&quot;);</span>
+<span class="nc" id="L779">	public static final int DATE_FORMAT_LENGTH = &quot;yyyyMMddHHmmss.SSS&quot;.length();</span>
+<span class="nc" id="L780">	public static final int TIME_FORMAT_LENGTH = &quot;HHmmss.SSS&quot;.length();	</span>
+	
+	/**
+	 * Parses a date according to OFX.
+	 *
+	 * @param value The value of the date.
+	 * @return The date value.
+	 */
+	protected Date parseDate(String value) {
+<span class="nc" id="L789">	    char[] parseableDate = new char[DATE_FORMAT_LENGTH];</span>
+<span class="nc" id="L790">	    Arrays.fill(parseableDate, '0');</span>
+<span class="nc" id="L791">	    parseableDate[parseableDate.length - 4] = '.';</span>
+<span class="nc" id="L792">	    char[] valueChars = value.toCharArray();</span>
+<span class="nc" id="L793">	    int index = 0;</span>
+<span class="nc bnc" id="L794" title="All 4 branches missed.">	    while (index &lt; valueChars.length &amp;&amp; valueChars[index] != '[') {</span>
+<span class="nc bnc" id="L795" title="All 2 branches missed.">	      if (index &lt; DATE_FORMAT_LENGTH) {</span>
+<span class="nc" id="L796">	        parseableDate[index] = valueChars[index];</span>
+	      }
+	      
+<span class="nc" id="L799">	      index++;</span>
+	    }
+
+<span class="nc" id="L802">	    int year = Integer.parseInt(new String(parseableDate, 0, 4));</span>
+<span class="nc" id="L803">	    int month = Integer.parseInt(new String(parseableDate, 4, 2)) - 1; //java month numberss are zero-based</span>
+<span class="nc" id="L804">	    int day = Integer.parseInt(new String(parseableDate, 6, 2));</span>
+<span class="nc" id="L805">	    int hour = Integer.parseInt(new String(parseableDate, 8, 2));</span>
+<span class="nc" id="L806">	    int minute = Integer.parseInt(new String(parseableDate, 10, 2));</span>
+<span class="nc" id="L807">	    int second = Integer.parseInt(new String(parseableDate, 12, 2));</span>
+<span class="nc" id="L808">	    int milli = Integer.parseInt(new String(parseableDate, 15, 3));</span>
+
+	    //set up a new calendar at zero, then set all the fields.
+<span class="nc" id="L811">	    GregorianCalendar calendar = new GregorianCalendar(year, month, day, hour, minute, second);</span>
+<span class="nc bnc" id="L812" title="All 4 branches missed.">	    if (index &lt; valueChars.length &amp;&amp; valueChars[index] == '[') {</span>
+<span class="nc" id="L813">	      String tzoffset = value.substring(index);</span>
+<span class="nc" id="L814">	      calendar.setTimeZone(parseTimeZone(tzoffset));</span>
+<span class="nc" id="L815">	    }</span>
+	    else {
+<span class="nc" id="L817">	      calendar.setTimeZone(GMT_TIME_ZONE);</span>
+	    }
+<span class="nc" id="L819">	    calendar.add(GregorianCalendar.MILLISECOND, milli);</span>
+
+<span class="nc" id="L821">	    return calendar.getTime();</span>
+	}
+	  
+	/**
+	 * Parse OFX date
+	 * @param value String
+	 * @return Timestamp
+	 * @throws ParseException
+	 */
+	private Timestamp parseOfxDate(String value) throws ParseException
+	{
+		try
+		{
+<span class="nc" id="L834">			return new Timestamp (parseDate(value).getTime());</span>
+		}
+<span class="nc" id="L836">		catch(Exception e)</span>
+		{
+<span class="nc" id="L838">			throw new ParseException(&quot;Error parsing date: &quot; + value, 0);</span>
+		}
+	}   //parseOfxDate
+	
+	/**
+	 * @return last error message
+	 */
+	public String getLastErrorMessage()
+	{
+<span class="nc" id="L847">		return m_errorMessage.toString();</span>
+	}
+	
+	/**
+	 * @return last error description
+	 */
+	public String getLastErrorDescription()
+	{
+<span class="nc" id="L855">		return m_errorDescription.toString();</span>
+	}
+		
+	/**
+	 * @author ET
+	 * @version $Id: OFXBankStatementHandler.java,v 1.3 2006/07/30 00:51:05 jjanke Exp $
+	 */
+	protected static class StatementLine
+	{
+<span class="nc" id="L864">		protected String routingNo = null;</span>
+<span class="nc" id="L865">		protected String bankAccountNo = null;</span>
+<span class="nc" id="L866">		protected String statementReference = null;</span>
+		
+		
+<span class="nc" id="L869">		protected Timestamp statementLineDate = null;</span>
+<span class="nc" id="L870">		protected String reference = null;</span>
+		protected Timestamp valutaDate;
+<span class="nc" id="L872">		protected String trxType = null; </span>
+<span class="nc" id="L873">		protected boolean isReversal = false; </span>
+<span class="nc" id="L874">		protected String currency = null;</span>
+<span class="nc" id="L875">		protected BigDecimal stmtAmt = null; </span>
+<span class="nc" id="L876">		protected String memo = null; </span>
+<span class="nc" id="L877">		protected String chargeName = null;</span>
+<span class="nc" id="L878">		protected BigDecimal chargeAmt = null;	</span>
+<span class="nc" id="L879">		protected String payeeAccountNo = null;</span>
+<span class="nc" id="L880">		protected String payeeName = null;</span>
+<span class="nc" id="L881">		protected String trxID = null;</span>
+<span class="nc" id="L882">		protected String checkNo = null;</span>
+		
+		
+		/**
+		 * Constructor for StatementLine
+		 * @param RoutingNo String
+		 * @param BankAccountNo String
+		 * @param Currency String
+		 */
+<span class="nc" id="L891">		public StatementLine(String RoutingNo, String BankAccountNo, String Currency)</span>
+		{
+<span class="nc" id="L893">			bankAccountNo = BankAccountNo;</span>
+<span class="nc" id="L894">			routingNo = RoutingNo;</span>
+<span class="nc" id="L895">			currency = Currency;</span>
+<span class="nc" id="L896">		}</span>
+
+	}
+
+}	//OFXBankStatementHandler
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

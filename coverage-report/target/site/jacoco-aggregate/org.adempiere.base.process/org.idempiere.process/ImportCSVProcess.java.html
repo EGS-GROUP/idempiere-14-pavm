@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ImportCSVProcess.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.idempiere.process</a> &gt; <span class="el_source">ImportCSVProcess.java</span></div><h1>ImportCSVProcess.java</h1><pre class="source lang-java linenums">/**********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Hiep Le Quy                                                       *
+ * - Thomas Bayen                                                      *
+ * - Carlos Ruiz                                                       *
+ **********************************************************************/
+
+package org.idempiere.process;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.IGridTabImporter;
+import org.adempiere.base.equinox.EquinoxExtensionLocator;
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.DataStatusEvent;
+import org.compiere.model.DataStatusListener;
+import org.compiere.model.GridField;
+import org.compiere.model.GridTab;
+import org.compiere.model.GridTable;
+import org.compiere.model.GridWindow;
+import org.compiere.model.MImportTemplate;
+import org.compiere.model.MLookup;
+import org.compiere.model.MProcessPara;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.ProcessInfoParameter;
+import org.compiere.process.SvrProcess;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L58">public class ImportCSVProcess extends SvrProcess implements DataStatusListener {</span>
+
+<span class="nc" id="L60">	private InputStream m_file_istream = null;</span>
+<span class="nc" id="L61">	private int p_AD_ImportTemplate_ID = 0;</span>
+	private MImportTemplate m_importTemplate;
+<span class="nc" id="L63">	private String p_FileName = &quot;&quot;;</span>
+<span class="nc" id="L64">	private String p_ImportMode = &quot;I&quot;;</span>
+
+	@Override
+	protected void prepare() {
+<span class="nc bnc" id="L68" title="All 2 branches missed.">		for (ProcessInfoParameter para : getParameter()) {</span>
+<span class="nc" id="L69">			String name = para.getParameterName();</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">			if (&quot;AD_ImportTemplate_ID&quot;.equals(name)) {</span>
+<span class="nc" id="L71">				p_AD_ImportTemplate_ID = para.getParameterAsInt();</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">			} else if (&quot;FileName&quot;.equals(name)) {</span>
+<span class="nc" id="L73">				p_FileName = para.getParameterAsString();</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">			} else if (&quot;ImportMode&quot;.equals(name)) {</span>
+<span class="nc" id="L75">				p_ImportMode = para.getParameterAsString();</span>
+<span class="nc" id="L76">			} else {</span>
+<span class="nc" id="L77">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para);</span>
+			}
+		}
+<span class="nc" id="L80">	}</span>
+
+<span class="nc" id="L82">	GridWindow m_gridWindow = null;</span>
+<span class="nc" id="L83">	GridTab m_gridTab = null;</span>
+<span class="nc" id="L84">	List&lt;GridTab&gt; m_Childs = null;</span>
+
+	@Override
+	protected String doIt() throws Exception {
+
+		try {
+<span class="nc" id="L90">			initGridTab();</span>
+<span class="nc" id="L91">			IGridTabImporter csvImport = initImporter();</span>
+<span class="nc" id="L92">			importFile (p_FileName, csvImport, m_gridTab, m_Childs);</span>
+<span class="nc" id="L93">		} finally {</span>
+<span class="nc" id="L94">			Env.clearWinContext(-1);</span>
+		}
+
+<span class="nc" id="L97">		return &quot;@OK@&quot;;</span>
+	}
+
+	protected void initGridTab() throws Exception {
+<span class="nc" id="L101">		m_importTemplate = new MImportTemplate(getCtx(), p_AD_ImportTemplate_ID, get_TrxName());</span>
+<span class="nc" id="L102">		int l_AD_Window_ID = m_importTemplate.getAD_Window_ID();</span>
+<span class="nc" id="L103">		int l_AD_Tab_ID = m_importTemplate.getAD_Tab_ID();</span>
+
+		// Verify ImportMode permission for the role on the template
+<span class="nc bnc" id="L106" title="All 2 branches missed.">		if (!m_importTemplate.isAllowed(p_ImportMode, Env.getAD_Role_ID(Env.getCtx())))</span>
+<span class="nc" id="L107">			throw new AdempiereException(Msg.getMsg(getCtx(), &quot;TemplateNotAllowedRole&quot;));</span>
+
+<span class="nc" id="L109">		m_gridWindow = GridWindow.get(getCtx(), -1, l_AD_Window_ID);</span>
+<span class="nc" id="L110">		Env.setContext(getCtx(), -1, &quot;IsSOTrx&quot;, m_gridWindow.isSOTrx());</span>
+<span class="nc" id="L111">		m_Childs = new ArrayList&lt;GridTab&gt;();</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">		for (int i = 0; i &lt; m_gridWindow.getTabCount(); i++) {</span>
+<span class="nc" id="L113">			GridTab gridtab = m_gridWindow.getTab(i);</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">			if (!gridtab.isLoadComplete())</span>
+<span class="nc" id="L115">				m_gridWindow.initTab(i);</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">			if (m_gridWindow.getTab(i).getAD_Tab_ID() == l_AD_Tab_ID) {</span>
+<span class="nc" id="L117">				m_gridTab  = m_gridWindow.getTab(i);</span>
+<span class="nc" id="L118">			} else {</span>
+<span class="nc bnc" id="L119" title="All 4 branches missed.">				if (m_gridTab != null &amp;&amp; gridtab.getTabLevel() &gt; m_gridTab.getTabLevel())</span>
+<span class="nc" id="L120">					m_Childs.add(gridtab);</span>
+			}
+		}
+
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (m_gridTab == null)</span>
+<span class="nc" id="L125">			throw new Exception(Msg.getMsg(getCtx(),&quot;NoActiveTab&quot;));</span>
+<span class="nc" id="L126">		m_gridTab.addDataStatusListener(this);</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">		for (GridTab childTab : m_Childs)</span>
+<span class="nc" id="L128">			childTab.addDataStatusListener(this);</span>
+<span class="nc" id="L129">	}</span>
+
+	protected IGridTabImporter initImporter() throws Exception {
+<span class="nc" id="L132">		IGridTabImporter csvImport = null;</span>
+<span class="nc" id="L133">		List&lt;IGridTabImporter&gt; importerList = EquinoxExtensionLocator.instance().list(IGridTabImporter.class).getExtensions();</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		for (IGridTabImporter importer : importerList){</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">			if (&quot;csv&quot;.equals(importer.getFileExtension())) {</span>
+<span class="nc" id="L136">				csvImport = importer;</span>
+<span class="nc" id="L137">				break;</span>
+			}
+		}
+
+<span class="nc bnc" id="L141" title="All 2 branches missed.">		if (csvImport == null)</span>
+<span class="nc" id="L142">			throw new Exception (Msg.getMsg(getCtx(),&quot;NoCSVImporter&quot;));</span>
+
+<span class="nc" id="L144">		return csvImport;</span>
+	}
+
+	protected void importFile(String filePath, IGridTabImporter csvImporter, GridTab activeTab, List&lt;GridTab&gt; childTabs) throws Exception {
+<span class="nc" id="L148">		m_file_istream = new FileInputStream(filePath);</span>
+
+<span class="nc" id="L150">		m_file_istream = m_importTemplate.validateFile(m_file_istream);</span>
+<span class="nc" id="L151">		File outFile = csvImporter.fileImport(activeTab, childTabs, m_file_istream, Charset.forName(m_importTemplate.getCharacterSet()), p_ImportMode, m_importTemplate.getSeparatorChar(), m_importTemplate.getQuoteChar(), processUI);</span>
+		// TODO: Potential improvement - traverse the outFile and call addLog with the results
+
+<span class="nc bnc" id="L154" title="All 2 branches missed.">		if (processUI != null)</span>
+<span class="nc" id="L155">			processUI.download(outFile);</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">		else if( getProcessInfo() != null ){</span>
+<span class="nc" id="L157">			ProcessInfo m_pi = getProcessInfo();</span>
+<span class="nc" id="L158">			m_pi.setExport(true);</span>
+<span class="nc" id="L159">			m_pi.setExportFile(outFile);</span>
+<span class="nc" id="L160">			m_pi.setExportFileExtension(&quot;csv&quot;);</span>
+		}
+
+<span class="nc" id="L163">		m_file_istream.close();</span>
+<span class="nc" id="L164">	}</span>
+
+    /**
+     * @param e
+     * @see DataStatusListener#dataStatusChanged(DataStatusEvent)
+     */
+	public void dataStatusChanged(DataStatusEvent e)
+    {
+<span class="nc" id="L172">        int col = e.getChangedColumn();</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        if (col &lt; 0)</span>
+<span class="nc" id="L174">        	return;</span>
+
+<span class="nc" id="L176">        GridTab l_gridTab = null;</span>
+<span class="nc bnc" id="L177" title="All 4 branches missed.">        if (e.getSource() != null &amp;&amp; e.getSource() instanceof GridTable) {</span>
+<span class="nc" id="L178">        	GridTable gt = (GridTable) e.getSource();</span>
+<span class="nc" id="L179">        	l_gridTab = m_gridWindow.getTab(gt.getTabNo());</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        	if (l_gridTab.getAD_Table_ID() != e.AD_Table_ID)</span>
+<span class="nc" id="L181">        		throw new RuntimeException(Msg.getMsg(getCtx(),&quot;TableDoesntMatchWithUpdatedTab&quot;));</span>
+        }
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        if (log.isLoggable(Level.CONFIG)) log.config(&quot;(&quot; + l_gridTab + &quot;) Col=&quot; + col + &quot;: &quot; + e.toString());</span>
+
+        //  Process Callout
+<span class="nc" id="L186">        GridField mField = l_gridTab.getField(col);</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        if (mField != null</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            &amp;&amp; (mField.getCallout().length() &gt; 0</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">            		|| (Core.findCallout(l_gridTab.getTableName(), mField.getColumnName())).size()&gt;0</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">            		|| l_gridTab.hasDependants(mField.getColumnName())))</span>
+        {
+<span class="nc" id="L192">            String msg = l_gridTab.processFieldChange(mField);     //  Dependencies &amp; Callout</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">            if (msg.length() &gt; 0)</span>
+            {
+<span class="nc" id="L195">            	log.warning(msg);</span>
+            }
+
+            // Refresh the list on dependent fields
+<span class="nc bnc" id="L199" title="All 2 branches missed.">    		for (GridField dependentField : l_gridTab.getDependantFields(mField.getColumnName()))</span>
+    		{
+    			//  if the field has a lookup
+<span class="nc bnc" id="L202" title="All 4 branches missed.">    			if (dependentField != null &amp;&amp; dependentField.getLookup() instanceof MLookup)</span>
+    			{
+<span class="nc" id="L204">    				MLookup mLookup = (MLookup)dependentField.getLookup();</span>
+    				//  if the lookup is dynamic (i.e. contains this columnName as variable)
+<span class="nc bnc" id="L206" title="All 2 branches missed.">    				if (mLookup.getValidation().indexOf(&quot;@&quot;+mField.getColumnName()+&quot;@&quot;) != -1)</span>
+    				{
+<span class="nc" id="L208">    					mLookup.refresh();</span>
+    				}
+    			}
+    		}   //  for all dependent fields
+
+        }
+<span class="nc" id="L214">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

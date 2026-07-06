@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MBankStatementLoader.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MBankStatementLoader.java</span></div><h1>MBankStatementLoader.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.sql.ResultSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.compiere.impexp.BankStatementLoaderInterface;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+ 
+ 
+/**
+ *  &lt;pre&gt;
+ *  Bank Statement Loader Model.
+ *  This class is responsible for creating an instance of the
+ *  bank statement loader class to use.
+ *  It also inserts the data into the I_BankStatement table.
+ *
+ *  The loader objects can access their configuration (e.g. file, URL,
+ *  password etc) using the corresponding get methods provided by this class.
+ *  As this class is derived from PO, &quot;Persistent Object&quot; it has access to
+ *  the loader configuration that has been entered for this loader.
+ *  How these values are interpreted is the responsibility of the loader.
+ *  There are two file names provided, getFileName() and getLocalFileName().
+ *  The first one is the file name as entered on the loader configuration tab,
+ *  the second one is the file name parameter from the loader process.
+ *  Recommended behavior for a file based loader would be to use the file
+ *  name from the process parameter if available, and resort to the file name
+ *  from the loader configuration as a second option.
+ *	
+ *  For a HTTP based loader the file name from the loader configuration should
+ *  be used to construct the URL to connect to (combined with the other parameters).
+ *  In this scenario the file name from the process parameter can be used to save
+ *  the acquired statement data to disk.
+ *  &lt;pre/&gt;
+ *	author Maarten Klinker, Eldir Tomassen
+ *	@version $Id: MBankStatementLoader.java,v 1.3 2006/07/30 00:51:04 jjanke Exp $
+ */
+ public class MBankStatementLoader extends X_C_BankStatementLoader
+ {
+ 	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = 8482717913976119270L;
+
+	/**	Number of statement lines imported			*/
+<span class="nc" id="L66">	private int loadCount = 0;</span>
+	
+	/**	Message will be handled by Adempiere (e.g. translated)	*/
+<span class="nc" id="L69">	private String errorMessage = &quot;&quot;;</span>
+	
+	/**	Additional error description				*/
+<span class="nc" id="L72">	private String errorDescription = &quot;&quot;;</span>
+
+	/**	Loader object to use 					*/
+<span class="nc" id="L75">	private BankStatementLoaderInterface m_loader = null;</span>
+	
+	/**	File name from process parameter							*/
+<span class="nc" id="L78">	private String localFileName = null;</span>
+
+	/** List of own bank accounts to lookup id */
+	private List&lt;X_C_BankAccount&gt; bankAccountList;
+	
+	/** Map of currency ISO-Codes to lookup id */
+	private HashMap&lt;String,Integer&gt; currencyMap;
+
+	/* Last saved line, to be retrieved on loaders */
+	private X_I_BankStatement m_lastSavedLine;
+	
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param C_BankStatementLoader_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MBankStatementLoader(Properties ctx, String C_BankStatementLoader_UU, String trxName) {
+<span class="nc" id="L96">        super(ctx, C_BankStatementLoader_UU, trxName);</span>
+<span class="nc" id="L97">		init(null);</span>
+<span class="nc" id="L98">    }</span>
+
+	/**
+	 * 	Create a Statement Loader
+	 *  Added for compatibility with new PO infrastructure (bug# 968136)
+	 * 	@param ctx Current context
+	 * 	@param C_BankStatementLoader_ID loader to use
+	 *	@param trxName transaction
+	 */
+	public MBankStatementLoader(Properties ctx, int C_BankStatementLoader_ID, String trxName)
+	{
+<span class="nc" id="L109">		super(ctx, C_BankStatementLoader_ID, trxName);</span>
+<span class="nc" id="L110">		init(null);</span>
+<span class="nc" id="L111">	}	//	MBankStatementLoader</span>
+	
+	/**
+	 * 	Create a Statement Loader
+	 * 	@param ctx Current context
+	 * 	@param C_BankStatementLoader_ID loader to use
+	 *  @param fileName input file
+	 *	@param trxName transaction
+	 */
+ 	public MBankStatementLoader(Properties ctx, int C_BankStatementLoader_ID, String fileName, String trxName)
+	{
+<span class="nc" id="L122">		super(ctx, C_BankStatementLoader_ID, trxName);</span>
+<span class="nc" id="L123">		init(fileName);</span>
+		
+<span class="nc" id="L125">	}	//	MBankStatementLoader</span>
+ 	
+	/**
+	 * 	Create a Statement Loader
+	 * 	@param ctx Current context
+	 * 	@param rs ResultSet
+	 *	@param trxName transaction
+	 */
+ 	public MBankStatementLoader(Properties ctx, ResultSet rs, String trxName)
+ 	{
+<span class="nc" id="L135"> 		super(ctx, rs, trxName);</span>
+<span class="nc" id="L136"> 		init(null);</span>
+<span class="nc" id="L137"> 	}	//	MBankStatementLoader</span>
+ 	
+ 	/**
+ 	 * Initialize loader
+ 	 * @param fileName
+ 	 */
+ 	private void init(String fileName)
+	{
+<span class="nc" id="L145">		localFileName = fileName;</span>
+		try
+		{
+<span class="nc bnc" id="L148" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info( &quot;MBankStatementLoader Class Name=&quot; + getStmtLoaderClass());</span>
+			// load the BankStatementLoader class via OSGi Service definition from a plugin
+<span class="nc" id="L150">			m_loader = Core.getBankStatementLoader(getStmtLoaderClass());</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">			if(m_loader==null){</span>
+				// if no OSGi plugin is found try the legacy way (in my own classpath)
+<span class="nc" id="L153">				Class&lt;?&gt; bsrClass = Class.forName(getStmtLoaderClass());</span>
+<span class="nc" id="L154">				m_loader = (BankStatementLoaderInterface) bsrClass.getDeclaredConstructor().newInstance();</span>
+			}
+<span class="nc" id="L156">		}</span>
+<span class="nc" id="L157">		catch(Exception e)</span>
+		{
+<span class="nc" id="L159">			errorMessage = &quot;ClassNotLoaded&quot;;</span>
+<span class="nc" id="L160">			errorDescription = e.getMessage();</span>
+		}		
+<span class="nc" id="L162">	}</span>
+	
+	/**
+	 *	Return id and name
+	 *	@return id and name
+	 */
+ 	@Override
+	public String toString ()
+	{
+<span class="nc" id="L171">		StringBuilder sb = new StringBuilder (&quot;MBankStatementLoader[&quot;)</span>
+<span class="nc" id="L172">			.append(get_ID ()).append(&quot;-&quot;).append(getName())</span>
+<span class="nc" id="L173">			.append (&quot;]&quot;);</span>
+<span class="nc" id="L174">		return sb.toString ();</span>
+	}	//	toString
+	
+	/**
+	 *	Return Local File Name
+	 *	@return Name
+	 */
+	public String getLocalFileName()
+	{
+<span class="nc" id="L183">		return localFileName;</span>
+	}	//	getLocalFileName
+	
+	/**
+	 * 	Start loading Bankstatements
+	 *	@return true if loading completed successfully
+	 */
+	public boolean loadLines()
+	{
+<span class="nc" id="L192">		boolean result = false;</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info( &quot;MBankStatementLoader.loadLines&quot;);</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">		if (m_loader == null)</span>
+		{
+<span class="nc" id="L196">			errorMessage = &quot;ClassNotLoaded&quot;;</span>
+<span class="nc" id="L197">			return result;</span>
+		}
+		// Initialize lookup lists
+<span class="nc" id="L200">		MTable table = MTable.get(Env.getCtx(), X_C_BankAccount.Table_ID);</span>
+<span class="nc" id="L201">		Query query = table.createQuery(null, get_TrxName());</span>
+<span class="nc" id="L202">		bankAccountList = query</span>
+<span class="nc" id="L203">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L204">				.setClient_ID()</span>
+<span class="nc" id="L205">				.list();</span>
+
+<span class="nc" id="L207">		table = MTable.get(Env.getCtx(), X_C_Currency.Table_ID);</span>
+<span class="nc" id="L208">		query = table.createQuery(&quot;AD_Client_ID IN (0, ?)&quot;, get_TrxName());</span>
+<span class="nc" id="L209">		List&lt;X_C_Currency&gt; currencyList = query</span>
+<span class="nc" id="L210">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L211">				.setParameters(getAD_Client_ID())</span>
+<span class="nc" id="L212">				.list();</span>
+<span class="nc" id="L213">		currencyMap = new HashMap&lt;String,Integer&gt;() ;</span>
+		
+<span class="nc bnc" id="L215" title="All 2 branches missed.">		for (X_C_Currency currency : currencyList) {</span>
+<span class="nc" id="L216">			currencyMap.put(currency.getISO_Code(), currency.get_ID()) ;</span>
+		}
+		//	Initialize the Loader 
+<span class="nc bnc" id="L219" title="All 2 branches missed.">		if (!m_loader.init(this))</span>
+		{
+<span class="nc" id="L221">			errorMessage = m_loader.getLastErrorMessage();</span>
+<span class="nc" id="L222">			errorDescription = m_loader.getLastErrorDescription();</span>
+<span class="nc" id="L223">			return result;</span>
+		}
+		//	Verify whether the data structure is valid
+<span class="nc bnc" id="L226" title="All 2 branches missed.">		if (!m_loader.isValid())</span>
+		{
+<span class="nc" id="L228">			errorMessage = m_loader.getLastErrorMessage();</span>
+<span class="nc" id="L229">			errorDescription = m_loader.getLastErrorDescription();</span>
+<span class="nc" id="L230">			return result;</span>
+		}
+		//	Load statement lines
+<span class="nc bnc" id="L233" title="All 2 branches missed.">		if (!m_loader.loadLines())</span>
+		{
+<span class="nc" id="L235">			errorMessage = m_loader.getLastErrorMessage();</span>
+<span class="nc" id="L236">			errorDescription = m_loader.getLastErrorDescription();</span>
+<span class="nc" id="L237">			return result;</span>
+		}
+<span class="nc" id="L239">		result = true;</span>
+<span class="nc" id="L240">		return result;</span>
+	}	//	loadLines
+	
+	/**
+	 * 	Save last loaded line from loader into the I_BankStatement table.
+	 *	This method is called by the BankStatementLoader after a complete 
+	 *	statement line has been read.
+	 *  @return true if Statement line was loaded successfully.
+	 */
+	public boolean saveLine()
+	{
+<span class="nc bnc" id="L251" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info( &quot;MBankStatementLoader.importLine&quot;);</span>
+<span class="nc" id="L252">		boolean result = false;</span>
+<span class="nc" id="L253">		X_I_BankStatement imp = new X_I_BankStatement(getCtx(), 0, get_TrxName());</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">		if (m_loader == null)</span>
+		{
+<span class="nc" id="L256">			errorMessage = &quot;LoadError&quot;;</span>
+<span class="nc" id="L257">			return result;</span>
+		}
+		//	Bank Account fields
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Bank Account=&quot; + m_loader.getBankAccountNo());</span>
+<span class="nc" id="L261">		imp.setBankAccountNo(m_loader.getBankAccountNo());</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Routing No=&quot; + m_loader.getRoutingNo());</span>
+<span class="nc" id="L263">		imp.setRoutingNo(m_loader.getRoutingNo());</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine IBAN=&quot; + m_loader.getIBAN());</span>
+<span class="nc" id="L265">		imp.setIBAN(m_loader.getIBAN());</span>
+		
+		//	Statement fields	
+<span class="nc bnc" id="L268" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine EFT Statement Reference No=&quot; + m_loader.getStatementReference());</span>
+<span class="nc" id="L269">		imp.setEftStatementReference(m_loader.getStatementReference());</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine EFT Statement Date=&quot; + m_loader.getStatementDate());</span>
+<span class="nc" id="L271">		imp.setEftStatementDate(m_loader.getStatementDate());</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Statement Date=&quot; + m_loader.getStatementDate());</span>
+<span class="nc" id="L273">		imp.setStatementDate(m_loader.getStatementDate());        </span>
+		
+		//	Statement Line fields
+<span class="nc bnc" id="L276" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine EFT Transaction ID=&quot; + m_loader.getTrxID());</span>
+<span class="nc" id="L277">		imp.setEftTrxID(m_loader.getTrxID());</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Statement Line Date=&quot; + m_loader.getStatementLineDate());</span>
+<span class="nc" id="L279">		imp.setStatementLineDate(m_loader.getStatementLineDate());</span>
+<span class="nc" id="L280">		imp.setEftStatementLineDate(m_loader.getStatementLineDate());</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Valuta Date=&quot; + m_loader.getValutaDate());</span>
+<span class="nc" id="L282">		imp.setValutaDate(m_loader.getValutaDate());</span>
+<span class="nc" id="L283">		imp.setEftValutaDate(m_loader.getValutaDate());</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Statement Amount=&quot; + m_loader.getStmtAmt());</span>
+<span class="nc" id="L285">		imp.setStmtAmt(m_loader.getStmtAmt());</span>
+<span class="nc" id="L286">		imp.setEftAmt(m_loader.getStmtAmt());</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Transaction Amount=&quot; + m_loader.getTrxAmt());</span>
+<span class="nc" id="L288">		imp.setTrxAmt(m_loader.getTrxAmt());</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Interest Amount=&quot; + m_loader.getInterestAmt());</span>
+<span class="nc" id="L290">		imp.setInterestAmt(m_loader.getInterestAmt());</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Reference No=&quot; + m_loader.getReference());</span>
+<span class="nc" id="L292">		imp.setReferenceNo(m_loader.getReference());</span>
+<span class="nc" id="L293">		imp.setEftReference(m_loader.getReference());</span>
+<span class="nc bnc" id="L294" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Check No=&quot; + m_loader.getCheckNo());</span>
+<span class="nc" id="L295">		imp.setEftCheckNo(m_loader.getCheckNo());</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Memo=&quot; + m_loader.getMemo());</span>
+<span class="nc" id="L297">		imp.setMemo(m_loader.getMemo());</span>
+<span class="nc" id="L298">		imp.setEftMemo(m_loader.getMemo());</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Payee Name=&quot; + m_loader.getPayeeName());</span>
+<span class="nc" id="L300">		imp.setEftPayee(m_loader.getPayeeName());</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Payee Account No=&quot; + m_loader.getPayeeAccountNo());</span>
+<span class="nc" id="L302">		imp.setEftPayeeAccount(m_loader.getPayeeAccountNo());</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine EFT Transaction Type=&quot; + m_loader.getTrxType());</span>
+<span class="nc" id="L304">		imp.setEftTrxType(m_loader.getTrxType());</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Currency=&quot; + m_loader.getCurrency());</span>
+<span class="nc" id="L306">		imp.setEftCurrency(m_loader.getCurrency());</span>
+<span class="nc" id="L307">		imp.setISO_Code(m_loader.getCurrency());</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Charge Name=&quot; + m_loader.getChargeName());</span>
+<span class="nc" id="L309">		imp.setChargeName(m_loader.getChargeName());</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG))log.config( &quot;MBankStatementLoader.importLine Charge Amount=&quot; + m_loader.getChargeAmt());</span>
+<span class="nc" id="L311">		imp.setChargeAmt(m_loader.getChargeAmt());</span>
+		
+		// Lookup Bank Account
+<span class="nc bnc" id="L314" title="All 2 branches missed.">		for (X_C_BankAccount bankAccount : bankAccountList) {</span>
+<span class="nc" id="L315">			MBank bank = MBank.get(bankAccount.getC_Bank_ID());</span>
+<span class="nc bnc" id="L316" title="All 4 branches missed.">			if ((!Util.isEmpty(imp.getIBAN()) &amp;&amp; imp.getIBAN().equalsIgnoreCase(bankAccount.getIBAN()))</span>
+<span class="nc bnc" id="L317" title="All 4 branches missed.">					|| (!Util.isEmpty(imp.getBankAccountNo()) &amp;&amp; !Util.isEmpty(imp.getRoutingNo())</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">							&amp;&amp; imp.getBankAccountNo().equalsIgnoreCase(bankAccount.getAccountNo())</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">							&amp;&amp; imp.getRoutingNo().equalsIgnoreCase(bank.getRoutingNo()))) {</span>
+<span class="nc" id="L320">				imp.setC_BankAccount_ID(bankAccount.get_ID());</span>
+<span class="nc" id="L321">				break;</span>
+			}
+		}
+
+		// Lookup Currency
+<span class="nc bnc" id="L326" title="All 2 branches missed.">		if (!Util.isEmpty(imp.getEftCurrency())) {</span>
+<span class="nc" id="L327">			imp.setC_Currency_ID(currencyMap.get(imp.getEftCurrency()));</span>
+		}
+				
+<span class="nc" id="L330">		imp.setProcessed(false);</span>
+<span class="nc" id="L331">		imp.setI_IsImported(false);</span>
+		
+<span class="nc" id="L333">		result = imp.save();</span>
+<span class="nc" id="L334">		m_lastSavedLine = imp;</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">		if (result)</span>
+		{
+<span class="nc" id="L337">			loadCount ++;</span>
+<span class="nc" id="L338">		}</span>
+		else
+		{
+<span class="nc" id="L341">			errorMessage = &quot;LoadError&quot;;</span>
+		}
+<span class="nc" id="L343">		imp = null;</span>
+<span class="nc" id="L344">		return result;</span>
+	}	//	saveLine
+
+	/**
+	 * Return the last saved line
+	 * @return last saved X_I_BankStatement record
+	 */
+	public X_I_BankStatement getLastSavedLine() {
+<span class="nc" id="L352">		return m_lastSavedLine;</span>
+	}
+
+	/**
+	 * 	Return the most recent error
+	 *	@return Error message
+	 *	This error message will be handled as a Adempiere message,
+	 *	(e.g. it can be translated)
+	 */
+	public String getErrorMessage()
+	{
+<span class="nc" id="L363">		return errorMessage;</span>
+	}	//	getErrorMessage
+
+	/**
+	 * 	Return the most recent error description
+	 *	@return Error description
+	 *	This is an additional error description, it can be used to provided
+	 *	descriptive information, such as a file name or SQL error, that can not
+	 *	be translated by the Adempiere message system.
+	 */
+	public String getErrorDescription()
+	{
+<span class="nc" id="L375">		return errorDescription;</span>
+	}	//	getErrorDescription
+	
+	/**
+	 * 	The total number of statement lines loaded
+	 *	@return Number of imported statement lines
+	 */
+	public int getLoadCount()
+	{
+<span class="nc" id="L384">		return loadCount;</span>
+	}	//	getLoadCount
+
+ 
+ }	//MBankStatementLoader
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

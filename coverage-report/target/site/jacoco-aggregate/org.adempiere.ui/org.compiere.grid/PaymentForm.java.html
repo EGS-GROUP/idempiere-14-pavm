@@ -1,0 +1,315 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PaymentForm.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.grid</a> &gt; <span class="el_source">PaymentForm.java</span></div><h1>PaymentForm.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2012 Elaine Tan                                              *
+ * Copyright (C) 2012 Trek Global
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.grid;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.GridTab;
+import org.compiere.model.MBankAccountProcessor;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.PO;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.TrxRunnable;
+
+/**
+ * Base class for payment form
+ * @author Elaine
+ */
+public abstract class PaymentForm implements IPaymentForm {
+
+	/**	Logger			*/
+<span class="nc" id="L43">	protected transient CLogger log = CLogger.getCLogger(getClass());</span>
+	
+	/**	Window						*/
+<span class="nc" id="L46">	private int                 m_WindowNo = 0;</span>
+	/**	Tab							*/
+	private GridTab         	m_mTab;
+	
+	// Data from Order/Invoice
+<span class="nc" id="L51">	protected String 				m_DocStatus = null;</span>
+	/** Start Payment Rule */
+<span class="nc" id="L53">	protected String 				m_PaymentRule = &quot;&quot;;</span>
+	/** Start Acct Date */
+<span class="nc" id="L55">	protected Timestamp 			m_DateAcct = null;</span>
+
+	/** Invoice Currency */
+<span class="nc" id="L58">	protected int 					m_C_Currency_ID = 0;</span>
+<span class="nc" id="L59">	protected int 					m_AD_Client_ID = 0;</span>
+<span class="nc" id="L60">	protected boolean 				m_Cash_As_Payment = true;</span>
+<span class="nc" id="L61">	protected int 					m_AD_Org_ID = 0;</span>
+<span class="nc" id="L62">	protected int 					m_C_BPartner_ID = 0;</span>
+<span class="nc" id="L63">	protected BigDecimal 			m_Amount = Env.ZERO; // Payment Amount</span>
+	
+<span class="nc" id="L65">	protected boolean				m_needSave = false;</span>
+	/** Only allow changing Rule        */
+<span class="nc" id="L67">	protected boolean 				m_onlyRule = false;</span>
+	/** Is SOTrx					*/
+<span class="nc" id="L69">	protected boolean				m_isSOTrx = true;</span>
+	
+	/**
+	 * @param WindowNo
+	 * @param mTab
+	 */
+<span class="nc" id="L75">	public PaymentForm(int WindowNo, GridTab mTab) {</span>
+<span class="nc" id="L76">		m_WindowNo = WindowNo;</span>
+<span class="nc" id="L77">		m_isSOTrx = &quot;Y&quot;.equals(Env.getContext(Env.getCtx(), WindowNo, &quot;IsSOTrx&quot;));</span>
+<span class="nc" id="L78">		m_mTab = mTab;</span>
+<span class="nc" id="L79">	}</span>
+	
+	@Override
+	public boolean dynInit() throws Exception {
+<span class="nc" id="L83">		m_DocStatus = (String) m_mTab.getValue(&quot;DocStatus&quot;);</span>
+<span class="nc" id="L84">		log.config(m_DocStatus);</span>
+
+<span class="nc bnc" id="L86" title="All 2 branches missed.">		if (m_mTab.getValue(&quot;C_BPartner_ID&quot;) == null) {</span>
+<span class="nc" id="L87">			throw new AdempiereException(&quot;SaveErrorRowNotFound&quot;);</span>
+		}
+
+		// DocStatus
+<span class="nc bnc" id="L91" title="All 2 branches missed.">		if (m_DocStatus == null)</span>
+<span class="nc" id="L92">			m_DocStatus = &quot;&quot;;</span>
+		// Is the Trx closed? Reversed / Voided / Cloased
+<span class="nc bnc" id="L94" title="All 6 branches missed.">		if (m_DocStatus.equals(&quot;RE&quot;) || m_DocStatus.equals(&quot;VO&quot;) || m_DocStatus.equals(&quot;CL&quot;))</span>
+<span class="nc" id="L95">			return false;</span>
+		
+		// Document is not complete - allow to change the Payment Rule only
+<span class="nc bnc" id="L98" title="All 4 branches missed.">		if (m_DocStatus.equals(&quot;CO&quot;) || m_DocStatus.equals(&quot;WP&quot;))</span>
+<span class="nc" id="L99">			m_onlyRule = false;</span>
+		else
+<span class="nc" id="L101">			m_onlyRule = true;</span>
+		// PO only Rule
+<span class="nc bnc" id="L103" title="All 2 branches missed.">		if (!m_onlyRule // Only order has Warehouse</span>
+<span class="nc bnc" id="L104" title="All 4 branches missed.">				&amp;&amp; !m_isSOTrx &amp;&amp; m_mTab.getValue(&quot;M_Warehouse_ID&quot;) != null)</span>
+<span class="nc" id="L105">			m_onlyRule = true;</span>
+		
+		//  Amount
+<span class="nc" id="L108">		m_Amount = (BigDecimal)m_mTab.getValue(&quot;GrandTotal&quot;);</span>
+<span class="nc bnc" id="L109" title="All 4 branches missed.">		if (!m_onlyRule &amp;&amp; m_Amount.compareTo(Env.ZERO) == 0)</span>
+		{
+<span class="nc" id="L111">			throw new AdempiereException(&quot;PaymentZero&quot;);</span>
+		}
+		
+		/**
+		 *	Get Data from Grid
+		 */
+<span class="nc" id="L117">		m_AD_Client_ID = ((Integer)m_mTab.getValue(&quot;AD_Client_ID&quot;)).intValue();</span>
+<span class="nc" id="L118">		m_Cash_As_Payment = MSysConfig.getBooleanValue(MSysConfig.CASH_AS_PAYMENT,true, m_AD_Client_ID);</span>
+<span class="nc" id="L119">		m_AD_Org_ID = ((Integer)m_mTab.getValue(&quot;AD_Org_ID&quot;)).intValue();</span>
+<span class="nc" id="L120">		m_C_BPartner_ID = ((Integer)m_mTab.getValue(&quot;C_BPartner_ID&quot;)).intValue();</span>
+<span class="nc" id="L121">		m_PaymentRule = (String)m_mTab.getValue(&quot;PaymentRule&quot;);</span>
+<span class="nc" id="L122">		m_C_Currency_ID = ((Integer)m_mTab.getValue(&quot;C_Currency_ID&quot;)).intValue();</span>
+<span class="nc" id="L123">		m_DateAcct = (Timestamp)m_mTab.getValue(&quot;DateAcct&quot;);</span>
+		
+		/**
+		 *	Payment Combo
+		 */
+<span class="nc bnc" id="L128" title="All 2 branches missed.">		if (m_PaymentRule == null)</span>
+<span class="nc" id="L129">			m_PaymentRule = &quot;&quot;;</span>
+
+<span class="nc" id="L131">		loadData();</span>
+		
+<span class="nc" id="L133">		return true;</span>
+	}
+	
+	@Override
+	public boolean saveChanges() {
+		// BF [ 1920179 ] perform the save in a trx's context.
+<span class="nc" id="L139">		final boolean[] success = new boolean[] { false };</span>
+<span class="nc" id="L140">		final TrxRunnable r = new TrxRunnable() {</span>
+			public void run(String trxName) {
+				//  only Payment Rule
+<span class="nc bnc" id="L143" title="All 2 branches missed.">				if (isOnlyRule())</span>
+<span class="nc" id="L144">					success[0] = true;</span>
+				else
+<span class="nc" id="L146">					success[0] = saveChangesInTrx(trxName);</span>
+<span class="nc" id="L147">			}</span>
+		};
+		try {
+<span class="nc" id="L150">			Trx.run(r);</span>
+<span class="nc" id="L151">		} catch (AdempiereException ae) {</span>
+<span class="nc" id="L152">			success[0] = false;</span>
+<span class="nc" id="L153">			throw ae;</span>
+<span class="nc" id="L154">		} catch (Throwable e) {</span>
+<span class="nc" id="L155">			success[0] = false;</span>
+<span class="nc" id="L156">			throw new AdempiereException(&quot;PaymentError&quot;, e);</span>
+		}
+		
+<span class="nc" id="L159">		afterSave(success[0]);</span>
+		
+<span class="nc" id="L161">		return success[0];</span>
+	}
+	
+	/**
+	 * After save and transaction have been committed/rollback
+	 * @param success
+	 */
+	protected abstract void afterSave(boolean success);
+	
+	
+	@Override
+	public boolean needSave()
+	{
+<span class="nc" id="L174">		return m_needSave;</span>
+	}	//	needSave
+	
+	/**
+	 *  Get Invoice ID for Order
+	 *  @param C_Order_ID order
+	 *  @return C_Invoice_ID or 0 if not found
+	 */
+	protected int getInvoiceID (int C_Order_ID)
+	{
+<span class="nc" id="L184">		int retValue = 0;</span>
+<span class="nc" id="L185">		String sql = &quot;SELECT C_Invoice_ID FROM C_Invoice WHERE C_Order_ID=? &quot;</span>
+			+ &quot;AND DocStatus NOT IN ('VO','RE') &quot;
+			+ &quot;ORDER BY C_Invoice_ID DESC&quot;;     //  last invoice
+<span class="nc" id="L188">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L189">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L192">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L193">			pstmt.setInt(1, C_Order_ID);</span>
+<span class="nc" id="L194">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L196">				retValue = rs.getInt(1);</span>
+<span class="nc" id="L197">		}</span>
+<span class="nc" id="L198">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L200">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L204">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L205">			rs = null;</span>
+<span class="nc" id="L206">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L209">		return retValue;</span>
+	}   //  getInvoiceID
+	
+	@Override
+	public void processOnline()
+	{
+<span class="nc" id="L215">		throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;ActionNotSupported&quot;));</span>
+	}
+	
+	/**
+	 * Is online payment processor have been configured for bank account
+	 * @param ctx
+	 * @param tender
+	 * @param CCType
+	 * @param AD_Client_ID
+	 * @param C_Currency_ID
+	 * @param PayAmt
+	 * @param trxName
+	 * @return true if online payment processor have been configured for bank account
+	 */
+	protected boolean isBankAccountProcessorExist(Properties ctx, String tender, String CCType, int AD_Client_ID, int C_Currency_ID, BigDecimal PayAmt, String trxName)
+	{
+<span class="nc" id="L231">		MBankAccountProcessor[] m_mBankAccountProcessors = MBankAccountProcessor.find(ctx, tender, CCType, AD_Client_ID, C_Currency_ID, PayAmt, trxName);</span>
+		//	Relax Amount
+<span class="nc bnc" id="L233" title="All 4 branches missed.">		if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L234">			m_mBankAccountProcessors = MBankAccountProcessor.find(ctx, tender, CCType, AD_Client_ID, C_Currency_ID, Env.ZERO, trxName);</span>
+<span class="nc bnc" id="L235" title="All 4 branches missed.">		if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L236">			return false;</span>
+<span class="nc" id="L237">		return true;</span>
+	}
+	
+	/**
+	 * Get online payment processor configuration
+	 * @param ctx
+	 * @param tender tender type
+	 * @param CCType credit card type
+	 * @param AD_Client_ID
+	 * @param C_Currency_ID
+	 * @param PayAmt
+	 * @param trxName
+	 * @return {@link MBankAccountProcessor}
+	 */
+	protected MBankAccountProcessor getBankAccountProcessor(Properties ctx, String tender, String CCType, int AD_Client_ID, int C_Currency_ID, BigDecimal PayAmt, String trxName)
+	{
+<span class="nc" id="L253">		MBankAccountProcessor[] m_mBankAccountProcessors = MBankAccountProcessor.find(ctx, tender, CCType, AD_Client_ID, C_Currency_ID, PayAmt, trxName);</span>
+		//	Relax Amount
+<span class="nc bnc" id="L255" title="All 4 branches missed.">		if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L256">			m_mBankAccountProcessors = MBankAccountProcessor.find(ctx, tender, CCType, AD_Client_ID, C_Currency_ID, Env.ZERO, trxName);</span>
+<span class="nc bnc" id="L257" title="All 4 branches missed.">		if (m_mBankAccountProcessors == null || m_mBankAccountProcessors.length == 0)</span>
+<span class="nc" id="L258">			return null;</span>
+
+<span class="nc" id="L260">		MBankAccountProcessor m_mBankAccountProcessor = null;</span>
+		//	Find the first right one
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		for (int i = 0; i &lt; m_mBankAccountProcessors.length; i++)</span>
+		{
+<span class="nc" id="L264">			MBankAccountProcessor bap = m_mBankAccountProcessors[i];</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">			if (bap.accepts(tender, CCType))</span>
+			{
+<span class="nc" id="L267">				m_mBankAccountProcessor = m_mBankAccountProcessors[i];</span>
+<span class="nc" id="L268">				break;</span>
+			}
+		}
+		//
+<span class="nc" id="L272">		return m_mBankAccountProcessor;</span>
+	}
+	
+	/**
+	 * @return {@link GridTab}
+	 */
+	public GridTab getGridTab()
+	{
+<span class="nc" id="L280">		return m_mTab;</span>
+	}
+	
+	@Override
+	public boolean isOnlyRule()
+	{
+<span class="nc" id="L286">		return m_onlyRule;</span>
+	}
+	
+	@Override
+	public boolean isApproved()
+	{
+<span class="nc" id="L292">		return true;</span>
+	}
+	
+	/**
+	 * @return window no
+	 */
+	public int getWindowNo()
+	{
+<span class="nc" id="L300">		return m_WindowNo;</span>
+	}
+	
+	@Override
+	public void setCustomizeValues(PO po) 
+	{
+		
+<span class="nc" id="L307">	}</span>
+	
+	@Override
+	public void setBankAccountProcessor(MBankAccountProcessor bankAccountProcessor)
+	{
+		
+<span class="nc" id="L313">	}		</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

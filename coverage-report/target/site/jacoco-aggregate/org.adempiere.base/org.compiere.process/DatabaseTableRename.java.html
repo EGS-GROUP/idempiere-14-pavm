@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DatabaseTableRename.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">DatabaseTableRename.java</span></div><h1>DatabaseTableRename.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz - globalqss                                           *
+ **********************************************************************/
+package org.compiere.process;
+
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.MClient;
+import org.compiere.model.MColumn;
+import org.compiere.model.MField;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MRefTable;
+import org.compiere.model.MReference;
+import org.compiere.model.MSequence;
+import org.compiere.model.MTab;
+import org.compiere.model.MTable;
+import org.compiere.model.MWindow;
+import org.compiere.model.M_Element;
+import org.compiere.model.Query;
+import org.compiere.util.CacheMgt;
+import org.compiere.util.DB;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+/**
+ * Process to rename a DB table.
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L52">public class DatabaseTableRename extends SvrProcess {</span>
+
+<span class="nc" id="L54">	private int p_AD_Table_ID = 0;</span>
+	// New Column Name
+	private String p_NewTableName;
+
+	@Override
+	protected void prepare() {
+<span class="nc bnc" id="L60" title="All 2 branches missed.">		for (ProcessInfoParameter para : getParameter()) {</span>
+<span class="nc" id="L61">			String name = para.getParameterName();</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">			if (&quot;NewTableName&quot;.equals(name)) {</span>
+<span class="nc" id="L63">				p_NewTableName = para.getParameterAsString();</span>
+<span class="nc" id="L64">			} else {</span>
+<span class="nc" id="L65">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para);</span>
+			}
+		}
+<span class="nc" id="L68">		p_AD_Table_ID = getRecord_ID();</span>
+<span class="nc" id="L69">	}</span>
+
+	@Override
+	protected String doIt() throws Exception {
+<span class="nc" id="L73">		MTable table = new MTable(getCtx(), p_AD_Table_ID, get_TrxName());</span>
+<span class="nc" id="L74">		String oldTableName = table.getTableName();</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(table.toString());</span>
+<span class="nc bnc" id="L76" title="All 2 branches missed.">		if (   Util.isEmpty(p_NewTableName, true)</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">			|| p_NewTableName.toLowerCase().equals(oldTableName.toLowerCase())) {</span>
+<span class="nc" id="L78">			throw new AdempiereException(Util.cleanAmp(Msg.parseTranslation(getCtx(), &quot;@NotValid@: @NewTableName@&quot;)));</span>
+		}
+<span class="nc" id="L80">		int cnt = DB.getSQLValueEx(get_TrxName(),</span>
+<span class="nc" id="L81">				&quot;SELECT COUNT(*) FROM AD_Table WHERE LOWER(TableName)=?&quot;,</span>
+<span class="nc" id="L82">				p_NewTableName.toLowerCase());</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">		if (cnt &gt; 0) {</span>
+<span class="nc" id="L84">			throw new AdempiereException(Util.cleanAmp(Msg.parseTranslation(getCtx(), &quot;@AlreadyExists@: @TableName@ = &quot; + p_NewTableName)));</span>
+		}
+
+<span class="nc" id="L87">		String regex = &quot;(?i)\\b&quot; + oldTableName + &quot;\\.&quot;;</span>
+<span class="nc" id="L88">		String fullregex = &quot;.*&quot; + regex + &quot;.*&quot;;</span>
+
+		// Rename table in WhereClause and OrderByClause in AD_Tab
+<span class="nc" id="L91">		List&lt;MTab&gt; tabs = new Query(getCtx(), MTab.Table_Name, &quot;AD_Table_ID=? AND (WhereClause IS NOT NULL OR OrderByClause IS NOT NULL)&quot;, get_TrxName())</span>
+<span class="nc" id="L92">				.setParameters(p_AD_Table_ID)</span>
+<span class="nc" id="L93">				.list();</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">		for (MTab tab : tabs) {</span>
+<span class="nc" id="L95">			boolean changed = false;</span>
+<span class="nc" id="L96">			String whereClause = tab.getWhereClause();</span>
+<span class="nc bnc" id="L97" title="All 4 branches missed.">			if (whereClause != null &amp;&amp; whereClause.matches(fullregex)) {</span>
+<span class="nc" id="L98">				whereClause = whereClause.replaceAll(regex, p_NewTableName + &quot;.&quot;);</span>
+<span class="nc" id="L99">				tab.setWhereClause(whereClause);</span>
+<span class="nc" id="L100">				changed = true;</span>
+			}
+<span class="nc" id="L102">			String orderByClause = tab.getOrderByClause();</span>
+<span class="nc bnc" id="L103" title="All 4 branches missed.">			if (orderByClause != null &amp;&amp; orderByClause.matches(fullregex)) {</span>
+<span class="nc" id="L104">				orderByClause = orderByClause.replaceAll(regex, p_NewTableName + &quot;.&quot;);</span>
+<span class="nc" id="L105">				tab.setOrderByClause(orderByClause);</span>
+<span class="nc" id="L106">				changed = true;</span>
+			}
+<span class="nc bnc" id="L108" title="All 2 branches missed.">			if (changed) {</span>
+<span class="nc" id="L109">				tab.saveEx();</span>
+<span class="nc" id="L110">				addLog(0, null, null, &quot;@Updated@ @AD_Tab_ID@ &quot; + tab.getName(), MTab.Table_ID, tab.getAD_Tab_ID());</span>
+			}
+		}
+
+		// Rename table in WhereClause and OrderByClause in AD_Ref_Table
+<span class="nc" id="L115">		List&lt;MRefTable&gt; refts = new Query(getCtx(), MRefTable.Table_Name, &quot;AD_Table_ID=? AND (WhereClause IS NOT NULL OR OrderByClause IS NOT NULL)&quot;, get_TrxName())</span>
+<span class="nc" id="L116">				.setParameters(p_AD_Table_ID)</span>
+<span class="nc" id="L117">				.list();</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">		for (MRefTable reft : refts) {</span>
+<span class="nc" id="L119">			boolean changed = false;</span>
+<span class="nc" id="L120">			String whereClause = reft.getWhereClause();</span>
+<span class="nc bnc" id="L121" title="All 4 branches missed.">			if (whereClause != null &amp;&amp; whereClause.matches(fullregex)) {</span>
+<span class="nc" id="L122">				whereClause = whereClause.replaceAll(regex, p_NewTableName + &quot;.&quot;);</span>
+<span class="nc" id="L123">				reft.setWhereClause(whereClause);</span>
+<span class="nc" id="L124">				changed = true;</span>
+			}
+<span class="nc" id="L126">			String orderByClause = reft.getOrderByClause();</span>
+<span class="nc bnc" id="L127" title="All 4 branches missed.">			if (orderByClause != null &amp;&amp; orderByClause.matches(fullregex)) {</span>
+<span class="nc" id="L128">				orderByClause = orderByClause.replaceAll(regex, p_NewTableName + &quot;.&quot;);</span>
+<span class="nc" id="L129">				reft.setOrderByClause(orderByClause);</span>
+<span class="nc" id="L130">				changed = true;</span>
+			}
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			if (changed) {</span>
+<span class="nc" id="L133">				reft.saveEx();</span>
+<span class="nc" id="L134">				MReference ref = MReference.get(reft.getAD_Reference_ID());</span>
+<span class="nc" id="L135">				addLog(0, null, null, &quot;@Updated@ @AD_Reference_ID@ &quot; + ref.getName(), MRefTable.Table_ID, reft.getAD_Reference_ID());</span>
+			}
+		}
+		
+		// Rename table in sequences
+<span class="nc" id="L140">		String whereSeq = &quot;(Name=? AND IsTableID='Y') OR (Name=? AND IsTableID='N')&quot;;</span>
+<span class="nc" id="L141">		List&lt;MSequence&gt; seqs = new Query(getCtx(), MSequence.Table_Name, whereSeq, get_TrxName())</span>
+<span class="nc" id="L142">				.setParameters(</span>
+<span class="nc" id="L143">						oldTableName,</span>
+<span class="nc" id="L144">						&quot;DocumentNo_&quot;+oldTableName</span>
+				)
+<span class="nc" id="L146">				.list();</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">		for (MSequence seq : seqs) {</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">			if (seq.isTableID()) {</span>
+<span class="nc" id="L149">				seq.setName(p_NewTableName);</span>
+<span class="nc" id="L150">				seq.setDescription(&quot;Table &quot;+p_NewTableName);</span>
+<span class="nc" id="L151">			} else {</span>
+<span class="nc" id="L152">				seq.setName(&quot;DocumentNo_&quot;+p_NewTableName);</span>
+<span class="nc" id="L153">				seq.setDescription(&quot;DocumentNo/Value for Table &quot;+p_NewTableName);</span>
+			}
+<span class="nc" id="L155">			seq.saveEx();</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">			if (seq.getAD_Client_ID() == 0) {</span>
+<span class="nc" id="L157">				addLog(0, null, null, &quot;@Updated@ @AD_Sequence_ID@ &quot; + seq.getName(), MSequence.Table_ID, seq.getAD_Sequence_ID());</span>
+<span class="nc" id="L158">			} else {</span>
+<span class="nc" id="L159">				addLog(0, null, null, &quot;@Updated@ @AD_Sequence_ID@ &quot; + seq.getName() + &quot;, @AD_Client_ID@ &quot; + MClient.get(seq.getAD_Client_ID()).getName());</span>
+			}
+		}
+		
+<span class="nc" id="L163">		String colPrefix = oldTableName.toLowerCase();</span>
+<span class="nc" id="L164">		List&lt;M_Element&gt; elements = new Query(getCtx(), M_Element.Table_Name, &quot;LOWER(ColumnName) IN (?, ?)&quot;, get_TrxName())</span>
+<span class="nc" id="L165">				.setParameters(colPrefix+&quot;_id&quot;, colPrefix+&quot;_uu&quot;)</span>
+<span class="nc" id="L166">				.setOrderBy(&quot;AD_Element_ID&quot;)</span>
+<span class="nc" id="L167">				.list();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">		for (M_Element element : elements) {</span>
+			String newColumnName;
+<span class="nc bnc" id="L170" title="All 2 branches missed.">			if (element.getColumnName().toLowerCase().endsWith(&quot;_id&quot;)) {</span>
+<span class="nc" id="L171">				newColumnName = p_NewTableName + &quot;_ID&quot;;</span>
+<span class="nc" id="L172">			} else {</span>
+<span class="nc" id="L173">				newColumnName = p_NewTableName + &quot;_UU&quot;;</span>
+			}
+<span class="nc" id="L175">			element.renameDBColumn(newColumnName, getProcessInfo());</span>
+<span class="nc" id="L176">			element.saveEx();</span>
+		}
+		
+<span class="nc" id="L179">		String sql = &quot;ALTER TABLE &quot; + oldTableName + &quot; RENAME TO &quot; + p_NewTableName;</span>
+<span class="nc" id="L180">		int rvalue = DB.executeUpdateEx(sql, get_TrxName());</span>
+<span class="nc" id="L181">		addLog(rvalue + &quot; - &quot; + sql);</span>
+
+<span class="nc" id="L183">		table.setTableName(p_NewTableName);</span>
+<span class="nc" id="L184">		table.saveEx();</span>
+
+<span class="nc" id="L186">		CacheMgt.scheduleCacheReset(MColumn.Table_Name, -1, false, get_TrxName());</span>
+<span class="nc" id="L187">		CacheMgt.scheduleCacheReset(MWindow.Table_Name, -1, false, get_TrxName());</span>
+<span class="nc" id="L188">		CacheMgt.scheduleCacheReset(MTab.Table_Name, -1, false, get_TrxName());</span>
+<span class="nc" id="L189">		CacheMgt.scheduleCacheReset(MField.Table_Name, -1, false, get_TrxName());</span>
+
+<span class="nc" id="L191">		return &quot;@OK@&quot;;</span>
+	}
+} // DatabaseTableRename
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,649 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DocActionDelegate.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.model</a> &gt; <span class="el_source">DocActionDelegate.java</span></div><h1>DocActionDelegate.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz													   *
+ * - hengsin                         								   *
+ **********************************************************************/
+package org.adempiere.model;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.Callable;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.BackDateTrxNotAllowedException;
+import org.adempiere.exceptions.PeriodClosedException;
+import org.compiere.model.MAcctSchema;
+import org.compiere.model.MDocType;
+import org.compiere.model.MPeriod;
+import org.compiere.model.MProjectIssue;
+import org.compiere.model.ModelValidationEngine;
+import org.compiere.model.ModelValidator;
+import org.compiere.model.PO;
+import org.compiere.process.DocAction;
+import org.compiere.process.DocumentEngine;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+
+/**
+ * Helper class to simplify the implementation of {@link DocAction} interface.
+ * @see {@link MProjectIssue} for example usage.
+ * @author hengsin
+ */
+public class DocActionDelegate&lt;T extends PO &amp; DocAction&gt; implements DocAction {
+
+	private T po;
+	/**	Process Message 			*/
+<span class="nc" id="L63">	private String		m_processMsg = null;</span>
+	/**	Just Prepared Flag			*/
+<span class="nc" id="L65">	private boolean		m_justPrepared = false;</span>
+	
+<span class="nc" id="L67">	private Map&lt;String, Callable&lt;String&gt;&gt; actionCallables = new HashMap&lt;String, Callable&lt;String&gt;&gt;();</span>
+
+	/**	Logger							*/
+<span class="nc" id="L70">	protected transient CLogger	log = CLogger.getCLogger (getClass());</span>
+	
+	/**
+	 * @param po
+	 */
+<span class="nc" id="L75">	public DocActionDelegate(T po) {</span>
+<span class="nc" id="L76">		this.po = po;</span>
+<span class="nc" id="L77">	}</span>
+
+	/**
+	 * set callable for docaction
+	 * @param docAction
+	 * @param callable
+	 */
+	public void setActionCallable(String docAction, Callable&lt;String&gt; callable) {
+<span class="nc" id="L85">		actionCallables.put(docAction, callable);</span>
+<span class="nc" id="L86">	}</span>
+	
+	@Override
+	public void setDocStatus(String DocStatus) {
+<span class="nc" id="L90">		po.columnExists(DOC_COLUMNNAME_DocStatus, true);</span>
+<span class="nc" id="L91">		po.set_ValueOfColumn(DOC_COLUMNNAME_DocStatus, DocStatus);</span>
+<span class="nc" id="L92">	}</span>
+
+	@Override
+	public String getDocStatus() {
+<span class="nc" id="L96">		po.columnExists(DOC_COLUMNNAME_DocStatus, true);</span>
+<span class="nc" id="L97">		return (String)po.get_Value(DOC_COLUMNNAME_DocStatus);</span>
+	}
+
+	@Override
+	public boolean processIt(String action) {
+<span class="nc" id="L102">		m_processMsg = null;</span>
+<span class="nc" id="L103">		DocumentEngine engine = new DocumentEngine (po, getDocStatus());</span>
+<span class="nc" id="L104">		return engine.processIt (action, getDocAction());</span>
+	}
+
+	@Override
+	public boolean unlockIt() {
+<span class="nc bnc" id="L109" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;unlockIt - &quot; + po.toString());</span>
+<span class="nc" id="L110">		setProcessing(false);</span>
+<span class="nc" id="L111">		return true;</span>
+	}
+
+	@Override
+	public boolean invalidateIt() {
+<span class="nc bnc" id="L116" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;invalidateIt - &quot; + po.toString());</span>
+<span class="nc" id="L117">		setDocAction(DocAction.ACTION_Prepare);</span>
+<span class="nc" id="L118">		return true;</span>
+	}
+
+	@Override
+	public String prepareIt() {
+<span class="nc bnc" id="L123" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+<span class="nc" id="L124">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po, ModelValidator.TIMING_BEFORE_PREPARE);</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L126">			return DocAction.STATUS_Invalid;</span>
+
+<span class="nc" id="L128">		int doctype = -1;</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_C_DocTypeTarget_ID)) {</span>
+<span class="nc" id="L130">			doctype = po.get_ValueAsInt(DOC_COLUMNNAME_C_DocTypeTarget_ID);</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">		} else if (po.columnExists(DOC_COLUMNNAME_C_DocType_ID)) {</span>
+<span class="nc" id="L132">			doctype = po.get_ValueAsInt(DOC_COLUMNNAME_C_DocType_ID);</span>
+		}
+<span class="nc" id="L134">		Timestamp date = null;</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_DateAcct)) {</span>
+<span class="nc" id="L136">			date = (Timestamp) po.get_Value(DOC_COLUMNNAME_DateAcct);</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">		} else if (po.columnExists(DOC_COLUMNNAME_DateTrx)) {</span>
+<span class="nc" id="L138">			date = (Timestamp) po.get_Value(DOC_COLUMNNAME_DateTrx);</span>
+<span class="nc" id="L139">		} else {</span>
+<span class="nc" id="L140">			date = TimeUtil.getDay(0);</span>
+		}
+<span class="nc bnc" id="L142" title="All 2 branches missed.">		if (doctype &gt;= 0) {</span>
+<span class="nc" id="L143">			MPeriod.testPeriodOpen(getCtx(), date, doctype, getAD_Org_ID());</span>
+<span class="nc" id="L144">			MAcctSchema.testBackDateTrxAllowed(getCtx(), date, get_TrxName());</span>
+		}
+
+<span class="nc" id="L147">		Callable&lt;String&gt; callable = actionCallables.get(DocAction.ACTION_Prepare);</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		if (callable != null) {</span>
+			try {
+<span class="nc" id="L150">				m_processMsg = callable.call();</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">				if (m_processMsg != null)</span>
+<span class="nc" id="L152">					return DocAction.STATUS_Invalid;</span>
+<span class="nc" id="L153">			} catch (Exception e) {</span>
+<span class="nc" id="L154">				throw new RuntimeException(e);</span>
+			}
+		}
+		
+<span class="nc" id="L158">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po, ModelValidator.TIMING_AFTER_PREPARE);</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L160">			return DocAction.STATUS_Invalid;</span>
+
+<span class="nc" id="L162">		m_justPrepared = true;</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (!DocAction.ACTION_Complete.equals(getDocAction()))</span>
+<span class="nc" id="L164">			setDocAction(DocAction.ACTION_Complete);</span>
+<span class="nc" id="L165">		return DocAction.STATUS_InProgress;</span>
+	}
+
+	@Override
+	public boolean approveIt() {
+<span class="nc bnc" id="L170" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+<span class="nc" id="L171">		setIsApproved(true);</span>
+<span class="nc" id="L172">		return true;</span>
+	}
+
+	@Override
+	public boolean rejectIt() {
+<span class="nc bnc" id="L177" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+<span class="nc" id="L178">		setIsApproved(false);</span>
+<span class="nc" id="L179">		return true;</span>
+	}
+
+	@Override
+	public String completeIt() {
+		//	Re-Check
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		if (!m_justPrepared)</span>
+		{
+<span class="nc" id="L187">			String status = prepareIt();</span>
+<span class="nc" id="L188">			m_justPrepared = false;</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">			if (!DocAction.STATUS_InProgress.equals(status))</span>
+<span class="nc" id="L190">				return status;</span>
+		}
+
+<span class="nc bnc" id="L193" title="All 2 branches missed.">		if (   po.columnExists(DOC_COLUMNNAME_C_DocTypeTarget_ID)</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">			&amp;&amp; po.columnExists(DOC_COLUMNNAME_C_DocType_ID)) {</span>
+<span class="nc" id="L195">			po.set_ValueOfColumn(DOC_COLUMNNAME_C_DocType_ID, po.get_ValueAsInt(DOC_COLUMNNAME_C_DocTypeTarget_ID));</span>
+		}
+
+		// Set the definite document number after completed (if needed)
+<span class="nc" id="L199">		setDefiniteDocumentNo();</span>
+
+<span class="nc" id="L201">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po, ModelValidator.TIMING_BEFORE_COMPLETE);</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L203">			return DocAction.STATUS_Invalid;</span>
+
+		//	Implicit Approval
+<span class="nc bnc" id="L206" title="All 2 branches missed.">		if (!isApproved())</span>
+<span class="nc" id="L207">			approveIt();</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+
+<span class="nc" id="L210">		Callable&lt;String&gt; callable = actionCallables.get(DocAction.ACTION_Complete);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if (callable != null) {</span>
+			try {
+<span class="nc" id="L213">				m_processMsg = callable.call();</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">				if (m_processMsg != null)</span>
+<span class="nc" id="L215">					return DocAction.STATUS_Invalid;</span>
+<span class="nc" id="L216">			} catch (Exception e) {</span>
+<span class="nc" id="L217">				throw new RuntimeException(e);</span>
+			}
+		}
+		
+		//	User Validation
+<span class="nc" id="L222">		String valid = ModelValidationEngine.get().fireDocValidate(po, ModelValidator.TIMING_AFTER_COMPLETE);</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">		if (valid != null)</span>
+		{
+<span class="nc" id="L225">			m_processMsg = valid;</span>
+<span class="nc" id="L226">			return DocAction.STATUS_Invalid;</span>
+		}
+
+<span class="nc" id="L229">		setProcessed(true);</span>
+<span class="nc" id="L230">		setDocAction(DocAction.ACTION_Close);</span>
+<span class="nc" id="L231">		return DocAction.STATUS_Completed;</span>
+	}
+
+	@Override
+	public boolean voidIt() {
+
+<span class="nc bnc" id="L237" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+
+<span class="nc bnc" id="L239" title="All 2 branches missed.">		if (   DocAction.STATUS_Closed.equals(getDocStatus())</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">			|| DocAction.STATUS_Reversed.equals(getDocStatus())</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">			|| DocAction.STATUS_Voided.equals(getDocStatus())) {</span>
+<span class="nc" id="L242">			m_processMsg = &quot;Document Closed: &quot; + getDocStatus();</span>
+<span class="nc" id="L243">			setDocAction(DocAction.ACTION_None);</span>
+<span class="nc" id="L244">			return false;</span>
+		}
+
+		//	Not Processed
+<span class="nc bnc" id="L248" title="All 2 branches missed.">		if (   DocAction.STATUS_Drafted.equals(getDocStatus())</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">			|| DocAction.STATUS_Invalid.equals(getDocStatus())</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">			|| DocAction.STATUS_InProgress.equals(getDocStatus())</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">			|| DocAction.STATUS_Approved.equals(getDocStatus())</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">			|| DocAction.STATUS_NotApproved.equals(getDocStatus())) {</span>
+			// Before Void
+<span class="nc" id="L254">			m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_BEFORE_VOID);</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">			if (m_processMsg != null)</span>
+<span class="nc" id="L256">				return false;</span>
+<span class="nc" id="L257">			Callable&lt;String&gt; callable = actionCallables.get(DocAction.ACTION_Void);</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">			if (callable != null) {</span>
+				try {
+<span class="nc" id="L260">					m_processMsg = callable.call();</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">					if (m_processMsg != null)</span>
+<span class="nc" id="L262">						return false;</span>
+<span class="nc" id="L263">				} catch (Exception e) {</span>
+<span class="nc" id="L264">					throw new RuntimeException(e);</span>
+				}
+			}			
+		} else {
+<span class="nc" id="L268">			boolean accrual = false;</span>
+<span class="nc" id="L269">			int doctype = -1;</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">			if (po.columnExists(DOC_COLUMNNAME_C_DocTypeTarget_ID)) {</span>
+<span class="nc" id="L271">				doctype = po.get_ValueAsInt(DOC_COLUMNNAME_C_DocTypeTarget_ID);</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">			} else if (po.columnExists(DOC_COLUMNNAME_C_DocType_ID)) {</span>
+<span class="nc" id="L273">				doctype = po.get_ValueAsInt(DOC_COLUMNNAME_C_DocType_ID);</span>
+			}
+<span class="nc" id="L275">			Timestamp date = null;</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">			if (po.columnExists(DOC_COLUMNNAME_DateAcct)) {</span>
+<span class="nc" id="L277">				date = (Timestamp) po.get_Value(DOC_COLUMNNAME_DateAcct);</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">			} else if (po.columnExists(DOC_COLUMNNAME_DateTrx)) {</span>
+<span class="nc" id="L279">				date = (Timestamp) po.get_Value(DOC_COLUMNNAME_DateTrx);</span>
+<span class="nc" id="L280">			} else {</span>
+<span class="nc" id="L281">				date = TimeUtil.getDay(0);</span>
+			}
+<span class="nc bnc" id="L283" title="All 2 branches missed.">			if (doctype &gt;= 0) {</span>
+				try {
+<span class="nc" id="L285">					MPeriod.testPeriodOpen(getCtx(), date, doctype, getAD_Org_ID());</span>
+<span class="nc" id="L286">				} catch (PeriodClosedException e) {</span>
+<span class="nc" id="L287">					accrual = true;</span>
+				}
+				try {
+<span class="nc" id="L290">					MAcctSchema.testBackDateTrxAllowed(getCtx(), date, get_TrxName());</span>
+<span class="nc" id="L291">				} catch (BackDateTrxNotAllowedException e) {</span>
+<span class="nc" id="L292">					accrual = true;</span>
+				}
+			}
+
+<span class="nc bnc" id="L296" title="All 2 branches missed.">			if (accrual)</span>
+<span class="nc" id="L297">				return reverseAccrualIt();</span>
+			else
+<span class="nc" id="L299">				return reverseCorrectIt();</span>
+		}
+
+		// After Void
+<span class="nc" id="L303">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_AFTER_VOID);</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L305">			return false;</span>
+
+<span class="nc" id="L307">		setProcessed(true);</span>
+<span class="nc" id="L308">		setDocAction(DocAction.ACTION_None);</span>
+<span class="nc" id="L309">		return true;</span>
+	}
+
+	@Override
+	public boolean closeIt() {
+<span class="nc bnc" id="L314" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+		// Before Close
+<span class="nc" id="L316">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_BEFORE_CLOSE);</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L318">			return false;</span>
+
+<span class="nc" id="L320">		Callable&lt;String&gt; callable = actionCallables.get(DocAction.ACTION_Close);</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">		if (callable != null) {</span>
+			try {
+<span class="nc" id="L323">				m_processMsg = callable.call();</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">				if (m_processMsg != null)</span>
+<span class="nc" id="L325">					return false;</span>
+<span class="nc" id="L326">			} catch (Exception e) {</span>
+<span class="nc" id="L327">				throw new RuntimeException(e);</span>
+			}
+		}
+		
+<span class="nc" id="L331">		setProcessed(true);</span>
+<span class="nc" id="L332">		setDocAction(DocAction.ACTION_None);</span>
+
+		// After Close
+<span class="nc" id="L335">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_AFTER_CLOSE);</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L337">			return false;</span>
+<span class="nc" id="L338">		return true;	</span>
+	}
+
+	@Override
+	public boolean reverseCorrectIt() {
+<span class="nc bnc" id="L343" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+		// Before reverseCorrect
+<span class="nc" id="L345">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_BEFORE_REVERSECORRECT);</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L347">			return false;</span>
+
+<span class="nc" id="L349">		Callable&lt;String&gt; callable = actionCallables.get(DocAction.ACTION_Reverse_Correct);</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">		if (callable != null) {</span>
+			try {
+<span class="nc" id="L352">				m_processMsg = callable.call();</span>
+<span class="nc" id="L353">			} catch (Exception e) {</span>
+<span class="nc" id="L354">				throw new RuntimeException(e);</span>
+			}
+		}
+		
+		// After reverseCorrect
+<span class="nc" id="L359">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_AFTER_REVERSECORRECT);</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L361">			return false;</span>
+
+<span class="nc bnc" id="L363" title="All 2 branches missed.">		if (callable != null)</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">			return m_processMsg == null;</span>
+		else
+<span class="nc" id="L366">			return false; // reverse needs to be implemented to create a negative document	</span>
+	}
+
+	@Override
+	public boolean reverseAccrualIt() {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+		// Before reverseAccrual
+<span class="nc" id="L373">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_BEFORE_REVERSEACCRUAL);</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L375">			return false;</span>
+
+<span class="nc" id="L377">		Callable&lt;String&gt; callable = actionCallables.get(DocAction.ACTION_Reverse_Accrual);</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">		if (callable != null) {</span>
+			try {
+<span class="nc" id="L380">				m_processMsg = callable.call();</span>
+<span class="nc" id="L381">			} catch (Exception e) {</span>
+<span class="nc" id="L382">				throw new RuntimeException(e);</span>
+			}
+		}
+		
+		// After reverseAccrual
+<span class="nc" id="L387">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_AFTER_REVERSEACCRUAL);</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L389">			return false;</span>
+
+<span class="nc bnc" id="L391" title="All 2 branches missed.">		if (callable != null)</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">			return m_processMsg == null;</span>
+		else
+<span class="nc" id="L394">			return false; // reverse needs to be implemented to create a negative document	</span>
+	}
+
+	@Override
+	public boolean reActivateIt() {
+<span class="nc bnc" id="L399" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(po.toString());</span>
+		// Before reActivate
+<span class="nc" id="L401">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_BEFORE_REACTIVATE);</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L403">			return false;	</span>
+
+<span class="nc" id="L405">		Callable&lt;String&gt; callable = actionCallables.get(DocAction.ACTION_ReActivate);</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">		if (callable != null) {</span>
+			try {
+<span class="nc" id="L408">				m_processMsg = callable.call();</span>
+<span class="nc" id="L409">			} catch (Exception e) {</span>
+<span class="nc" id="L410">				throw new RuntimeException(e);</span>
+			}
+		}
+		
+		// After reActivate
+<span class="nc" id="L415">		m_processMsg = ModelValidationEngine.get().fireDocValidate(po,ModelValidator.TIMING_AFTER_REACTIVATE);</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L417">			return false;</span>
+
+<span class="nc" id="L419">		setDocAction(DocAction.ACTION_Complete);</span>
+<span class="nc" id="L420">		setProcessed(false);</span>
+		
+<span class="nc bnc" id="L422" title="All 2 branches missed.">		if (callable != null)</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">			return m_processMsg == null;</span>
+		else
+<span class="nc" id="L425">			return false; // reactivate needs to be implemented to reverse the effect of complete and post	</span>
+	}
+
+	@Override
+	public String getSummary() {
+<span class="nc" id="L430">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L431">		sb.append(getDocumentNo());</span>
+<span class="nc" id="L432">		String description = null;</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_Description))</span>
+<span class="nc" id="L434">			description = po.get_ValueAsString(DOC_COLUMNNAME_Description);</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">		if (!Util.isEmpty(description))</span>
+<span class="nc" id="L436">			sb.append(&quot; - &quot;).append(description);</span>
+<span class="nc" id="L437">		return sb.toString();	</span>
+	}
+
+	@Override
+	public String getDocumentNo() {
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_DocumentNo)) {</span>
+<span class="nc" id="L443">			return po.get_ValueAsString(DOC_COLUMNNAME_DocumentNo);</span>
+		}
+<span class="nc" id="L445">		return null;	</span>
+	}
+
+	@Override
+	public String getDocumentInfo() {
+<span class="nc" id="L450">		int doctype = -1;</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_C_DocTypeTarget_ID)) {</span>
+<span class="nc" id="L452">			doctype = po.get_ValueAsInt(DOC_COLUMNNAME_C_DocTypeTarget_ID);</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">		} else if (po.columnExists(DOC_COLUMNNAME_C_DocType_ID)) {</span>
+<span class="nc" id="L454">			doctype = po.get_ValueAsInt(DOC_COLUMNNAME_C_DocType_ID);</span>
+		}
+<span class="nc" id="L456">		MDocType dt = null;</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">		if (doctype &gt; 0) {</span>
+<span class="nc" id="L458">			dt = MDocType.get(getCtx(), doctype);</span>
+		}
+<span class="nc bnc" id="L460" title="All 2 branches missed.">		StringBuilder msgreturn = new StringBuilder().append((dt != null ? dt.getNameTrl() : &quot;&quot;)).append(&quot; &quot;).append(getDocumentNo());</span>
+<span class="nc" id="L461">		return msgreturn.toString();	</span>
+	}
+
+	@Override
+	public File createPDF() {
+<span class="nc" id="L466">		return null;</span>
+	}
+
+	@Override
+	public String getProcessMsg() {
+<span class="nc" id="L471">		return m_processMsg;</span>
+	}
+
+	@Override
+	public int getDoc_User_ID() {
+<span class="nc" id="L476">		int userid = 0;</span>
+<span class="nc bnc" id="L477" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_SalesRep_ID)) {</span>
+<span class="nc" id="L478">			userid = po.get_ValueAsInt(DOC_COLUMNNAME_SalesRep_ID);</span>
+<span class="nc bnc" id="L479" title="All 2 branches missed.">		} else if (po.columnExists(DOC_COLUMNNAME_AD_User_ID)) {</span>
+<span class="nc" id="L480">			userid = po.get_ValueAsInt(DOC_COLUMNNAME_AD_User_ID);</span>
+<span class="nc" id="L481">		} else {</span>
+<span class="nc" id="L482">			userid = po.getCreatedBy();</span>
+		}
+<span class="nc" id="L484">		return userid;	</span>
+	}
+
+	@Override
+	public int getC_Currency_ID() {
+<span class="nc" id="L489">		int currency = 0;</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_C_Currency_ID)) {</span>
+<span class="nc" id="L491">			currency = po.get_ValueAsInt(DOC_COLUMNNAME_C_Currency_ID);</span>
+		}
+<span class="nc" id="L493">		return currency;	</span>
+	}
+
+	@Override
+	public BigDecimal getApprovalAmt() {
+<span class="nc" id="L498">		return null;</span>
+	}
+
+	@Override
+	public int getAD_Client_ID() {
+<span class="nc" id="L503">		return po.getAD_Client_ID();</span>
+	}
+
+	@Override
+	public int getAD_Org_ID() {
+<span class="nc" id="L508">		return po.getAD_Org_ID();</span>
+	}
+
+	@Override
+	public String getDocAction() {
+<span class="nc" id="L513">		po.columnExists(DOC_COLUMNNAME_DocAction, true);</span>
+<span class="nc" id="L514">		return (String)po.get_Value(DOC_COLUMNNAME_DocAction);</span>
+	}
+
+	@Override
+	public boolean save() {
+<span class="nc" id="L519">		return po.save();</span>
+	}
+
+	@Override
+	public void saveEx() throws AdempiereException {
+<span class="nc" id="L524">		po.saveEx();</span>
+<span class="nc" id="L525">	}</span>
+
+	@Override
+	public Properties getCtx() {
+<span class="nc" id="L529">		return po.getCtx();</span>
+	}
+
+	@Override
+	public int get_ID() {
+<span class="nc" id="L534">		return po.get_ID();</span>
+	}
+
+	@Override
+	public int get_Table_ID() {
+<span class="nc" id="L539">		return po.get_Table_ID();</span>
+	}
+
+	@Override
+	public CLogger get_Logger() {
+<span class="nc" id="L544">		return po.get_Logger();</span>
+	}
+
+	@Override
+	public String get_TrxName() {
+<span class="nc" id="L549">		return po.get_TrxName();</span>
+	}
+
+	/**
+	 *  Set Document Action.
+	 *  @param DocAction The targeted status of the document
+	 */
+	public void setDocAction (String DocAction) {
+<span class="nc" id="L557">		po.columnExists(DOC_COLUMNNAME_DocAction, true);</span>
+<span class="nc" id="L558">		po.set_ValueOfColumn(DOC_COLUMNNAME_DocAction, DocAction);</span>
+<span class="nc" id="L559">	}</span>
+	
+	/** 
+	 * Set Processing Now.
+	 * @param Processing Process Now
+	 */
+	public void setProcessing (boolean Processing)
+	{
+<span class="nc" id="L567">		po.columnExists(DOC_COLUMNNAME_Processing, true);</span>
+<span class="nc" id="L568">		po.set_ValueOfColumn(DOC_COLUMNNAME_Processing, Boolean.valueOf(Processing));</span>
+<span class="nc" id="L569">	}</span>
+	
+	/**
+	 * Set Processed.
+	 * @param Processed	The document has been processed
+	 */
+	public void setProcessed (boolean Processed) {
+<span class="nc" id="L576">		po.columnExists(DOC_COLUMNNAME_Processed, true);</span>
+<span class="nc" id="L577">		po.set_ValueNoCheck (DOC_COLUMNNAME_Processed, Boolean.valueOf(Processed));</span>
+<span class="nc" id="L578">	}</span>
+	
+	/**
+	 * Get Approved.
+	 * 	@return Indicates if this document requires approval
+	 */
+	public boolean isApproved() {
+<span class="nc bnc" id="L585" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_IsApproved)) {</span>
+<span class="nc" id="L586">			Object oo = po.get_Value(DOC_COLUMNNAME_IsApproved);</span>
+<span class="nc bnc" id="L587" title="All 2 branches missed.">			if (oo != null) {</span>
+<span class="nc bnc" id="L588" title="All 2 branches missed.">				if (oo instanceof Boolean) </span>
+<span class="nc" id="L589">					return ((Boolean)oo).booleanValue(); </span>
+<span class="nc" id="L590">				return &quot;Y&quot;.equals(oo);</span>
+			}
+		}
+<span class="nc" id="L593">		return true;</span>
+	}
+	
+	/**
+	 * Set Approved.
+	 * @param IsApproved Indicates if this document requires approval
+	 */
+	public void setIsApproved (boolean IsApproved) {
+<span class="nc" id="L601">		po.columnExists(DOC_COLUMNNAME_IsApproved, true);</span>
+<span class="nc" id="L602">		po.set_ValueNoCheck (DOC_COLUMNNAME_IsApproved, Boolean.valueOf(IsApproved));</span>
+<span class="nc" id="L603">	}</span>
+	
+	/**
+	 * 	Set the definite document number after completed
+	 */
+	private void setDefiniteDocumentNo() {
+<span class="nc" id="L609">		int doctype = -1;</span>
+<span class="nc bnc" id="L610" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_C_DocType_ID)) {</span>
+<span class="nc" id="L611">			doctype = po.get_ValueAsInt(DOC_COLUMNNAME_C_DocType_ID);</span>
+		}
+<span class="nc" id="L613">		Timestamp dateacct = null;</span>
+<span class="nc bnc" id="L614" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_DateAcct)) {</span>
+<span class="nc" id="L615">			dateacct = (Timestamp) po.get_Value(DOC_COLUMNNAME_DateAcct);</span>
+		}
+<span class="nc" id="L617">		Timestamp datetrx = null;</span>
+<span class="nc bnc" id="L618" title="All 2 branches missed.">		if (po.columnExists(DOC_COLUMNNAME_DateTrx)) {</span>
+<span class="nc" id="L619">			datetrx = (Timestamp) po.get_Value(DOC_COLUMNNAME_DateTrx);</span>
+		}
+<span class="nc bnc" id="L621" title="All 2 branches missed.">		if (datetrx == null) {</span>
+<span class="nc" id="L622">			datetrx = TimeUtil.getDay(0);</span>
+		}
+<span class="nc bnc" id="L624" title="All 2 branches missed.">		if (doctype &gt;= 0) {</span>
+<span class="nc bnc" id="L625" title="All 2 branches missed.">			MPeriod.testPeriodOpen(getCtx(), (dateacct != null ? dateacct : datetrx), doctype, getAD_Org_ID());</span>
+<span class="nc bnc" id="L626" title="All 2 branches missed.">			MAcctSchema.testBackDateTrxAllowed(getCtx(), (dateacct != null ? dateacct : datetrx), get_TrxName());</span>
+<span class="nc" id="L627">			MDocType dt = MDocType.get(doctype);</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">			if (dt.isOverwriteDateOnComplete()) {</span>
+<span class="nc bnc" id="L629" title="All 2 branches missed.">				if (po.columnExists(DOC_COLUMNNAME_DateTrx)) {</span>
+<span class="nc" id="L630">					po.set_ValueOfColumn(DOC_COLUMNNAME_DateTrx, TimeUtil.getDay(0));</span>
+				}
+<span class="nc bnc" id="L632" title="All 4 branches missed.">				if (dateacct != null &amp;&amp; dateacct.before(datetrx)) {</span>
+<span class="nc" id="L633">					po.set_ValueOfColumn(DOC_COLUMNNAME_DateAcct, datetrx);</span>
+<span class="nc" id="L634">					MPeriod.testPeriodOpen(getCtx(), datetrx, doctype, getAD_Org_ID());</span>
+<span class="nc" id="L635">					MAcctSchema.testBackDateTrxAllowed(getCtx(), datetrx, get_TrxName());</span>
+				}
+			}
+<span class="nc bnc" id="L638" title="All 2 branches missed.">			if (dt.isOverwriteSeqOnComplete()) {</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">				if (po.columnExists(DOC_COLUMNNAME_DocumentNo)) {</span>
+<span class="nc" id="L640">					String value = DB.getDocumentNo(doctype, get_TrxName(), true, po);</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">					if (value != null)</span>
+<span class="nc" id="L642">						po.set_ValueOfColumn(DOC_COLUMNNAME_DocumentNo, value);</span>
+				}
+			}
+		}
+
+<span class="nc" id="L647">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

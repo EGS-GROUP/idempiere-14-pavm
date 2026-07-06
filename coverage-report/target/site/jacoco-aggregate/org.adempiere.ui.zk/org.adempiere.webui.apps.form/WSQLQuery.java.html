@@ -1,0 +1,341 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>WSQLQuery.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.webui.apps.form</a> &gt; <span class="el_source">WSQLQuery.java</span></div><h1>WSQLQuery.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz - globalqss - bxservice                               *
+ **********************************************************************/
+
+package org.adempiere.webui.apps.form;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.DBException;
+import org.adempiere.webui.component.Button;
+import org.adempiere.webui.component.Label;
+import org.adempiere.webui.component.ListModelTable;
+import org.adempiere.webui.component.Textbox;
+import org.adempiere.webui.component.WListItemRenderer;
+import org.adempiere.webui.component.WListbox;
+import org.adempiere.webui.panel.ADForm;
+import org.adempiere.webui.theme.ThemeManager;
+import org.adempiere.webui.util.Icon;
+import org.adempiere.webui.util.ZKUpdateUtil;
+import org.compiere.model.MIssue;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.SystemIDs;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.event.Events;
+import org.zkoss.zul.Borderlayout;
+import org.zkoss.zul.Center;
+import org.zkoss.zul.Div;
+import org.zkoss.zul.Frozen;
+import org.zkoss.zul.North;
+import org.zkoss.zul.South;
+
+/**
+ * A Custom Form to process SQL queries.
+ *
+ * The statement to be executed can be restricted using SysConfig.
+ */
+@org.idempiere.ui.zk.annotation.Form
+public class WSQLQuery extends ADForm implements EventListener&lt;Event&gt;
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -6641250848300700313L;
+
+	/** Log. */
+<span class="nc" id="L79">	private static final CLogger  log = CLogger.getCLogger(WSQLQuery.class);</span>
+
+	/** Grid used to layout components. */
+<span class="nc" id="L82">	private Borderlayout layout = new Borderlayout();</span>
+	/** SQL label. */
+<span class="nc" id="L84">	private Label m_lblSql = new Label(&quot;SQL&quot;);</span>
+	/** SQL statement field. */
+<span class="nc" id="L86">	private Textbox m_txbSqlField = new Textbox();</span>
+	/** Process button. */
+<span class="nc" id="L88">	private Button m_btnSql = createProcessButton();</span>
+	/** Field to hold result of SQL statement execution. */
+<span class="nc" id="L90">	private Textbox m_txbResultField = new Textbox();</span>
+	/** Grid to show the result data. */
+<span class="nc" id="L92">	private ListModelTable model = null;</span>
+<span class="nc" id="L93">	private WListbox listbox = new WListbox();</span>
+
+	/**
+	 * Remove comment
+	 */
+	private static final String REGEX_REMOVE_COMMENTS = &quot;/\\*(?:.|[\\n\\r])*?\\*/&quot;;
+
+	/**
+	 * Remove quoted string
+	 */
+	private static final String REGEX_REMOVE_QUOTED_STRINGS = &quot;'(?:.|[\\n\\r])*?'&quot;;
+
+	/**
+	 * Remove leading space
+	 */
+<span class="nc" id="L108">	private static final String REGEX_REMOVE_LEADING_SPACES = &quot;^\\s+&quot;;</span>
+
+	/**
+	 * Default constructor.
+	 */
+	public WSQLQuery() {
+<span class="nc" id="L114">		super();</span>
+<span class="nc" id="L115">	}</span>
+
+	/**
+	 * Layout form
+	 */
+	@Override
+	protected void initForm() {
+<span class="nc" id="L122">		North north = new North();</span>
+<span class="nc" id="L123">		Center center = new Center();</span>
+<span class="nc" id="L124">		South south = new South();</span>
+<span class="nc" id="L125">		final int maxStatementLength = 10000;</span>
+<span class="nc" id="L126">		final int noStatementRows = 3;</span>
+<span class="nc" id="L127">		final int noResultRows = 2;</span>
+
+<span class="nc" id="L129">		ZKUpdateUtil.setWidth(layout, &quot;100%&quot;);</span>
+<span class="nc" id="L130">		ZKUpdateUtil.setHeight(layout, &quot;100%&quot;);</span>
+<span class="nc" id="L131">		layout.setStyle(&quot;background-color: transparent; position: relative;&quot;);</span>
+
+<span class="nc" id="L133">		Div div = new Div();</span>
+		// create the top row of components
+<span class="nc" id="L135">		m_txbSqlField.setMultiline(true);</span>
+<span class="nc" id="L136">		m_txbSqlField.setMaxlength(maxStatementLength);</span>
+<span class="nc" id="L137">		m_txbSqlField.setRows(noStatementRows);</span>
+<span class="nc" id="L138">		ZKUpdateUtil.setHflex(m_txbSqlField, &quot;1&quot;);</span>
+<span class="nc" id="L139">		m_txbSqlField.setReadonly(false);</span>
+
+<span class="nc" id="L141">		m_btnSql.addEventListener(Events.ON_CLICK, this);</span>
+
+<span class="nc" id="L143">		div.appendChild(m_lblSql);</span>
+<span class="nc" id="L144">		div.appendChild(m_txbSqlField);</span>
+<span class="nc" id="L145">		div.appendChild(m_btnSql);</span>
+<span class="nc" id="L146">		north.appendChild(div);</span>
+<span class="nc" id="L147">		layout.appendChild(north);</span>
+
+		// create the bottom row of components
+<span class="nc" id="L150">		m_txbResultField.setRows(noResultRows);</span>
+<span class="nc" id="L151">		ZKUpdateUtil.setHflex(m_txbResultField, &quot;1&quot;);</span>
+<span class="nc" id="L152">		m_txbResultField.setReadonly(true);</span>
+
+<span class="nc" id="L154">		center.appendChild(listbox);</span>
+<span class="nc" id="L155">		ZKUpdateUtil.setVflex(listbox, &quot;1&quot;);</span>
+<span class="nc" id="L156">		ZKUpdateUtil.setHflex(listbox, &quot;1&quot;);</span>
+
+<span class="nc" id="L158">		layout.appendChild(center);</span>
+
+<span class="nc" id="L160">		south.appendChild(m_txbResultField);</span>
+<span class="nc" id="L161">		layout.appendChild(south);</span>
+
+<span class="nc" id="L163">		this.appendChild(layout);</span>
+
+<span class="nc" id="L165">		return;</span>
+	}
+
+	/**
+	 *  Create Process Button.
+	 *  @return button
+	 */
+	public static final Button createProcessButton() {
+<span class="nc" id="L173">		Button btnProcess = new Button();</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">		if(ThemeManager.isUseFontIconForImage())</span>
+<span class="nc" id="L175">			btnProcess.setIconSclass(Icon.getIconSclass(Icon.PROCESS));</span>
+		else
+<span class="nc" id="L177">			btnProcess.setImage(ThemeManager.getThemeResource(&quot;images/Process24.png&quot;));</span>
+<span class="nc" id="L178">		btnProcess.setName(Msg.getMsg(Env.getCtx(), &quot;Process&quot;));</span>
+
+<span class="nc" id="L180">		return btnProcess;</span>
+	}   //  createProcessButton
+
+	/**
+	 *  Process SQL Statements.
+	 *
+	 *  @param sqlStatement a single SQL statement
+	 *  @return a string summarizing the results
+	 */
+	public String processStatement (String sqlStatement) {
+<span class="nc" id="L190">		m_txbResultField.setText(null);</span>
+<span class="nc" id="L191">		listbox.clear();</span>
+
+<span class="nc bnc" id="L193" title="All 4 branches missed.">		if (sqlStatement == null || sqlStatement.length() == 0)</span>
+<span class="nc" id="L194">			return &quot;&quot;;</span>
+<span class="nc" id="L195">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L196">		char[] chars = sqlStatement.toCharArray();</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		for (int i = 0; i &lt; chars.length; i++) {</span>
+<span class="nc" id="L198">			char c = chars[i];</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">			if (Character.isWhitespace(c))</span>
+<span class="nc" id="L200">				sb.append(' ');</span>
+			else
+<span class="nc" id="L202">				sb.append(c);</span>
+		}
+<span class="nc" id="L204">		String sql = sb.toString().trim();</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">		if (sql.length() == 0)</span>
+<span class="nc" id="L206">			return &quot;&quot;;</span>
+		//
+<span class="nc" id="L208">		StringBuilder result = new StringBuilder();</span>
+<span class="nc" id="L209">		String SQL = sql.toUpperCase();</span>
+<span class="nc" id="L210">		String cleanSQL = SQL</span>
+<span class="nc" id="L211">				.replaceAll(REGEX_REMOVE_COMMENTS, &quot;&quot;)</span>
+<span class="nc" id="L212">				.replaceAll(REGEX_REMOVE_QUOTED_STRINGS, &quot;&quot;)</span>
+<span class="nc" id="L213">				.replaceFirst(REGEX_REMOVE_LEADING_SPACES, &quot;&quot;);</span>
+
+<span class="nc bnc" id="L215" title="All 2 branches missed.">		if (cleanSQL.contains(&quot;;&quot;)) {</span>
+<span class="nc" id="L216">			result.append(&quot;ERROR: Multiple Commands Not Allowed&quot;);</span>
+<span class="nc" id="L217">			return result.toString();</span>
+		}
+
+<span class="nc" id="L220">		int timeout = MSysConfig.getIntValue(MSysConfig.FORM_SQL_QUERY_TIMEOUT_IN_SECONDS, 120);</span>
+<span class="nc" id="L221">		int maxRecords = MSysConfig.getIntValue(MSysConfig.FORM_SQL_QUERY_MAX_RECORDS, 500);</span>
+
+<span class="nc" id="L223">		String[] allowedKeywords = MSysConfig.getValue(MSysConfig.FORM_SQL_QUERY_ALLOWED_KEYWORDS, &quot;SELECT,WITH,SHOW&quot;).split(&quot;,&quot;);</span>
+<span class="nc" id="L224">		boolean isError = true;</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">		for (int i = 0; i &lt; allowedKeywords.length; i++) {</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">			if (cleanSQL.startsWith(allowedKeywords[i] + &quot; &quot;)) {</span>
+<span class="nc" id="L227">				isError = false;	</span>
+<span class="nc" id="L228">				break;</span>
+			}
+		}
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		if (isError) {</span>
+<span class="nc" id="L232">			result.append(&quot;ERROR: Not Allowed Command&quot;);</span>
+<span class="nc" id="L233">			return result.toString();</span>
+		}
+
+<span class="nc" id="L236">		List&lt;String&gt; header = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L237">		header.add(&quot;#&quot;);</span>
+<span class="nc" id="L238">		model = new ListModelTable();</span>
+<span class="nc" id="L239">		Frozen frozen = new Frozen();</span>
+<span class="nc" id="L240">		frozen.setColumns(1);</span>
+<span class="nc" id="L241">		listbox.appendChild(frozen);</span>
+
+<span class="nc" id="L243">		Trx trx = null;</span>
+<span class="nc" id="L244">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L245">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L247">			long start = System.currentTimeMillis();</span>
+
+<span class="nc" id="L249">			String trxName = Trx.createTrxName(&quot;WSQLQuery&quot;);</span>
+<span class="nc" id="L250">			trx = Trx.get(trxName, false);</span>
+<span class="nc" id="L251">			trx.setDisplayName(getClass().getName()+&quot;_processStatement&quot;);</span>
+<span class="nc" id="L252">			trx.getConnection().setReadOnly(true);</span>
+
+<span class="nc" id="L254">			pstmt = DB.prepareNormalReadReplicaStatement(sql, trxName);</span>
+<span class="nc" id="L255">			pstmt.setQueryTimeout(timeout);</span>
+<span class="nc" id="L256">			rs = pstmt.executeQuery();</span>
+			
+<span class="nc" id="L258">			ResultSetMetaData meta = rs.getMetaData();</span>
+<span class="nc" id="L259">			int count = 0;</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">			for (int col = 1; col &lt;= meta.getColumnCount(); col++) {</span>
+<span class="nc" id="L261">				String columnName = meta.getColumnLabel(col);</span>
+<span class="nc" id="L262">				header.add(columnName);</span>
+			}
+
+<span class="nc bnc" id="L265" title="All 2 branches missed.">			while (rs.next ()) {</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">				if (count &gt;= maxRecords) {</span>
+<span class="nc" id="L267">					result.append(&quot;Maximum of &quot; + maxRecords + &quot; records reached.  &quot;);</span>
+<span class="nc" id="L268">					break;</span>
+				}
+<span class="nc" id="L270">				List&lt;Object&gt; row = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L271">				row.add(++count);</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">				for (int col = 1; col &lt;= meta.getColumnCount(); col++) {</span>
+<span class="nc" id="L273">					String colName = header.get(col).toLowerCase();</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">					if (rs.getObject(col) instanceof BigDecimal</span>
+<span class="nc bnc" id="L275" title="All 6 branches missed.">						&amp;&amp; (colName.endsWith(&quot;_id&quot;) || colName.equals(&quot;createdby&quot;) || colName.equals(&quot;updatedby&quot;)))</span>
+<span class="nc" id="L276">						row.add(rs.getInt(col));</span>
+					else
+<span class="nc" id="L278">						row.add(rs.getObject(col));</span>
+				}	//	for all columns
+<span class="nc" id="L280">				model.add(row);</span>
+			}
+<span class="nc" id="L282">			long end = System.currentTimeMillis();</span>
+<span class="nc" id="L283">			BigDecimal durationSeconds = BigDecimal.valueOf(end).subtract(BigDecimal.valueOf(start)).divide(BigDecimal.valueOf(1000.0));</span>
+<span class="nc" id="L284">			result.append(&quot;Count = &quot;).append(count);</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">			if (MSysConfig.getBooleanValue(MSysConfig.FORM_SQL_QUERY_LOG_ISSUE, true)) {</span>
+<span class="nc" id="L286">				MIssue issue = new MIssue(Env.getCtx(), 0, null);</span>
+<span class="nc" id="L287">				issue.setIssueSummary(&quot;SQL executed on SQL Query form&quot;);</span>
+<span class="nc" id="L288">				issue.setStackTrace(sql);</span>
+<span class="nc" id="L289">				issue.setResponseText(result.toString());</span>
+<span class="nc" id="L290">				issue.setIssueSource(MIssue.ISSUESOURCE_Form);</span>
+<span class="nc" id="L291">				issue.setUserName(Env.getContext(Env.getCtx(), Env.AD_USER_NAME));</span>
+<span class="nc" id="L292">				issue.setAD_Form_ID(SystemIDs.FORM_SQL_QUERY);</span>
+<span class="nc" id="L293">				issue.setProcessed(true);</span>
+<span class="nc" id="L294">				issue.setComments(&quot;Duration : &quot; + durationSeconds + &quot; seconds&quot;);</span>
+<span class="nc" id="L295">				issue.saveEx();</span>
+			}
+
+			// Show the result in WListbox
+<span class="nc" id="L299">			WListItemRenderer renderer = new WListItemRenderer(header);</span>
+<span class="nc" id="L300">			model.setNoColumns(header.size());</span>
+<span class="nc" id="L301">			listbox.setModel(model);</span>
+<span class="nc" id="L302">			listbox.setItemRenderer(renderer);</span>
+<span class="nc" id="L303">			listbox.initialiseHeader();</span>
+<span class="nc" id="L304">			listbox.setSizedByContent(true);</span>
+
+<span class="nc" id="L306">		} catch (Exception e) {</span>
+<span class="nc bnc" id="L307" title="All 2 branches missed.">			if (trx != null) {</span>
+<span class="nc" id="L308">				trx.rollback();</span>
+			}
+<span class="nc bnc" id="L310" title="All 2 branches missed.">			if (DBException.isTimeout(e)) {</span>
+<span class="nc" id="L311">				result.append(&quot;Maximum of &quot; + timeout + &quot; seconds reached, query cancelled.&quot;);</span>
+<span class="nc" id="L312">			} else {</span>
+<span class="nc" id="L313">				e.printStackTrace();</span>
+<span class="nc" id="L314">				String exception = e.toString();</span>
+<span class="nc" id="L315">				log.log(Level.SEVERE, &quot;process statement: &quot; + sql + &quot; - &quot; + exception);</span>
+<span class="nc" id="L316">				result.append(&quot;Exception =&gt; &quot;).append(exception);</span>
+			}
+		} finally {
+<span class="nc" id="L319">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L320">			rs = null; pstmt = null;</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">			if (trx != null) {</span>
+<span class="nc" id="L322">				trx.close();</span>
+<span class="nc" id="L323">				trx = null;</span>
+			}
+		}
+
+<span class="nc" id="L327">		return result.toString();</span>
+	}
+
+    /**
+     *  Process the events for this form
+     *  @param event
+     */
+	@Override
+	public void onEvent(Event event) throws Exception {
+<span class="nc bnc" id="L336" title="All 2 branches missed.">		if (event.getTarget() == m_btnSql)</span>
+<span class="nc" id="L337">			m_txbResultField.setText(processStatement(m_txbSqlField.getText()));</span>
+<span class="nc" id="L338">		super.onEvent(event);</span>
+<span class="nc" id="L339">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

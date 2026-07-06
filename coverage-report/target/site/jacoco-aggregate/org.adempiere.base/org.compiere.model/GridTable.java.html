@@ -1,0 +1,3743 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>GridTable.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">GridTable.java</span></div><h1>GridTable.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyVetoException;
+import java.beans.VetoableChangeListener;
+import java.beans.VetoableChangeSupport;
+import java.io.Serializable;
+import java.math.BigDecimal;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.logging.Level;
+
+import javax.swing.event.TableModelListener;
+import javax.swing.table.AbstractTableModel;
+
+import org.adempiere.base.GeneratedCodeCoverageExclusion;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.adempiere.util.ServerContext;
+import org.compiere.Adempiere;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.MSort;
+import org.compiere.util.Msg;
+import org.compiere.util.SecureEngine;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ *	Grid Table Model for JDBC table access, including buffering.
+ *  &lt;pre&gt;
+ *		The following data types are handled
+ *			Integer		for all IDs
+ *			BigDecimal	for all Numbers
+ *			Timestamp	for all Dates
+ *			String		for all others
+ *  The data is read via r/o resultset and cached in m_buffer. Writes/updates
+ *  are via dynamically constructed SQL INSERT/UPDATE statements. The record
+ *  is re-read via the resultset to get results of triggers.
+ *
+ *  &lt;/pre&gt;
+ *  The model maintains and fires the requires TableModelEvent changes,
+ *  the DataChanged events (loading, changed, etc.) as well as Vetoable Change event &quot;RowChange&quot;
+ *  (for row changes initiated by moving the row in the table grid).
+ *
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: GridTable.java,v 1.9 2006/08/09 16:38:25 jjanke Exp $
+ * 
+ * @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;BF [ 1901192 ] LogMigrationScripts: GridTable.dataSave: manual update
+ *			&lt;li&gt;BF [ 1943682 ] Copy Record should not copy IsApproved and IsGenerated
+ *			&lt;li&gt;BF [ 1949543 ] Window freeze if there is a severe exception
+ *			&lt;li&gt;BF [ 1984310 ] GridTable.getClientOrg() doesn't work for AD_Client/AD_Org
+ *  @author victor.perez@e-evolution.com,www.e-evolution.com
+ *  		&lt;li&gt;BF [ 2910358 ] Error in context when a field is found in different tabs.
+ *  			https://sourceforge.net/p/adempiere/bugs/2255/
+ *     		&lt;li&gt;BF [ 2910368 ] Error in context when IsActive field is found in different
+ *  			https://sourceforge.net/p/adempiere/bugs/2256/
+ */
+public class GridTable extends AbstractTableModel
+	implements Serializable
+{
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1852095729689900949L;
+
+	protected static final String SORTED_DSE_EVENT = &quot;Sorted&quot;;
+	
+	public static final int DEFAULT_GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS = 30;
+	public static final int DEFAULT_GRIDTABLE_COUNT_TIMEOUT_IN_SECONDS = 1;
+
+	public static final String LOAD_TIMEOUT_ERROR_MESSAGE = &quot;GridTabLoadTimeoutError&quot;;
+	public static final String COUNT_QUERY_TIMEOUT_ERROR_MESSAGE = &quot;CountQueryTimeoutLoadBackground&quot;;
+	public static final String FIND_OVER_MAX_ERROR_MESSAGE = &quot;FindOverMax&quot;;
+	public static final String BACKGROUND_LOAD_FINISHED_INFO_MESSAGE = &quot;BackgroundLoadFinished&quot;;
+
+	public static final String DATA_REFRESH_MESSAGE = &quot;Refreshed&quot;;
+	public static final String DATA_UPDATE_COPIED_MESSAGE = &quot;UpdateCopied&quot;;
+	public static final String DATA_INSERTED_MESSAGE = &quot;Inserted&quot;;
+	public static final String DATA_IGNORED_MESSAGE = &quot;Ignored&quot;;
+	public static final String DATA_SAVED_MESSAGE = &quot;Saved&quot;;
+
+	/**
+	 *	JDBC Based Buffered Table
+	 *
+	 *  @param ctx Properties
+	 *  @param AD_Table_ID table id
+	 *  @param TableName table name
+	 *  @param WindowNo window no
+	 *  @param TabNo tab no
+	 *  @param withAccessControl    if true adds AD_Client/Org restrictions
+	 */
+	public GridTable(Properties ctx, int AD_Table_ID, String TableName, int WindowNo, int TabNo,
+		boolean withAccessControl)
+	{
+<span class="nc" id="L134">		this(ctx, AD_Table_ID, TableName, WindowNo, TabNo, withAccessControl, false);</span>
+<span class="nc" id="L135">	}</span>
+
+	/**
+	 *	JDBC Based Buffered Table
+	 *
+	 *  @param ctx Properties
+	 *  @param AD_Table_ID table id
+	 *  @param TableName table name
+	 *  @param WindowNo window no
+	 *  @param TabNo tab no
+	 *  @param withAccessControl    if true adds AD_Client/Org restrictuins
+	 *  @param virtual use virtual table mode if table is mark as high volume
+	 */
+	public GridTable(Properties ctx, int AD_Table_ID, String TableName, int WindowNo, int TabNo,
+		boolean withAccessControl, boolean virtual)
+	{
+<span class="nc" id="L151">		super();</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(TableName);</span>
+<span class="nc" id="L153">		m_ctx = ctx;</span>
+<span class="nc" id="L154">		m_AD_Table_ID = AD_Table_ID;</span>
+<span class="nc" id="L155">		setTableName(TableName);</span>
+<span class="nc" id="L156">		m_WindowNo = WindowNo;</span>
+<span class="nc" id="L157">		m_TabNo = TabNo;</span>
+<span class="nc" id="L158">		m_withAccessControl = withAccessControl;</span>
+<span class="nc" id="L159">		m_virtual = virtual;</span>
+<span class="nc" id="L160">	}	//	MTable</span>
+
+<span class="nc" id="L162">	private static CLogger		log = CLogger.getCLogger(GridTable.class);</span>
+	private Properties          m_ctx;
+	private int					m_AD_Table_ID;
+<span class="nc" id="L165">	private String 		        m_tableName = &quot;&quot;;</span>
+	private int				    m_WindowNo;
+	/** Tab No 0..				*/
+	private int				    m_TabNo;
+	private boolean			    m_withAccessControl;
+<span class="nc" id="L170">	private boolean			    m_readOnly = true;</span>
+<span class="nc" id="L171">	private boolean			    m_deleteable = true;</span>
+	//virtual table state variables
+	private boolean				m_virtual;
+	public static final String CTX_KeyColumnName = &quot;KeyColumnName&quot;;
+	//
+
+	/**	Rowcount                    */
+<span class="nc" id="L178">	private int				    m_rowCount = 0;</span>
+<span class="nc" id="L179">	private boolean				m_rowCountTimeout = false;</span>
+<span class="nc" id="L180">	private boolean				m_rowLoadTimeout = false;</span>
+	/**	Boolean flag set via the {@link #setChanged(boolean)} method  */
+<span class="nc" id="L182">	private boolean			    m_changed = false;</span>
+	/** Index of changed row via SetValueAt */
+<span class="nc" id="L184">	private int				    m_rowChanged = -1;</span>
+	/** Insert mode active          */
+<span class="nc" id="L186">	private boolean			    m_inserting = false;</span>
+	/** Inserted Row number         */
+<span class="nc" id="L188">	private int                 m_newRow = -1;</span>
+	
+	/**	Is the Resultset open?      */
+<span class="nc" id="L191">	private boolean			    m_open = false;</span>
+	/**	Compare to DB before save	*/
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+<span class="nc" id="L194">	private boolean				m_compareDB = true;		//	set to true after every save</span>
+
+	/** Data buffer */
+<span class="nc" id="L197">	private volatile ArrayList&lt;Object[]&gt;	m_buffer = new ArrayList&lt;Object[]&gt;(100);</span>
+	/** Sort order for {@link #m_buffer} */
+<span class="nc" id="L199">	private volatile ArrayList&lt;MSort&gt;		m_sort = new ArrayList&lt;MSort&gt;(100);</span>
+	/** Record ID:Values */
+<span class="nc" id="L201">	private volatile Map&lt;Integer, Object[]&gt; m_virtualBuffer = new HashMap&lt;Integer, Object[]&gt;(100);</span>
+	/** Original row data               */
+<span class="nc" id="L203">	private Object[]			m_rowData = null;</span>
+	/** Original data [row,col,data]    */
+<span class="nc" id="L205">	private Object[]            m_oldValue = null;</span>
+	//
+<span class="nc" id="L207">	private Loader		        m_loader = null;</span>
+
+	/**	Columns                 		*/
+<span class="nc" id="L210">	private ArrayList&lt;GridField&gt;	m_fields = new ArrayList&lt;GridField&gt;(30);</span>
+
+	/** Complete SQL statement          */
+	private String 		        m_SQL;
+	/** SQL Statement for Row Count     */
+	private String 		        m_SQL_Count;
+	/** The SELECT clause with FROM     */
+	private String 		        m_SQL_Select;
+	/** The static where clause         */
+<span class="nc" id="L219">	private SQLFragment 		m_whereClause = new SQLFragment(&quot;2=3&quot;);</span>
+	/** Parameters for where clause (after parsing of context)    */
+<span class="nc" id="L221">	private List&lt;Object&gt;		m_whereParams = new ArrayList&lt;Object&gt;();</span>
+	/** Show only Processed='N' and last 24h records    */
+<span class="nc" id="L223">	private boolean		        m_onlyCurrentRows = false;</span>
+	/** Show only Not processed and x days				*/
+<span class="nc" id="L225">	private int					m_onlyCurrentDays = 1;</span>
+	/** Static ORDER BY clause          */
+<span class="nc" id="L227">	private String		        m_orderClause = &quot;&quot;;</span>
+	/** Max Rows to query or 0 for all	*/
+<span class="nc" id="L229">	private int					m_maxRows = 0;</span>
+
+	/** Index of Key Column                 */
+<span class="nc" id="L232">	private int			        m_indexKeyColumn = -1;</span>
+	/** Index of UUID Column                */
+<span class="nc" id="L234">	private int			        m_indexUUIDColumn = -1;</span>
+	/** Index of Color Column               */
+<span class="nc" id="L236">	private int			        m_indexColorColumn = -1;</span>
+	/** Index of Processed Column           */
+<span class="nc" id="L238">	private int                 m_indexProcessedColumn = -1;</span>
+	/** Index of IsActive Column            */
+<span class="nc" id="L240">	private int                 m_indexActiveColumn = -1;</span>
+	/** Index of AD_Client_ID Column        */
+<span class="nc" id="L242">	private int					m_indexClientColumn = -1;</span>
+	/** Index of AD_Org_ID Column           */
+<span class="nc" id="L244">	private int					m_indexOrgColumn = -1;</span>
+
+	/** Vetoable Change Bean support    */
+<span class="nc" id="L247">	private VetoableChangeSupport   m_vetoableChangeSupport = new VetoableChangeSupport(this);</span>
+	private Future&lt;?&gt; m_loaderFuture;
+	/** Property of Vetoable Bean support &quot;RowChange&quot; */
+	public static final String  PROPERTY = &quot;MTable-RowSave&quot;;
+
+<span class="nc" id="L252">	private final static Integer NEW_ROW_ID = Integer.valueOf(-1);</span>
+	private static final int DEFAULT_FETCH_SIZE = 200;
+
+	/** Keep track of last sorted column index and sort direction */
+<span class="nc" id="L256">	private int 				m_lastSortColumnIndex = -1;</span>
+<span class="nc" id="L257">	private boolean 			m_lastSortedAscending = true;</span>
+
+	/**
+	 *	Set Table Name
+	 *  @param newTableName table name
+	 */
+	public void setTableName(String newTableName)
+	{
+<span class="nc bnc" id="L265" title="All 2 branches missed.">		if (m_open)</span>
+		{
+<span class="nc" id="L267">			log.log(Level.SEVERE, &quot;Table already open - ignored&quot;);</span>
+<span class="nc" id="L268">			return;</span>
+		}
+<span class="nc bnc" id="L270" title="All 4 branches missed.">		if (newTableName == null || newTableName.length() == 0)</span>
+<span class="nc" id="L271">			return;</span>
+<span class="nc" id="L272">		m_tableName = newTableName;</span>
+<span class="nc" id="L273">	}	//	setTableName</span>
+
+	/**
+	 *	Get Table Name
+	 *  @return table name
+	 */
+	public String getTableName()
+	{
+<span class="nc" id="L281">		return m_tableName;</span>
+	}	//	getTableName
+
+	/**
+	 *	Set Where Clause (w/o the WHERE keyword and w/o History).
+	 *  @param newWhereClause sql where clause
+	 *  @param onlyCurrentRows only current rows
+	 *  @param onlyCurrentDays how many days back for current
+	 *	@return true if where clase set
+	 *  @deprecated replace by {@link #setSQLFilter(SQLFragment, boolean, int)}
+	 */	
+	@Deprecated(since=&quot;13&quot;, forRemoval=true)
+	public boolean setSelectWhereClause(String newWhereClause, boolean onlyCurrentRows, int onlyCurrentDays)
+	{
+<span class="nc bnc" id="L295" title="All 2 branches missed.">		return this.setSQLFilter(new SQLFragment(newWhereClause != null ? newWhereClause : &quot;&quot;), onlyCurrentRows, onlyCurrentDays);</span>
+	}
+	
+	/**
+	 *	Set Where Clause (w/o the WHERE keyword and w/o History).
+	 *  @param newWhereClause sql where clause and parameters
+	 *  @param onlyCurrentRows only current rows
+	 *  @param onlyCurrentDays how many days back for current
+	 *	@return true if where clase set
+	 */	
+	public boolean setSQLFilter(SQLFragment newWhereClause, boolean onlyCurrentRows, int onlyCurrentDays)
+	{
+<span class="nc bnc" id="L307" title="All 2 branches missed.">		if (m_open)</span>
+		{
+<span class="nc" id="L309">			log.log(Level.SEVERE, &quot;Table already open - ignored&quot;);</span>
+<span class="nc" id="L310">			return false;</span>
+		}
+		//
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		m_whereClause = (newWhereClause != null) ? newWhereClause : new SQLFragment(&quot;&quot;);</span>
+		// set in #createSelectSql
+<span class="nc" id="L315">		m_whereParams.clear();</span>
+<span class="nc" id="L316">		m_onlyCurrentRows = onlyCurrentRows;</span>
+<span class="nc" id="L317">		m_onlyCurrentDays = onlyCurrentDays;</span>
+<span class="nc" id="L318">		return true;</span>
+	}	//	setWhereClause
+
+	/**
+	 *	Get Where Clause (w/o the WHERE keyword and w/o History)
+	 *  @return where clause
+	 *  @deprecated use {@link #getSQLFilter()}
+	 */
+	@Deprecated(since=&quot;13&quot;, forRemoval=true)
+	public String getSelectWhereClause()
+	{
+<span class="nc" id="L329">		return m_whereClause.toSQLWithParameters();</span>
+	}	//	getWhereClause
+
+	/**
+	 * Get Where Clause (w/o the WHERE keyword and w/o History)
+	 * @return sql where clause and parameters
+	 */
+	public SQLFragment getSQLFilter()
+	{
+<span class="nc" id="L338">		return m_whereClause;</span>
+	}	//	getSQLFilter
+	
+	/**
+	 *	Is show only unprocessed or the one updated within x days
+	 *  @return true if show only unprocessed or the one updated within x days
+	 */
+	public boolean isOnlyCurrentRowsDisplayed()
+	{
+<span class="nc" id="L347">		return m_onlyCurrentRows;</span>
+	}	
+
+	/**
+	 *	Set Order Clause (w/o the ORDER BY keyword)
+	 *  @param newOrderClause sql order by clause
+	 */
+	public void setOrderClause(String newOrderClause)
+	{
+<span class="nc" id="L356">		m_orderClause = newOrderClause;</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">		if (m_orderClause == null)</span>
+<span class="nc" id="L358">			m_orderClause = &quot;&quot;;</span>
+<span class="nc" id="L359">	}	//	setOrderClause</span>
+
+	/**
+	 *	Get Order By Clause (w/o the ORDER BY keyword)
+	 *  @return order by clause
+	 */
+	public String getOrderClause()
+	{
+<span class="nc" id="L367">		return m_orderClause;</span>
+	}	//	getOrderClause
+
+	/**
+	 *	Assemble &amp; store {@link #m_SQL}, {@link #m_SQL_Select} and {@link #m_SQL_Count}.
+	 *  @return m_SQL
+	 */
+	private String createSelectSql()
+	{
+<span class="nc bnc" id="L376" title="All 6 branches missed.">		if (m_fields.size() == 0 || m_tableName == null || m_tableName.equals(&quot;&quot;))</span>
+<span class="nc" id="L377">			return &quot;&quot;;</span>
+
+		//	Create SELECT Part
+<span class="nc" id="L380">		StringBuilder select = new StringBuilder(&quot;SELECT &quot;);</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">		for (int i = 0; i &lt; m_fields.size(); i++)</span>
+		{
+<span class="nc bnc" id="L383" title="All 2 branches missed.">			if (i &gt; 0)</span>
+<span class="nc" id="L384">				select.append(&quot;,&quot;);</span>
+<span class="nc" id="L385">			GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">			select.append(field.isVirtualColumn() ? field.getColumnSQL(true) : DB.getDatabase().quoteColumnName(field.getColumnSQL(true)));	//	ColumnName or Virtual Column</span>
+		}
+		//
+<span class="nc" id="L389">		select.append(&quot; FROM &quot;).append(m_tableName);</span>
+<span class="nc" id="L390">		m_SQL_Select = select.toString();</span>
+<span class="nc" id="L391">		m_SQL_Count = &quot;SELECT COUNT(*) FROM &quot; + m_tableName;</span>
+		//BF [ 2910358 ] 
+		//Restore the Original Value for Key Column Name based in Tab Context Value
+<span class="nc" id="L394">		int parentTabNo = getParentTabNo();</span>
+<span class="nc" id="L395">		String parentKey = Env.getContext(m_ctx, m_WindowNo, parentTabNo, GridTab.CTX_KeyColumnName, true);</span>
+<span class="nc" id="L396">		String valueKey = null;</span>
+<span class="nc" id="L397">		String currKey = null;</span>
+<span class="nc bnc" id="L398" title="All 4 branches missed.">		if (parentKey != null &amp;&amp; parentKey.length() &gt; 0) {</span>
+<span class="nc" id="L399">			valueKey = Env.getContext(m_ctx, m_WindowNo, parentTabNo, parentKey, true);</span>
+<span class="nc" id="L400">			currKey = Env.getContext(m_ctx, m_WindowNo, parentKey);</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">			if (currKey == null)</span>
+<span class="nc" id="L402">				currKey = new String(&quot;&quot;);</span>
+<span class="nc bnc" id="L403" title="All 10 branches missed.">			if (valueKey != null &amp;&amp; valueKey.length() &gt; 0 &amp;&amp; parentKey != null &amp;&amp; parentKey.length() &gt; 0 &amp;&amp; ! currKey.equals(valueKey))</span>
+			{
+<span class="nc" id="L405">				Env.setContext(m_ctx, m_WindowNo,  parentKey, valueKey);</span>
+			}	
+		}
+		
+<span class="nc" id="L409">		StringBuilder where = new StringBuilder(&quot;&quot;);</span>
+		//	WHERE
+<span class="nc" id="L411">		m_whereParams = new ArrayList&lt;Object&gt;();</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">		if (!Util.isEmpty(m_whereClause.sqlClause(), true))</span>
+		{
+<span class="nc" id="L414">			m_whereParams.addAll(m_whereClause.parameters());</span>
+<span class="nc" id="L415">			String whereClause = m_whereClause.sqlClause();</span>
+<span class="nc" id="L416">			where.append(&quot; WHERE (&quot;);</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">			if (whereClause.indexOf('@') == -1)</span>
+<span class="nc" id="L418">				where.append(whereClause);</span>
+			else    //  replace variables
+			{
+<span class="nc" id="L421">				List&lt;Object&gt; tempParams = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L422">				String context = Env.parseContextForSql(m_ctx, m_WindowNo, whereClause, false, false, tempParams);</span>
+<span class="nc bnc" id="L423" title="All 4 branches missed.">				if(context != null &amp;&amp; context.trim().length() &gt; 0)</span>
+				{
+<span class="nc" id="L425">					where.append(context);</span>
+<span class="nc" id="L426">					m_whereParams = Env.mergeParameters(m_whereClause.sqlClause(), context, m_whereParams.toArray(), tempParams.toArray());</span>
+<span class="nc" id="L427">				}</span>
+				else
+				{
+<span class="nc" id="L430">					log.log(Level.WARNING, &quot;Failed to parse where clause. whereClause=&quot;+m_whereClause);</span>
+<span class="nc" id="L431">					where.append(&quot; 1 = 2 &quot;);</span>
+<span class="nc" id="L432">					m_whereParams.clear();</span>
+				}
+			}
+<span class="nc" id="L435">			where.append(&quot;)&quot;);</span>
+		}
+<span class="nc bnc" id="L437" title="All 4 branches missed.">		if (m_onlyCurrentRows &amp;&amp; m_TabNo == 0)</span>
+		{
+<span class="nc bnc" id="L439" title="All 2 branches missed.">			if (where.toString().indexOf(&quot; WHERE &quot;) == -1)</span>
+<span class="nc" id="L440">				where.append(&quot; WHERE &quot;);</span>
+			else
+<span class="nc" id="L442">				where.append(&quot; AND &quot;);</span>
+			//	Show only unprocessed or the one updated within x days
+<span class="nc" id="L444">			where.append(&quot;(Processed='N' OR Updated&gt;&quot;);</span>
+<span class="nc" id="L445">			where.append(&quot;getDate()-1&quot;);</span>
+<span class="nc" id="L446">			where.append(&quot;)&quot;);</span>
+		}
+
+		//	RO/RW Access
+<span class="nc" id="L450">		m_SQL = m_SQL_Select + where.toString();</span>
+<span class="nc" id="L451">		m_SQL_Count += where.toString();</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">		if (m_withAccessControl)</span>
+		{
+<span class="nc" id="L454">			m_SQL = MRole.getDefault(m_ctx, false).addAccessSQL(m_SQL, </span>
+<span class="nc" id="L455">				m_tableName, MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO);</span>
+<span class="nc" id="L456">			m_SQL_Count = MRole.getDefault(m_ctx, false).addAccessSQL(m_SQL_Count, </span>
+<span class="nc" id="L457">				m_tableName, MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO);</span>
+		}
+
+		//	ORDER BY
+<span class="nc bnc" id="L461" title="All 2 branches missed.">		if (!m_orderClause.equals(&quot;&quot;))</span>
+		{
+<span class="nc" id="L463">			m_SQL += &quot; ORDER BY &quot; + m_orderClause;</span>
+		}
+		
+		//IDEMPIERE-5193 Add Limit to Query
+<span class="nc bnc" id="L467" title="All 4 branches missed.">		if(m_maxRows &gt; 0 &amp;&amp; DB.getDatabase().isPagingSupported())</span>
+		{
+			// set to maxRows plus one to trigger FindOverMax on overflow
+<span class="nc" id="L470">			m_SQL = DB.getDatabase().addPagingSQL(m_SQL, 1, m_maxRows+1);</span>
+		}
+		
+		//
+<span class="nc bnc" id="L474" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L475">			log.fine(m_SQL_Count);</span>
+<span class="nc" id="L476">		Env.setContext(m_ctx, m_WindowNo, m_TabNo, GridTab.CTX_SQL, m_SQL);</span>
+<span class="nc" id="L477">		return m_SQL;</span>
+	}	//	createSelectSql
+
+	/**
+	 *	Add Field to Table
+	 *  @param field field
+	 */
+	public void addField (GridField field)
+	{
+<span class="nc bnc" id="L486" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;(&quot; + m_tableName + &quot;) - &quot; + field.getColumnName());</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">		if (m_open)</span>
+		{
+<span class="nc" id="L489">			log.log(Level.SEVERE, &quot;Table already open - ignored: &quot; + field.getColumnName());</span>
+<span class="nc" id="L490">			return;</span>
+		}
+<span class="nc bnc" id="L492" title="All 2 branches missed.">		if (!MRole.getDefault(m_ctx, false).isColumnAccess (m_AD_Table_ID, field.getAD_Column_ID(), true))</span>
+		{
+<span class="nc bnc" id="L494" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;No Column Access &quot; + field.getColumnName());</span>
+<span class="nc" id="L495">			return;			</span>
+		}
+		//  Set Index for Key column
+<span class="nc bnc" id="L498" title="All 2 branches missed.">		if (field.isKey())</span>
+<span class="nc" id="L499">			m_indexKeyColumn = m_fields.size();</span>
+<span class="nc bnc" id="L500" title="All 2 branches missed.">		else if (field.isUUID())</span>
+<span class="nc" id="L501">			m_indexUUIDColumn = m_fields.size();</span>
+		//  Set Index of other standard columns
+<span class="nc bnc" id="L503" title="All 2 branches missed.">		if (field.getColumnName().equals(&quot;IsActive&quot;))</span>
+<span class="nc" id="L504">			m_indexActiveColumn = m_fields.size();</span>
+<span class="nc bnc" id="L505" title="All 2 branches missed.">		else if (field.getColumnName().equals(&quot;Processed&quot;))</span>
+<span class="nc" id="L506">			m_indexProcessedColumn = m_fields.size();</span>
+<span class="nc bnc" id="L507" title="All 2 branches missed.">		else if (field.getColumnName().equals(&quot;AD_Client_ID&quot;))</span>
+<span class="nc" id="L508">			m_indexClientColumn = m_fields.size();</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">		else if (field.getColumnName().equals(&quot;AD_Org_ID&quot;))</span>
+<span class="nc" id="L510">			m_indexOrgColumn = m_fields.size();</span>
+		//
+<span class="nc" id="L512">		m_fields.add(field);</span>
+<span class="nc" id="L513">	}	//	addColumn</span>
+
+	/**
+	 *  Returns database column name
+	 *
+	 *  @param index  column index
+	 *  @return column name or empty string (if index is invalid)
+	 */
+	public String getColumnName (int index)
+	{
+<span class="nc bnc" id="L523" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_fields.size())</span>
+		{
+<span class="nc" id="L525">			log.log(Level.SEVERE, &quot;Invalid index=&quot; + index);</span>
+<span class="nc" id="L526">			return &quot;&quot;;</span>
+		}
+		//
+<span class="nc" id="L529">		GridField field = (GridField)m_fields.get(index);</span>
+<span class="nc" id="L530">		return field.getColumnName();</span>
+	}   //  getColumnName
+
+	/**
+	 * Find column index via column name.
+	 *
+	 * @param columnName string containing name of column to be located
+	 * @return the column index with &lt;code&gt;columnName&lt;/code&gt;, or -1 if not found
+	 */
+	public int findColumn (String columnName)
+	{
+<span class="nc bnc" id="L541" title="All 2 branches missed.">		for (int i = 0; i &lt; m_fields.size(); i++)</span>
+		{
+<span class="nc" id="L543">			GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc bnc" id="L544" title="All 2 branches missed.">			if (columnName.equals(field.getColumnName()))</span>
+<span class="nc" id="L545">				return i;</span>
+		}
+<span class="nc" id="L547">		return -1;</span>
+	}   //  findColumn
+
+	/**
+	 *  Returns Class of database column/field
+	 *
+	 *  @param index column index
+	 *  @return Java class for column
+	 */
+	public Class&lt;?&gt; getColumnClass (int index)
+	{
+<span class="nc bnc" id="L558" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_fields.size())</span>
+		{
+<span class="nc" id="L560">			log.log(Level.SEVERE, &quot;Invalid index=&quot; + index);</span>
+<span class="nc" id="L561">			return null;</span>
+		}
+<span class="nc" id="L563">		GridField field = (GridField)m_fields.get(index);</span>
+<span class="nc" id="L564">		return DisplayType.getClass(field.getDisplayType(), false);</span>
+	}   //  getColumnClass
+
+	/**
+	 *	Get GridField at index
+	 *  @param index index
+	 *  @return GridField
+	 */
+	public GridField getField (int index)
+	{
+<span class="nc bnc" id="L574" title="All 4 branches missed.">		if (index &lt; 0 || index &gt;= m_fields.size())</span>
+<span class="nc" id="L575">			return null;</span>
+<span class="nc" id="L576">		return (GridField)m_fields.get(index);</span>
+	}	//	getField
+
+	/**
+	 *	Get GridField with ColumnName
+	 *  @param identifier column name
+	 *  @return GridField or null
+	 */
+	protected GridField getField (String identifier)
+	{
+<span class="nc bnc" id="L586" title="All 4 branches missed.">		if (identifier == null || identifier.length() == 0)</span>
+<span class="nc" id="L587">			return null;</span>
+<span class="nc" id="L588">		int cols = m_fields.size();</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">		for (int i = 0; i &lt; cols; i++)</span>
+		{
+<span class="nc" id="L591">			GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc bnc" id="L592" title="All 2 branches missed.">			if (identifier.equalsIgnoreCase(field.getColumnName()))</span>
+<span class="nc" id="L593">				return field;</span>
+		}
+<span class="nc" id="L595">		return null;</span>
+	}	//	getField
+
+	/**
+	 *  Get all Fields
+	 *  @return GridField[]
+	 */
+	public GridField[] getFields ()
+	{
+<span class="nc" id="L604">		GridField[] retValue = new GridField[m_fields.size()];</span>
+<span class="nc" id="L605">		m_fields.toArray(retValue);</span>
+<span class="nc" id="L606">		return retValue;</span>
+	}   //  getField
+	
+	/**
+	 *	Open connection to db and load data from table.
+	 *  If already opened, data is refreshed.&lt;br/&gt;
+	 *  Loading of data is perform asynchronously in background thread. 
+	 *	@param maxRows maximum number of rows or 0 for all
+	 *	@return true if success
+	 */
+	public boolean open (int maxRows)
+	{
+<span class="nc bnc" id="L618" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;MaxRows=&quot; + maxRows);</span>
+<span class="nc" id="L619">		m_maxRows = maxRows;</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">		if (m_open)</span>
+		{
+<span class="nc bnc" id="L622" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L623">				log.fine(&quot;already open&quot;);</span>
+<span class="nc" id="L624">			dataRefreshAll();</span>
+<span class="nc" id="L625">			return true;</span>
+		}
+
+<span class="nc bnc" id="L628" title="All 2 branches missed.">		if (m_virtual)</span>
+		{
+<span class="nc" id="L630">			verifyVirtual();</span>
+		}
+
+		//	create m_SQL and m_countSQL
+<span class="nc" id="L634">		createSelectSql();</span>
+<span class="nc bnc" id="L635" title="All 4 branches missed.">		if (m_SQL == null || m_SQL.equals(&quot;&quot;))</span>
+		{
+<span class="nc" id="L637">			log.log(Level.SEVERE, &quot;No SQL&quot;);</span>
+<span class="nc" id="L638">			return false;</span>
+		}
+
+<span class="nc bnc" id="L641" title="All 2 branches missed.">		if (!m_open)</span>
+		{
+<span class="nc" id="L643">			m_open = true;</span>
+		}
+
+		//	Start Loading
+<span class="nc" id="L647">		m_loader = new Loader();</span>
+<span class="nc" id="L648">		m_loaderFuture = null;</span>
+<span class="nc" id="L649">		m_rowCount = m_loader.open(maxRows);</span>
+<span class="nc bnc" id="L650" title="All 2 branches missed.">		if (m_virtual)</span>
+		{
+<span class="nc" id="L652">			m_buffer = null;</span>
+<span class="nc" id="L653">			m_virtualBuffer = new HashMap&lt;Integer, Object[]&gt;(210);</span>
+<span class="nc" id="L654">		}</span>
+		else
+		{
+<span class="nc" id="L657">			m_buffer = new ArrayList&lt;Object[]&gt;(m_rowCount+10);</span>
+		}
+<span class="nc" id="L659">		m_sort = new ArrayList&lt;MSort&gt;(m_rowCount+10);</span>
+		// actual row count or timeout
+<span class="nc bnc" id="L661" title="All 4 branches missed.">		if (m_rowCount &gt; 0 || m_rowCountTimeout) </span>
+		{
+<span class="nc" id="L663">			m_loader.setContext(ServerContext.getCurrentInstance());</span>
+<span class="nc" id="L664">			m_loaderFuture = Adempiere.getThreadPoolExecutor().submit(m_loader);</span>
+<span class="nc" id="L665">		}</span>
+		else
+<span class="nc" id="L667">			m_loader.close();</span>
+		//
+<span class="nc" id="L669">		m_changed = false;</span>
+<span class="nc" id="L670">		m_rowChanged = -1;</span>
+<span class="nc" id="L671">		m_inserting = false;</span>
+<span class="nc" id="L672">		return true;</span>
+	}	//	open
+
+	/**
+	 * Verify whether use of virtual buffer is supported
+	 */
+	private void verifyVirtual()
+	{
+<span class="nc bnc" id="L680" title="All 2 branches missed.">		if (m_indexKeyColumn == -1)</span>
+		{
+<span class="nc" id="L682">			m_virtual = false;</span>
+<span class="nc" id="L683">			return;</span>
+		}
+<span class="nc" id="L685">		GridField[] fields = getFields();</span>
+<span class="nc bnc" id="L686" title="All 2 branches missed.">		for(int i = 0; i &lt; fields.length; i++)</span>
+		{
+<span class="nc bnc" id="L688" title="All 4 branches missed.">			if (fields[i].isKey() &amp;&amp; i != m_indexKeyColumn)</span>
+			{
+<span class="nc" id="L690">				m_virtual = false;</span>
+<span class="nc" id="L691">				return;</span>
+			}
+		}
+<span class="nc" id="L694">	}</span>
+
+	/**
+	 *  Wait until asynchronous loading of Table and Lookup Fields is complete.
+	 */
+	public void loadComplete()
+	{
+		//  Wait for loader
+<span class="nc bnc" id="L702" title="All 2 branches missed.">		if (m_loaderFuture != null)</span>
+		{
+<span class="nc bnc" id="L704" title="All 2 branches missed.">			if (!m_loaderFuture.isDone())</span>
+			{
+				try
+				{
+<span class="nc" id="L708">					m_loaderFuture.get();</span>
+<span class="nc" id="L709">				}</span>
+<span class="nc" id="L710">				catch (Exception ie)</span>
+				{
+<span class="nc" id="L712">					log.log(Level.SEVERE, &quot;Interrupted&quot;, ie);</span>
+				}
+			}
+		}
+		//  wait for field lookup loaders
+<span class="nc bnc" id="L717" title="All 2 branches missed.">		for (int i = 0; i &lt; m_fields.size(); i++)</span>
+		{
+<span class="nc" id="L719">			GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc" id="L720">			field.lookupLoadComplete();</span>
+		}
+<span class="nc" id="L722">	}   //  loadComplete</span>
+
+	/**
+	 *  Is Loading
+	 *  @return true if loading is in progress
+	 */
+	public boolean isLoading()
+	{
+<span class="nc bnc" id="L730" title="All 4 branches missed.">		if (m_loaderFuture != null &amp;&amp; !m_loaderFuture.isDone())</span>
+<span class="nc" id="L731">			return true;</span>
+<span class="nc" id="L732">		return false;</span>
+	}   //  isLoading
+
+	/**
+	 * wait for the loading of data
+	 * @param timeout timeout in milisecond. pass 0 or negative value for infinite wait
+	 * @throws InterruptedException
+	 * @throws ExecutionException
+	 * @throws TimeoutException 
+	 */
+	public void waitLoading(long timeout) throws InterruptedException, ExecutionException, TimeoutException
+	{
+<span class="nc bnc" id="L744" title="All 4 branches missed.">		if (m_loaderFuture != null &amp;&amp; !m_loaderFuture.isDone()) {</span>
+<span class="nc bnc" id="L745" title="All 2 branches missed.">			if (timeout &gt; 0)</span>
+<span class="nc" id="L746">				m_loaderFuture.get(timeout, TimeUnit.MILLISECONDS);</span>
+			else
+<span class="nc" id="L748">				m_loaderFuture.get();</span>
+		}
+<span class="nc" id="L750">	}</span>
+	
+	/**
+	 *	Is it open?
+	 *  @return true if opened
+	 */
+	public boolean isOpen()
+	{
+<span class="nc" id="L758">		return m_open;</span>
+	}	//	isOpen
+
+	/**
+	 *	Close Resultset
+	 *  @param finalCall true for final call and perform clean up
+	 */
+	public void close (boolean finalCall)
+	{
+<span class="nc bnc" id="L767" title="All 2 branches missed.">		if (!m_open)</span>
+<span class="nc" id="L768">			return;</span>
+<span class="nc bnc" id="L769" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;final=&quot; + finalCall);</span>
+
+		//  remove listeners
+<span class="nc bnc" id="L772" title="All 2 branches missed.">		if (finalCall)</span>
+		{
+<span class="nc" id="L774">			DataStatusListener evl[] = (DataStatusListener[])listenerList.getListeners(DataStatusListener.class);</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">			for (int i = 0; i &lt; evl.length; i++)</span>
+<span class="nc" id="L776">				listenerList.remove(DataStatusListener.class, evl[i]);</span>
+<span class="nc" id="L777">			TableModelListener ev2[] = (TableModelListener[])listenerList.getListeners(TableModelListener.class);</span>
+<span class="nc bnc" id="L778" title="All 2 branches missed.">			for (int i = 0; i &lt; ev2.length; i++)</span>
+<span class="nc" id="L779">				listenerList.remove(TableModelListener.class, ev2[i]);</span>
+<span class="nc" id="L780">			VetoableChangeListener vcl[] = m_vetoableChangeSupport.getVetoableChangeListeners();</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">			for (int i = 0; i &lt; vcl.length; i++)</span>
+<span class="nc" id="L782">				m_vetoableChangeSupport.removeVetoableChangeListener(vcl[i]);</span>
+		}
+
+		//	Stop loader
+<span class="nc bnc" id="L786" title="All 4 branches missed.">		while (m_loaderFuture != null &amp;&amp; !m_loaderFuture.isDone())</span>
+		{
+<span class="nc bnc" id="L788" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L789">				log.fine(&quot;Interrupting Loader ...&quot;);</span>
+<span class="nc" id="L790">			m_loaderFuture.cancel(true);</span>
+			try
+			{
+<span class="nc" id="L793">				Thread.sleep(200);		//	.2 second</span>
+<span class="nc" id="L794">			}</span>
+<span class="nc" id="L795">			catch (InterruptedException ie)</span>
+			{}
+<span class="nc" id="L797">			m_loaderFuture = null;</span>
+		}
+
+<span class="nc bnc" id="L800" title="All 2 branches missed.">		if (!m_inserting)</span>
+<span class="nc" id="L801">			dataSave(false);	//	not manual</span>
+
+<span class="nc bnc" id="L803" title="All 2 branches missed.">		if (m_buffer != null)</span>
+		{
+<span class="nc" id="L805">			m_buffer.clear();</span>
+		}
+<span class="nc bnc" id="L807" title="All 2 branches missed.">		if (m_sort != null)</span>
+		{
+<span class="nc" id="L809">			m_sort.clear();</span>
+		}
+<span class="nc bnc" id="L811" title="All 2 branches missed.">		if (m_virtualBuffer != null)</span>
+		{
+<span class="nc" id="L813">			m_virtualBuffer.clear();</span>
+		}
+
+<span class="nc bnc" id="L816" title="All 2 branches missed.">		if (finalCall) {</span>
+<span class="nc" id="L817">			dispose();</span>
+<span class="nc" id="L818">			m_buffer = null;</span>
+<span class="nc" id="L819">			m_sort = null;</span>
+<span class="nc" id="L820">			m_virtualBuffer = null;</span>
+		}
+
+		//  Fields are disposed from MTab
+<span class="nc bnc" id="L824" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L825">			log.fine(&quot;&quot;);</span>
+<span class="nc" id="L826">		m_open = false;</span>
+<span class="nc" id="L827">	}	//	close</span>
+
+	/**
+	 *  Clean up.
+	 *  Called by close-final.
+	 */
+	private void dispose()
+	{
+		//  GridFields
+<span class="nc bnc" id="L836" title="All 2 branches missed.">		for (int i = 0; i &lt; m_fields.size(); i++)</span>
+<span class="nc" id="L837">			((GridField)m_fields.get(i)).dispose();</span>
+<span class="nc" id="L838">		m_fields.clear();</span>
+<span class="nc" id="L839">		m_fields = null;</span>
+		//
+<span class="nc" id="L841">		m_vetoableChangeSupport = null;</span>
+		//
+		//  clear data arrays
+<span class="nc" id="L844">		m_buffer = null;</span>
+<span class="nc" id="L845">		m_virtualBuffer = null;</span>
+<span class="nc" id="L846">		m_sort = null;</span>
+<span class="nc" id="L847">		m_rowData = null;</span>
+<span class="nc" id="L848">		m_oldValue = null;</span>
+<span class="nc" id="L849">		m_loader = null;</span>
+<span class="nc" id="L850">		m_loaderFuture = null;</span>
+<span class="nc" id="L851">	}   //  dispose</span>
+
+	/**
+	 *	Get column count
+	 *  @return column count
+	 */
+	public int getColumnCount()
+	{
+<span class="nc" id="L859">		return m_fields.size();</span>
+	}	//	getColumnCount
+
+	/**
+	 *	Get field count
+	 *  @return field count
+	 */
+	public int getFieldCount()
+	{
+<span class="nc" id="L868">		return m_fields.size();</span>
+	}	//	getFieldCount
+
+	/**
+	 *  Return number of rows
+	 *  @return Number of rows or 0 if not opened
+	 */
+	public int getRowCount()
+	{
+<span class="nc" id="L877">		return m_rowCount;</span>
+	}	//	getRowCount
+
+	/**
+	 *	Set the Column to determine the color of the row
+	 *  @param columnName column name
+	 */
+	public void setColorColumn (String columnName)
+	{
+<span class="nc" id="L886">		m_indexColorColumn = findColumn(columnName);</span>
+<span class="nc" id="L887">	}	//  setColorColumn</span>
+
+	/**
+	 *	Get ColorCode for Row.
+	 *  &lt;pre&gt;
+	 *	If numerical value in compare column is
+	 *		negative = -1,
+	 *      positive = 1,
+	 *      otherwise = 0
+	 *  &lt;/pre&gt;
+	 *  @see #setColorColumn
+	 *  @param row row
+	 *  @return color code
+	 */
+	public int getColorCode (int row)
+	{
+<span class="nc bnc" id="L903" title="All 2 branches missed.">		if (m_indexColorColumn  == -1)</span>
+<span class="nc" id="L904">			return 0;</span>
+<span class="nc" id="L905">		Object data = getValueAt(row, m_indexColorColumn);</span>
+		//	We need to have a Number
+<span class="nc bnc" id="L907" title="All 4 branches missed.">		if (data == null || !(data instanceof BigDecimal))</span>
+<span class="nc" id="L908">			return 0;</span>
+<span class="nc" id="L909">		BigDecimal bd = (BigDecimal)data;</span>
+<span class="nc" id="L910">		return bd.signum();</span>
+	}	//	getColorCode
+
+
+	/**
+	 *	Sort records by Column.
+	 *  &lt;p&gt;
+	 *  Actually the rows are not sorted, just the access pointer ArrayList
+	 *  with the same size as m_buffer ({@link #m_sort}).
+	 *  @param col col
+	 *  @param ascending ascending
+	 */
+	public void sort (int col, boolean ascending)
+	{
+<span class="nc bnc" id="L924" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;#&quot; + col + &quot; &quot; + ascending);</span>
+<span class="nc bnc" id="L925" title="All 2 branches missed.">		if (col &lt; 0) {</span>
+<span class="nc" id="L926">			return;</span>
+		}
+<span class="nc bnc" id="L928" title="All 2 branches missed.">		if (getRowCount() == 0)</span>
+<span class="nc" id="L929">			return;</span>
+
+<span class="nc" id="L931">		GridField field = getField(col);</span>
+
+		// Ignoring new record while sorting
+<span class="nc bnc" id="L934" title="All 2 branches missed.">		if (field.getGridTab().isQuickForm())</span>
+<span class="nc" id="L935">			dataIgnore();</span>
+
+<span class="nc bnc" id="L937" title="All 4 branches missed.">		boolean isSameSortEntries = (col == m_lastSortColumnIndex &amp;&amp; ascending == m_lastSortedAscending);</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">		if (!isSameSortEntries)</span>
+		{
+<span class="nc" id="L940">			m_lastSortColumnIndex = col;</span>
+<span class="nc" id="L941">			m_lastSortedAscending = ascending;</span>
+		}
+
+		//cache changed row
+<span class="nc bnc" id="L945" title="All 2 branches missed.">		MSort changedRow = m_rowChanged &gt;= 0 ? (MSort)m_sort.get(m_rowChanged) : null;</span>
+<span class="nc bnc" id="L946" title="All 2 branches missed.">		if (m_rowChanged == m_newRow)</span>
+<span class="nc" id="L947">			changedRow = null;</span>
+<span class="nc bnc" id="L948" title="All 2 branches missed.">		Object[] changedRowData = changedRow != null ? getDataAtRow(m_rowChanged) : null;</span>
+		
+<span class="nc bnc" id="L950" title="All 2 branches missed.">		MSort newRow = m_newRow &gt;= 0 ? (MSort)m_sort.get(m_newRow) : null;</span>
+		
+<span class="nc bnc" id="L952" title="All 4 branches missed.">		MSort currentRow = m_currentRow &gt;= 0 &amp;&amp; m_currentRow &lt; m_sort.size() ? (MSort)m_sort.get(m_currentRow) : null;</span>
+
+		//	RowIDs are not sorted
+<span class="nc bnc" id="L955" title="All 2 branches missed.">		if (field.getDisplayType() == DisplayType.RowID)</span>
+<span class="nc" id="L956">			return;</span>
+<span class="nc" id="L957">		boolean isLookup = DisplayType.isLookup(field.getDisplayType());</span>
+<span class="nc bnc" id="L958" title="All 2 branches missed.">		boolean isASI = DisplayType.PAttribute == field.getDisplayType();</span>
+
+		//	fill MSort entities with data entity
+<span class="nc bnc" id="L961" title="All 2 branches missed.">		for (int i = 0; i &lt; m_sort.size(); i++)</span>
+		{
+<span class="nc" id="L963">			MSort sort = (MSort)m_sort.get(i);</span>
+<span class="nc" id="L964">			Object[] rowData = getDataAtRow(i);</span>
+<span class="nc bnc" id="L965" title="All 2 branches missed.">			if (rowData[col] == null)</span>
+<span class="nc" id="L966">				sort.data = null;</span>
+<span class="nc bnc" id="L967" title="All 4 branches missed.">			else if (isLookup || isASI)</span>
+<span class="nc" id="L968">				sort.data = field.getLookup().getDisplay(rowData[col]);	//	lookup</span>
+			else
+<span class="nc" id="L970">				sort.data = rowData[col];								//	data</span>
+		}
+<span class="nc bnc" id="L972" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(field.toString() + &quot; #&quot; + m_sort.size());</span>
+
+		//	sort it
+<span class="nc" id="L975">		MSort sort = new MSort(0, null);</span>
+<span class="nc" id="L976">		sort.setSortAsc(ascending);</span>
+<span class="nc" id="L977">		Collections.sort(m_sort, sort);</span>
+<span class="nc bnc" id="L978" title="All 2 branches missed.">		if (m_virtual)</span>
+		{
+<span class="nc bnc" id="L980" title="All 2 branches missed.">			Object[] newRowData = newRow != null ? m_virtualBuffer.get(NEW_ROW_ID) : null;</span>
+<span class="nc" id="L981">			m_virtualBuffer.clear();</span>
+<span class="nc bnc" id="L982" title="All 2 branches missed.">			if (newRow != null)</span>
+<span class="nc" id="L983">				m_virtualBuffer.put(NEW_ROW_ID, newRowData);</span>
+
+<span class="nc bnc" id="L985" title="All 2 branches missed.">			if (changedRow != null)</span>
+			{				
+<span class="nc bnc" id="L987" title="All 2 branches missed.">				for(int i = 0; i &lt; m_sort.size(); i++)</span>
+				{
+<span class="nc bnc" id="L989" title="All 2 branches missed.">					if (m_sort.get(i) == changedRow)</span>
+					{
+<span class="nc" id="L991">						m_rowChanged = i;</span>
+<span class="nc" id="L992">						m_virtualBuffer.put(changedRow.index, changedRowData);</span>
+<span class="nc" id="L993">						break;</span>
+					}
+				}
+			}
+
+			//release sort memory
+<span class="nc bnc" id="L999" title="All 2 branches missed.">			for (int i = 0; i &lt; m_sort.size(); i++)</span>
+			{
+<span class="nc" id="L1001">				m_sort.get(i).data = null;</span>
+<span class="nc bnc" id="L1002" title="All 4 branches missed.">				if (newRow != null &amp;&amp; m_sort.get(i) == newRow)</span>
+				{
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">					if (m_rowChanged == m_newRow)</span>
+<span class="nc" id="L1005">						m_rowChanged = i;</span>
+<span class="nc" id="L1006">					m_newRow = i;</span>
+				}
+				
+<span class="nc bnc" id="L1009" title="All 4 branches missed.">				if (currentRow != null &amp;&amp; m_sort.get(i) == currentRow)</span>
+<span class="nc" id="L1010">					m_currentRow = i;</span>
+			}
+<span class="nc" id="L1012">		}</span>
+		else
+		{
+<span class="nc bnc" id="L1015" title="All 2 branches missed.">			for (int i = 0; i &lt; m_sort.size(); i++)</span>
+			{
+<span class="nc bnc" id="L1017" title="All 4 branches missed.">				if (newRow != null &amp;&amp; m_sort.get(i) == newRow)</span>
+				{
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">					if (m_rowChanged == m_newRow)</span>
+<span class="nc" id="L1020">						m_rowChanged = i;</span>
+<span class="nc" id="L1021">					m_newRow = i;</span>
+				}
+				
+<span class="nc bnc" id="L1024" title="All 4 branches missed.">				if (currentRow != null &amp;&amp; m_sort.get(i) == currentRow)</span>
+<span class="nc" id="L1025">					m_currentRow = i;</span>
+			}
+		}
+		
+<span class="nc bnc" id="L1029" title="All 2 branches missed.">		if (!isSameSortEntries)</span>
+		{
+			//  Info detected by MTab.dataStatusChanged and current row set to 0
+<span class="nc" id="L1032">			fireDataStatusIEvent(SORTED_DSE_EVENT, &quot;#&quot; + m_sort.size());</span>
+			//	update UI
+<span class="nc" id="L1034">			fireTableDataChanged();</span>
+		}
+<span class="nc" id="L1036">	}	//	sort</span>
+
+	/**
+	 *	Get Key ID or -1 of none
+	 *  @param row row index
+	 *  @return ID or -1
+	 */
+	public int getKeyID (int row)
+	{
+<span class="nc bnc" id="L1045" title="All 2 branches missed.">		if (m_indexKeyColumn != -1)</span>
+		{
+			try
+			{
+<span class="nc" id="L1049">				Integer ii = (Integer)getValueAt(row, m_indexKeyColumn);</span>
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">				if (ii == null)</span>
+<span class="nc" id="L1051">					return -1;</span>
+<span class="nc" id="L1052">				return ii.intValue();</span>
+			}
+<span class="nc" id="L1054">			catch (Exception e)     //  Alpha Key</span>
+			{
+<span class="nc" id="L1056">				return -1;</span>
+			}
+		}
+<span class="nc" id="L1059">		return -1;</span>
+	}	//	getKeyID
+
+	/**
+	 *	Get Key UUID or null of none
+	 *  @param row row index
+	 *  @return UUID or null
+	 */
+	public String getKeyUUID (int row)
+	{
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">		if (m_indexUUIDColumn != -1)</span>
+		{
+			try
+			{
+<span class="nc" id="L1073">				String ii = (String)getValueAt(row, m_indexUUIDColumn);</span>
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">				if (ii == null)</span>
+<span class="nc" id="L1075">					return null;</span>
+<span class="nc" id="L1076">				return ii;</span>
+			}
+<span class="nc" id="L1078">			catch (Exception e)</span>
+			{
+<span class="nc" id="L1080">				return null;</span>
+			}
+		}
+<span class="nc" id="L1083">		return null;</span>
+	}	//	getKeyUUID
+
+	/**
+	 *	Get UUID or null of none
+	 *  @param row row index
+	 *  @return UUID or null
+	 */
+	public UUID getUUID (int row)
+	{
+<span class="nc" id="L1093">		String keyUUID = getKeyUUID(row);</span>
+<span class="nc bnc" id="L1094" title="All 2 branches missed.">		if (keyUUID != null)</span>
+<span class="nc" id="L1095">			return UUID.fromString(keyUUID);</span>
+<span class="nc" id="L1096">		return null;</span>
+	}	//	getUUID
+
+	/**
+	 *	Get Key ColumnName
+	 *  @return key column name
+	 */
+	public String getKeyColumnName()
+	{
+<span class="nc bnc" id="L1105" title="All 2 branches missed.">		if (m_indexKeyColumn != -1)</span>
+<span class="nc" id="L1106">			return getColumnName(m_indexKeyColumn);</span>
+<span class="nc" id="L1107">		return &quot;&quot;;</span>
+	}	//	getKeyColumnName
+
+	/**
+	 * 	Get Value at row and column
+	 *  @param row row
+	 *  @param col col
+	 *  @return Value at row/column
+	 */
+	public Object getValueAt (int row, int col)
+	{
+<span class="nc bnc" id="L1118" title="All 8 branches missed.">		if (!m_open || row &lt; 0 || col &lt; 0 || row &gt;= m_rowCount)</span>
+		{
+<span class="nc" id="L1120">			return null;</span>
+		}
+
+<span class="nc" id="L1123">		waitLoadingForRow(row);</span>
+
+		//	empty buffer
+<span class="nc bnc" id="L1126" title="All 2 branches missed.">		if (row &gt;= m_sort.size())</span>
+		{
+<span class="nc" id="L1128">			return null;</span>
+		}
+
+		//	return Data item
+<span class="nc" id="L1132">		Object[] rowData = getDataAtRow(row);</span>
+		//	out of bounds
+<span class="nc bnc" id="L1134" title="All 4 branches missed.">		if (rowData == null || col &gt; rowData.length)</span>
+		{
+<span class="nc" id="L1136">			return null;</span>
+		}
+<span class="nc" id="L1138">		return rowData[col];</span>
+	}	//	getValueAt
+
+	/**
+	 * wait for loading of row
+	 * @param row
+	 */
+	public void waitLoadingForRow(int row) {
+		// optimization - this method is called too frequently
+		// avoid processing when the criteria of whiles and if's below is not  met
+<span class="nc bnc" id="L1148" title="All 4 branches missed.">		if ( ! (row &gt;= m_sort.size() || m_sort.size() == 0) )</span>
+<span class="nc" id="L1149">			return;</span>
+		//	need to wait for data read into buffer
+<span class="nc" id="L1151">		int loops = 0;</span>
+		//wait for [timeout] seconds
+<span class="nc" id="L1153">		int timeout = MSysConfig.getIntValue(MSysConfig.GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS, DEFAULT_GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">		if (timeout &lt;= 0) {</span>
+<span class="nc" id="L1155">			timeout = 120;</span>
+<span class="nc" id="L1156">			log.warning(&quot;Setting GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS = 0 is not recommended as long queries can keep running in the database and affects performance, &quot;</span>
+					+ &quot; in this case the system assigns a wait of 2 minutes to load records of a window&quot;);
+<span class="nc" id="L1158">		} else {</span>
+<span class="nc" id="L1159">			timeout += 5; /* give 5 seconds extra for the query to timeout first in the database */</span>
+		}
+<span class="nc bnc" id="L1161" title="All 10 branches missed.">		while (row &gt;= m_sort.size() &amp;&amp; m_loaderFuture != null &amp;&amp; !m_loaderFuture.isDone() &amp;&amp; !m_rowLoadTimeout &amp;&amp; loops &lt; timeout)</span>
+		{
+<span class="nc bnc" id="L1163" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Waiting for loader row=&quot; + row + &quot;, size=&quot; + m_sort.size());</span>
+			try
+			{
+<span class="nc" id="L1166">				m_loaderFuture.get(1000, TimeUnit.MILLISECONDS);</span>
+<span class="nc" id="L1167">			}</span>
+<span class="nc" id="L1168">			catch (Exception ie)</span>
+			{}
+<span class="nc" id="L1170">			loops++;</span>
+		}
+<span class="nc bnc" id="L1172" title="All 2 branches missed.">		if (m_sort.size() == 0) {</span>
+			// check if there is a DB error saved to show
+<span class="nc" id="L1174">			Exception savedEx = CLogger.retrieveException();</span>
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">			if (savedEx != null)</span>
+<span class="nc" id="L1176">				throw new IllegalStateException(savedEx);</span>
+		}
+		// zero rows found without load timeout
+<span class="nc bnc" id="L1179" title="All 8 branches missed.">		if (row == 0 &amp;&amp; m_sort.size() == 0 &amp;&amp; m_rowCountTimeout &amp;&amp; !m_rowLoadTimeout)</span>
+<span class="nc" id="L1180">			throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;FindZeroRecords&quot;));</span>
+<span class="nc bnc" id="L1181" title="All 2 branches missed.">		if (row &gt;= m_sort.size()) {</span>
+<span class="nc" id="L1182">			log.warning(&quot;Reached &quot; + timeout + &quot; seconds timeout loading row &quot; + (row+1) + &quot; for SQL=&quot; + m_SQL);</span>
+			//adjust row count
+<span class="nc" id="L1184">			m_rowCount = m_sort.size();</span>
+<span class="nc" id="L1185">			m_rowLoadTimeout = true; // at this moment this must be set, but just to be sure that the warning is raised at doRun</span>
+		}
+<span class="nc" id="L1187">	}</span>
+
+	/**
+	 * @param row row index
+	 * @return data at row index
+	 */
+	private Object[] getDataAtRow(int row)
+	{
+<span class="nc" id="L1195">		return getDataAtRow(row, true);</span>
+	}
+
+	/**
+	 * @param row row index
+	 * @param fetchIfNotFound
+	 * @return data at row index
+	 */
+	private Object[] getDataAtRow(int row, boolean fetchIfNotFound)
+	{
+<span class="nc" id="L1205">		waitLoadingForRow(row);</span>
+<span class="nc" id="L1206">		MSort sort = (MSort)m_sort.get(row);</span>
+<span class="nc" id="L1207">		Object[] rowData = null;</span>
+<span class="nc bnc" id="L1208" title="All 2 branches missed.">		if (m_virtual)</span>
+		{
+<span class="nc bnc" id="L1210" title="All 6 branches missed.">			if (sort.index != NEW_ROW_ID &amp;&amp; !(m_virtualBuffer.containsKey(sort.index)) &amp;&amp; fetchIfNotFound)</span>
+			{
+<span class="nc" id="L1212">				fillBuffer(row, DEFAULT_FETCH_SIZE);</span>
+			}
+<span class="nc" id="L1214">			rowData = (Object[])m_virtualBuffer.get(sort.index);</span>
+<span class="nc" id="L1215">		}</span>
+		else
+		{
+<span class="nc" id="L1218">			rowData = (Object[])m_buffer.get(sort.index);</span>
+		}
+<span class="nc" id="L1220">		return rowData;</span>
+	}
+
+	/**
+	 * @param row row index
+	 * @param rowData
+	 */
+	private void setDataAtRow(int row, Object[] rowData) {
+<span class="nc" id="L1228">		MSort sort = m_sort.get(row);</span>
+<span class="nc bnc" id="L1229" title="All 2 branches missed.">		if (m_virtual)</span>
+		{
+<span class="nc bnc" id="L1231" title="All 4 branches missed.">			if (sort.index != NEW_ROW_ID &amp;&amp; !(m_virtualBuffer.containsKey(sort.index)))</span>
+			{
+<span class="nc" id="L1233">				fillBuffer(row, DEFAULT_FETCH_SIZE);</span>
+			}
+<span class="nc" id="L1235">			m_virtualBuffer.put(sort.index, rowData);</span>
+<span class="nc" id="L1236">		}</span>
+		else
+		{
+<span class="nc" id="L1239">			m_buffer.set(sort.index, rowData);</span>
+		}
+
+<span class="nc" id="L1242">	}</span>
+
+	/**
+	 * Fill virtual buffer ({@link #m_virtualBuffer}.
+	 * @param start
+	 * @param fetchSize
+	 */
+	private void fillBuffer(int start, int fetchSize)
+	{
+		//adjust start if needed
+<span class="nc bnc" id="L1252" title="All 2 branches missed.">		if (start &gt; 0)</span>
+		{
+<span class="nc bnc" id="L1254" title="All 2 branches missed.">			if (start + fetchSize &gt;= m_sort.size())</span>
+			{
+<span class="nc" id="L1256">				start = start - (fetchSize - ( m_sort.size() - start ));</span>
+<span class="nc bnc" id="L1257" title="All 2 branches missed.">				if (start &lt; 0)</span>
+<span class="nc" id="L1258">					start = 0;</span>
+			}
+		}
+<span class="nc" id="L1261">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc" id="L1262">		sql.append(m_SQL_Select)</span>
+<span class="nc" id="L1263">			.append(&quot; WHERE &quot;)</span>
+<span class="nc" id="L1264">			.append(getKeyColumnName())</span>
+<span class="nc" id="L1265">			.append(&quot; IN (&quot;);</span>
+<span class="nc" id="L1266">		Map&lt;Integer, Integer&gt;rowmap = new LinkedHashMap&lt;Integer, Integer&gt;(DEFAULT_FETCH_SIZE);</span>
+<span class="nc" id="L1267">		int count = 0;</span>
+<span class="nc bnc" id="L1268" title="All 4 branches missed.">		for(int i = start; i &lt; start+fetchSize &amp;&amp; i &lt; m_sort.size(); i++)</span>
+		{
+<span class="nc bnc" id="L1270" title="All 2 branches missed.">			if (m_sort.get(i).index == NEW_ROW_ID)</span>
+<span class="nc" id="L1271">					continue;</span>
+<span class="nc bnc" id="L1272" title="All 2 branches missed.">			if(count &gt; 0)</span>
+<span class="nc" id="L1273">				sql.append(&quot;,&quot;);</span>
+<span class="nc" id="L1274">			sql.append(m_sort.get(i).index);</span>
+<span class="nc" id="L1275">			rowmap.put(m_sort.get(i).index, i);</span>
+<span class="nc" id="L1276">			count++;</span>
+		}
+<span class="nc" id="L1278">		sql.append(&quot;)&quot;);</span>
+
+<span class="nc" id="L1280">		Object[] newRow = m_virtualBuffer.get(NEW_ROW_ID);</span>
+		//cache changed row
+<span class="nc bnc" id="L1282" title="All 2 branches missed.">		Object[] changedRow = m_rowChanged &gt;= 0 ? getDataAtRow(m_rowChanged, false) : null;</span>
+<span class="nc" id="L1283">		m_virtualBuffer = new HashMap&lt;Integer, Object[]&gt;(210);</span>
+<span class="nc bnc" id="L1284" title="All 4 branches missed.">		if (newRow != null &amp;&amp; newRow.length &gt; 0)</span>
+<span class="nc" id="L1285">			m_virtualBuffer.put(NEW_ROW_ID, newRow);		</span>
+
+<span class="nc" id="L1287">		PreparedStatement stmt = null;</span>
+<span class="nc" id="L1288">		ResultSet rs = null;</span>
+<span class="nc" id="L1289">		m_rowLoadTimeout = false;</span>
+		try
+		{
+<span class="nc" id="L1292">			stmt = DB.prepareStatement(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L1293">			int timeout = MSysConfig.getIntValue(MSysConfig.GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS, DEFAULT_GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L1294" title="All 2 branches missed.">			if (timeout &gt; 0)</span>
+<span class="nc" id="L1295">				stmt.setQueryTimeout(timeout);</span>
+<span class="nc" id="L1296">			rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L1297" title="All 2 branches missed.">			while(rs.next())</span>
+			{
+<span class="nc" id="L1299">				Object[] data = readData(rs);</span>
+<span class="nc" id="L1300">				rowmap.remove(data[m_indexKeyColumn]);</span>
+<span class="nc" id="L1301">				m_virtualBuffer.put((Integer)data[m_indexKeyColumn], data);</span>
+			}
+<span class="nc bnc" id="L1303" title="All 2 branches missed.">			if (!rowmap.isEmpty())</span>
+			{
+<span class="nc" id="L1305">				List&lt;Integer&gt; toremove = new ArrayList&lt;Integer&gt;();</span>
+<span class="nc bnc" id="L1306" title="All 2 branches missed.">				for(Map.Entry&lt;Integer, Integer&gt; entry : rowmap.entrySet())</span>
+				{
+<span class="nc" id="L1308">					toremove.add(entry.getValue());</span>
+				}
+<span class="nc" id="L1310">				Collections.reverse(toremove);</span>
+<span class="nc bnc" id="L1311" title="All 2 branches missed.">				for(Integer row : toremove)</span>
+				{
+<span class="nc" id="L1313">					m_sort.remove(row.intValue());</span>
+				}
+			}
+			
+<span class="nc bnc" id="L1317" title="All 4 branches missed.">			if (changedRow != null &amp;&amp; changedRow.length &gt; 0)</span>
+			{
+<span class="nc bnc" id="L1319" title="All 4 branches missed.">				if (changedRow[m_indexKeyColumn] != null &amp;&amp; (Integer)changedRow[m_indexKeyColumn] &gt; 0)</span>
+				{
+<span class="nc" id="L1321">					m_virtualBuffer.put((Integer)changedRow[m_indexKeyColumn], changedRow);</span>
+				}
+			}
+<span class="nc" id="L1324">		}</span>
+<span class="nc" id="L1325">		catch (SQLException e)</span>
+		{
+<span class="nc bnc" id="L1327" title="All 2 branches missed.">			if (DB.getDatabase().isQueryTimeout(e))</span>
+<span class="nc" id="L1328">				m_rowLoadTimeout = true;</span>
+<span class="nc" id="L1329">			log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L1333">			DB.close(rs, stmt);</span>
+		}
+<span class="nc" id="L1335">	}</span>
+	
+	/**
+	 *	Indicate that there will be a change
+	 *  @param changed changed
+	 */
+	public void setChanged (boolean changed)
+	{
+		//	Can we edit?
+<span class="nc bnc" id="L1344" title="All 4 branches missed.">		if (!m_open || m_readOnly)</span>
+<span class="nc" id="L1345">			return;</span>
+
+		//	Indicate Change
+<span class="nc" id="L1348">		m_changed = changed;</span>
+<span class="nc bnc" id="L1349" title="All 2 branches missed.">		if (!changed)</span>
+<span class="nc" id="L1350">			m_rowChanged = -1;</span>
+<span class="nc" id="L1351">	}	//	setChanged</span>
+
+	/**
+	 * 	Set value at row and column
+	 *
+	 *  @param  value value to assign to cell
+	 *  @param  row row index of cell
+	 *  @param  col column index of cell
+	 */
+	public final void setValueAt (Object value, int row, int col)
+	{
+<span class="nc" id="L1362">		setValueAt (value, row, col, false, false);</span>
+<span class="nc" id="L1363">	}	//	setValueAt</span>
+
+	/**
+	 * 	call {@link #setValueAt(Object, int, int, boolean, boolean)} with isInitEdit = false
+	 *
+	 *  @param  value value to assign to cell
+	 *  @param  row row index of cell
+	 *  @param  col column index of cell
+	 * 	@param	force force setting new value
+	 */
+	public final void setValueAt (Object value, int row, int col, boolean force)
+	{
+<span class="nc" id="L1375">		setValueAt (value, row, col, force, false);</span>
+<span class="nc" id="L1376">	}	//	setValueAt</span>
+	
+	/**
+	 * 	Set value in row data and update GridField.
+	 *
+	 *  @param  value value to assign to cell
+	 *  @param  row row index of cell
+	 *  @param  col column index of cell
+	 * 	@param	force force setting new value
+	 *  @param	isInitEdit indicate event rise by start edit a field. just want change status to edit, don't change anything else
+	 */
+	public final void setValueAt (Object value, int row, int col, boolean force, boolean isInitEdit)
+	{
+		//	Can we edit?
+<span class="nc bnc" id="L1390" title="All 4 branches missed.">		if (!m_open || m_readOnly       //  not accessible</span>
+<span class="nc bnc" id="L1391" title="All 4 branches missed.">				|| row &lt; 0 || col &lt; 0   //  invalid index</span>
+<span class="nc bnc" id="L1392" title="All 2 branches missed.">				|| m_rowCount == 0	//  no rows</span>
+<span class="nc bnc" id="L1393" title="All 2 branches missed.">				|| row &gt;= m_rowCount )     //invalid row</span>
+		{
+<span class="nc bnc" id="L1395" title="All 2 branches missed.">			if (log.isLoggable(Level.FINEST)) log.finest(&quot;r=&quot; + row + &quot; c=&quot; + col + &quot; - R/O=&quot; + m_readOnly + &quot;, Rows=&quot; + m_rowCount + &quot; - Ignored&quot;);</span>
+<span class="nc" id="L1396">			return;</span>
+		}
+
+<span class="nc" id="L1399">		dataSave(row, false);</span>
+
+		//	Has anything changed?
+<span class="nc" id="L1402">		Object oldValue = getValueAt(row, col);</span>
+<span class="nc bnc" id="L1403" title="All 6 branches missed.">		if (!force &amp;&amp; !isInitEdit &amp;&amp; !isValueChanged(oldValue, value) )</span>
+		{
+<span class="nc bnc" id="L1405" title="All 2 branches missed.">			if (log.isLoggable(Level.FINEST)) log.finest(&quot;r=&quot; + row + &quot; c=&quot; + col + &quot; - New=&quot; + value + &quot;==Old=&quot; + oldValue + &quot; - Ignored&quot;);</span>
+<span class="nc" id="L1406">			return;</span>
+		}
+
+<span class="nc bnc" id="L1409" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;r=&quot; + row + &quot; c=&quot; + col + &quot; = &quot; + value + &quot; (&quot; + oldValue + &quot;)&quot;);</span>
+
+		//  Save old value
+<span class="nc" id="L1412">		m_oldValue = new Object[3];</span>
+<span class="nc" id="L1413">		m_oldValue[0] = Integer.valueOf(row);</span>
+<span class="nc" id="L1414">		m_oldValue[1] = Integer.valueOf(col);</span>
+<span class="nc" id="L1415">		m_oldValue[2] = oldValue;</span>
+
+		//	Set Data item
+		
+<span class="nc" id="L1419">		Object[] rowData = getDataAtRow(row);</span>
+<span class="nc" id="L1420">		m_rowChanged = row;</span>
+
+		//	save original value - shallow copy
+<span class="nc bnc" id="L1423" title="All 2 branches missed.">		if (m_rowData == null)</span>
+		{
+<span class="nc" id="L1425">			int size = m_fields.size();</span>
+<span class="nc" id="L1426">			m_rowData = new Object[size];</span>
+<span class="nc bnc" id="L1427" title="All 2 branches missed.">			for (int i = 0; i &lt; size; i++)</span>
+<span class="nc" id="L1428">				m_rowData[i] = rowData[i];</span>
+		}
+
+		//	save &amp; update
+<span class="nc" id="L1432">		rowData[col] = value;</span>
+<span class="nc" id="L1433">		setDataAtRow(row, rowData);</span>
+		//  update Table
+<span class="nc" id="L1435">		fireTableCellUpdated(row, col);</span>
+		//  update GridField
+<span class="nc" id="L1437">		GridField field = getField(col);</span>
+<span class="nc" id="L1438">		field.setValue(value, m_inserting);</span>
+		//  inform
+<span class="nc" id="L1440">		DataStatusEvent evt = createDSE();</span>
+<span class="nc" id="L1441">		evt.setIsInitEdit(isInitEdit);</span>
+<span class="nc" id="L1442">		evt.setChangedColumn(col, field.getColumnName());</span>
+<span class="nc" id="L1443">		fireDataStatusChanged(evt);</span>
+<span class="nc" id="L1444">	}	//	setValueAt</span>
+
+	/**
+	 *  Get Old Value
+	 *  @param row row
+	 *  @param col col
+	 *  @return old value
+	 */
+	public Object getOldValue (int row, int col)
+	{
+<span class="nc bnc" id="L1454" title="All 2 branches missed.">		if (m_oldValue == null)</span>
+<span class="nc" id="L1455">			return null;</span>
+<span class="nc bnc" id="L1456" title="All 2 branches missed.">		if (((Integer)m_oldValue[0]).intValue() == row</span>
+<span class="nc bnc" id="L1457" title="All 2 branches missed.">				&amp;&amp; ((Integer)m_oldValue[1]).intValue() == col)</span>
+<span class="nc" id="L1458">			return m_oldValue[2];</span>
+<span class="nc" id="L1459">		return null;</span>
+	}   // getOldValue
+
+	/**
+	 *	Return true for one of the following conditions:
+	 *  &lt;li&gt;Current row has changes (i.e {@link #m_rowChanged} &gt; -1&lt;/li&gt;
+	 *  &lt;li&gt;onlyRealChange is false and {@link #setChanged(true)} was called and current row has no changes ({@link #m_rowChanged} = -1)&lt;/li&gt;
+	 *  @param  onlyRealChange if false, return true if {@link #setChanged(true)} was called and current row has no changes ({@link #m_rowChanged} = -1)
+	 *	@return true if conditions met the parameters passed
+	 */
+	public boolean needSave(boolean onlyRealChange)
+	{
+<span class="nc" id="L1471">		return needSave(-2, onlyRealChange);</span>
+	}   //  needSave
+
+	/**
+	 *	Return true for one of the conditions met:
+	 *  &lt;li&gt;Current row has changes (i.e {@link #m_rowChanged} &gt; -1&lt;/li&gt;
+	 *  &lt;li&gt;{@link #setChanged(true)} was called and current row has no changes ({@link #m_rowChanged} = -1)&lt;/li&gt;
+	 *	@return true if current row has changes or {@link #setChanged(true)} was called for a not modified row
+	 */
+	public boolean needSave()
+	{
+<span class="nc" id="L1482">		return needSave(-2, false);</span>
+	}   //  needSave
+
+	/**
+	 *  Return true for one of the following conditions:
+	 *  &lt;li&gt;rowFlag not equal to current changed row value (e.g rowFlag=-2, m_rowChanged=0) and current row has changes (i.e {@link #m_rowChanged} &gt; -1)&lt;/li&gt;
+	 *  &lt;li&gt;rowFlag not equal to current changed row value (e.g rowFlag-2, m_rowChanged=-1) and {@link #setChanged(true)} was called and current row 
+	 *  has no changes ({@link #m_rowChanged} = -1)&lt;/li&gt;
+	 *  &lt;br/&gt;
+	 *	Return false for one of the following conditions:
+	 *  &lt;li&gt;current row has no changes and setChanged(true) was not called&lt;/li&gt;
+	 *  &lt;li&gt;rowFlag is the value of current changed row&lt;/li&gt;
+	 *	@param	rowFlag row value to determine the 'need save' condition
+	 *	@return true if conditions met the parameters passed
+	 */
+	public boolean needSave(int rowFlag)
+	{
+<span class="nc" id="L1499">		return needSave(rowFlag, false);</span>
+	}   //  needSave
+
+	/**
+	 *	Return true for one of the following conditions:
+	 *  &lt;li&gt;rowFlag not equal to current changed row value (e.g rowFlag=-2, m_rowChanged=0) and current row has changes (i.e {@link #m_rowChanged} &gt; -1)&lt;/li&gt;
+	 *  &lt;li&gt;rowFlag not equal to current changed row value (e.g rowFlag=-2, m_rowChanged=-1) and {@link #setChanged(true)} was called 
+	 *  and current row has no changes ({@link #m_rowChanged} = -1) and onlyRealChange is false&lt;/li&gt;
+	 *  &lt;br/&gt;
+	 *  Return false for one of the following conditions:
+	 *  &lt;li&gt;current row has no changes and setChanged(true) was not called&lt;/li&gt;
+	 *  &lt;li&gt;rowFlag is the value of current changed row&lt;/li&gt;
+	 *	@param	rowFlag row value to determine the 'need save' condition
+	 *  @param  onlyRealChange if false, return true if {@link #setChanged(true)} was called and current row has no changes ({@link #m_rowChanged} = -1)
+	 *  and rowFlag not equal to {@link #m_rowChanged}
+	 *	@return true if conditions met the parameters passed
+	 */
+	public boolean needSave(int rowFlag, boolean onlyRealChange)
+	{
+<span class="nc bnc" id="L1518" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L1519">			log.fine(&quot;Row=&quot; + rowFlag +</span>
+<span class="nc" id="L1520">					&quot;, Changed=&quot; + m_rowChanged + &quot;/&quot; + m_changed);  //  m_rowChanged set in setValueAt</span>
+		//  nothing done
+<span class="nc bnc" id="L1522" title="All 4 branches missed.">		if (!m_changed &amp;&amp; m_rowChanged == -1)</span>
+<span class="nc" id="L1523">			return false;</span>
+		//  setChange(true) but no setValueAt called
+<span class="nc bnc" id="L1525" title="All 6 branches missed.">		if (m_changed &amp;&amp; m_rowChanged == -1 &amp;&amp; onlyRealChange)</span>
+<span class="nc" id="L1526">			return false;</span>
+		//  flag to always return false
+<span class="nc bnc" id="L1528" title="All 2 branches missed.">		if (rowFlag == m_rowChanged)</span>
+<span class="nc" id="L1529">			return false;</span>
+
+<span class="nc" id="L1531">		return true;</span>
+	}	//	needSave
+
+	/** Save OK - O		*/
+	public static final char	SAVE_OK = 'O';			//	the only OK condition
+	/** Save Error - E	*/
+	public static final char	SAVE_ERROR = 'E';
+	/** Save Access Error - A	*/
+	public static final char	SAVE_ACCESS = 'A';
+	/** Save Mandatory Error - M	*/
+	public static final char	SAVE_MANDATORY = 'M';
+	/** Save Abort Error - U	*/
+<span class="nc" id="L1543">	public static final char	SAVE_ABORT = 'U';</span>
+
+	/**
+	 *	Check if it needs to be saved and save it.
+	 *  @param newRow row index
+	 *  @param manualCmd true if initiated from user action
+	 *	@return true if not needed to be saved or successful saved
+	 */
+	public boolean dataSave (int newRow, boolean manualCmd)
+	{
+<span class="nc bnc" id="L1553" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Row=&quot; + newRow +</span>
+<span class="nc" id="L1554">			&quot;, Changed=&quot; + m_rowChanged + &quot;/&quot; + m_changed);  //  m_rowChanged set in setValueAt</span>
+		//  nothing done
+<span class="nc bnc" id="L1556" title="All 4 branches missed.">		if (!m_changed &amp;&amp; m_rowChanged == -1)</span>
+<span class="nc" id="L1557">			return true;</span>
+		//  same row, don't save yet
+<span class="nc bnc" id="L1559" title="All 2 branches missed.">		if (newRow == m_rowChanged)</span>
+<span class="nc" id="L1560">			return true;</span>
+
+<span class="nc bnc" id="L1562" title="All 2 branches missed.">		return (dataSave(manualCmd) == SAVE_OK);</span>
+	}   //  dataSave
+
+	/**
+	 *	Save changes.
+	 *  @param manualCmd if true (i.e initiated from user action), no vetoable PropertyChange will be fired for save confirmation
+	 *	@return OK Or Error condition
+	 *  Error info (Access*, FillMandatory, SaveErrorNotUnique,
+	 *  SaveErrorRowNotFound, SaveErrorDataChanged) is saved in the log
+	 */
+	public char dataSave (boolean manualCmd)
+	{
+		//	cannot save
+<span class="nc bnc" id="L1575" title="All 2 branches missed.">		if (!m_open)</span>
+		{
+<span class="nc" id="L1577">			log.warning (&quot;Error - Open=&quot; + m_open);</span>
+<span class="nc" id="L1578">			return SAVE_ERROR;</span>
+		}
+		//	no need - not changed - row not positioned - no Value changed
+<span class="nc bnc" id="L1581" title="All 2 branches missed.">		if (m_rowChanged == -1)</span>
+		{
+<span class="nc bnc" id="L1583" title="All 2 branches missed.">			if (log.isLoggable(Level.CONFIG)) log.config(&quot;NoNeed - Changed=&quot; + m_changed + &quot;, Row=&quot; + m_rowChanged);</span>
+<span class="nc bnc" id="L1584" title="All 2 branches missed.">			if (!manualCmd)</span>
+<span class="nc" id="L1585">				return SAVE_OK;</span>
+		}
+		//  Value not changed
+<span class="nc bnc" id="L1588" title="All 2 branches missed.">		if (m_rowData == null)</span>
+		{
+			//reset out of sync variable
+<span class="nc" id="L1591">			m_rowChanged = -1;</span>
+<span class="nc bnc" id="L1592" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L1593">				log.fine(&quot;No Changes&quot;);</span>
+<span class="nc" id="L1594">			return SAVE_ERROR;</span>
+		}
+
+<span class="nc bnc" id="L1597" title="All 2 branches missed.">		if (m_readOnly)</span>
+		//	If Processed - not editable (Find always editable)  -&gt; ok for changing payment terms, etc.
+		{
+<span class="nc bnc" id="L1600" title="All 2 branches missed.">			if (log.isLoggable(Level.WARNING))</span>
+<span class="nc" id="L1601">				log.warning(&quot;IsReadOnly - ignored&quot;);</span>
+<span class="nc" id="L1602">			dataIgnore();</span>
+<span class="nc" id="L1603">			return SAVE_ACCESS;</span>
+		}
+
+		//	row not positioned - no Value changed
+<span class="nc bnc" id="L1607" title="All 2 branches missed.">		if (m_rowChanged == -1)</span>
+		{
+<span class="nc bnc" id="L1609" title="All 2 branches missed.">			if (m_newRow != -1)     //  new row and nothing changed - might be OK</span>
+<span class="nc" id="L1610">				m_rowChanged = m_newRow;</span>
+			else
+			{
+<span class="nc" id="L1613">				fireDataStatusEEvent(&quot;SaveErrorNoChange&quot;, &quot;&quot;, true);</span>
+<span class="nc" id="L1614">				return SAVE_ERROR;</span>
+			}
+		}
+
+		//	Can we change?
+<span class="nc" id="L1619">		int[] co = getClientOrg(m_rowChanged);</span>
+<span class="nc" id="L1620">		int AD_Client_ID = co[0]; </span>
+<span class="nc" id="L1621">		int AD_Org_ID = co[1];</span>
+<span class="nc bnc" id="L1622" title="All 2 branches missed.">		if (!MRole.getDefault(m_ctx, false).canUpdate(AD_Client_ID, AD_Org_ID, m_AD_Table_ID, 0, true))</span>
+		{
+<span class="nc" id="L1624">			fireDataStatusEEvent(CLogger.retrieveError());</span>
+<span class="nc" id="L1625">			dataIgnore();</span>
+<span class="nc" id="L1626">			return SAVE_ACCESS;</span>
+		}
+
+<span class="nc bnc" id="L1629" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Row=&quot; + m_rowChanged);</span>
+
+		//  inform about data save action, if not manually initiated
+		try
+		{
+<span class="nc bnc" id="L1634" title="All 2 branches missed.">			if (!manualCmd)</span>
+<span class="nc" id="L1635">				m_vetoableChangeSupport.fireVetoableChange(PROPERTY, -1, m_rowChanged);</span>
+<span class="nc" id="L1636">		}</span>
+<span class="nc" id="L1637">		catch (PropertyVetoException pve)</span>
+		{
+<span class="nc" id="L1639">			log.warning(pve.getMessage());</span>
+<span class="nc" id="L1640">			return SAVE_ABORT;</span>
+		}
+
+		//	get updated row data
+<span class="nc" id="L1644">		Object[] rowData = getDataAtRow(m_rowChanged);</span>
+
+		//	Check Mandatory
+<span class="nc" id="L1647">		String missingColumns = getMandatory(rowData);</span>
+<span class="nc bnc" id="L1648" title="All 2 branches missed.">		if (missingColumns.length() != 0)</span>
+		{
+<span class="nc" id="L1650">			fireDataStatusEEvent(&quot;FillMandatory&quot;, missingColumns + &quot;\n&quot;, true);</span>
+<span class="nc" id="L1651">			return SAVE_MANDATORY;</span>
+		}
+
+		/**
+		 *	Update row *****
+		 */
+		try
+		{
+<span class="nc" id="L1659">			return dataSavePO ();</span>
+		}
+<span class="nc" id="L1661">		catch (Throwable e)</span>
+		{
+<span class="nc bnc" id="L1663" title="All 2 branches missed.">			if (e instanceof ClassNotFoundException)</span>
+<span class="nc" id="L1664">				log.warning(m_tableName + &quot; - &quot; + e.getLocalizedMessage());</span>
+			else
+			{
+<span class="nc" id="L1667">				log.log(Level.SEVERE, &quot;Persistency Issue - &quot; </span>
+<span class="nc" id="L1668">					+ m_tableName + &quot;: &quot; + e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L1669">				log.saveError(&quot;Error&quot;, e.getLocalizedMessage());</span>
+			}
+		}
+<span class="nc" id="L1672">		return SAVE_ERROR;</span>
+	}	//	dataSave
+
+	/**
+	 * 	Save via PO
+	 *	@return SAVE_ERROR or SAVE_OK
+	 *	@throws Exception
+	 */
+	private char dataSavePO () throws Exception
+	{
+<span class="nc bnc" id="L1682" title="All 2 branches missed.">		if (! m_importing) // Just use trx when importing</span>
+<span class="nc" id="L1683">			m_trxName = null;				</span>
+		//
+<span class="nc" id="L1685">		Object[] rowData = getDataAtRow(m_rowChanged);</span>
+		//
+<span class="nc" id="L1687">		PO po = getPO(m_rowChanged);</span>
+		//	No Persistent Object
+<span class="nc bnc" id="L1689" title="All 2 branches missed.">		if (po == null)</span>
+<span class="nc" id="L1690">			throw new ClassNotFoundException (&quot;No Persistent Object&quot;);</span>
+		
+<span class="nc bnc" id="L1692" title="All 2 branches missed.">		if (!po.is_new())</span>
+		{
+<span class="nc bnc" id="L1694" title="All 2 branches missed.">			if (hasChanged(po))</span>
+			{				
+				// return error stating that current record has changed and it cannot be saved
+<span class="nc" id="L1697">				String adMessage = &quot;CurrentRecordModified&quot;;</span>
+<span class="nc" id="L1698">				String msg = Msg.getMsg(Env.getCtx(), adMessage);</span>
+<span class="nc" id="L1699">				fireDataStatusEEvent(adMessage, msg, true);</span>
+<span class="nc" id="L1700">				return SAVE_ERROR;</span>
+			}
+		}
+		
+<span class="nc" id="L1704">		int size = m_fields.size();</span>
+<span class="nc bnc" id="L1705" title="All 2 branches missed.">		for (int col = 0; col &lt; size; col++)</span>
+		{
+<span class="nc" id="L1707">			GridField field = (GridField)m_fields.get (col);</span>
+<span class="nc bnc" id="L1708" title="All 2 branches missed.">			if (field.isVirtualColumn())</span>
+<span class="nc" id="L1709">				continue;</span>
+<span class="nc" id="L1710">			String columnName = field.getColumnName ();</span>
+<span class="nc" id="L1711">			Object value = rowData[col];</span>
+<span class="nc" id="L1712">			Object oldValue = m_rowData[col];</span>
+			//	RowID
+<span class="nc bnc" id="L1714" title="All 2 branches missed.">			if (field.getDisplayType() == DisplayType.RowID)</span>
+<span class="nc" id="L1715">				; 	//	ignore</span>
+
+			//	Nothing changed &amp; null
+<span class="nc bnc" id="L1718" title="All 4 branches missed.">			else if (oldValue == null &amp;&amp; value == null)</span>
+<span class="nc" id="L1719">				;	//	ignore</span>
+			
+			//	***	Data changed ***
+<span class="nc bnc" id="L1722" title="All 4 branches missed.">			else if (m_inserting || isValueChanged(oldValue, value) )</span>
+			{
+				//	Check existence
+<span class="nc" id="L1725">				int poIndex = po.get_ColumnIndex(columnName);</span>
+<span class="nc bnc" id="L1726" title="All 2 branches missed.">				if (poIndex &lt; 0)</span>
+				{
+					//	Custom Fields not in PO
+<span class="nc" id="L1729">					po.set_CustomColumn(columnName, value);</span>
+				//	log.log(Level.SEVERE, &quot;Column not found: &quot; + columnName);
+<span class="nc" id="L1731">					continue;</span>
+				}
+				
+<span class="nc" id="L1734">				Object dbValue = po.get_Value(poIndex);</span>
+<span class="nc bnc" id="L1735" title="All 2 branches missed.">				if (m_inserting </span>
+<span class="nc bnc" id="L1736" title="All 2 branches missed.">					|| !m_compareDB</span>
+					//	Original == DB
+<span class="nc bnc" id="L1738" title="All 4 branches missed.">					|| (oldValue == null &amp;&amp; dbValue == null)</span>
+<span class="nc bnc" id="L1739" title="All 4 branches missed.">					|| (oldValue != null &amp;&amp; oldValue.equals (dbValue))</span>
+					//	Target == DB (changed by trigger to new value already)
+<span class="nc bnc" id="L1741" title="All 4 branches missed.">					|| (value == null &amp;&amp; dbValue == null)</span>
+<span class="nc bnc" id="L1742" title="All 4 branches missed.">					|| (value != null &amp;&amp; value.equals (dbValue)) </span>
+<span class="nc bnc" id="L1743" title="All 10 branches missed.">					|| ((oldValue != null &amp;&amp; dbValue != null &amp;&amp; oldValue.getClass().equals(byte[].class) &amp;&amp; dbValue.getClass().equals(byte[].class)) &amp;&amp; Arrays.equals((byte[])oldValue, (byte[])dbValue))</span>
+<span class="nc bnc" id="L1744" title="All 10 branches missed.">					|| ((value != null &amp;&amp; dbValue != null &amp;&amp; value.getClass().equals(byte[].class) &amp;&amp; dbValue.getClass().equals(byte[].class)) &amp;&amp; Arrays.equals((byte[])oldValue, (byte[])dbValue)) </span>
+						)
+				{
+<span class="nc bnc" id="L1747" title="All 2 branches missed.">					if (!po.set_ValueNoCheck (columnName, value))</span>
+					{
+<span class="nc" id="L1749">						ValueNamePair lastError = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L1750" title="All 2 branches missed.">						if (lastError != null) {</span>
+<span class="nc" id="L1751">							String adMessage = lastError.getValue();</span>
+<span class="nc" id="L1752">							String adMessageArgument = lastError.getName().trim();</span>
+							
+<span class="nc" id="L1754">							StringBuilder info = new StringBuilder(adMessageArgument);</span>
+							
+<span class="nc bnc" id="L1756" title="All 2 branches missed.">							if (!adMessageArgument.endsWith(&quot;;&quot;)) info.append(&quot;;&quot;);</span>
+<span class="nc" id="L1757">							info.append(field.getHeader());</span>
+							
+<span class="nc" id="L1759">							fireDataStatusEEvent(adMessage, info.toString(), true);</span>
+<span class="nc" id="L1760">						} else {</span>
+<span class="nc" id="L1761">							fireDataStatusEEvent(&quot;Set value failed&quot;, field.getHeader(), true);</span>
+						}
+<span class="nc" id="L1763">						return SAVE_ERROR;</span>
+					}
+				}
+				//	Original != DB
+				else
+				{
+					// hasChanged(po) check above is for external PO changes, here is for external direct changes
+<span class="nc" id="L1770">					String msg = columnName </span>
+<span class="nc" id="L1771">						+ &quot;= &quot; + oldValue </span>
+<span class="nc bnc" id="L1772" title="All 2 branches missed.">							+ (oldValue==null ? &quot;&quot; : &quot;(&quot; + oldValue.getClass().getName() + &quot;)&quot;)</span>
+<span class="nc" id="L1773">						+ &quot; != DB: &quot; + dbValue </span>
+<span class="nc bnc" id="L1774" title="All 2 branches missed.">							+ (dbValue==null ? &quot;&quot; : &quot;(&quot; + dbValue.getClass().getName() + &quot;)&quot;)</span>
+<span class="nc" id="L1775">						+ &quot; -&gt; New: &quot; + value </span>
+<span class="nc bnc" id="L1776" title="All 2 branches missed.">							+ (value==null ? &quot;&quot; : &quot;(&quot; + value.getClass().getName() + &quot;)&quot;);</span>
+
+<span class="nc" id="L1778">					dataRefresh(m_rowChanged);</span>
+<span class="nc" id="L1779">					fireDataStatusEEvent(&quot;SaveErrorDataChanged&quot;, msg, true);</span>
+<span class="nc" id="L1780">					return SAVE_ERROR;</span>
+				}
+			}	//	Data changed
+
+		}	//	for every column
+
+<span class="nc bnc" id="L1786" title="All 2 branches missed.">		if (!po.save())</span>
+		{
+<span class="nc" id="L1788">			String msg = &quot;SaveError&quot;;</span>
+<span class="nc" id="L1789">			String info = &quot;&quot;;</span>
+<span class="nc" id="L1790">			ValueNamePair ppE = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L1791" title="All 2 branches missed.">			if (ppE != null)</span>
+			{
+<span class="nc" id="L1793">				msg = ppE.getValue();</span>
+<span class="nc" id="L1794">				info = ppE.getName();</span>
+<span class="nc bnc" id="L1795" title="All 2 branches missed.">				if (&quot;DBExecuteError&quot;.equals(msg))</span>
+<span class="nc" id="L1796">					info = &quot;DBExecuteError:&quot; + info;</span>
+			}
+<span class="nc" id="L1798">			fireDataStatusEEvent(msg, info, true);</span>
+<span class="nc" id="L1799">			return SAVE_ERROR;</span>
+		}
+<span class="nc bnc" id="L1801" title="All 4 branches missed.">		else if (m_virtual &amp;&amp; po.get_ID() &gt; 0)</span>
+		{
+			//update ID
+<span class="nc" id="L1804">			MSort sort = m_sort.get(m_rowChanged);</span>
+<span class="nc" id="L1805">			int oldid = sort.index;</span>
+<span class="nc bnc" id="L1806" title="All 2 branches missed.">			if (oldid != po.get_ID())</span>
+			{
+<span class="nc" id="L1808">				sort.index = po.get_ID();</span>
+<span class="nc" id="L1809">				Object[] data = m_virtualBuffer.remove(oldid);</span>
+<span class="nc" id="L1810">				data[m_indexKeyColumn] = sort.index;</span>
+<span class="nc" id="L1811">				m_virtualBuffer.put(sort.index, data);</span>
+			}
+		}
+		
+		//	Refresh - update buffer
+<span class="nc" id="L1816">		String whereClause = po.get_WhereClause(true);</span>
+<span class="nc bnc" id="L1817" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Reading ... &quot; + whereClause);</span>
+<span class="nc" id="L1818">		StringBuilder refreshSQL = new StringBuilder(m_SQL_Select)</span>
+<span class="nc" id="L1819">			.append(&quot; WHERE &quot;).append(whereClause);</span>
+<span class="nc" id="L1820">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L1821">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L1824">			pstmt = DB.prepareStatement(refreshSQL.toString(), get_TrxName());</span>
+<span class="nc" id="L1825">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L1826" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L1828">				Object[] rowDataDB = readData(rs);</span>
+				//	update buffer
+<span class="nc" id="L1830">				setDataAtRow(m_rowChanged, rowDataDB);</span>
+<span class="nc" id="L1831">				fireTableRowsUpdated(m_rowChanged, m_rowChanged);</span>
+			}
+<span class="nc" id="L1833">		}</span>
+<span class="nc" id="L1834">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L1836">			String msg = &quot;SaveError&quot;;</span>
+<span class="nc" id="L1837">			log.log(Level.SEVERE, refreshSQL.toString(), e);</span>
+<span class="nc" id="L1838">			fireDataStatusEEvent(msg, e.getLocalizedMessage(), true);</span>
+<span class="nc" id="L1839">			return SAVE_ERROR;</span>
+		}
+		finally
+		{
+<span class="nc" id="L1843">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L1844">			rs = null;</span>
+<span class="nc" id="L1845">			pstmt = null;</span>
+		}
+
+		//	everything ok
+<span class="nc" id="L1849">		m_rowData = null;</span>
+<span class="nc" id="L1850">		m_changed = false;</span>
+<span class="nc" id="L1851">		m_compareDB = true;</span>
+<span class="nc" id="L1852">		m_rowChanged = -1;</span>
+<span class="nc" id="L1853">		m_newRow = -1;</span>
+<span class="nc" id="L1854">		m_inserting = false;</span>
+		//
+<span class="nc" id="L1856">		ValueNamePair pp = CLogger.retrieveWarning();</span>
+<span class="nc bnc" id="L1857" title="All 2 branches missed.">		if (pp != null)</span>
+		{
+<span class="nc" id="L1859">			String msg = pp.getValue();</span>
+<span class="nc" id="L1860">			String info = pp.getName();</span>
+<span class="nc" id="L1861">			fireDataStatusEEvent(msg, info, false);</span>
+<span class="nc" id="L1862">		}</span>
+		else
+		{
+<span class="nc" id="L1865">			pp = CLogger.retrieveInfo();</span>
+<span class="nc" id="L1866">			String msg = &quot;Saved&quot;;</span>
+<span class="nc" id="L1867">			String info = &quot;&quot;;</span>
+<span class="nc bnc" id="L1868" title="All 2 branches missed.">			if (pp != null)</span>
+			{
+<span class="nc" id="L1870">				msg = pp.getValue();</span>
+<span class="nc" id="L1871">				info = pp.getName();</span>
+			}
+<span class="nc" id="L1873">			fireDataStatusIEvent(msg, info);</span>
+		}
+		//
+<span class="nc" id="L1876">		log.config(&quot;fini&quot;);</span>
+<span class="nc" id="L1877">		return SAVE_OK;</span>
+	}	//	dataSavePO
+	
+	/**
+	 * 	Get Record Where Clause from data (single key or multi-key)
+	 *	@param rowData data
+	 *	@return where clause or null
+	 */
+	private String getWhereClause (Object[] rowData)
+	{
+<span class="nc" id="L1887">		int size = m_fields.size();</span>
+<span class="nc" id="L1888">		StringBuilder singleRowWHERE = null;</span>
+<span class="nc" id="L1889">		StringBuilder singleRowUUWHERE = null;</span>
+<span class="nc" id="L1890">		StringBuilder multiRowWHERE = null;</span>
+<span class="nc" id="L1891">		String tableName = getTableName();</span>
+<span class="nc" id="L1892">		int uidColumn = -1;</span>
+<span class="nc bnc" id="L1893" title="All 2 branches missed.">		for (int col = 0; col &lt; size; col++)</span>
+		{
+<span class="nc" id="L1895">			GridField field = (GridField)m_fields.get (col);</span>
+<span class="nc" id="L1896">			String columnName = field.getColumnName();</span>
+<span class="nc bnc" id="L1897" title="All 2 branches missed.">			if (field.isKey())</span>
+			{
+<span class="nc" id="L1899">				Object value = rowData[col]; </span>
+<span class="nc bnc" id="L1900" title="All 2 branches missed.">				if (value == null)</span>
+				{
+<span class="nc" id="L1902">					log.log(Level.WARNING, &quot;PK data is null - &quot; + columnName);</span>
+<span class="nc" id="L1903">					return null;</span>
+				}
+<span class="nc bnc" id="L1905" title="All 2 branches missed.">				if (columnName.endsWith (&quot;_ID&quot;))</span>
+<span class="nc" id="L1906">					singleRowWHERE = new StringBuilder(tableName).append(&quot;.&quot;).append(columnName)</span>
+<span class="nc" id="L1907">						.append (&quot;=&quot;).append (value);</span>
+				else
+<span class="nc" id="L1909">					singleRowWHERE = new StringBuilder(tableName).append(&quot;.&quot;).append(columnName)</span>
+<span class="nc" id="L1910">						.append (&quot;=&quot;).append (DB.TO_STRING(value.toString()));</span>
+<span class="nc" id="L1911">				break;</span>
+			}
+<span class="nc bnc" id="L1913" title="All 2 branches missed.">			else if (field.isParentColumn())</span>
+			{
+<span class="nc" id="L1915">				Object value = rowData[col]; </span>
+<span class="nc bnc" id="L1916" title="All 2 branches missed.">				if (value == null)</span>
+				{
+<span class="nc bnc" id="L1918" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO))log.log(Level.INFO, &quot;FK data is null - &quot; + columnName);</span>
+<span class="nc" id="L1919">					continue;</span>
+				}
+<span class="nc bnc" id="L1921" title="All 2 branches missed.">				if (multiRowWHERE == null)</span>
+<span class="nc" id="L1922">					multiRowWHERE = new StringBuilder();</span>
+				else
+<span class="nc" id="L1924">					multiRowWHERE.append(&quot; AND &quot;);</span>
+<span class="nc bnc" id="L1925" title="All 2 branches missed.">				if (columnName.endsWith (&quot;_ID&quot;))</span>
+<span class="nc" id="L1926">					multiRowWHERE.append (tableName).append(&quot;.&quot;).append(columnName)</span>
+<span class="nc" id="L1927">						.append (&quot;=&quot;).append (value);</span>
+<span class="nc bnc" id="L1928" title="All 2 branches missed.">				else if (value instanceof Timestamp) {</span>
+<span class="nc" id="L1929">					multiRowWHERE.append (tableName).append(&quot;.&quot;).append(columnName)</span>
+<span class="nc" id="L1930">					.append (&quot;=&quot;).append (DB.TO_DATE((Timestamp)value, false));</span>
+<span class="nc" id="L1931">				}else</span>
+<span class="nc" id="L1932">					multiRowWHERE.append (tableName).append(&quot;.&quot;).append(columnName)</span>
+<span class="nc" id="L1933">						.append (&quot;=&quot;).append (DB.TO_STRING(value.toString()));</span>
+<span class="nc" id="L1934">			}</span>
+<span class="nc bnc" id="L1935" title="All 2 branches missed.">			else if (columnName.equals(PO.getUUIDColumnName(tableName)))</span>
+			{
+<span class="nc" id="L1937">				uidColumn = col;</span>
+			}
+		}	//	for all columns
+						
+<span class="nc bnc" id="L1941" title="All 2 branches missed.">		if (singleRowWHERE != null)</span>
+<span class="nc" id="L1942">			return singleRowWHERE.toString();</span>
+
+<span class="nc bnc" id="L1944" title="All 2 branches missed.">		if (multiRowWHERE != null)</span>
+<span class="nc" id="L1945">			return multiRowWHERE.toString();</span>
+
+<span class="nc bnc" id="L1947" title="All 2 branches missed.">		if (uidColumn &gt;= 0)</span>
+		{
+<span class="nc" id="L1949">			Object value = rowData[uidColumn]; </span>
+<span class="nc bnc" id="L1950" title="All 4 branches missed.">			if (value == null &amp;&amp; multiRowWHERE == null)</span>
+			{
+<span class="nc" id="L1952">				log.log(Level.WARNING, &quot;UUID data is null - &quot; + uidColumn);</span>
+<span class="nc" id="L1953">				return null;</span>
+			}
+			else
+			{
+<span class="nc" id="L1957">				singleRowUUWHERE = new StringBuilder(tableName).append(&quot;.&quot;).append(PO.getUUIDColumnName(tableName))</span>
+<span class="nc" id="L1958">						.append (&quot;=&quot;).append (DB.TO_STRING(value.toString()));</span>
+			}
+		}
+<span class="nc bnc" id="L1961" title="All 2 branches missed.">		if (singleRowUUWHERE != null)</span>
+<span class="nc" id="L1962">			return singleRowUUWHERE.toString();</span>
+
+<span class="nc" id="L1964">		log.log(Level.WARNING, &quot;No key Found&quot;);</span>
+<span class="nc" id="L1965">		return null;</span>
+	}	//	getWhereClause
+	
+	/**
+	 *	Get Mandatory empty columns
+	 *  @param rowData row data
+	 *  @return Mandatory columns that's empty (separated by comma)
+	 */
+	private String getMandatory(Object[] rowData)
+	{
+		//  see also =&gt; ProcessParameter.saveParameter
+<span class="nc" id="L1976">		StringBuilder sb = new StringBuilder();</span>
+
+		//	Check all columns
+<span class="nc" id="L1979">		int size = m_fields.size();</span>
+<span class="nc bnc" id="L1980" title="All 2 branches missed.">		for (int i = 0; i &lt; size; i++)</span>
+		{
+<span class="nc" id="L1982">			GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc bnc" id="L1983" title="All 2 branches missed.">			if (field.isMandatory(true))        //  check context</span>
+			{
+<span class="nc bnc" id="L1985" title="All 4 branches missed.">				if (rowData[i] == null || rowData[i].toString().length() == 0)</span>
+				{
+<span class="nc" id="L1987">					field.setInserting (true);  //  set editable otherwise deadlock</span>
+<span class="nc" id="L1988">					field.setError(true);</span>
+<span class="nc bnc" id="L1989" title="All 2 branches missed.">					if (sb.length() &gt; 0)</span>
+<span class="nc" id="L1990">						sb.append(&quot;, &quot;);</span>
+<span class="nc" id="L1991">					sb.append(field.getHeader());</span>
+<span class="nc" id="L1992">				}</span>
+				else
+<span class="nc" id="L1994">					field.setError(false);</span>
+			}
+		}
+
+<span class="nc bnc" id="L1998" title="All 2 branches missed.">		if (sb.length() == 0)</span>
+<span class="nc" id="L1999">			return &quot;&quot;;</span>
+<span class="nc" id="L2000">		return sb.toString();</span>
+	}	//	getMandatory
+
+	/**
+	 * @return true if need save and all mandatory field has value
+	 */
+	public boolean isNeedSaveAndMandatoryFill() {
+<span class="nc bnc" id="L2007" title="All 2 branches missed.">		if (!m_open)</span>
+		{
+<span class="nc" id="L2009">			return false;</span>
+		}
+		//	no need - not changed - row not positioned - no Value changed
+<span class="nc bnc" id="L2012" title="All 2 branches missed.">		if (m_rowChanged == -1)</span>
+		{
+<span class="nc" id="L2014">			return false;</span>
+		}
+		//  Value not changed
+<span class="nc bnc" id="L2017" title="All 2 branches missed.">		if (m_rowData == null)</span>
+		{
+<span class="nc" id="L2019">			return false;</span>
+		}
+
+<span class="nc bnc" id="L2022" title="All 2 branches missed.">		if (m_readOnly)</span>
+		{
+<span class="nc" id="L2024">			return false;</span>
+		}
+
+		//	get updated row data
+<span class="nc" id="L2028">		Object[] rowData = getDataAtRow(m_rowChanged);</span>
+
+		//	Check Mandatory
+<span class="nc" id="L2031">		String missingColumns = getMandatory(rowData);</span>
+<span class="nc bnc" id="L2032" title="All 2 branches missed.">		if (missingColumns.length() != 0) {</span>
+<span class="nc" id="L2033">			return false;</span>
+		}
+		
+<span class="nc" id="L2036">		return true;</span>
+	}
+	
+	// IDEMPIERE-454 Easy import
+<span class="nc" id="L2040">	private boolean m_importing = false;</span>
+<span class="nc" id="L2041">	private String m_trxName = null;</span>
+
+<span class="nc" id="L2043">	private int m_currentRow = -1;</span>
+
+	/**
+	 *	Append new row after current row
+	 *  @param currentRow row
+	 *  @param copyCurrent true to copy value from current row
+	 *  @return true if success -
+	 *  Error info (Access*, AccessCannotInsert) is saved in the log
+	 */
+	public boolean dataNew (int currentRow, boolean copyCurrent)
+	{
+<span class="nc bnc" id="L2054" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Current=&quot; + currentRow + &quot;, Copy=&quot; + copyCurrent);</span>
+		//  Read only
+<span class="nc bnc" id="L2056" title="All 2 branches missed.">		if (m_readOnly)</span>
+		{
+<span class="nc" id="L2058">			fireDataStatusEEvent(&quot;AccessCannotInsert&quot;, &quot;&quot;, true);</span>
+<span class="nc" id="L2059">			return false;</span>
+		}
+
+		//  see if we need to save
+<span class="nc" id="L2063">		dataSave(-2, false);</span>
+
+<span class="nc" id="L2065">		m_inserting = true;</span>
+		
+		// Setup the buffer first so that event will be handle properly
+		// Create default data
+<span class="nc" id="L2069">		int size = m_fields.size();</span>
+<span class="nc" id="L2070">		m_rowData = new Object[size];	//	&quot;original&quot; data</span>
+<span class="nc" id="L2071">		Object[] rowData = new Object[size];</span>
+		
+<span class="nc" id="L2073">		m_changed = true;</span>
+<span class="nc" id="L2074">		m_compareDB = true;		</span>
+<span class="nc" id="L2075">		m_newRow = currentRow + 1;</span>
+		//  if there is no record, the current row could be 0 (and not -1)
+<span class="nc bnc" id="L2077" title="All 2 branches missed.">		if (m_sort.size() &lt; m_newRow)</span>
+<span class="nc" id="L2078">			m_newRow = m_sort.size();</span>
+
+		//	add Data at end of buffer
+<span class="nc bnc" id="L2081" title="All 2 branches missed.">		MSort newSort = m_virtual</span>
+<span class="nc" id="L2082">				? new MSort(NEW_ROW_ID, null)</span>
+<span class="nc" id="L2083">				: new MSort(m_sort.size(), null);	//	index</span>
+<span class="nc bnc" id="L2084" title="All 2 branches missed.">		if (m_virtual)</span>
+		{
+<span class="nc" id="L2086">			m_virtualBuffer.put(NEW_ROW_ID, rowData);</span>
+<span class="nc" id="L2087">		}</span>
+		else
+		{
+<span class="nc" id="L2090">			m_buffer.add(rowData);</span>
+		}
+		//	add Sort pointer
+<span class="nc" id="L2093">		m_sort.add(m_newRow, newSort);</span>
+<span class="nc" id="L2094">		m_rowCount++;</span>
+		
+		//	fill data
+<span class="nc bnc" id="L2097" title="All 2 branches missed.">		if (copyCurrent)</span>
+		{
+<span class="nc bnc" id="L2099" title="All 2 branches missed.">			boolean hasDocTypeTargetField = (getField(&quot;C_DocTypeTarget_ID&quot;) != null);</span>
+<span class="nc" id="L2100">			Object[] origData = getDataAtRow(currentRow);</span>
+<span class="nc bnc" id="L2101" title="All 2 branches missed.">			for (int i = 0; i &lt; size; i++)</span>
+			{
+<span class="nc" id="L2103">				GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc" id="L2104">				MColumn column = null;</span>
+<span class="nc bnc" id="L2105" title="All 2 branches missed.">				if (field.getAD_Column_ID() &gt; 0)</span>
+<span class="nc" id="L2106">					column = MColumn.get(m_ctx, field.getAD_Column_ID());</span>
+<span class="nc bnc" id="L2107" title="All 2 branches missed.">				if (field.isVirtualColumn())</span>
+<span class="nc" id="L2108">					;</span>
+<span class="nc bnc" id="L2109" title="All 2 branches missed.">				else if (   field.isKey()		//	KeyColumn</span>
+<span class="nc bnc" id="L2110" title="All 4 branches missed.">						  || (column != null &amp;&amp; column.isUUIDColumn()) // IDEMPIERE-67</span>
+<span class="nc bnc" id="L2111" title="All 6 branches missed.">						  || (column != null &amp;&amp; column.isStandardColumn() &amp;&amp; !column.getColumnName().equals(&quot;AD_Org_ID&quot;)) // AD_Org_ID can be copied</span>
+						  // Bug [ 1807947 ]
+<span class="nc bnc" id="L2113" title="All 4 branches missed.">						  || (hasDocTypeTargetField &amp;&amp; field.getColumnName().equals(&quot;C_DocType_ID&quot;))</span>
+<span class="nc bnc" id="L2114" title="All 2 branches missed.">						  || ! field.isAllowCopy())</span>
+				{
+<span class="nc" id="L2116">					Object value = field.getDefault();</span>
+<span class="nc" id="L2117">					field.setValue(value, m_inserting);</span>
+<span class="nc" id="L2118">					field.validateValueNoDirect();</span>
+<span class="nc" id="L2119">					rowData[i] = field.getValue();</span>
+<span class="nc" id="L2120">				}</span>
+				else {
+<span class="nc" id="L2122">					Object value = origData[i];</span>
+<span class="nc" id="L2123">					field.setValue(value, m_inserting);</span>
+<span class="nc" id="L2124">					field.validateValueNoDirect();</span>
+<span class="nc" id="L2125">					rowData[i] = field.getValue();</span>
+				}
+			}
+<span class="nc" id="L2128">		}</span>
+		else	//	new
+		{
+<span class="nc bnc" id="L2131" title="All 2 branches missed.">			for (int i = 0; i &lt; size; i++)</span>
+			{
+<span class="nc" id="L2133">				GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc bnc" id="L2134" title="All 2 branches missed.">				if (field.getGridTab() != null) {</span>
+					//avoid getting default from previous row
+<span class="nc" id="L2136">					String key = field.getVO().WindowNo+&quot;|&quot;+field.getVO().TabNo+&quot;|&quot;+field.getVO().ColumnName;</span>
+<span class="nc" id="L2137">					field.getVO().ctx.remove(key);</span>
+				}
+<span class="nc" id="L2139">				Object value = field.getDefault();</span>
+<span class="nc" id="L2140">				field.setValue(value, m_inserting);</span>
+<span class="nc" id="L2141">				field.validateValueNoDirect();</span>
+<span class="nc" id="L2142">				rowData[i] = field.getValue();</span>
+			}
+		}
+		
+<span class="nc" id="L2146">		m_rowChanged = -1;  //  only changed in setValueAt</span>
+
+		//	inform
+<span class="nc bnc" id="L2149" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Current=&quot; + currentRow + &quot;, New=&quot; + m_newRow);</span>
+<span class="nc" id="L2150">		fireTableRowsInserted(m_newRow, m_newRow);</span>
+<span class="nc bnc" id="L2151" title="All 2 branches missed.">		fireDataStatusIEvent(copyCurrent ? DATA_UPDATE_COPIED_MESSAGE : DATA_INSERTED_MESSAGE, &quot;&quot;);</span>
+<span class="nc bnc" id="L2152" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Current=&quot; + currentRow + &quot;, New=&quot; + m_newRow + &quot; - complete&quot;);</span>
+<span class="nc" id="L2153">		return true;</span>
+	}	//	dataNew
+
+	/**
+	 *	Delete data at row index
+	 *  @param row row index
+	 *  @return true if success -
+	 *  Error info (Access*, AccessNotDeleteable, DeleteErrorDependent,
+	 *  DeleteError) is saved in the log
+	 */
+	public boolean dataDelete (int row)
+	{
+<span class="nc bnc" id="L2165" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Row=&quot; + row);</span>
+<span class="nc bnc" id="L2166" title="All 2 branches missed.">		if (row &lt; 0)</span>
+<span class="nc" id="L2167">			return false;</span>
+
+		//	Tab R/O
+<span class="nc bnc" id="L2170" title="All 2 branches missed.">		if (m_readOnly)</span>
+		{
+<span class="nc" id="L2172">			fireDataStatusEEvent(&quot;AccessCannotDelete&quot;, &quot;&quot;, true);	//	privileges</span>
+<span class="nc" id="L2173">			return false;</span>
+		}
+
+		//	Is this record deletable?
+<span class="nc bnc" id="L2177" title="All 2 branches missed.">		if (!m_deleteable)</span>
+		{
+<span class="nc" id="L2179">			fireDataStatusEEvent(&quot;AccessNotDeleteable&quot;, &quot;&quot;, true);	//	audit</span>
+<span class="nc" id="L2180">			return false;</span>
+		}
+
+		//	Processed Column and not an Import Table
+<span class="nc bnc" id="L2184" title="All 4 branches missed.">		if (m_indexProcessedColumn &gt; 0 &amp;&amp; !m_tableName.startsWith(&quot;I_&quot;))</span>
+		{
+<span class="nc" id="L2186">			Boolean processed = (Boolean)getValueAt(row, m_indexProcessedColumn);</span>
+<span class="nc bnc" id="L2187" title="All 4 branches missed.">			if (processed != null &amp;&amp; processed.booleanValue())</span>
+			{
+<span class="nc" id="L2189">				fireDataStatusEEvent(&quot;CannotDeleteTrx&quot;, &quot;&quot;, true);</span>
+<span class="nc" id="L2190">				return false;</span>
+			}
+		}
+		// Carlos Ruiz - globalqss - IDEMPIERE-111
+		// Check if the role has access to this client
+		//	Can we change?
+<span class="nc" id="L2196">		int[] co = getClientOrg(row);</span>
+<span class="nc" id="L2197">		int AD_Client_ID = co[0];</span>
+<span class="nc" id="L2198">		int AD_Org_ID = co[1];</span>
+<span class="nc bnc" id="L2199" title="All 2 branches missed.">		if (!MRole.getDefault(m_ctx, false).canUpdate(AD_Client_ID, AD_Org_ID, m_AD_Table_ID, 0, true))</span>
+		{
+<span class="nc" id="L2201">			fireDataStatusEEvent(&quot;AccessCannotDelete&quot;, &quot;&quot;, true);</span>
+<span class="nc" id="L2202">			return false;</span>
+		}
+
+<span class="nc" id="L2205">		MSort sort = (MSort)m_sort.get(row);</span>
+<span class="nc" id="L2206">		Object[] rowData = getDataAtRow(row);</span>
+		//
+<span class="nc" id="L2208">		PO po = getPO(row);</span>
+		
+		//	Delete via PO 
+<span class="nc bnc" id="L2211" title="All 2 branches missed.">		if (po != null)</span>
+		{
+<span class="nc" id="L2213">			boolean ok = false;</span>
+			try
+			{
+<span class="nc" id="L2216">				ok = po.delete(false);</span>
+<span class="nc" id="L2217">			}</span>
+<span class="nc" id="L2218">			catch (Throwable t)</span>
+			{
+<span class="nc" id="L2220">				log.log(Level.SEVERE, &quot;Delete&quot;, t);</span>
+			}
+<span class="nc bnc" id="L2222" title="All 2 branches missed.">			if (!ok)</span>
+			{
+<span class="nc" id="L2224">				ValueNamePair vp = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L2225" title="All 6 branches missed.">				if (vp != null &amp;&amp; !(Util.isEmpty(vp.getValue()) || Util.isEmpty(vp.getName())))</span>
+<span class="nc" id="L2226">					fireDataStatusEEvent(vp);</span>
+				else
+<span class="nc" id="L2228">					fireDataStatusEEvent(&quot;DeleteError&quot;, &quot;&quot;, true);</span>
+<span class="nc" id="L2229">				return false;</span>
+			}
+		}
+		else	//	Delete via SQL
+		{
+<span class="nc" id="L2234">			StringBuilder sql = new StringBuilder(&quot;DELETE FROM &quot;);</span>
+<span class="nc" id="L2235">			sql.append(m_tableName).append(&quot; WHERE &quot;).append(getWhereClause(rowData));</span>
+<span class="nc" id="L2236">			int no = 0;</span>
+<span class="nc" id="L2237">			PreparedStatement pstmt = null;</span>
+			try
+			{
+<span class="nc" id="L2240">				pstmt = DB.prepareStatement (sql.toString(), </span>
+<span class="nc" id="L2241">						ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE, m_trxName);</span>
+<span class="nc" id="L2242">				no = pstmt.executeUpdate();</span>
+<span class="nc" id="L2243">			}</span>
+<span class="nc" id="L2244">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L2246">				log.log(Level.SEVERE, sql.toString(), e);</span>
+<span class="nc" id="L2247">				String msg = &quot;DeleteError&quot;;</span>
+<span class="nc" id="L2248">				String dbMsg = DBException.getDefaultDBExceptionMessage(e);</span>
+<span class="nc bnc" id="L2249" title="All 2 branches missed.">				if (!Util.isEmpty(dbMsg))</span>
+<span class="nc" id="L2250">					msg = dbMsg;</span>
+<span class="nc" id="L2251">				fireDataStatusEEvent(msg, e.getLocalizedMessage(), true);</span>
+<span class="nc" id="L2252">				return false;</span>
+			}
+			finally
+			{
+<span class="nc" id="L2256">				DB.close(pstmt);</span>
+<span class="nc" id="L2257">				pstmt = null;</span>
+			}
+			//	Check Result
+<span class="nc bnc" id="L2260" title="All 2 branches missed.">			if (no != 1)</span>
+			{
+<span class="nc" id="L2262">				log.log(Level.SEVERE, &quot;Number of deleted rows = &quot; + no);</span>
+<span class="nc" id="L2263">				return false;</span>
+			}
+		}
+
+		//	Get Sort
+<span class="nc bnc" id="L2268" title="All 2 branches missed.">		if (m_virtual)</span>
+		{
+<span class="nc" id="L2270">			m_virtualBuffer.remove(sort.index);</span>
+<span class="nc" id="L2271">		}</span>
+		else
+		{
+			//	Delete row in Buffer and shifts all below up
+<span class="nc" id="L2275">			m_buffer.remove(sort.index);</span>
+		}
+<span class="nc" id="L2277">		m_rowCount--;</span>
+
+		//	Delete row in Sort
+<span class="nc" id="L2280">		m_sort.remove(row);</span>
+<span class="nc bnc" id="L2281" title="All 2 branches missed.">		if (!m_virtual)</span>
+		{
+			//	Correct pointer in Sort
+<span class="nc bnc" id="L2284" title="All 2 branches missed.">			for (int i = 0; i &lt; m_sort.size(); i++)</span>
+			{
+<span class="nc" id="L2286">				MSort ptr = (MSort)m_sort.get(i);</span>
+<span class="nc bnc" id="L2287" title="All 2 branches missed.">				if (ptr.index &gt; sort.index)</span>
+<span class="nc" id="L2288">					ptr.index--;	//	move up</span>
+			}
+		}
+
+		//	inform
+<span class="nc" id="L2293">		m_changed = false;</span>
+<span class="nc" id="L2294">		m_rowChanged = -1;</span>
+<span class="nc" id="L2295">		fireTableRowsDeleted(row, row);</span>
+<span class="nc" id="L2296">		fireDataStatusIEvent(&quot;Deleted&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L2297" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Row=&quot; + row + &quot; complete&quot;);</span>
+<span class="nc" id="L2298">		return true;</span>
+	}	//	dataDelete
+	
+	/**
+	 *	Ignore/Undo changes
+	 */
+	public void dataIgnore()
+	{
+<span class="nc bnc" id="L2306" title="All 6 branches missed.">		if (!m_inserting &amp;&amp; !m_changed &amp;&amp; m_rowChanged &lt; 0)</span>
+		{
+<span class="nc bnc" id="L2308" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L2309">				log.fine(&quot;Nothing to ignore&quot;);</span>
+<span class="nc" id="L2310">			m_newRow = -1;</span>
+<span class="nc" id="L2311">			return;</span>
+		}
+<span class="nc bnc" id="L2313" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Inserting=&quot; + m_inserting);</span>
+
+		//	Inserting - delete new row
+<span class="nc bnc" id="L2316" title="All 2 branches missed.">		if (m_inserting)</span>
+		{
+			//	Get Sort
+<span class="nc" id="L2319">			MSort sort = (MSort)m_sort.get(m_newRow);</span>
+<span class="nc bnc" id="L2320" title="All 2 branches missed.">			if (m_virtual)</span>
+			{
+<span class="nc" id="L2322">				m_virtualBuffer.remove(NEW_ROW_ID);</span>
+<span class="nc" id="L2323">			}</span>
+			else
+			{
+				//	Delete row in Buffer and shifts all below up
+<span class="nc" id="L2327">				m_buffer.remove(sort.index);</span>
+			}
+<span class="nc" id="L2329">			m_rowCount--;</span>
+			//	Delete row in Sort
+<span class="nc" id="L2331">			m_sort.remove(m_newRow);	//	pintint to the last column, so no adjustment</span>
+			//
+<span class="nc" id="L2333">			m_changed = false;</span>
+<span class="nc" id="L2334">			m_rowData = null;</span>
+<span class="nc" id="L2335">			m_rowChanged = -1;</span>
+<span class="nc" id="L2336">			m_inserting = false;</span>
+			//	inform
+<span class="nc" id="L2338">			fireTableRowsDeleted(m_newRow, m_newRow);</span>
+<span class="nc" id="L2339">		}</span>
+		else
+		{
+			//	update buffer
+<span class="nc bnc" id="L2343" title="All 2 branches missed.">			if (m_rowData != null)</span>
+			{
+<span class="nc" id="L2345">				setDataAtRow(m_rowChanged, m_rowData);</span>
+			}
+<span class="nc" id="L2347">			m_changed = false;</span>
+<span class="nc" id="L2348">			m_rowData = null;</span>
+<span class="nc" id="L2349">			m_rowChanged = -1;</span>
+<span class="nc" id="L2350">			m_inserting = false;</span>
+			//	inform
+		//	fireTableRowsUpdated(m_rowChanged, m_rowChanged); &gt;&gt; messes up display?? (clearSelection)
+		}
+<span class="nc" id="L2354">		m_newRow = -1;</span>
+<span class="nc" id="L2355">		fireDataStatusIEvent(DATA_IGNORED_MESSAGE, &quot;&quot;);</span>
+<span class="nc" id="L2356">	}	//	dataIgnore</span>
+
+	/**
+	 *	Refresh Row - ignore changes
+	 *  @param row row
+	 */
+	public void dataRefresh (int row)
+	{
+<span class="nc" id="L2364">		dataRefresh(row, true);</span>
+<span class="nc" id="L2365">	}</span>
+
+	/**
+	 * get where clause for row
+	 * @param row
+	 * @return where clause
+	 */
+	public String getWhereClause(int row)
+	{
+<span class="nc bnc" id="L2374" title="All 6 branches missed.">		if (row &lt; 0 || m_sort.size() == 0 || m_inserting)</span>
+<span class="nc" id="L2375">			return null;</span>
+
+<span class="nc" id="L2377">		Object[] rowData = getDataAtRow(row);</span>
+<span class="nc bnc" id="L2378" title="All 2 branches missed.">		if (rowData == null)</span>
+<span class="nc" id="L2379">			return null;</span>
+
+<span class="nc" id="L2381">		String where = getWhereClause(rowData);</span>
+
+<span class="nc" id="L2383">		return where;</span>
+	}
+
+	/**
+	 *	Refresh Row - ignore changes
+	 *  @param row row
+	 *  @param fireStatusEvent
+	 */
+	public void dataRefresh (int row, boolean fireStatusEvent)
+	{
+<span class="nc bnc" id="L2393" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Row=&quot; + row);</span>
+
+<span class="nc bnc" id="L2395" title="All 6 branches missed.">		if (row &lt; 0 || m_sort.size() == 0 || m_inserting)</span>
+<span class="nc" id="L2396">			return;</span>
+
+<span class="nc" id="L2398">		Object[] rowData = getDataAtRow(row);</span>
+
+		//  ignore
+<span class="nc" id="L2401">		dataIgnore();</span>
+
+		//	Create SQL
+<span class="nc" id="L2404">		String where = getWhereClause(rowData);</span>
+<span class="nc bnc" id="L2405" title="All 4 branches missed.">		if (where == null || where.length() == 0)</span>
+<span class="nc" id="L2406">			where = &quot;1=2&quot;;</span>
+<span class="nc" id="L2407">		String sql = m_SQL_Select + &quot; WHERE &quot; + where;</span>
+<span class="nc" id="L2408">		Object[] rowDataDB = null;</span>
+<span class="nc" id="L2409">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L2410">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L2413">			pstmt = DB.prepareStatement(sql,get_TrxName());</span>
+<span class="nc" id="L2414">			rs = pstmt.executeQuery();</span>
+			//	only one row
+<span class="nc bnc" id="L2416" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L2417">				rowDataDB = readData(rs);</span>
+<span class="nc" id="L2418">		}</span>
+<span class="nc" id="L2419">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L2421">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L2422">			fireTableRowsUpdated(row, row);</span>
+<span class="nc" id="L2423">			fireDataStatusEEvent(&quot;RefreshError&quot;, sql, true);</span>
+<span class="nc" id="L2424">			return;</span>
+		}
+		finally
+		{
+<span class="nc" id="L2428">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L2429">			rs = null;</span>
+<span class="nc" id="L2430">			pstmt = null;</span>
+		}
+
+		//	update buffer
+<span class="nc bnc" id="L2434" title="All 2 branches missed.">		if (rowDataDB!=null)</span>
+<span class="nc" id="L2435">			setDataAtRow(row, rowDataDB);</span>
+		//	info
+<span class="nc" id="L2437">		m_rowData = null;</span>
+<span class="nc" id="L2438">		m_changed = false;</span>
+<span class="nc" id="L2439">		m_rowChanged = -1;</span>
+<span class="nc" id="L2440">		m_inserting = false;</span>
+<span class="nc" id="L2441">		fireTableRowsUpdated(row, row);</span>
+<span class="nc bnc" id="L2442" title="All 2 branches missed.">		if (fireStatusEvent)</span>
+<span class="nc" id="L2443">			fireDataStatusIEvent(DATA_REFRESH_MESSAGE, &quot;&quot;);</span>
+<span class="nc" id="L2444">	}	//	dataRefresh</span>
+
+
+	/**
+	 *	Refresh all Rows - ignore changes
+	 */
+	public void dataRefreshAll()
+	{
+<span class="nc" id="L2452">		dataRefreshAll(true);</span>
+<span class="nc" id="L2453">	}</span>
+
+	/**
+	 *	Refresh all Rows - ignore changes
+	 *  @param fireStatusEvent
+	 */
+	public void dataRefreshAll(boolean fireStatusEvent)
+	{
+<span class="nc" id="L2461">		dataRefreshAll(fireStatusEvent, -1);</span>
+<span class="nc" id="L2462">	}</span>
+
+	/**
+	 *	Refresh all Rows - ignore changes
+	 *  @param fireStatusEvent
+	 *  @param rowToRetained
+	 */
+	public void dataRefreshAll(boolean fireStatusEvent, int rowToRetained)
+	{
+<span class="nc" id="L2471">		m_inserting = false;	//	should not happen</span>
+<span class="nc" id="L2472">		dataIgnore();</span>
+<span class="nc" id="L2473">		String retainedWhere = null;</span>
+<span class="nc bnc" id="L2474" title="All 2 branches missed.">		if (rowToRetained &gt;= 0)</span>
+		{
+<span class="nc" id="L2476">			retainedWhere = getWhereClause(rowToRetained);</span>
+		}
+<span class="nc" id="L2478">		close(false);</span>
+<span class="nc bnc" id="L2479" title="All 2 branches missed.">		if (retainedWhere != null)</span>
+		{
+<span class="nc bnc" id="L2481" title="All 2 branches missed.">			String tempWhere = m_whereClause != null ? m_whereClause.sqlClause() : &quot;&quot;;</span>
+<span class="nc bnc" id="L2482" title="All 2 branches missed.">			if (!Util.isEmpty(tempWhere, true))</span>
+			{
+<span class="nc" id="L2484">				StringBuilder orRetainedWhere = new StringBuilder(&quot;) OR (&quot;).append(retainedWhere).append(&quot;)) &quot;);</span>
+<span class="nc bnc" id="L2485" title="All 2 branches missed.">				if (! tempWhere.contains(orRetainedWhere.toString()))</span>
+<span class="nc" id="L2486">					tempWhere = &quot;((&quot; + tempWhere + orRetainedWhere.toString();</span>
+			}
+<span class="nc bnc" id="L2488" title="All 2 branches missed.">			m_whereClause = new SQLFragment(tempWhere, m_whereClause != null ? m_whereClause.parameters() : null);</span>
+<span class="nc" id="L2489">			open(m_maxRows);</span>
+<span class="nc" id="L2490">		}</span>
+		else
+		{
+<span class="nc" id="L2493">			open(m_maxRows);</span>
+		}
+		//	Info
+<span class="nc" id="L2496">		m_rowData = null;</span>
+<span class="nc" id="L2497">		m_changed = false;</span>
+<span class="nc" id="L2498">		m_rowChanged = -1;</span>
+<span class="nc" id="L2499">		m_inserting = false;</span>
+<span class="nc bnc" id="L2500" title="All 2 branches missed.">		if (m_lastSortColumnIndex &gt;= 0)</span>
+		{
+<span class="nc" id="L2502">			loadComplete();</span>
+<span class="nc" id="L2503">			sort(m_lastSortColumnIndex, m_lastSortedAscending);</span>
+		}
+<span class="nc" id="L2505">		fireTableDataChanged();</span>
+<span class="nc bnc" id="L2506" title="All 2 branches missed.">		if (fireStatusEvent)</span>
+<span class="nc" id="L2507">			fireDataStatusIEvent(DATA_REFRESH_MESSAGE, &quot;&quot;);</span>
+<span class="nc" id="L2508">	}	//	dataRefreshAll</span>
+
+	/**
+	 *	Re-query with new whereClause
+	 *  @param whereClause sql where clause
+	 *  @param onlyCurrentRows only current rows
+	 *  @param onlyCurrentDays how many days back
+	 *  @param fireEvents if tabledatachanged and datastatusievent must be fired
+	 *  @return true if success
+	 *  @deprecated use {@link #dataRequery(SQLFragment, boolean, int, boolean)} instead
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public boolean dataRequery (String whereClause, boolean onlyCurrentRows, int onlyCurrentDays, boolean fireEvents)
+	{
+<span class="nc" id="L2522">		return dataRequery (new SQLFragment(whereClause), onlyCurrentRows, onlyCurrentDays, fireEvents);</span>
+	}
+	
+	/**
+	 *	Re-query with new whereClause
+	 *  @param whereClause sql where clause and parameters
+	 *  @param onlyCurrentRows only current rows
+	 *  @param onlyCurrentDays how many days back
+	 *  @param fireEvents if tabledatachanged and datastatusievent must be fired
+	 *  @return true if success
+	 */
+	public boolean dataRequery (SQLFragment whereClause, boolean onlyCurrentRows, int onlyCurrentDays, boolean fireEvents)
+	{
+<span class="nc bnc" id="L2535" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(whereClause + &quot;; OnlyCurrent=&quot; + onlyCurrentRows);</span>
+<span class="nc" id="L2536">		close(false);</span>
+<span class="nc" id="L2537">		m_onlyCurrentDays = onlyCurrentDays;</span>
+<span class="nc" id="L2538">		setSQLFilter(whereClause, onlyCurrentRows, m_onlyCurrentDays);</span>
+<span class="nc" id="L2539">		open(m_maxRows);</span>
+		//  Info
+<span class="nc" id="L2541">		m_rowData = null;</span>
+<span class="nc" id="L2542">		m_changed = false;</span>
+<span class="nc" id="L2543">		m_rowChanged = -1;</span>
+<span class="nc" id="L2544">		m_inserting = false;</span>
+<span class="nc bnc" id="L2545" title="All 2 branches missed.">		if (m_lastSortColumnIndex &gt;= 0)</span>
+		{
+<span class="nc" id="L2547">			loadComplete();</span>
+<span class="nc" id="L2548">			sort(m_lastSortColumnIndex, m_lastSortedAscending);</span>
+		}
+<span class="nc bnc" id="L2550" title="All 2 branches missed.">		if (fireEvents) {</span>
+<span class="nc" id="L2551">			fireTableDataChanged();</span>
+<span class="nc" id="L2552">			fireDataStatusIEvent(DATA_REFRESH_MESSAGE, &quot;&quot;);</span>
+		}
+<span class="nc" id="L2554">		return true;</span>
+	}	//	dataRequery
+
+	/**
+	 * Delegate to {@link #dataRequery(String, boolean, int, boolean)} with fireEvents=true
+	 * @param whereClause
+	 * @param onlyCurrentRows
+	 * @param onlyCurrentDays
+	 * @return true if success
+	 * @deprecated use {@link #dataRequery(SQLFragment, boolean, int)} instead
+	 */
+	@Deprecated(forRemoval = true, since = &quot;13&quot;)
+	public boolean dataRequery (String whereClause, boolean onlyCurrentRows, int onlyCurrentDays)
+	{
+<span class="nc" id="L2568">		return dataRequery (whereClause, onlyCurrentRows, onlyCurrentDays, true);</span>
+	}	//	dataRequery
+
+	/**
+	 * Delegate to {@link #dataRequery(SQLFragment, boolean, int, boolean)} with fireEvents=true
+	 * @param whereClause
+	 * @param onlyCurrentRows
+	 * @param onlyCurrentDays
+	 * @return true if success
+	 */
+	public boolean dataRequery (SQLFragment whereClause, boolean onlyCurrentRows, int onlyCurrentDays)
+	{
+<span class="nc" id="L2580">		return dataRequery (whereClause, onlyCurrentRows, onlyCurrentDays, true);</span>
+	}
+	
+	/**
+	 *	Is Cell Editable.
+	 *  @param  row row index
+	 *  @param  col column index
+	 *  @return true, if editable
+	 */
+	public boolean isCellEditable (int row, int col)
+	{
+		//	Entire Table not editable
+<span class="nc bnc" id="L2592" title="All 2 branches missed.">		if (m_readOnly)</span>
+<span class="nc" id="L2593">			return false;</span>
+		//	Key not editable
+<span class="nc bnc" id="L2595" title="All 2 branches missed.">		if (col == m_indexKeyColumn)</span>
+<span class="nc" id="L2596">			return false;</span>
+		/** @todo check link columns */
+
+		//	Check column range
+<span class="nc bnc" id="L2600" title="All 4 branches missed.">		if (col &lt; 0 || col &gt;= m_fields.size())</span>
+<span class="nc" id="L2601">			return false;</span>
+		//  IsActive Column always editable if no processed exists
+<span class="nc bnc" id="L2603" title="All 4 branches missed.">		if (col == m_indexActiveColumn &amp;&amp; m_indexProcessedColumn == -1)</span>
+<span class="nc" id="L2604">			return true;</span>
+		//	Row
+<span class="nc bnc" id="L2606" title="All 2 branches missed.">		if (!isRowEditable(row))</span>
+<span class="nc" id="L2607">			return false;</span>
+
+		//	Column
+<span class="nc" id="L2610">		return ((GridField)m_fields.get(col)).isEditable(false);</span>
+	}	//	IsCellEditable
+
+	/**
+	 *	Is row editable
+	 *  @param row row index
+	 *  @return true if editable
+	 */
+	public boolean isRowEditable (int row)
+	{
+		//	Entire Table not editable or no row
+<span class="nc bnc" id="L2621" title="All 6 branches missed.">		if (m_readOnly || row &lt; 0 || row &gt;= m_rowCount)</span>
+<span class="nc" id="L2622">			return false;</span>
+		//	If not Active - not editable
+<span class="nc bnc" id="L2624" title="All 2 branches missed.">		if (m_indexActiveColumn &gt; 0)		//	&amp;&amp; m_TabNo != Find.s_TabNo)</span>
+		{
+<span class="nc" id="L2626">			Object value = getValueAt(row, m_indexActiveColumn);</span>
+<span class="nc bnc" id="L2627" title="All 2 branches missed.">			if (value instanceof Boolean)</span>
+			{
+<span class="nc bnc" id="L2629" title="All 2 branches missed.">				if (!((Boolean)value).booleanValue())</span>
+<span class="nc" id="L2630">					return false;</span>
+			}
+<span class="nc bnc" id="L2632" title="All 2 branches missed.">			else if (&quot;N&quot;.equals(value)) </span>
+<span class="nc" id="L2633">				return false;</span>
+		}
+		//	If Processed - not editable (Find always editable)
+<span class="nc bnc" id="L2636" title="All 2 branches missed.">		if (m_indexProcessedColumn &gt; 0)		//	&amp;&amp; m_TabNo != Find.s_TabNo)</span>
+		{
+<span class="nc" id="L2638">			Object processed = getValueAt(row, m_indexProcessedColumn);</span>
+<span class="nc bnc" id="L2639" title="All 2 branches missed.">			if (processed instanceof Boolean)</span>
+			{
+<span class="nc bnc" id="L2641" title="All 2 branches missed.">				if (((Boolean)processed).booleanValue())</span>
+<span class="nc" id="L2642">					return false;</span>
+			}
+<span class="nc bnc" id="L2644" title="All 2 branches missed.">			else if (&quot;Y&quot;.equals(processed)) </span>
+<span class="nc" id="L2645">				return false;</span>
+		}
+		//
+<span class="nc" id="L2648">		int[] co = getClientOrg(row);</span>
+<span class="nc" id="L2649">		int AD_Client_ID = co[0]; </span>
+<span class="nc" id="L2650">		int AD_Org_ID = co[1];</span>
+<span class="nc" id="L2651">		int Record_ID = getKeyID(row);</span>
+<span class="nc" id="L2652">		return MRole.getDefault(m_ctx, false).canUpdate</span>
+<span class="nc" id="L2653">			(AD_Client_ID, AD_Org_ID, m_AD_Table_ID, Record_ID, false);</span>
+	}	//	isRowEditable
+
+	/**
+	 * 	Get Client Org for row
+	 *	@param row row index
+	 *	@return array [0] = Client [1] = Org - a value of -1 is not defined/found
+	 */
+	private int[] getClientOrg (int row)
+	{
+<span class="nc" id="L2663">		int AD_Client_ID = -1;</span>
+<span class="nc bnc" id="L2664" title="All 2 branches missed.">		if (m_indexClientColumn != -1)</span>
+		{
+<span class="nc" id="L2666">			Integer ii = (Integer)getValueAt(row, m_indexClientColumn);</span>
+<span class="nc bnc" id="L2667" title="All 2 branches missed.">			if (ii != null)</span>
+<span class="nc" id="L2668">				AD_Client_ID = ii.intValue();</span>
+		}
+<span class="nc" id="L2670">		int AD_Org_ID = 0;</span>
+<span class="nc bnc" id="L2671" title="All 2 branches missed.">		if (m_indexOrgColumn != -1)</span>
+		{
+<span class="nc" id="L2673">			Integer ii = (Integer)getValueAt(row, m_indexOrgColumn);</span>
+<span class="nc bnc" id="L2674" title="All 2 branches missed.">			if (ii != null)</span>
+<span class="nc" id="L2675">				AD_Org_ID = ii.intValue();</span>
+		}
+<span class="nc" id="L2677">		return new int[] {AD_Client_ID, AD_Org_ID};</span>
+	}	//	getClientOrg
+
+	/**
+	 *	Set entire table as read only
+	 *  @param value new read only value
+	 */
+	public void setReadOnly (boolean value)
+	{
+<span class="nc bnc" id="L2686" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;ReadOnly=&quot; + value);</span>
+<span class="nc" id="L2687">		m_readOnly = value;</span>
+<span class="nc" id="L2688">	}	//	setReadOnly</span>
+
+	/**
+	 *  Is entire Table Read/Only
+	 *  @return true if read only
+	 */
+	public boolean isReadOnly()
+	{
+<span class="nc" id="L2696">		return m_readOnly;</span>
+	}   //  isReadOnly
+
+	/**
+	 *  Is inserting
+	 *  @return true if inserting
+	 */
+	public boolean isInserting()
+	{
+<span class="nc" id="L2705">		return m_inserting;</span>
+	}   //  isInserting
+
+	/**
+	 *	Set Compare DB.
+	 * 	If Set to false, save overwrites the record, regardless of DB changes.
+	 *  (When a payment is changed in Sales Order, the payment reversal clears the payment id)
+	 * 	@param compareDB compare DB - false forces overwrite
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	@GeneratedCodeCoverageExclusion
+	public void setCompareDB (boolean compareDB)
+	{
+		m_compareDB = compareDB;
+	}  	//	setCompareDB
+
+	/**
+	 *	Get Compare DB.
+	 * 	@return false if save overwrites the record, regardless of DB changes
+	 * 	(false forces overwrite).
+	 *  @deprecated
+	 */
+	@Deprecated (since=&quot;13&quot;, forRemoval=true)
+	public boolean getCompareDB ()
+	{
+<span class="nc" id="L2731">		return m_compareDB;</span>
+	}  	//	getCompareDB
+
+	/**
+	 *	Can Table rows be deleted
+	 *  @param value new deleteable value
+	 */
+	public void setDeleteable (boolean value)
+	{
+<span class="nc bnc" id="L2740" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Deleteable=&quot; + value);</span>
+<span class="nc" id="L2741">		m_deleteable = value;</span>
+<span class="nc" id="L2742">	}	//	setDeleteable</span>
+	
+	/**
+	 *	Read data from result set
+	 *  @param rs result set
+	 *  @return Data Array
+	 */
+	private Object[] readData (ResultSet rs)
+	{
+<span class="nc" id="L2751">		int size = m_fields.size();</span>
+<span class="nc" id="L2752">		Object[] rowData = new Object[size];</span>
+<span class="nc" id="L2753">		String columnName = null;</span>
+<span class="nc" id="L2754">		int displayType = 0;</span>
+
+		//	Types see also GridField.createDefault
+		try
+		{
+			//	get row data
+<span class="nc bnc" id="L2760" title="All 2 branches missed.">			for (int j = 0; j &lt; size; j++)</span>
+			{
+				//	Column Info
+<span class="nc" id="L2763">				GridField field = (GridField)m_fields.get(j);</span>
+<span class="nc" id="L2764">				columnName = field.getColumnName();</span>
+<span class="nc" id="L2765">				displayType = field.getDisplayType();</span>
+				//	Integer, ID, Lookup
+<span class="nc bnc" id="L2767" title="All 8 branches missed.">				if (displayType == DisplayType.Integer || (DisplayType.isID(displayType) &amp;&amp; !(columnName.equals(&quot;EntityType&quot;) || columnName.equals(&quot;AD_Language&quot;))))</span>
+				{
+<span class="nc" id="L2769">					rowData[j] = Integer.valueOf(rs.getInt(j+1));	//	Integer</span>
+<span class="nc bnc" id="L2770" title="All 2 branches missed.">					if (rs.wasNull())</span>
+<span class="nc" id="L2771">						rowData[j] = null;</span>
+<span class="nc" id="L2772">				}</span>
+				//	Number
+<span class="nc bnc" id="L2774" title="All 2 branches missed.">				else if (DisplayType.isNumeric(displayType))</span>
+<span class="nc" id="L2775">					rowData[j] = rs.getBigDecimal(j+1);			//	BigDecimal</span>
+				//	Date
+<span class="nc bnc" id="L2777" title="All 2 branches missed.">				else if (DisplayType.isDate(displayType))</span>
+<span class="nc" id="L2778">					rowData[j] = rs.getTimestamp(j+1);			//	Timestamp</span>
+				//	RowID or Key (and Selection)
+<span class="nc bnc" id="L2780" title="All 2 branches missed.">				else if (displayType == DisplayType.RowID)</span>
+<span class="nc" id="L2781">					rowData[j] = null;</span>
+				//	YesNo
+<span class="nc bnc" id="L2783" title="All 2 branches missed.">				else if (displayType == DisplayType.YesNo)</span>
+				{
+<span class="nc" id="L2785">					String str = rs.getString(j+1);</span>
+<span class="nc bnc" id="L2786" title="All 2 branches missed.">					if (field.isEncryptedColumn())</span>
+<span class="nc" id="L2787">						str = (String)decrypt(str, getAD_Client_ID(rs));</span>
+<span class="nc" id="L2788">					rowData[j] = Boolean.valueOf(&quot;Y&quot;.equals(str));	//	Boolean</span>
+<span class="nc" id="L2789">				}</span>
+				//	LOB
+<span class="nc bnc" id="L2791" title="All 2 branches missed.">				else if (DisplayType.isLOB(displayType))</span>
+				{
+<span class="nc" id="L2793">					Object value = rs.getObject(j+1);</span>
+<span class="nc bnc" id="L2794" title="All 2 branches missed.">					if (rs.wasNull())</span>
+<span class="nc" id="L2795">						rowData[j] = null;</span>
+<span class="nc bnc" id="L2796" title="All 2 branches missed.">					else if (value instanceof Clob) </span>
+					{
+<span class="nc" id="L2798">						Clob lob = (Clob)value;</span>
+<span class="nc" id="L2799">						long length = lob.length();</span>
+<span class="nc" id="L2800">						rowData[j] = lob.getSubString(1, (int)length);</span>
+<span class="nc" id="L2801">					}</span>
+<span class="nc bnc" id="L2802" title="All 2 branches missed.">					else if (value instanceof Blob)</span>
+					{
+<span class="nc" id="L2804">						Blob lob = (Blob)value;</span>
+<span class="nc" id="L2805">						long length = lob.length();</span>
+<span class="nc" id="L2806">						rowData[j] = lob.getBytes(1, (int)length);</span>
+<span class="nc" id="L2807">					}</span>
+<span class="nc bnc" id="L2808" title="All 2 branches missed.">					else if (value instanceof String)</span>
+<span class="nc" id="L2809">						rowData[j] = value;</span>
+<span class="nc bnc" id="L2810" title="All 2 branches missed.">					else if (value instanceof byte[])</span>
+<span class="nc" id="L2811">						rowData[j] = value;</span>
+<span class="nc" id="L2812">				}</span>
+				//	String
+				else
+<span class="nc" id="L2815">					rowData[j] = rs.getString(j+1);				//	String</span>
+				//	Encrypted
+<span class="nc bnc" id="L2817" title="All 4 branches missed.">				if (field.isEncryptedColumn() &amp;&amp; displayType != DisplayType.YesNo)</span>
+<span class="nc" id="L2818">					rowData[j] = decrypt(rowData[j], getAD_Client_ID(rs));</span>
+			}
+<span class="nc" id="L2820">		}</span>
+<span class="nc" id="L2821">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L2823">			log.log(Level.SEVERE, columnName + &quot;, DT=&quot; + displayType, e);</span>
+		}
+<span class="nc" id="L2825">		return rowData;</span>
+	}	//	readData
+
+	/**
+	 * 	Decrypt
+	 *	@param yy encrypted data
+	 *  @param AD_Client_ID
+	 *	@return clear data
+	 */
+	private Object decrypt (Object yy, int AD_Client_ID)
+	{
+<span class="nc bnc" id="L2836" title="All 2 branches missed.">		if (yy == null)</span>
+<span class="nc" id="L2837">			return null;</span>
+<span class="nc" id="L2838">		return SecureEngine.decrypt(yy, AD_Client_ID);</span>
+	}	//	decrypt
+	
+	/**
+	 * @param rs
+	 * @return AD_Client_ID or -1
+	 */
+	private int getAD_Client_ID(ResultSet rs) {
+<span class="nc" id="L2846">		int AD_Client_ID = -1;</span>
+		try {
+<span class="nc" id="L2848">			AD_Client_ID = rs.getInt(&quot;AD_Client_ID&quot;);</span>
+<span class="nc bnc" id="L2849" title="All 2 branches missed.">			if (rs.wasNull())</span>
+<span class="nc" id="L2850">				AD_Client_ID = -1;</span>
+<span class="nc" id="L2851">		} catch (SQLException e) {</span>
+<span class="nc" id="L2852">			AD_Client_ID = -1;</span>
+		}
+<span class="nc bnc" id="L2854" title="All 2 branches missed.">		if (AD_Client_ID == -1)</span>
+<span class="nc" id="L2855">			AD_Client_ID = getAD_Client_ID();</span>
+<span class="nc" id="L2856">		return AD_Client_ID;</span>
+	}
+
+	/**
+	 * @return AD_Client_ID
+	 */
+	private int getAD_Client_ID() 
+	{
+<span class="nc" id="L2864">		int AD_Client_ID = Env.getAD_Client_ID(Env.getCtx());</span>
+<span class="nc" id="L2865">		GridField field = getField(&quot;AD_Client_ID&quot;);</span>
+<span class="nc bnc" id="L2866" title="All 4 branches missed.">		if (field != null &amp;&amp; field.getValue() != null) {</span>
+<span class="nc" id="L2867">			AD_Client_ID = ((Number)field.getValue()).intValue();</span>
+		}
+<span class="nc" id="L2869">		return AD_Client_ID;</span>
+	}
+	
+	/**
+	 *	Remove Data Status Listener
+	 *  @param l listener
+	 */
+	public synchronized void removeDataStatusListener(DataStatusListener l)
+	{
+<span class="nc" id="L2878">		listenerList.remove(DataStatusListener.class, l);</span>
+<span class="nc" id="L2879">	}	//	removeDataStatusListener</span>
+
+	/**
+	 *	Add Data Status Listener
+	 *  @param l listener
+	 */
+	public synchronized void addDataStatusListener(DataStatusListener l)
+	{
+<span class="nc" id="L2887">		listenerList.add(DataStatusListener.class, l);</span>
+<span class="nc" id="L2888">	}	//	addDataStatusListener</span>
+
+	/**
+	 *	Fire data status changed event
+	 *  @param e event
+	 */
+	private void fireDataStatusChanged (DataStatusEvent e)
+	{
+<span class="nc" id="L2896">		DataStatusListener[] listeners = listenerList.getListeners(DataStatusListener.class);</span>
+<span class="nc bnc" id="L2897" title="All 2 branches missed.">        for (int i = 0; i &lt; listeners.length; i++) </span>
+<span class="nc" id="L2898">        	listeners[i].dataStatusChanged(e);</span>
+<span class="nc" id="L2899">	}	//	fireDataStatusChanged</span>
+
+	/**
+	 *  Create new Data Status Event instance
+	 *  @return new data status event instance
+	 */
+	private DataStatusEvent createDSE()
+	{
+<span class="nc" id="L2907">		boolean changed = m_changed;</span>
+<span class="nc bnc" id="L2908" title="All 2 branches missed.">		if (m_rowChanged != -1)</span>
+<span class="nc" id="L2909">			changed = true;</span>
+<span class="nc" id="L2910">		DataStatusEvent dse = new DataStatusEvent(this, m_rowCount, changed,</span>
+<span class="nc" id="L2911">			Env.isAutoCommit(m_ctx, m_WindowNo), m_inserting);</span>
+<span class="nc" id="L2912">		dse.AD_Table_ID = m_AD_Table_ID;</span>
+<span class="nc" id="L2913">		dse.Record_ID = null;</span>
+<span class="nc" id="L2914">		return dse;</span>
+	}   //  createDSE
+
+	/**
+	 *  Create and fire Data Status Info Event
+	 *  @param AD_Message message
+	 *  @param info additional info
+	 */
+	protected void fireDataStatusIEvent (String AD_Message, String info)
+	{
+<span class="nc" id="L2924">		DataStatusEvent e = createDSE();</span>
+<span class="nc" id="L2925">		e.setInfo(AD_Message, info, false,false);</span>
+<span class="nc bnc" id="L2926" title="All 4 branches missed.">		if (SORTED_DSE_EVENT.equals(AD_Message) &amp;&amp; m_currentRow &gt;= 0)</span>
+<span class="nc" id="L2927">			e.setCurrentRow(m_currentRow);</span>
+<span class="nc" id="L2928">		fireDataStatusChanged (e);</span>
+<span class="nc" id="L2929">	}   //  fireDataStatusIEvent</span>
+
+	/**
+	 *  Create and fire Data Status Error Event
+	 *  @param AD_Message message
+	 *  @param info info
+	 *  @param isError error
+	 */
+	protected void fireDataStatusEEvent (String AD_Message, String info, boolean isError)
+	{
+		//
+<span class="nc" id="L2940">		DataStatusEvent e = createDSE();</span>
+<span class="nc bnc" id="L2941" title="All 4 branches missed.">		if (info != null &amp;&amp; info.startsWith(&quot;DBExecuteError:&quot;)) {</span>
+			String firstline;
+<span class="nc" id="L2943">			int nl = info.indexOf(&quot;\n&quot;);</span>
+<span class="nc bnc" id="L2944" title="All 2 branches missed.">			if (nl &gt; 0)</span>
+<span class="nc" id="L2945">				firstline = info.substring(0, nl);</span>
+			else
+<span class="nc" id="L2947">				firstline = info;</span>
+<span class="nc" id="L2948">			String newinfo = Msg.getMsg(m_ctx, firstline);</span>
+<span class="nc bnc" id="L2949" title="All 2 branches missed.">			if (firstline.equals(newinfo))</span>
+<span class="nc" id="L2950">				newinfo = info.substring(15); // size of &quot;DBExecuteError:&quot;</span>
+<span class="nc bnc" id="L2951" title="All 2 branches missed.">			e.setInfo(AD_Message, newinfo, isError, !isError);</span>
+<span class="nc" id="L2952">		} else {</span>
+<span class="nc bnc" id="L2953" title="All 2 branches missed.">			e.setInfo(AD_Message, info, isError, !isError);</span>
+		}
+<span class="nc bnc" id="L2955" title="All 2 branches missed.">		if (isError)</span>
+<span class="nc" id="L2956">			log.saveWarning(AD_Message, info);</span>
+<span class="nc" id="L2957">		fireDataStatusChanged (e);</span>
+<span class="nc" id="L2958">	}   //  fireDataStatusEEvent</span>
+
+	/**
+	 *  Create and fire Data Status Error Event (from Error Log)
+	 *  @param errorLog error log info
+	 */
+	protected void fireDataStatusEEvent (ValueNamePair errorLog)
+	{
+<span class="nc bnc" id="L2966" title="All 2 branches missed.">		if (errorLog != null)</span>
+<span class="nc" id="L2967">			fireDataStatusEEvent (errorLog.getValue(), errorLog.getName(), true);</span>
+<span class="nc" id="L2968">	}   //  fireDataStatusEEvent</span>
+	
+	/**
+	 *  Remove Vetoable change listener for row changes
+	 *  @param l listener
+	 */
+	public synchronized void removeVetoableChangeListener(VetoableChangeListener l)
+	{
+<span class="nc" id="L2976">		m_vetoableChangeSupport.removeVetoableChangeListener(l);</span>
+<span class="nc" id="L2977">	}   //  removeVetoableChangeListener</span>
+
+	/**
+	 *  Add Vetoable change listener for row changes
+	 *  @param l listener
+	 */
+	public synchronized void addVetoableChangeListener(VetoableChangeListener l)
+	{
+<span class="nc" id="L2985">		m_vetoableChangeSupport.addVetoableChangeListener(l);</span>
+<span class="nc" id="L2986">	}   //  addVetoableChangeListener</span>
+
+	/**
+	 *  Fire Vetoable change listener for row changes
+	 *  @param e event
+	 *  @throws PropertyVetoException
+	 */
+	protected void fireVetoableChange(PropertyChangeEvent e) throws java.beans.PropertyVetoException
+	{
+<span class="nc" id="L2995">		m_vetoableChangeSupport.fireVetoableChange(e);</span>
+<span class="nc" id="L2996">	}   //  fireVetoableChange</span>
+
+	/**
+	 *  toString
+	 *  @return String representation
+	 */
+	public String toString()
+	{
+<span class="nc" id="L3004">		return new StringBuilder(&quot;MTable[&quot;).append(m_tableName)</span>
+<span class="nc" id="L3005">			.append(&quot;,WindowNo=&quot;).append(m_WindowNo)</span>
+<span class="nc" id="L3006">			.append(&quot;,Tab=&quot;).append(m_TabNo).append(&quot;]&quot;).toString();</span>
+	}   //  toString
+
+	/**
+	 * 
+	 * @return new row added
+	 */
+	public int getNewRow()
+	{
+<span class="nc" id="L3015">		return m_newRow;</span>
+	}
+	
+	/**
+	 *	Asynchronous Loader
+	 */
+	protected class Loader implements Serializable, Runnable
+	{
+		/**
+		 * generated serial id
+		 */
+		private static final long serialVersionUID = -6866671239509705988L;
+
+		/**
+		 *  Construct Loader
+		 */
+		public Loader()
+<span class="nc" id="L3032">		{</span>
+<span class="nc" id="L3033">			super();</span>
+<span class="nc" id="L3034">		}	//	Loader</span>
+
+<span class="nc" id="L3036">		private PreparedStatement   m_pstmt = null;</span>
+<span class="nc" id="L3037">		private ResultSet 		    m_rs = null;</span>
+<span class="nc" id="L3038">		private Trx trx = null;</span>
+<span class="nc" id="L3039">		private Properties m_context = null;</span>
+		private int maxRows;
+		private int rows;
+		
+		public void setContext(Properties context)
+		{
+<span class="nc" id="L3045">			m_context = context;</span>
+<span class="nc" id="L3046">		}</span>
+
+		/**
+		 *	Open ResultSet
+		 *	@param maxRows maximum number of rows or 0 for all
+		 *	@return number of records
+		 */
+		protected int open (int maxRows)
+		{
+<span class="nc" id="L3055">			m_rowLoadTimeout = false;</span>
+<span class="nc" id="L3056">			m_rowCountTimeout = false;</span>
+<span class="nc" id="L3057">			this.maxRows = maxRows;</span>
+
+			//	Get Number of Rows
+<span class="nc" id="L3060">			rows = 0;</span>
+<span class="nc" id="L3061">			PreparedStatement pstmt = null;</span>
+<span class="nc" id="L3062">			ResultSet rs = null;		</span>
+<span class="nc" id="L3063">			m_rowCountTimeout = false;</span>
+			try
+			{
+<span class="nc" id="L3066">				pstmt = DB.prepareStatement(m_SQL_Count, get_TrxName());</span>
+<span class="nc" id="L3067">				setParameter (pstmt, true);</span>
+<span class="nc" id="L3068">		        int timeout = MSysConfig.getIntValue(MSysConfig.GRIDTABLE_INITIAL_COUNT_TIMEOUT_IN_SECONDS, </span>
+<span class="nc" id="L3069">		        		DEFAULT_GRIDTABLE_COUNT_TIMEOUT_IN_SECONDS, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L3070" title="All 2 branches missed.">				if (timeout &gt; 0)</span>
+<span class="nc" id="L3071">					pstmt.setQueryTimeout(timeout);</span>
+<span class="nc" id="L3072">				rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L3073" title="All 2 branches missed.">				if (rs.next())</span>
+<span class="nc" id="L3074">					rows = rs.getInt(1);</span>
+<span class="nc" id="L3075">			}</span>
+<span class="nc" id="L3076">			catch (SQLException e0)</span>
+			{
+<span class="nc bnc" id="L3078" title="All 2 branches missed.">				if (DB.getDatabase().isQueryTimeout(e0))</span>
+				{
+<span class="nc bnc" id="L3080" title="All 2 branches missed.">					if (log.isLoggable(Level.INFO)) log.info(&quot;Count query timed out -&gt; &quot; + m_SQL_Count);</span>
+<span class="nc" id="L3081">					m_rowCountTimeout = true;</span>
+<span class="nc" id="L3082">					return 0;</span>
+				}
+				else
+<span class="nc" id="L3085">					throw new DBException(e0);</span>
+			}
+			finally
+			{
+<span class="nc" id="L3089">				DB.close(rs, pstmt);				</span>
+			}
+<span class="nc" id="L3091">			StringBuilder info = new StringBuilder(&quot;Rows=&quot;);</span>
+<span class="nc" id="L3092">			info.append(rows);</span>
+<span class="nc bnc" id="L3093" title="All 2 branches missed.">			if (rows == 0)</span>
+<span class="nc" id="L3094">				info.append(&quot; - &quot;).append(m_SQL_Count);</span>
+				
+<span class="nc bnc" id="L3096" title="All 4 branches missed.">			if (maxRows &gt; 0 &amp;&amp; rows &gt; maxRows)</span>
+			{
+<span class="nc" id="L3098">				info.append(&quot; - MaxRows=&quot;).append(maxRows);					</span>
+<span class="nc" id="L3099">				rows = maxRows;</span>
+			}
+					
+<span class="nc bnc" id="L3102" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(info.toString());</span>
+			
+<span class="nc" id="L3104">			return rows;</span>
+		}	//	open
+
+		private void openResultSet() {
+<span class="nc" id="L3108">			m_rowLoadTimeout = false;</span>
+<span class="nc" id="L3109">			String trxName = get_TrxName();</span>
+			//postgresql need trx to use cursor based resultset
+			//https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
+<span class="nc bnc" id="L3112" title="All 2 branches missed.">			if (trxName == null) {</span>
+<span class="nc bnc" id="L3113" title="All 2 branches missed.">				trxName = m_virtual ? Trx.createTrxName(&quot;Loader&quot;) : null;</span>
+<span class="nc bnc" id="L3114" title="All 2 branches missed.">				trx  = trxName != null ? Trx.get(trxName, true) : null;</span>
+<span class="nc bnc" id="L3115" title="All 2 branches missed.">				if (trx != null)</span>
+<span class="nc" id="L3116">					trx.setDisplayName(getClass().getName()+&quot;_openResultSet&quot;);</span>
+			}
+			//	open Statement (closed by Loader.close)
+			try
+			{
+<span class="nc" id="L3121">				m_pstmt = DB.prepareStatement(m_SQL, trxName);</span>
+				//ensure not all rows are fetch into memory for virtual table
+<span class="nc bnc" id="L3123" title="All 2 branches missed.">				if (m_virtual)</span>
+<span class="nc" id="L3124">					m_pstmt.setFetchSize(100);</span>
+<span class="nc" id="L3125">				setParameter (m_pstmt, false);</span>
+<span class="nc" id="L3126">				int timeout = MSysConfig.getIntValue(MSysConfig.GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS, DEFAULT_GRIDTABLE_LOAD_TIMEOUT_IN_SECONDS, Env.getAD_Client_ID(Env.getCtx()));</span>
+<span class="nc bnc" id="L3127" title="All 2 branches missed.">				if (timeout &gt; 0)</span>
+<span class="nc" id="L3128">					m_pstmt.setQueryTimeout(timeout);</span>
+<span class="nc" id="L3129">				m_rs = m_pstmt.executeQuery();</span>
+<span class="nc" id="L3130">			}</span>
+<span class="nc" id="L3131">			catch (SQLException e)</span>
+			{
+<span class="nc bnc" id="L3133" title="All 2 branches missed.">				if (DB.getDatabase().isQueryTimeout(e)) {</span>
+<span class="nc" id="L3134">					m_rowLoadTimeout = true;</span>
+<span class="nc" id="L3135">					throw new AdempiereException(Msg.getMsg(Env.getCtx(), LOAD_TIMEOUT_ERROR_MESSAGE), e);</span>
+				} else {
+<span class="nc" id="L3137">					log.severe(e.getLocalizedMessage() + &quot; -&gt; &quot; + m_SQL);</span>
+<span class="nc" id="L3138">					log.saveError(e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L3139">					throw new DBException(e);</span>
+				}
+			}
+<span class="nc" id="L3142">		}</span>
+
+		/**
+		 *	Close RS and Statement
+		 */
+		private void close()
+		{
+<span class="nc" id="L3149">			DB.close(m_rs, m_pstmt);</span>
+<span class="nc" id="L3150">			m_rs = null;</span>
+<span class="nc" id="L3151">			m_pstmt = null;</span>
+<span class="nc bnc" id="L3152" title="All 2 branches missed.">			if (trx != null)</span>
+			{
+<span class="nc" id="L3154">				trx.close();</span>
+<span class="nc" id="L3155">				trx = null;</span>
+			}
+<span class="nc" id="L3157">		}	//	close</span>
+
+		/**
+		 *	Fill Buffer to include Row
+		 */
+		public void run()
+		{
+			try {
+<span class="nc bnc" id="L3165" title="All 2 branches missed.">				if (m_context != null)</span>
+<span class="nc" id="L3166">					ServerContext.setCurrentInstance(m_context);</span>
+<span class="nc" id="L3167">				doRun();</span>
+<span class="nc" id="L3168">			} finally {</span>
+<span class="nc bnc" id="L3169" title="All 2 branches missed.">				if (m_context != null)</span>
+<span class="nc" id="L3170">					ServerContext.dispose();</span>
+			}
+<span class="nc" id="L3172">		}	//	run</span>
+
+		/**
+		 * Fill buffer from result set
+		 */
+		private void doRun() {
+<span class="nc" id="L3178">			boolean isFindOverMax = false;</span>
+<span class="nc" id="L3179">			boolean backgroundLoad = false;</span>
+			try
+			{
+<span class="nc" id="L3182">				openResultSet();</span>
+<span class="nc bnc" id="L3183" title="All 2 branches missed.">				if (m_rs == null)</span>
+<span class="nc" id="L3184">					return;</span>
+
+<span class="nc bnc" id="L3186" title="All 2 branches missed.">				while (m_rs.next())</span>
+				{
+<span class="nc bnc" id="L3188" title="All 4 branches missed.">					if (maxRows &gt; 0 &amp;&amp; m_sort.size() == maxRows) {</span>
+<span class="nc" id="L3189">						isFindOverMax = true;</span>
+<span class="nc" id="L3190">			            break;</span>
+					}
+
+<span class="nc bnc" id="L3193" title="All 2 branches missed.">					if (Thread.interrupted())</span>
+					{
+<span class="nc bnc" id="L3195" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;Interrupted&quot;);</span>
+<span class="nc" id="L3196">						close();</span>
+<span class="nc" id="L3197">						return;</span>
+					}
+					//  Get Data
+<span class="nc" id="L3200">					int recordId = 0;</span>
+<span class="nc" id="L3201">					Object[] rowData = null;</span>
+<span class="nc bnc" id="L3202" title="All 2 branches missed.">					if (m_virtual)</span>
+<span class="nc" id="L3203">						recordId = m_rs.getInt(getKeyColumnName());</span>
+					else
+<span class="nc" id="L3205">						rowData = readData(m_rs);</span>
+					//	add Data
+<span class="nc bnc" id="L3207" title="All 2 branches missed.">					MSort sort = m_virtual</span>
+<span class="nc" id="L3208">						? new MSort(recordId, null)</span>
+<span class="nc" id="L3209">						: new MSort(m_buffer.size(), null);	//	index</span>
+<span class="nc bnc" id="L3210" title="All 2 branches missed.">					if (!m_virtual)</span>
+					{
+<span class="nc" id="L3212">						m_buffer.add(rowData);</span>
+					}
+<span class="nc" id="L3214">					m_sort.add(sort);</span>
+
+					// Start with rowCount=0, inform loading of first row
+<span class="nc bnc" id="L3217" title="All 2 branches missed.">					if (m_rowCountTimeout)</span>
+					{
+<span class="nc" id="L3219">						m_rowCount++;</span>
+<span class="nc bnc" id="L3220" title="All 2 branches missed.">						if (m_rowCount == 1)</span>
+						{
+<span class="nc" id="L3222">							DataStatusEvent evt = createDSE();</span>
+<span class="nc" id="L3223">							evt.setLoading(m_sort.size());</span>
+<span class="nc" id="L3224">							evt.setInfo(COUNT_QUERY_TIMEOUT_ERROR_MESSAGE, null, false, false);</span>
+<span class="nc" id="L3225">							fireDataStatusChanged(evt);</span>
+						}
+					}
+
+					//	Statement all 1000 rows &amp; sleep
+<span class="nc bnc" id="L3230" title="All 4 branches missed.">					if (!m_sort.isEmpty() &amp;&amp; m_sort.size() % 1000 == 0)</span>
+					{
+<span class="nc" id="L3232">						backgroundLoad = true;</span>
+<span class="nc" id="L3233">						DataStatusEvent evt = createDSE();</span>
+<span class="nc" id="L3234">						evt.setLoading(m_sort.size());</span>
+<span class="nc" id="L3235">						fireDataStatusChanged(evt);</span>
+						//	give the other processes a chance
+						try
+						{
+<span class="nc" id="L3239">							Thread.yield();</span>
+<span class="nc" id="L3240">							Thread.sleep(10);		//	.01 second</span>
+<span class="nc" id="L3241">						}</span>
+<span class="nc" id="L3242">						catch (InterruptedException ie)</span>
+						{
+<span class="nc bnc" id="L3244" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(&quot;Interrupted while sleeping&quot;);</span>
+<span class="nc" id="L3245">							close();</span>
+<span class="nc" id="L3246">							return;</span>
+						}
+					}
+				}	//	while(rs.next())
+<span class="nc" id="L3250">			}</span>
+<span class="nc" id="L3251">			catch (Exception e)</span>
+			{
+<span class="nc bnc" id="L3253" title="All 2 branches missed.">				if (! DBException.isTimeout(e))</span>
+<span class="nc" id="L3254">					throw new AdempiereException(e);</span>
+<span class="nc bnc" id="L3255" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Query timed out -&gt; &quot; + m_SQL);</span>
+			}
+			finally
+			{
+<span class="nc" id="L3259">				close();</span>
+			}
+			
+			// Background loading without initial rowCount, inform final loaded rows
+<span class="nc bnc" id="L3263" title="All 4 branches missed.">			if (backgroundLoad &amp;&amp; m_sort.size() &gt; 0)</span>
+			{
+<span class="nc" id="L3265">				DataStatusEvent evt = createDSE();</span>
+<span class="nc" id="L3266">				evt.setLoading(m_sort.size());</span>
+<span class="nc bnc" id="L3267" title="All 2 branches missed.">				if (isFindOverMax)</span>
+<span class="nc" id="L3268">					evt.setInfo(FIND_OVER_MAX_ERROR_MESSAGE, &quot; &gt; &quot; + m_sort.size(), false, true);</span>
+				else
+<span class="nc" id="L3270">					evt.setInfo(BACKGROUND_LOAD_FINISHED_INFO_MESSAGE, null, false, false);</span>
+<span class="nc" id="L3271">				fireDataStatusChanged(evt);</span>
+<span class="nc bnc" id="L3272" title="All 2 branches missed.">			} else if (m_rowLoadTimeout)</span>
+			{
+<span class="nc" id="L3274">				DataStatusEvent evt = createDSE();</span>
+<span class="nc" id="L3275">				evt.setLoading(m_sort.size());</span>
+<span class="nc" id="L3276">				evt.setInfo(LOAD_TIMEOUT_ERROR_MESSAGE, null, false, true);</span>
+<span class="nc" id="L3277">				fireDataStatusChanged(evt);</span>
+<span class="nc bnc" id="L3278" title="All 2 branches missed.">			} else if (isFindOverMax)</span>
+			{
+<span class="nc" id="L3280">				DataStatusEvent evt = createDSE();</span>
+<span class="nc" id="L3281">				evt.setLoading(m_sort.size());</span>
+<span class="nc" id="L3282">				evt.setInfo(FIND_OVER_MAX_ERROR_MESSAGE, &quot; &gt; &quot; + m_sort.size(), false, true);</span>
+<span class="nc" id="L3283">				fireDataStatusChanged(evt);</span>
+			}
+
+<span class="nc" id="L3286">			fireDataStatusIEvent(&quot;&quot;, &quot;&quot;);</span>
+<span class="nc" id="L3287">		}</span>
+
+		/**
+		 *	Set Parameter for Query.
+		 *		elements must be Integer, BigDecimal, String (default)
+		 *  @param pstmt prepared statement
+		 *  @param countSQL count
+		 */
+		private void setParameter (PreparedStatement pstmt, boolean countSQL)
+		{
+<span class="nc bnc" id="L3297" title="All 4 branches missed.">			if (m_whereParams == null || m_whereParams.isEmpty())</span>
+<span class="nc" id="L3298">				return;</span>
+			
+			try
+			{
+<span class="nc" id="L3302">				int pos = 1;	//	position in Statement</span>
+				//	Select Clause Parameters
+<span class="nc bnc" id="L3304" title="All 2 branches missed.">				for (Object para : m_whereParams)</span>
+				{
+<span class="nc bnc" id="L3306" title="All 2 branches missed.">					if (para == null)</span>
+<span class="nc" id="L3307">						;</span>
+<span class="nc bnc" id="L3308" title="All 2 branches missed.">					else if (para instanceof Integer)</span>
+					{
+<span class="nc" id="L3310">						Integer ii = (Integer)para;</span>
+<span class="nc" id="L3311">						pstmt.setInt (pos++, ii.intValue());</span>
+<span class="nc" id="L3312">					}</span>
+<span class="nc bnc" id="L3313" title="All 2 branches missed.">					else if (para instanceof BigDecimal)</span>
+<span class="nc" id="L3314">						pstmt.setBigDecimal (pos++, (BigDecimal)para);</span>
+<span class="nc bnc" id="L3315" title="All 2 branches missed.">					else if (para instanceof Timestamp)</span>
+<span class="nc" id="L3316">						pstmt.setTimestamp (pos++, (Timestamp)para);</span>
+					else
+					{
+<span class="nc" id="L3319">						String str = para.toString();</span>
+<span class="nc" id="L3320">						boolean hasId = false;</span>
+<span class="nc bnc" id="L3321" title="All 2 branches missed.">						if (str.indexOf('@') &gt;= 0)</span>
+						{
+<span class="nc" id="L3323">							String preParse = str;</span>
+<span class="nc bnc" id="L3324" title="All 6 branches missed.">							hasId = str.contains(&quot;_ID&quot;) || str.contains(&quot;CreatedBy&quot;) || str.contains(&quot;UpdatedBy&quot;);</span>
+<span class="nc" id="L3325">							String context = Env.parseContext(m_ctx, m_WindowNo, str, false);</span>
+<span class="nc bnc" id="L3326" title="All 4 branches missed.">							if(context != null &amp;&amp; context.trim().length() &gt; 0)</span>
+							{
+<span class="nc" id="L3328">								str = context;</span>
+<span class="nc" id="L3329">							}</span>
+							else
+							{
+<span class="nc" id="L3332">								log.log(Level.WARNING, &quot;Failed to parse where clause param. param=&quot;+preParse);</span>
+<span class="nc bnc" id="L3333" title="All 2 branches missed.">								if (hasId)</span>
+<span class="nc" id="L3334">									str = null;</span>
+							}
+						}
+<span class="nc bnc" id="L3337" title="All 4 branches missed.">						if (hasId &amp;&amp; str != null)</span>
+						{
+							try
+							{
+<span class="nc" id="L3341">								int id = Integer.parseInt(str);</span>
+<span class="nc" id="L3342">								pstmt.setInt (pos++, id);</span>
+<span class="nc" id="L3343">								continue;</span>
+							}
+<span class="nc" id="L3345">							catch (NumberFormatException nfe)</span>
+							{
+								//	do nothing, set as string
+							}
+						}
+<span class="nc bnc" id="L3350" title="All 2 branches missed.">						if (str != null)</span>
+<span class="nc" id="L3351">							pstmt.setString(pos++, str);</span>
+						else
+<span class="nc" id="L3353">							pstmt.setObject(pos++, str);</span>
+					}
+				}
+<span class="nc" id="L3356">			}</span>
+<span class="nc" id="L3357">			catch (SQLException e)</span>
+			{
+<span class="nc" id="L3359">				log.log(Level.SEVERE, &quot;parameter&quot;, e);</span>
+			}
+<span class="nc" id="L3361">		}	//	setParameter</span>
+
+	}	//	Loader
+
+	/**
+	 * Feature Request [1707462]
+	 * Enable runtime change of VFormat
+	 * @param identifier column name
+	 * @param strNewFormat new input mask
+	 * author fer_luck
+	 */
+	protected void setFieldVFormat (String identifier, String strNewFormat)
+	{
+<span class="nc" id="L3374">		int cols = m_fields.size();</span>
+<span class="nc bnc" id="L3375" title="All 2 branches missed.">		for (int i = 0; i &lt; cols; i++)</span>
+		{
+<span class="nc" id="L3377">			GridField field = (GridField)m_fields.get(i);</span>
+<span class="nc bnc" id="L3378" title="All 2 branches missed.">			if (identifier.equalsIgnoreCase(field.getColumnName())){</span>
+<span class="nc" id="L3379">				field.setVFormat(strNewFormat);</span>
+<span class="nc" id="L3380">				m_fields.set(i, field);</span>
+<span class="nc" id="L3381">				break;</span>
+			}
+		}
+<span class="nc" id="L3384">	}	//	setFieldVFormat	</span>
+
+	/**
+	 * Verify if the record at row has been changed at DB (by other user or process)
+	 * @param row row index
+	 * @return true if record at row has been changed at DB
+	 */
+	public boolean hasChanged(int row) {
+		// not so aggressive (it can has still concurrency problems)
+		// compare Updated, IsProcessed
+<span class="nc bnc" id="L3394" title="All 2 branches missed.">		if (getKeyID(row) &gt; 0) {</span>
+<span class="nc" id="L3395">			int colUpdated = findColumn(&quot;Updated&quot;);</span>
+<span class="nc" id="L3396">			int colProcessed = findColumn(&quot;Processed&quot;);</span>
+			
+<span class="nc bnc" id="L3398" title="All 2 branches missed.">			boolean hasUpdated = (colUpdated &gt;= 0);</span>
+<span class="nc bnc" id="L3399" title="All 2 branches missed.">			boolean hasProcessed = (colProcessed &gt;= 0);</span>
+			
+<span class="nc" id="L3401">			String columns = null;</span>
+<span class="nc bnc" id="L3402" title="All 4 branches missed.">			if (hasUpdated &amp;&amp; hasProcessed) {</span>
+<span class="nc" id="L3403">				columns = new String(&quot;Updated, Processed&quot;);</span>
+<span class="nc bnc" id="L3404" title="All 2 branches missed.">			} else if (hasUpdated) {</span>
+<span class="nc" id="L3405">				columns = new String(&quot;Updated&quot;);</span>
+<span class="nc bnc" id="L3406" title="All 2 branches missed.">			} else if (hasProcessed) {</span>
+<span class="nc" id="L3407">				columns = new String(&quot;Processed&quot;);</span>
+<span class="nc" id="L3408">			} else {</span>
+				// no columns updated or processed to compare
+<span class="nc" id="L3410">				return false;</span>
+			}
+						
+			// todo: temporary fix for carlos assumption that all windows have _id column
+<span class="nc bnc" id="L3414" title="All 2 branches missed.">			if ( findColumn(m_tableName + &quot;_ID&quot;) == -1)</span>
+<span class="nc" id="L3415">				return false;</span>
+
+<span class="nc" id="L3417">	    	Timestamp dbUpdated = null;</span>
+<span class="nc" id="L3418">	    	String dbProcessedS = null;</span>
+<span class="nc" id="L3419">	    	PreparedStatement pstmt = null;</span>
+<span class="nc" id="L3420">	    	ResultSet rs = null;</span>
+<span class="nc" id="L3421">	    	String sql = &quot;SELECT &quot; + columns + &quot; FROM &quot; + m_tableName + &quot; WHERE &quot; + m_tableName + &quot;_ID=?&quot;;</span>
+	    	try
+	    	{
+<span class="nc" id="L3424">	    		pstmt = DB.prepareStatement(sql, get_TrxName());</span>
+<span class="nc" id="L3425">	    		pstmt.setInt(1, getKeyID(row));</span>
+<span class="nc" id="L3426">	    		rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L3427" title="All 2 branches missed.">	    		if (rs.next()) {</span>
+<span class="nc" id="L3428">	    			int idx = 1;</span>
+<span class="nc bnc" id="L3429" title="All 2 branches missed.">	    			if (hasUpdated)</span>
+<span class="nc" id="L3430">	    				dbUpdated = rs.getTimestamp(idx++);</span>
+<span class="nc bnc" id="L3431" title="All 2 branches missed.">	    			if (hasProcessed)</span>
+<span class="nc" id="L3432">	    				dbProcessedS = rs.getString(idx++);</span>
+<span class="nc" id="L3433">	    		}</span>
+	    		else
+<span class="nc bnc" id="L3435" title="All 2 branches missed.">	    			if (log.isLoggable(Level.INFO)) log.info(&quot;No Value &quot; + sql);</span>
+<span class="nc" id="L3436">	    	}</span>
+<span class="nc" id="L3437">	    	catch (SQLException e)</span>
+	    	{
+<span class="nc" id="L3439">	    		throw new DBException(e, sql);</span>
+	    	}
+	    	finally
+	    	{
+<span class="nc" id="L3443">	    		DB.close(rs, pstmt);</span>
+<span class="nc" id="L3444">	    		rs = null; pstmt = null;</span>
+	    	}
+	    	
+<span class="nc bnc" id="L3447" title="All 2 branches missed.">	    	if (hasUpdated) {</span>
+<span class="nc" id="L3448">				Timestamp memUpdated = null;</span>
+<span class="nc" id="L3449">				memUpdated = (Timestamp) getOldValue(row, colUpdated);</span>
+<span class="nc bnc" id="L3450" title="All 2 branches missed.">				if (memUpdated == null)</span>
+<span class="nc" id="L3451">					memUpdated = (Timestamp) getValueAt(row, colUpdated);</span>
+
+<span class="nc bnc" id="L3453" title="All 4 branches missed.">				if (memUpdated != null &amp;&amp; ! memUpdated.equals(dbUpdated))</span>
+<span class="nc" id="L3454">					return true;</span>
+	    	}
+	    	
+<span class="nc bnc" id="L3457" title="All 2 branches missed.">	    	if (hasProcessed) {</span>
+<span class="nc" id="L3458">				Boolean memProcessed = null;</span>
+<span class="nc" id="L3459">				memProcessed = (Boolean) getOldValue(row, colProcessed);</span>
+<span class="nc bnc" id="L3460" title="All 2 branches missed.">				if (memProcessed == null){</span>
+<span class="nc bnc" id="L3461" title="All 2 branches missed.">					if(getValueAt(row, colProcessed) instanceof Boolean )</span>
+<span class="nc" id="L3462">					   memProcessed = (Boolean) getValueAt(row, colProcessed); </span>
+<span class="nc bnc" id="L3463" title="All 2 branches missed.">					else if (getValueAt(row, colProcessed) instanceof String )</span>
+<span class="nc" id="L3464">					   memProcessed = Boolean.valueOf((String)getValueAt(row, colProcessed)); </span>
+				}
+	    			
+<span class="nc" id="L3467">				Boolean dbProcessed = Boolean.TRUE;</span>
+<span class="nc bnc" id="L3468" title="All 2 branches missed.">				if (! dbProcessedS.equals(&quot;Y&quot;))</span>
+<span class="nc" id="L3469">					dbProcessed = Boolean.FALSE;</span>
+<span class="nc bnc" id="L3470" title="All 4 branches missed.">				if (memProcessed != null &amp;&amp; ! memProcessed.equals(dbProcessed))</span>
+<span class="nc" id="L3471">					return true;</span>
+	    	}
+		}
+
+		// @TODO: configurable aggressive - compare each column with the DB
+<span class="nc" id="L3476">		return false;</span>
+	}
+
+	/**
+	 * Verify if po has been changed at DB (by other user or process)
+	 * @param po
+	 * @return true if po has been changed at DB
+	 */
+	private boolean hasChanged(PO po) {
+<span class="nc bnc" id="L3485" title="All 2 branches missed.">		if (m_rowChanged &lt; 0)</span>
+<span class="nc" id="L3486">			return false;</span>
+		
+		// not so aggressive (it can has still concurrency problems)
+		// compare Updated, IsProcessed
+<span class="nc" id="L3490">		int colUpdated = findColumn(&quot;Updated&quot;);</span>
+<span class="nc" id="L3491">		int colProcessed = findColumn(&quot;Processed&quot;);</span>
+		
+<span class="nc bnc" id="L3493" title="All 2 branches missed.">		boolean hasUpdated = colUpdated &gt;= 0;</span>
+<span class="nc bnc" id="L3494" title="All 2 branches missed.">		boolean hasProcessed = colProcessed &gt;= 0;</span>
+
+<span class="nc bnc" id="L3496" title="All 4 branches missed.">		if (!hasUpdated &amp;&amp; !hasProcessed) {</span>
+			// no columns updated or processed to compare
+<span class="nc" id="L3498">			return false;</span>
+		}
+				
+<span class="nc" id="L3501">    	Timestamp dbUpdated = (Timestamp) po.get_Value(&quot;Updated&quot;);</span>
+<span class="nc bnc" id="L3502" title="All 2 branches missed.">    	if (hasUpdated) {</span>
+<span class="nc" id="L3503">			Timestamp memUpdated = null;</span>
+<span class="nc" id="L3504">			memUpdated = (Timestamp) getOldValue(m_rowChanged, colUpdated);</span>
+<span class="nc bnc" id="L3505" title="All 2 branches missed.">			if (memUpdated == null)</span>
+<span class="nc" id="L3506">				memUpdated = (Timestamp) getValueAt(m_rowChanged, colUpdated);</span>
+
+<span class="nc bnc" id="L3508" title="All 4 branches missed.">			if (memUpdated != null &amp;&amp; ! memUpdated.equals(dbUpdated))</span>
+<span class="nc" id="L3509">				return true;</span>
+    	}
+    	
+<span class="nc bnc" id="L3512" title="All 2 branches missed.">    	if (hasProcessed) {</span>
+<span class="nc" id="L3513">			Boolean memProcessed = null;</span>
+<span class="nc" id="L3514">			memProcessed = (Boolean) getOldValue(m_rowChanged, colProcessed);</span>
+<span class="nc bnc" id="L3515" title="All 2 branches missed.">			if (memProcessed == null){</span>
+<span class="nc bnc" id="L3516" title="All 2 branches missed.">				if(getValueAt(m_rowChanged, colProcessed) instanceof Boolean )</span>
+<span class="nc" id="L3517">				   memProcessed = (Boolean) getValueAt(m_rowChanged, colProcessed); </span>
+<span class="nc bnc" id="L3518" title="All 2 branches missed.">				else if (getValueAt(m_rowChanged, colProcessed) instanceof String )</span>
+<span class="nc" id="L3519">				   memProcessed = Boolean.valueOf((String)getValueAt(m_rowChanged, colProcessed)); </span>
+			}
+    			
+<span class="nc" id="L3522">			Boolean dbProcessed = po.get_ValueAsBoolean(&quot;Processed&quot;);</span>
+<span class="nc bnc" id="L3523" title="All 4 branches missed.">			if (memProcessed != null &amp;&amp; ! memProcessed.equals(dbProcessed))</span>
+<span class="nc" id="L3524">				return true;</span>
+    	}
+
+<span class="nc" id="L3527">		return false;</span>
+	}
+		
+	/**
+	 * get Parent Tab No
+	 * @return Parent Tab No
+	 */
+	private int getParentTabNo()
+	{
+<span class="nc" id="L3536">		int tabNo = m_TabNo;</span>
+<span class="nc" id="L3537">		int currentLevel = Env.getContextAsInt(m_ctx, m_WindowNo, tabNo, GridTab.CTX_TabLevel);</span>
+<span class="nc" id="L3538">		int parentLevel = currentLevel-1;</span>
+<span class="nc bnc" id="L3539" title="All 2 branches missed.">		if (parentLevel &lt; 0)</span>
+<span class="nc" id="L3540">			return tabNo;</span>
+<span class="nc bnc" id="L3541" title="All 2 branches missed.">			while (parentLevel != currentLevel)</span>
+			{
+<span class="nc" id="L3543">				tabNo--;				</span>
+<span class="nc" id="L3544">				currentLevel = Env.getContextAsInt(m_ctx, m_WindowNo, tabNo, GridTab.CTX_TabLevel);</span>
+<span class="nc bnc" id="L3545" title="All 2 branches missed.">				if (tabNo == 0)</span>
+<span class="nc" id="L3546">					break;</span>
+			}
+<span class="nc" id="L3548">		return tabNo;</span>
+	}
+
+	/**
+	 * get Tab No
+	 * @return Tab No
+	 */
+	public int getTabNo()
+	{
+<span class="nc" id="L3557">		return m_TabNo;</span>
+	}
+	
+	/**
+	 * @param value
+	 * @return true if value is not null and is empty string
+	 */
+	private boolean isNotNullAndIsEmpty (Object value) {
+<span class="nc bnc" id="L3565" title="All 2 branches missed.">		if (value != null </span>
+<span class="nc bnc" id="L3566" title="All 2 branches missed.">				&amp;&amp; (value instanceof String) </span>
+<span class="nc bnc" id="L3567" title="All 2 branches missed.">				&amp;&amp; value.toString().equals(&quot;&quot;)</span>
+			) 
+		{
+<span class="nc" id="L3570">			return true;</span>
+		} else {
+<span class="nc" id="L3572">			return false;</span>
+		}
+
+	}
+	
+	/**
+	 * @param oldValue
+	 * @param value
+	 * @return true if oldValue and value is different
+	 */
+	@SuppressWarnings(&quot;unchecked&quot;)
+	private boolean	isValueChanged(Object oldValue, Object value)
+	{
+<span class="nc bnc" id="L3585" title="All 2 branches missed.">		if ( isNotNullAndIsEmpty(oldValue) ) {</span>
+<span class="nc" id="L3586">			oldValue = null;</span>
+		}
+
+<span class="nc bnc" id="L3589" title="All 2 branches missed.">		if ( isNotNullAndIsEmpty(value) ) {</span>
+<span class="nc" id="L3590">			value = null;</span>
+		}
+
+<span class="nc bnc" id="L3593" title="All 4 branches missed.">		boolean bChanged = (oldValue == null &amp;&amp; value != null) </span>
+<span class="nc bnc" id="L3594" title="All 4 branches missed.">							|| (oldValue != null &amp;&amp; value == null);</span>
+
+<span class="nc bnc" id="L3596" title="All 4 branches missed.">		if (!bChanged &amp;&amp; oldValue != null)</span>
+		{
+<span class="nc bnc" id="L3598" title="All 2 branches missed.">			if (oldValue.getClass().equals(value.getClass()))</span>
+			{
+<span class="nc bnc" id="L3600" title="All 2 branches missed.">				if (oldValue instanceof Comparable&lt;?&gt;)</span>
+				{
+<span class="nc bnc" id="L3602" title="All 2 branches missed.">					bChanged = (((Comparable&lt;Object&gt;)oldValue).compareTo(value) != 0);</span>
+<span class="nc" id="L3603">				}</span>
+				else
+				{
+<span class="nc bnc" id="L3606" title="All 2 branches missed.">					bChanged = !oldValue.equals(value);</span>
+				}
+<span class="nc" id="L3608">			}</span>
+<span class="nc bnc" id="L3609" title="All 2 branches missed.">			else if(value != null)</span>
+			{
+<span class="nc bnc" id="L3611" title="All 2 branches missed.">				bChanged = !(oldValue.toString().equals(value.toString()));</span>
+			}
+		}
+<span class="nc" id="L3614">		return bChanged;	</span>
+	}
+
+	/**
+	 * Load PO for row
+	 * @param row row index
+	 * @return PO
+	 */
+	public PO getPO(int row) {
+<span class="nc bnc" id="L3623" title="All 2 branches missed.">		int Record_ID = m_inserting ? 0 : -1;</span>
+<span class="nc" id="L3624">		String uuid = null;</span>
+<span class="nc bnc" id="L3625" title="All 2 branches missed.">		if (!m_inserting)</span>
+<span class="nc bnc" id="L3626" title="All 4 branches missed.">			if (m_indexKeyColumn == -1 &amp;&amp; m_indexUUIDColumn &gt;= 0)</span>
+<span class="nc" id="L3627">				uuid = getKeyUUID(row);</span>
+			else
+<span class="nc" id="L3629">				Record_ID = getKeyID(row);</span>
+		
+<span class="nc" id="L3631">		MTable table = MTable.get (m_ctx, m_AD_Table_ID);				</span>
+<span class="nc" id="L3632">		PO po = null;</span>
+<span class="nc bnc" id="L3633" title="All 2 branches missed.">		if (Record_ID != -1)</span>
+		{
+<span class="nc bnc" id="L3635" title="All 6 branches missed.">			if (Record_ID == 0 &amp;&amp; !m_inserting &amp;&amp; MTable.isZeroIDTable(table.getTableName())) {</span>
+<span class="nc" id="L3636">				String uuidFromZeroID = table.getUUIDFromZeroID();</span>
+<span class="nc" id="L3637">				po = table.getPOByUU(uuidFromZeroID, m_trxName);</span>
+<span class="nc" id="L3638">			} else {</span>
+<span class="nc bnc" id="L3639" title="All 6 branches missed.">				if (m_indexKeyColumn == -1 &amp;&amp; m_indexUUIDColumn &gt;= 0 &amp;&amp; table.isUUIDKeyTable())</span>
+<span class="nc" id="L3640">					po = table.getPOByUU(PO.UUID_NEW_RECORD, m_trxName);</span>
+				else
+<span class="nc" id="L3642">					po = table.getPO(Record_ID, m_trxName);</span>
+			}
+<span class="nc" id="L3644">		}</span>
+<span class="nc bnc" id="L3645" title="All 2 branches missed.">		else if (!Util.isEmpty(uuid, true))</span>
+<span class="nc" id="L3646">			po = table.getPOByUU(uuid, m_trxName);</span>
+		else	//	Multi - Key
+<span class="nc" id="L3648">			po = table.getPO(getWhereClause(getDataAtRow(row)), m_trxName);</span>
+<span class="nc" id="L3649">		return po;</span>
+	}
+
+	/**
+	 * @param importing import mode
+	 * @param trxName optional trx name
+	 */
+	public void setImportingMode(boolean importing, String trxName) {
+<span class="nc" id="L3657">		m_importing = importing;</span>
+<span class="nc" id="L3658">		m_trxName = trxName;</span>
+<span class="nc" id="L3659">	}</span>
+
+	/**
+	 * @return true if it is in import mode
+	 */
+	public boolean isImporting() {
+<span class="nc" id="L3665">		return m_importing;</span>
+	}
+	
+	/**
+	 * @return trx name
+	 */
+	public String get_TrxName() {
+<span class="nc" id="L3672">		return m_trxName;</span>
+	}
+	
+	/**
+	 * reset the cache sort state ( sort column and sort ascending )
+	 */
+	public void resetCacheSortState() {
+<span class="nc" id="L3679">		m_lastSortColumnIndex = -1;</span>
+<span class="nc" id="L3680">		m_lastSortedAscending = true;</span>
+<span class="nc" id="L3681">	}</span>
+	
+	/**
+	 * Get index of sorted column
+	 * @return index of sorted column
+	 */
+	public int getSortColumnIndex() {
+<span class="nc" id="L3688">		return m_lastSortColumnIndex;</span>
+	}
+	
+	/**
+	 * Is sorted ascending. This is only meaningful if getSortColumnIndex() != -1
+	 * @return true if sorted ascending, false if sorted descending
+	 */
+	public boolean isSortedAscending() {
+<span class="nc" id="L3696">		return m_lastSortedAscending;</span>
+	}
+
+	/**
+	 * @return index of primary key column
+	 */
+	public int getKeyColumnIndex() {
+<span class="nc" id="L3703">		return m_indexKeyColumn;</span>
+	}
+
+	/**
+	 * Index of change row
+	 */
+	public int getRowChanged()
+	{
+<span class="nc" id="L3711">		return m_rowChanged;</span>
+	}
+	
+	/**
+	 * reset to empty
+	 */
+	public void reset() 
+	{
+<span class="nc bnc" id="L3719" title="All 2 branches missed.">		if (m_buffer != null)</span>
+<span class="nc" id="L3720">			m_buffer.clear();</span>
+<span class="nc" id="L3721">		m_changed = false;</span>
+<span class="nc" id="L3722">		m_rowChanged = -1;</span>
+<span class="nc bnc" id="L3723" title="All 2 branches missed.">		if (m_sort != null)</span>
+<span class="nc" id="L3724">			m_sort.clear();</span>
+<span class="nc bnc" id="L3725" title="All 2 branches missed.">		if (m_virtualBuffer != null)</span>
+<span class="nc" id="L3726">			m_virtualBuffer.clear();</span>
+<span class="nc" id="L3727">		m_rowCount = 0;</span>
+<span class="nc" id="L3728">		m_rowData = null;</span>
+<span class="nc" id="L3729">		m_oldValue = null;</span>
+<span class="nc" id="L3730">		m_inserting = false;</span>
+<span class="nc" id="L3731">		m_lastSortColumnIndex = -1;</span>
+<span class="nc" id="L3732">		m_lastSortedAscending = false;</span>
+<span class="nc" id="L3733">	}</span>
+
+	/**
+	 * set current row of gridtable container (gridtab). use in sort to create dse event with new current row (after sort) data
+	 * @param m_currentRow
+	 */
+	protected void setCurrentRow(int m_currentRow) {
+<span class="nc" id="L3740">		this.m_currentRow  = m_currentRow;</span>
+<span class="nc" id="L3741">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

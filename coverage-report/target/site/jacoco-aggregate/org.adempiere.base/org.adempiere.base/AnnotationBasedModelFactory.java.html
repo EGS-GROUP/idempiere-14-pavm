@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AnnotationBasedModelFactory.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.base</a> &gt; <span class="el_source">AnnotationBasedModelFactory.java</span></div><h1>AnnotationBasedModelFactory.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.base;
+
+import java.sql.ResultSet;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.BiConsumer;
+import org.compiere.model.PO;
+import org.compiere.util.CLogger;
+import org.osgi.framework.wiring.BundleWiring;
+import org.osgi.service.component.ComponentContext;
+import org.osgi.service.component.annotations.Activate;
+import org.osgi.service.component.annotations.Component;
+
+import io.github.classgraph.AnnotationInfo;
+import io.github.classgraph.ClassGraph;
+import io.github.classgraph.ClassGraph.ScanResultProcessor;
+import io.github.classgraph.ClassInfo;
+import io.github.classgraph.ClassInfoList;
+import io.github.classgraph.ScanResult;
+
+/**
+ * Translates table names into model classes having the {@link Model} annotation. Relies on
+ * {@link DefaultModelFactory} for everything else.&lt;br/&gt;
+ * This factory is designed to have a service rank higher than {@link DefaultModelFactory}, as class
+ * discovery using SPI is preferred over reflection-based methods.
+ * @author Saulo Gil
+ * @author Heng Sin
+ */
+@Component(immediate = true, service = IModelFactory.class, property = {&quot;service.ranking:Integer=0&quot;})
+<span class="nc" id="L42">public class AnnotationBasedModelFactory extends AnnotationBasedFactory implements IModelFactory</span>
+{
+	/**
+	 * Table name to class cache
+	 */
+<span class="nc" id="L47">	private Map&lt;String,Class&lt;?&gt;&gt; classCache = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L49">	private final static CLogger s_log = CLogger.getCLogger(AnnotationBasedModelFactory.class);</span>
+
+	/**
+	 * Packages to scan for Core X* classes
+	 */
+<span class="nc" id="L54">	private final static String[] CORE_PACKAGES = new String[] {</span>
+<span class="nc" id="L55">		&quot;org.compiere.model&quot;,  &quot;compiere.model&quot;, &quot;adempiere.model&quot;, &quot;org.adempiere.model&quot;,</span>
+<span class="nc" id="L56">		&quot;org.compiere.wf&quot;, &quot;org.compiere.print&quot;, &quot;org.compiere.impexp&quot;,</span>
+<span class="nc" id="L57">		&quot;org.eevolution.model&quot;</span>
+<span class="nc" id="L58">	};</span>
+	
+	/**
+	 * Extension point. Subclasses might override this method in order to have faster
+	 * model class scanning.
+	 * @return array of packages to be accepted during class scanning
+	 * @see ClassGraph#acceptPackagesNonRecursive(String...)
+	 */
+	protected String[] getPackages() {
+<span class="nc" id="L67">		return new String[]{};</span>
+	}
+
+	/**
+	 * Extension point. Provide a list of patterns to match against class names.
+	 * @return array of strings containing patterns
+	 * @see ClassGraph#acceptClasses(String...)
+	 */
+	protected String[] getAcceptClassesPatterns() {
+<span class="nc" id="L76">		String[] patterns = new String[] {&quot;*.X_*&quot;,&quot;*.M*&quot;};</span>
+<span class="nc" id="L77">		return patterns;</span>
+	}
+	
+	/**
+	 * Scan annotation upon activation of component
+	 * @param context
+	 * @throws ClassNotFoundException
+	 */
+	@Activate
+	public void activate(ComponentContext context) throws ClassNotFoundException {
+<span class="nc" id="L87">		long start = System.currentTimeMillis();</span>
+<span class="nc" id="L88">		ClassLoader classLoader = context.getBundleContext().getBundle().adapt(BundleWiring.class).getClassLoader();</span>
+
+<span class="nc" id="L90">		ClassGraph graph = new ClassGraph()</span>
+<span class="nc" id="L91">				.enableAnnotationInfo()</span>
+<span class="nc" id="L92">				.overrideClassLoaders(classLoader)</span>
+<span class="nc" id="L93">				.disableNestedJarScanning()</span>
+<span class="nc" id="L94">				.disableModuleScanning();</span>
+
+		// narrow search to a list of packages
+<span class="nc" id="L97">		String[] packages = null;</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">		if(isAtCore())</span>
+<span class="nc" id="L99">			packages = CORE_PACKAGES;</span>
+		else
+<span class="nc" id="L101">			packages = getPackages();</span>
+
+		//acceptClasses has no effect when acceptPackagesNonRecursive is use
+<span class="nc bnc" id="L104" title="All 4 branches missed.">		if (packages != null &amp;&amp; packages.length &gt; 0)</span>
+		{
+<span class="nc" id="L106">			graph.acceptPackagesNonRecursive(packages);</span>
+<span class="nc" id="L107">		}</span>
+		else
+		{
+			// narrow search to class names matching a set of patterns
+<span class="nc" id="L111">			String[] acceptClasses = getAcceptClassesPatterns();</span>
+<span class="nc bnc" id="L112" title="All 4 branches missed.">			if(acceptClasses!=null &amp;&amp; acceptClasses.length &gt; 0)</span>
+<span class="nc" id="L113">				graph.acceptClasses(acceptClasses);</span>
+		}
+
+<span class="nc" id="L116">		ScanResultProcessor scanResultProcessor = scanResult -&gt; {</span>
+			try {
+<span class="nc" id="L118">				processResults(classLoader, scanResult);</span>
+<span class="nc" id="L119">			} catch (Exception e) {</span>
+<span class="nc" id="L120">				s_log.severe(&quot;exception found while scanning classes&quot; + e.getMessage());</span>
+<span class="nc" id="L121">				signalScanCompletion(false);</span>
+<span class="nc" id="L122">				return;</span>
+			}
+<span class="nc" id="L124">			long end = System.currentTimeMillis();</span>
+<span class="nc" id="L125">			s_log.info(() -&gt; this.getClass().getSimpleName() + &quot; loaded &quot; + classCache.size() + &quot; classes in &quot;</span>
+<span class="nc" id="L126">						+ ((end-start)/1000f) + &quot;s&quot;);</span>
+<span class="nc" id="L127">			signalScanCompletion(true);</span>
+<span class="nc" id="L128">		};</span>
+
+<span class="nc" id="L130">		graph.scanAsync(getExecutorService(), getMaxThreads(), scanResultProcessor, getScanFailureHandler());</span>
+<span class="nc" id="L131">	}</span>
+
+	/**
+	 * Process annotation scan result
+	 * @param classLoader
+	 * @param scanResult
+	 */
+	private void processResults(ClassLoader classLoader, ScanResult scanResult ) {
+<span class="nc" id="L139">        BiConsumer&lt;String,ClassNotFoundException&gt; exceptionHandler = (className, exception) -&gt; </span>
+<span class="nc" id="L140">        	s_log.severe(String.format(&quot;exception while loading class %s - %s&quot;, className, exception.getMessage()));</span>
+
+<span class="nc bnc" id="L142" title="All 2 branches missed.">	    for (ClassInfo classInfo : scanResult.getClassesWithAnnotation(Model.class)) {</span>
+<span class="nc" id="L143">	        String className = classInfo.getName();</span>
+
+<span class="nc" id="L145">	        AnnotationInfo annotationInfo = classInfo.getAnnotationInfo(Model.class);</span>
+<span class="nc" id="L146">	        String tableName = (String) annotationInfo.getParameterValues().getValue(&quot;table&quot;);</span>
+
+<span class="nc" id="L148">	        Class&lt;?&gt; existing = classCache.get(tableName);</span>
+
+	        // try to detect M classes only if we found an X class
+<span class="nc bnc" id="L151" title="All 4 branches missed.">	        if(existing == null &amp;&amp; className.substring(className.lastIndexOf(&quot;.&quot;)).startsWith(&quot;.X&quot;)) {</span>
+<span class="nc" id="L152">		        ClassInfoList subclasses = classInfo.getSubclasses().directOnly();</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">		        while(!subclasses.isEmpty()) {</span>
+<span class="nc" id="L154">		        	className = subclasses.get(0).getName();</span>
+<span class="nc" id="L155">		        	subclasses = subclasses.get(0).getSubclasses().directOnly();</span>
+		        }
+	        }
+
+
+<span class="nc bnc" id="L160" title="All 2 branches missed.">	        if(existing==null) {</span>
+	        	try {
+<span class="nc" id="L162">					classCache.put(tableName, classLoader.loadClass(className));</span>
+<span class="nc" id="L163">				} catch (ClassNotFoundException e) {</span>
+<span class="nc" id="L164">					exceptionHandler.accept(className, e);</span>
+				}
+<span class="nc bnc" id="L166" title="All 2 branches missed.">	        } else if (className.substring(className.lastIndexOf(&quot;.&quot;)).startsWith(&quot;.M&quot;)) {</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">	        	if(existing.getSimpleName().startsWith(&quot;X_&quot;)) {</span>
+	        		try {
+<span class="nc" id="L169">						classCache.put(tableName, classLoader.loadClass(className));</span>
+<span class="nc" id="L170">					} catch (ClassNotFoundException e) {</span>
+<span class="nc" id="L171">						exceptionHandler.accept(className, e);</span>
+					}
+<span class="nc" id="L173">	        	} else {</span>
+<span class="nc" id="L174">	        		Class&lt;?&gt; found = null;</span>
+					try {
+<span class="nc" id="L176">						found = classLoader.loadClass(className);</span>
+<span class="nc" id="L177">					} catch (ClassNotFoundException e) {</span>
+<span class="nc" id="L178">						exceptionHandler.accept(className, e);</span>
+					}
+		        	// replace existing entries only if found class has a lower hierarchy
+<span class="nc bnc" id="L181" title="All 4 branches missed.">		        	if(found != null &amp;&amp; existing.isAssignableFrom(found))</span>
+						try {
+<span class="nc" id="L183">							classCache.put(tableName, classLoader.loadClass(className));</span>
+<span class="nc" id="L184">						} catch (ClassNotFoundException e) {</span>
+<span class="nc" id="L185">							exceptionHandler.accept(className, e);</span>
+						}
+	        	}
+	        }
+	    }
+<span class="nc" id="L190">	}</span>
+
+	/**
+	 * {@inheritDoc}
+	 */
+	@Override
+	public Class&lt;?&gt; getClass(String tableName) {
+<span class="nc" id="L197">		blockWhileScanning();</span>
+<span class="nc" id="L198">		return classCache.get(tableName);</span>
+	}
+
+	/**
+	 * Tells whether we're executing code from a subclass of {@link AnnotationBasedModelFactory}.
+	 * @return
+	 */
+	private boolean isAtCore() {
+<span class="nc" id="L206">		return getClass().equals(AnnotationBasedModelFactory.class);</span>
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	@Override
+	public PO getPO(String tableName, int Record_ID, String trxName) {
+<span class="nc" id="L214">		return AbstractModelFactory.getPO(getClass(tableName), tableName, Record_ID, trxName);</span>
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	@Override
+	public PO getPO(String tableName, String Record_UU, String trxName) {
+<span class="nc" id="L222">		return AbstractModelFactory.getPO(getClass(tableName), tableName, Record_UU, trxName);</span>
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	@Override
+	public PO getPO(String tableName, ResultSet rs, String trxName) {
+<span class="nc" id="L230">		return AbstractModelFactory.getPO(getClass(tableName), tableName, rs, trxName);</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

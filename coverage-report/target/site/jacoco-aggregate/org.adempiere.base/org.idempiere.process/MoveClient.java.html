@@ -1,0 +1,1701 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MoveClient.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.idempiere.process</a> &gt; <span class="el_source">MoveClient.java</span></div><h1>MoveClient.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz - globalqss                                           *
+ * Sponsored by FH                                                     *
+ **********************************************************************/
+
+package org.idempiere.process;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.db.CConnection;
+import org.compiere.model.MColumn;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MSequence;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.Query;
+import org.compiere.model.X_AD_Package_UUID_Map;
+import org.compiere.model.X_A_Asset_Addition;
+import org.compiere.model.X_A_Asset_Disposed;
+import org.compiere.model.X_A_Asset_Reval;
+import org.compiere.model.X_A_Asset_Transfer;
+import org.compiere.model.X_A_Depreciation_Entry;
+import org.compiere.model.X_A_Depreciation_Exp;
+import org.compiere.model.X_C_AllocationHdr;
+import org.compiere.model.X_C_AllocationLine;
+import org.compiere.model.X_C_BankStatement;
+import org.compiere.model.X_C_BankStatementLine;
+import org.compiere.model.X_C_Cash;
+import org.compiere.model.X_C_CashLine;
+import org.compiere.model.X_C_Invoice;
+import org.compiere.model.X_C_InvoiceLine;
+import org.compiere.model.X_C_Order;
+import org.compiere.model.X_C_OrderLine;
+import org.compiere.model.X_C_Payment;
+import org.compiere.model.X_C_ProjectIssue;
+import org.compiere.model.X_GL_Journal;
+import org.compiere.model.X_GL_JournalLine;
+import org.compiere.model.X_M_InOut;
+import org.compiere.model.X_M_InOutLine;
+import org.compiere.model.X_M_Inventory;
+import org.compiere.model.X_M_InventoryLine;
+import org.compiere.model.X_M_MatchInv;
+import org.compiere.model.X_M_MatchPO;
+import org.compiere.model.X_M_Movement;
+import org.compiere.model.X_M_MovementLine;
+import org.compiere.model.X_M_Production;
+import org.compiere.model.X_M_ProductionLine;
+import org.compiere.model.X_M_Requisition;
+import org.compiere.model.X_M_RequisitionLine;
+import org.compiere.process.ProcessInfoParameter;
+import org.compiere.process.SvrProcess;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+
+/**
+ * Process to move a client from a external database to current, or copy a template in current database
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L95">public class MoveClient extends SvrProcess {</span>
+
+	/** Define if the process is to copy a template client, or bring from external database */
+	private boolean p_IsCopyClient;
+	/** JDBC URL of the external database */
+	private String p_JDBC_URL;
+	/** optional to connect to the JDBC URL, if empty use the same as target */
+	private String p_UserName;
+	/** optional to connect to the JDBC URL, if empty use the same as target */
+	private String p_Password;
+	/** optional, comma separated list of tables to exclude */
+	private String p_TablesToExclude;
+	/** optional, comma separated list, if empty then all clients &gt;= 1000000 will be moved */
+	private String p_ClientsToInclude;
+	/** optional, comma separated list of clients to exclude */
+	private String p_ClientsToExclude;
+	/** to do just validation and not execute the process */
+	private boolean p_IsValidateOnly;
+	/** optional, comma separated list of tables that require to preserve IDs, * for all */
+	private String p_TablesToPreserveIDs;
+	/** New client name when copying from template */
+	private String p_ClientName;
+	/** New client value when copying from template */
+	private String p_ClientValue;
+	/** skip some validations to make the process faster */
+	private boolean p_IsSkipSomeValidations;
+	/* Fallback Records when FK not found */
+<span class="nc" id="L122">	private String p_FallbackRecordsWhenFKNotFound = null;</span>
+
+	final private static String insertConversionId = &quot;INSERT INTO T_MoveClient (AD_PInstance_ID, TableName, Source_Key, Target_Key, Identifier) VALUES (?, ?, ?, ?, ?)&quot;;
+	final private static String queryT_MoveClient = &quot;SELECT Target_Key FROM T_MoveClient WHERE AD_PInstance_ID=? AND TableName=? AND Source_Key=?&quot;;
+
+	private Connection externalConn;
+<span class="nc" id="L128">	private StringBuffer p_excludeTablesWhere = new StringBuffer();</span>
+<span class="nc" id="L129">	private StringBuffer p_whereClient = new StringBuffer();</span>
+<span class="nc" id="L130">	private List&lt;String&gt; p_errorList = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L131">	private List&lt;String&gt; p_missingFkList = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L132">	private List&lt;String&gt; p_tablesVerifiedList = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L133">	private List&lt;String&gt; p_tablesToPreserveIDsList = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L134">	private List&lt;String&gt; p_tablesToExcludeList = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L135">	private List&lt;String&gt; p_columnsVerifiedList = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L136">	private List&lt;String&gt; p_idSystemConversionList = new ArrayList&lt;String&gt;(); // can consume lot of memory but it helps for performance</span>
+<span class="nc" id="L137">	private List&lt;FallbackRecord&gt; p_fallbackRecords = null;</span>
+<span class="nc" id="L138">	private boolean p_isPreserveAll = false;</span>
+
+	/**
+	 * Prepare - e.g., get Parameters.
+	 */
+	@Override
+	protected void prepare() {
+		// defaults
+<span class="nc" id="L146">		p_IsValidateOnly = true;</span>
+		//
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		for (ProcessInfoParameter para : getParameter()) {</span>
+<span class="nc" id="L149">			String name = para.getParameterName();</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">			if (&quot;IsCopyClient&quot;.equals(name)) {</span>
+<span class="nc" id="L151">				p_IsCopyClient  = para.getParameterAsBoolean();</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">			} else if (&quot;JDBC_URL&quot;.equals(name)) {</span>
+<span class="nc" id="L153">				p_JDBC_URL  = para.getParameterAsString();</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">			} else if (&quot;UserName&quot;.equals(name)) {</span>
+<span class="nc" id="L155">				p_UserName = para.getParameterAsString();</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">			} else if (&quot;Password&quot;.equals(name)) {</span>
+<span class="nc" id="L157">				p_Password = para.getParameterAsString();</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">			} else if (&quot;ClientName&quot;.equals(name)) {</span>
+<span class="nc" id="L159">				p_ClientName = para.getParameterAsString();</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">			} else if (&quot;ClientValue&quot;.equals(name)) {</span>
+<span class="nc" id="L161">				p_ClientValue = para.getParameterAsString();</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">			} else if (&quot;TablesToExclude&quot;.equals(name)) {</span>
+<span class="nc" id="L163">				p_TablesToExclude = para.getParameterAsString();</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">			} else if (&quot;ClientsToInclude&quot;.equals(name)) {</span>
+<span class="nc" id="L165">				p_ClientsToInclude = para.getParameterAsString();</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">			} else if (&quot;ClientsToExclude&quot;.equals(name)) {</span>
+<span class="nc" id="L167">				p_ClientsToExclude = para.getParameterAsString();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">			} else if (&quot;IsValidateOnly&quot;.equals(name)) {</span>
+<span class="nc" id="L169">				p_IsValidateOnly = para.getParameterAsBoolean();</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">			} else if (&quot;IsPreserveIDs&quot;.equals(name)) {</span>
+<span class="nc" id="L171">				p_TablesToPreserveIDs = para.getParameterAsString();</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">			} else if (&quot;IsSkipSomeValidations&quot;.equals(name)) {</span>
+<span class="nc" id="L173">				p_IsSkipSomeValidations = para.getParameterAsBoolean();</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">			} else if (&quot;FallbackRecordsWhenFKNotFound&quot;.equals(name)) {</span>
+<span class="nc" id="L175">				p_FallbackRecordsWhenFKNotFound = para.getParameterAsString();</span>
+<span class="nc" id="L176">			} else {</span>
+<span class="nc" id="L177">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para);</span>
+			}
+		}
+<span class="nc" id="L180">	}</span>
+
+	/**
+	 *  Perform process.
+	 *  @return Message (variables are parsed)
+	 *  @throws Exception if not successful
+	 */
+	@Override
+	protected String doIt() throws Exception {
+		// validate parameters
+<span class="nc bnc" id="L190" title="All 2 branches missed.">		if (p_IsCopyClient) {</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">			if (! Util.isEmpty(p_ClientsToExclude, true))</span>
+<span class="nc" id="L192">				throw new AdempiereException(&quot;Tenants to exclude must be empty when copying from template&quot;);</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">			if (! Util.isEmpty(p_TablesToPreserveIDs, true))</span>
+<span class="nc" id="L194">				throw new AdempiereException(&quot;Preserve IDs must be empty when copying from template&quot;);</span>
+			try {
+<span class="nc" id="L196">				Integer.parseInt(p_ClientsToInclude);</span>
+<span class="nc" id="L197">			} catch (NumberFormatException e) {</span>
+<span class="nc" id="L198">				throw new AdempiereException(&quot;Error in parameter Tenants to Include, must be just one integer&quot;);</span>
+			}
+		} else {
+<span class="nc bnc" id="L201" title="All 2 branches missed.">			if (Util.isEmpty(p_JDBC_URL, true))</span>
+<span class="nc" id="L202">				throw new AdempiereException(&quot;Fill mandatory JDBC_URL&quot;);</span>
+		}
+<span class="nc bnc" id="L204" title="All 4 branches missed.">		if (! Util.isEmpty(p_ClientsToInclude, true) &amp;&amp; ! Util.isEmpty(p_ClientsToExclude, true))</span>
+<span class="nc" id="L205">			throw new AdempiereException(&quot;Tenants to exclude and include cannot be used at the same time&quot;);</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">		if (Util.isEmpty(p_UserName, true))</span>
+<span class="nc" id="L207">			p_UserName = CConnection.get().getDbUid();</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">		if (Util.isEmpty(p_Password, true))</span>
+<span class="nc" id="L209">			p_Password = CConnection.get().getDbPwd();</span>
+		
+		// Construct the where clauses
+<span class="nc" id="L212">		p_excludeTablesWhere.append(&quot;(UPPER(AD_Table.TableName) NOT LIKE 'T|_%' ESCAPE '|'&quot;); // exclude temporary tables</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">		if (p_IsCopyClient) {</span>
+			// exclude always AD_ChangeLog when copying from template client
+<span class="nc" id="L215">			p_excludeTablesWhere.append(&quot; AND UPPER(TableName) != 'AD_CHANGELOG'&quot;);</span>
+		}
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		if (Util.isEmpty(p_TablesToExclude, true)) {</span>
+<span class="nc" id="L218">			p_excludeTablesWhere.append(&quot;)&quot;);</span>
+<span class="nc" id="L219">		} else {</span>
+<span class="nc" id="L220">			p_excludeTablesWhere.append(&quot; AND UPPER(TableName) NOT IN (&quot;);</span>
+<span class="nc" id="L221">			boolean addComma = false;</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">			for (String tableName : p_TablesToExclude.split(&quot;,&quot;)) {</span>
+<span class="nc" id="L223">				p_tablesToExcludeList.add(tableName.toUpperCase());</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">				if (addComma) {</span>
+<span class="nc" id="L225">					p_excludeTablesWhere.append(&quot;,&quot;);</span>
+<span class="nc" id="L226">				} else {</span>
+<span class="nc" id="L227">					addComma = true;</span>
+				}
+<span class="nc" id="L229">				p_excludeTablesWhere.append(DB.TO_STRING(tableName.toUpperCase()));</span>
+			}
+<span class="nc" id="L231">			p_excludeTablesWhere.append(&quot;))&quot;);</span>
+		}
+
+<span class="nc" id="L234">		p_whereClient.append(&quot;AD_Client.AD_Client_ID NOT IN (0&quot;); // by default exclude System</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		if (! Util.isEmpty(p_ClientsToExclude, true)) {</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">			for (String clientStr : p_ClientsToExclude.split(&quot;,&quot;)) {</span>
+<span class="nc" id="L237">				p_whereClient.append(&quot;,&quot;);</span>
+				int clientInt;
+				try {
+<span class="nc" id="L240">					clientInt = Integer.parseInt(clientStr);</span>
+<span class="nc" id="L241">				} catch (NumberFormatException e) {</span>
+<span class="nc" id="L242">					throw new AdempiereException(&quot;Error in parameter Tenants to Exclude, must be a list of integer separated by commas, wrong format: &quot; + clientStr);</span>
+				}
+<span class="nc" id="L244">				p_whereClient.append(clientInt);</span>
+			}
+		}
+<span class="nc" id="L247">		p_whereClient.append(&quot;)&quot;);</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">		if (! Util.isEmpty(p_ClientsToInclude, true)) {</span>
+<span class="nc" id="L249">			p_whereClient.append(&quot; AND AD_Client.AD_Client_ID IN (&quot;);</span>
+<span class="nc" id="L250">			boolean addComma = false;</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">			for (String clientStr : p_ClientsToInclude.split(&quot;,&quot;)) {</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">				if (addComma) {</span>
+<span class="nc" id="L253">					p_whereClient.append(&quot;,&quot;);</span>
+<span class="nc" id="L254">				} else {</span>
+<span class="nc" id="L255">					addComma = true;</span>
+				}
+				int clientInt;
+				try {
+<span class="nc" id="L259">					clientInt = Integer.parseInt(clientStr);</span>
+<span class="nc" id="L260">				} catch (NumberFormatException e) {</span>
+<span class="nc" id="L261">					throw new AdempiereException(&quot;Error in parameter Tenants to Include, must be a list of integer separated by commas, wrong format: &quot; + clientStr);</span>
+				}
+<span class="nc" id="L263">				p_whereClient.append(clientInt);</span>
+			}
+<span class="nc" id="L265">			p_whereClient.append(&quot;)&quot;);</span>
+		}
+
+<span class="nc bnc" id="L268" title="All 2 branches missed.">		if (! Util.isEmpty(p_TablesToPreserveIDs, true)) {</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">			if  (&quot;*&quot;.equals(p_TablesToPreserveIDs)) {</span>
+<span class="nc" id="L270">				p_isPreserveAll = true;</span>
+<span class="nc" id="L271">			} else {</span>
+<span class="nc" id="L272">				p_isPreserveAll = false;</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">				for (String tableName : p_TablesToPreserveIDs.split(&quot;,&quot;)) {</span>
+<span class="nc" id="L274">					p_tablesToPreserveIDsList.add(tableName.toUpperCase());</span>
+				}
+			}
+		}
+
+<span class="nc" id="L279">		p_fallbackRecords = parseFallbackRecordsString(p_FallbackRecordsWhenFKNotFound);</span>
+
+		// Make the connection to external database - or to the same local when copying template
+<span class="nc" id="L282">		externalConn = null;</span>
+		try {
+			try {
+<span class="nc bnc" id="L285" title="All 2 branches missed.">				if (p_IsCopyClient) {</span>
+<span class="nc" id="L286">					externalConn = DB.getConnection();</span>
+<span class="nc" id="L287">				} else {</span>
+<span class="nc" id="L288">					externalConn = DB.getDatabase(p_JDBC_URL).getDriverConnection(p_JDBC_URL, p_UserName, p_Password);</span>
+				}
+<span class="nc" id="L290">			} catch (Exception e) {</span>
+<span class="nc" id="L291">				throw new AdempiereException(&quot;Could not get a connection to &quot; + p_JDBC_URL + &quot;,\nCause: &quot; + e.getLocalizedMessage());</span>
+			}
+
+<span class="nc" id="L294">			validate();</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">			if (! p_errorList.isEmpty()) {</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">				for (String err : p_errorList) {</span>
+<span class="nc" id="L297">					addLog(err);</span>
+				}
+<span class="nc bnc" id="L299" title="All 2 branches missed.">				if (! p_missingFkList.isEmpty()) {</span>
+<span class="nc" id="L300">					Collections.sort(p_missingFkList);</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">					for (String err : p_missingFkList) {</span>
+<span class="nc" id="L302">						addLog(&quot;Missing Key -&gt; &quot; + err);</span>
+					}
+				}
+<span class="nc" id="L305">				return &quot;@Error@&quot;;</span>
+			}
+
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			if (! p_IsValidateOnly) {</span>
+<span class="nc" id="L309">				moveClient();</span>
+			}
+<span class="nc" id="L311">		} finally {</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">			if (externalConn != null)</span>
+<span class="nc" id="L313">				externalConn.close();</span>
+		}
+
+<span class="nc" id="L316">		checkSequences();</span>
+
+<span class="nc" id="L318">		return &quot;@OK@&quot;;</span>
+	}
+
+	/**
+	 * Conduct data validations before proceeding with the actual inserts
+	 */
+	private void validate() {
+<span class="nc bnc" id="L325" title="All 2 branches missed.">		if (p_IsCopyClient) {</span>
+			// Validate that the newtenant value/name doesn't exist
+<span class="nc" id="L327">			int cntCN = DB.getSQLValueEx(get_TrxName(), &quot;SELECT COUNT(*) FROM AD_Client WHERE Name=?&quot;, p_ClientName);</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">			if (cntCN &gt; 0)</span>
+<span class="nc" id="L329">				throw new AdempiereUserError(&quot;Tenant with name &quot; + p_ClientName + &quot; already exists in database&quot;);</span>
+<span class="nc" id="L330">			int cntCV = DB.getSQLValueEx(get_TrxName(), &quot;SELECT COUNT(*) FROM AD_Client WHERE Value=?&quot;, p_ClientValue);</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">			if (cntCV &gt; 0)</span>
+<span class="nc" id="L332">				throw new AdempiereUserError(&quot;Tenant with search key &quot; + p_ClientValue + &quot; already exists in database&quot;);</span>
+<span class="nc" id="L333">			int cntCW = DB.getSQLValueEx(get_TrxName(), &quot;SELECT COUNT(*) FROM W_Store WHERE WebContext=?&quot;, p_ClientValue.toLowerCase());</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">			if (cntCW &gt; 0)</span>
+<span class="nc" id="L335">				throw new AdempiereUserError(&quot;WebStore with context &quot; + p_ClientValue.toLowerCase() + &quot; already exists in database&quot;);</span>
+		}
+		
+		// validate there are clients to move, and doesn't exist in target
+<span class="nc" id="L339">		StringBuilder sqlValidClientsSB = new StringBuilder()</span>
+<span class="nc" id="L340">				.append(&quot;SELECT AD_Client_ID, Value, Name, AD_Client_UU FROM AD_Client WHERE &quot;)</span>
+<span class="nc" id="L341">				.append(p_whereClient)</span>
+<span class="nc" id="L342">				.append(&quot; ORDER BY Value&quot;);</span>
+<span class="nc" id="L343">		StringBuilder sqlValidateLocalClient = new StringBuilder()</span>
+<span class="nc" id="L344">				.append(&quot;SELECT COUNT(*) FROM AD_Client WHERE Value=? OR Name=? OR AD_Client_UU=?&quot;);</span>
+<span class="nc bnc" id="L345" title="All 4 branches missed.">		if (p_isPreserveAll || p_tablesToPreserveIDsList.contains(&quot;AD_CLIENT&quot;)) {</span>
+<span class="nc" id="L346">			sqlValidateLocalClient.append(&quot; OR AD_Client_ID=?&quot;);</span>
+		}
+<span class="nc" id="L348">		String sqlValidClients = DB.getDatabase().convertStatement(sqlValidClientsSB.toString());</span>
+<span class="nc" id="L349">		PreparedStatement stmtVC = null;</span>
+<span class="nc" id="L350">		ResultSet rsVC = null;</span>
+<span class="nc" id="L351">		int noClients = 0;</span>
+		try {
+<span class="nc" id="L353">			stmtVC = externalConn.prepareStatement(sqlValidClients, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L354">			rsVC = stmtVC.executeQuery();</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">			while (rsVC.next()) {</span>
+<span class="nc" id="L356">				noClients++;</span>
+<span class="nc" id="L357">				int clientID = rsVC.getInt(1);</span>
+<span class="nc" id="L358">				String clientValue = rsVC.getString(2);</span>
+<span class="nc" id="L359">				String clientName = rsVC.getString(3);</span>
+<span class="nc" id="L360">				String clientUUID = rsVC.getString(4);</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">				if (! p_IsCopyClient) {</span>
+<span class="nc" id="L362">					int cnt = 0;</span>
+<span class="nc bnc" id="L363" title="All 4 branches missed.">					if (p_isPreserveAll || p_tablesToPreserveIDsList.contains(&quot;AD_CLIENT&quot;)) {</span>
+<span class="nc" id="L364">						cnt = DB.getSQLValueEx(get_TrxName(), sqlValidateLocalClient.toString(), clientValue, clientName, clientUUID, clientID);</span>
+<span class="nc" id="L365">					} else {</span>
+<span class="nc" id="L366">						cnt = DB.getSQLValueEx(get_TrxName(), sqlValidateLocalClient.toString(), clientValue, clientName, clientUUID);</span>
+					}
+<span class="nc bnc" id="L368" title="All 2 branches missed.">					if (cnt &gt; 0) {</span>
+<span class="nc" id="L369">						String msg = &quot;Tenant &quot; + clientValue + &quot;/&quot; + clientName + &quot; already exists.  UUID=&quot; + clientUUID;</span>
+<span class="nc bnc" id="L370" title="All 4 branches missed.">						if (p_isPreserveAll || p_tablesToPreserveIDsList.contains(&quot;AD_CLIENT&quot;)) {</span>
+<span class="nc" id="L371">							msg += &quot;, ID=&quot; + clientID;</span>
+						}
+<span class="nc" id="L373">						p_errorList.add(msg);</span>
+					}
+				}
+			}
+<span class="nc" id="L377">		} catch (SQLException e) {</span>
+<span class="nc" id="L378">			throw new AdempiereException(&quot;Could not execute external query: &quot; + sqlValidClients + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L380">			DB.close(rsVC, stmtVC);</span>
+		}
+<span class="nc bnc" id="L382" title="All 2 branches missed.">		if (noClients &lt;= 0) {</span>
+<span class="nc" id="L383">			throw new AdempiereUserError(&quot;No tenants to move&quot;);</span>
+		}
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		if (p_errorList.size() &gt; 0) {</span>
+<span class="nc" id="L386">			return;</span>
+		}
+
+		// validate if there are attachments using external storage provider - inform not implemented yet (blocking)
+<span class="nc bnc" id="L390" title="All 2 branches missed.">		if (! p_excludeTablesWhere.toString().contains(&quot;'AD_ATTACHMENT'&quot;)) {</span>
+<span class="nc" id="L391">			statusUpdate(&quot;Checking storage for attachments&quot;);</span>
+<span class="nc" id="L392">			StringBuilder sqlExternalAttachment = new StringBuilder()</span>
+<span class="nc" id="L393">					.append(&quot;SELECT COUNT(*) FROM AD_Attachment&quot;)</span>
+<span class="nc" id="L394">					.append(&quot; JOIN AD_Client ON (AD_Attachment.AD_Client_ID=AD_Client.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L395">					.append(&quot; JOIN AD_ClientInfo ON (AD_Attachment.AD_Client_ID=AD_ClientInfo.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L396">					.append(&quot; JOIN AD_Table ON (AD_Attachment.AD_Table_ID=AD_Table.AD_Table_ID)&quot;)</span>
+<span class="nc" id="L397">					.append(&quot; LEFT JOIN AD_StorageProvider ON (AD_StorageProvider.AD_StorageProvider_ID=AD_ClientInfo.AD_StorageProvider_ID)&quot;)</span>
+<span class="nc" id="L398">					.append(&quot; WHERE AD_StorageProvider.Method IS NOT NULL AND AD_StorageProvider.Method!='DB'&quot;)</span>
+<span class="nc" id="L399">					.append(&quot; AND &quot;).append(p_whereClient)</span>
+<span class="nc" id="L400">					.append(&quot; AND &quot;).append(p_excludeTablesWhere);</span>
+<span class="nc" id="L401">			int cntES = countInExternal(sqlExternalAttachment.toString());</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">			if (cntES &gt; 0) {</span>
+<span class="nc" id="L403">				throw new AdempiereUserError(&quot;There are attachments using external storage provider - that's not implemented yet&quot;);</span>
+			}
+		}
+
+		// validate if there are archives using external storage provider - inform not implemented yet (blocking)
+<span class="nc bnc" id="L408" title="All 2 branches missed.">		if (! p_excludeTablesWhere.toString().contains(&quot;'AD_ARCHIVE'&quot;)) {</span>
+<span class="nc" id="L409">			statusUpdate(&quot;Checking storage for archives&quot;);</span>
+<span class="nc" id="L410">			StringBuilder sqlExternalArchive = new StringBuilder()</span>
+<span class="nc" id="L411">					.append(&quot;SELECT COUNT(*) FROM AD_Archive&quot;)</span>
+<span class="nc" id="L412">					.append(&quot; JOIN AD_Client ON (AD_Archive.AD_Client_ID=AD_Client.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L413">					.append(&quot; JOIN AD_ClientInfo ON (AD_Archive.AD_Client_ID=AD_ClientInfo.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L414">					.append(&quot; JOIN AD_Table ON (AD_Archive.AD_Table_ID=AD_Table.AD_Table_ID)&quot;)</span>
+<span class="nc" id="L415">					.append(&quot; LEFT JOIN AD_StorageProvider ON (AD_StorageProvider.AD_StorageProvider_ID=AD_ClientInfo.StorageArchive_ID)&quot;)</span>
+<span class="nc" id="L416">					.append(&quot; WHERE AD_StorageProvider.Method IS NOT NULL AND AD_StorageProvider.Method!='DB'&quot;)</span>
+<span class="nc" id="L417">					.append(&quot; AND &quot;).append(p_whereClient)</span>
+<span class="nc" id="L418">					.append(&quot; AND &quot;).append(p_excludeTablesWhere);</span>
+<span class="nc" id="L419">			int cntEA = countInExternal(sqlExternalArchive.toString());</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">			if (cntEA &gt; 0) {</span>
+<span class="nc" id="L421">				throw new AdempiereUserError(&quot;There are archives using external storage provider - that's not implemented yet&quot;);</span>
+			}
+		}
+
+		// validate if there are images using external storage provider - inform not implemented yet (blocking)
+<span class="nc bnc" id="L426" title="All 2 branches missed.">		if (! p_excludeTablesWhere.toString().contains(&quot;'AD_IMAGE'&quot;)) {</span>
+<span class="nc" id="L427">			statusUpdate(&quot;Checking storage for images&quot;);</span>
+<span class="nc" id="L428">			StringBuilder sqlExternalImage = new StringBuilder()</span>
+<span class="nc" id="L429">					.append(&quot;SELECT COUNT(*) FROM AD_Image&quot;)</span>
+<span class="nc" id="L430">					.append(&quot; JOIN AD_Client ON (AD_Image.AD_Client_ID=AD_Client.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L431">					.append(&quot; JOIN AD_ClientInfo ON (AD_Image.AD_Client_ID=AD_ClientInfo.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L432">					.append(&quot; LEFT JOIN AD_StorageProvider ON (AD_StorageProvider.AD_StorageProvider_ID=AD_ClientInfo.StorageImage_ID)&quot;)</span>
+<span class="nc" id="L433">					.append(&quot; WHERE AD_StorageProvider.Method IS NOT NULL AND AD_StorageProvider.Method!='DB'&quot;)</span>
+<span class="nc" id="L434">					.append(&quot; AND &quot;).append(p_whereClient);</span>
+<span class="nc" id="L435">			int cntEI = countInExternal(sqlExternalImage.toString());</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">			if (cntEI &gt; 0) {</span>
+<span class="nc" id="L437">				throw new AdempiereUserError(&quot;There are images using external storage provider - that's not implemented yet&quot;);</span>
+			}
+		}
+
+		// create list of tables to ignore
+		// validate tables
+		// for each source table not excluded
+<span class="nc" id="L444">		StringBuilder sqlTablesSB = new StringBuilder()</span>
+<span class="nc" id="L445">				.append(&quot;SELECT TableName FROM AD_Table WHERE IsActive='Y' AND IsView='N' AND &quot;)</span>
+<span class="nc" id="L446">				.append(p_excludeTablesWhere)</span>
+<span class="nc" id="L447">				.append(&quot; ORDER BY TableName&quot;);</span>
+
+<span class="nc" id="L449">		String sqlRemoteTables = DB.getDatabase().convertStatement(sqlTablesSB.toString());</span>
+<span class="nc" id="L450">		PreparedStatement stmtRT = null;</span>
+<span class="nc" id="L451">		ResultSet rsRT = null;</span>
+		try {
+<span class="nc" id="L453">			stmtRT = externalConn.prepareStatement(sqlRemoteTables, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L454">			rsRT = stmtRT.executeQuery();</span>
+<span class="nc bnc" id="L455" title="All 2 branches missed.">			while (rsRT.next()) {</span>
+<span class="nc" id="L456">				String tableName = rsRT.getString(1);</span>
+<span class="nc" id="L457">				validateExternalTable(tableName);</span>
+			}
+<span class="nc" id="L459">		} catch (SQLException e) {</span>
+<span class="nc" id="L460">			throw new AdempiereException(&quot;Could not execute external query: &quot; + sqlRemoteTables + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L462">			DB.close(rsRT, stmtRT);</span>
+		}
+
+<span class="nc bnc" id="L465" title="All 2 branches missed.">		if (! p_IsSkipSomeValidations) {</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">			for (String tableName : p_tablesVerifiedList) {</span>
+<span class="nc" id="L467">				validateOrphan(tableName);</span>
+			}
+		}
+
+<span class="nc" id="L471">	}</span>
+
+	/**
+	 * Conduct validations on a specific table
+	 * @param tableName
+	 */
+	private void validateExternalTable(String tableName) {
+<span class="nc" id="L478">		statusUpdate(&quot;Validating table &quot; + tableName);</span>
+
+		// if table is not present in target
+		// inform blocking as it has client data
+<span class="nc" id="L482">		MTable localTable = MTable.get(getCtx(), tableName);</span>
+<span class="nc bnc" id="L483" title="All 4 branches missed.">		if (localTable == null || localTable.getAD_Table_ID() &lt;= 0) {</span>
+<span class="nc" id="L484">			p_errorList.add(&quot;Table &quot; + tableName + &quot; doesn't exist&quot;);</span>
+<span class="nc" id="L485">			return;</span>
+		}
+
+		// if table doesn't have client data (taking into account include/exclude) in the source DB
+		// add to the list of tables to ignore
+		// ignore and continue with next table
+<span class="nc bnc" id="L491" title="All 2 branches missed.">		if (! &quot;AD_Client&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L492">			StringBuilder sqlCountData = new StringBuilder()</span>
+<span class="nc" id="L493">					.append(&quot;SELECT COUNT(*) FROM &quot;).append(tableName);</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">			if (&quot;AD_Attribute_Value&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L495">				sqlCountData.append(&quot; JOIN AD_Attribute ON (AD_Attribute_Value.AD_Attribute_ID=AD_Attribute.AD_Attribute_ID)&quot;);</span>
+<span class="nc" id="L496">				sqlCountData.append(&quot; JOIN AD_Client ON (AD_Attribute.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+<span class="nc bnc" id="L497" title="All 2 branches missed.">			} else if (&quot;AD_PInstance_Log&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L498">				sqlCountData.append(&quot; JOIN AD_PInstance ON (AD_PInstance_Log.AD_PInstance_ID=AD_PInstance.AD_PInstance_ID)&quot;);</span>
+<span class="nc" id="L499">				sqlCountData.append(&quot; JOIN AD_Client ON (AD_PInstance.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+<span class="nc" id="L500">			} else {</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">				if (MColumn.get(getCtx(), tableName, &quot;AD_Client_ID&quot;) == null) {</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">					if (log.isLoggable(Level.WARNING)) log.warning(&quot;Ignoring &quot; + tableName + &quot;, doesn't have column AD_Client_ID&quot;);</span>
+<span class="nc" id="L503">					return;</span>
+				}
+<span class="nc" id="L505">				sqlCountData.append(&quot; JOIN AD_Client ON (&quot;).append(tableName).append(&quot;.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+			}
+<span class="nc" id="L507">			sqlCountData.append(&quot; WHERE &quot;).append(p_whereClient);</span>
+<span class="nc" id="L508">			int cntCD = countInExternal(sqlCountData.toString());</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">			if (cntCD == 0) {</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.info(&quot;Ignoring &quot; + tableName + &quot;, doesn't have tenant data&quot;);</span>
+<span class="nc" id="L511">				return;</span>
+			}
+<span class="nc bnc" id="L513" title="All 4 branches missed.">			if (cntCD &gt; 0 &amp;&amp; &quot;AD_Attribute_Value&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L514">				throw new AdempiereUserError(&quot;Table &quot; + tableName + &quot; has data, migration not supported&quot;);</span>
+			}
+		}
+
+		// for each source column
+<span class="nc" id="L519">		final String sqlRemoteColumnsST = &quot;&quot;</span>
+				+ &quot; SELECT AD_Column.ColumnName, AD_Column.AD_Reference_ID, AD_Column.FieldLength&quot;
+				+ &quot; FROM AD_Column&quot;
+				+ &quot; JOIN AD_Table ON (AD_Table.AD_Table_ID=AD_Column.AD_Table_ID)&quot;
+				+ &quot; WHERE UPPER(AD_Table.TableName)=? AND AD_Column.IsActive='Y' AND AD_Column.ColumnSQL IS NULL&quot;
+				+ &quot; ORDER BY AD_Column.ColumnName&quot;;
+<span class="nc" id="L525">		String sqlRemoteColumns = DB.getDatabase().convertStatement(sqlRemoteColumnsST);</span>
+<span class="nc" id="L526">		PreparedStatement stmtRC = null;</span>
+<span class="nc" id="L527">		ResultSet rsRC = null;</span>
+		try {
+<span class="nc" id="L529">			stmtRC = externalConn.prepareStatement(sqlRemoteColumns, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L530">			stmtRC.setString(1, tableName.toUpperCase());</span>
+<span class="nc" id="L531">			rsRC = stmtRC.executeQuery();</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">			while (rsRC.next()) {</span>
+<span class="nc" id="L533">				String columnName = rsRC.getString(1);</span>
+<span class="nc" id="L534">				int refID = rsRC.getInt(2);</span>
+<span class="nc" id="L535">				int length = rsRC.getInt(3);</span>
+<span class="nc bnc" id="L536" title="All 2 branches missed.">				if (columnName.equalsIgnoreCase(&quot;AD_Client_ID&quot;)) {</span>
+<span class="nc" id="L537">					p_columnsVerifiedList.add(tableName.toUpperCase() + &quot;.&quot; + columnName.toUpperCase());</span>
+<span class="nc" id="L538">				} else {</span>
+<span class="nc" id="L539">					validateExternalColumn(tableName, columnName, refID, length);</span>
+				}
+			}
+<span class="nc" id="L542">		} catch (SQLException e) {</span>
+<span class="nc" id="L543">			throw new AdempiereException(&quot;Could not execute external query: &quot; + sqlRemoteColumns + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L545">			DB.close(rsRC, stmtRC);</span>
+		}
+<span class="nc" id="L547">		p_tablesVerifiedList.add(tableName.toUpperCase());</span>
+<span class="nc" id="L548">	}</span>
+
+	/**
+	 * Conduct validations for a specific column
+	 * @param tableName
+	 * @param columnName
+	 * @param refID
+	 * @param length
+	 */
+	private void validateExternalColumn(String tableName, String columnName, int refID, int length) {
+		// inform if column is not present in target (blocking as it has client data)
+		// statusUpdate(&quot;Validating column &quot; + tableName + &quot;.&quot; + columnName);
+<span class="nc" id="L560">		MColumn localColumn = MColumn.get(getCtx(), tableName, columnName);</span>
+<span class="nc bnc" id="L561" title="All 4 branches missed.">		if (localColumn == null || localColumn.getAD_Column_ID() &lt;= 0) {</span>
+<span class="nc" id="L562">			p_errorList.add(&quot;Column &quot; + tableName + &quot;.&quot; + columnName +  &quot; doesn't exist&quot;);</span>
+<span class="nc" id="L563">			return;</span>
+		}
+
+		// inform if db type is different (blocking as it has client data)
+<span class="nc bnc" id="L567" title="All 2 branches missed.">		if (refID &lt;= MTable.MAX_OFFICIAL_ID</span>
+<span class="nc bnc" id="L568" title="All 2 branches missed.">				&amp;&amp; localColumn.getAD_Reference_ID() &lt;= MTable.MAX_OFFICIAL_ID </span>
+<span class="nc bnc" id="L569" title="All 2 branches missed.">				&amp;&amp; refID != localColumn.getAD_Reference_ID()) {</span>
+<span class="nc" id="L570">			p_errorList.add(&quot;Column &quot; + tableName + &quot;.&quot; + columnName +  &quot; has different type in dictionary, external: &quot; + refID + &quot;, local: &quot; + localColumn.getAD_Reference_ID());</span>
+		}
+
+		// inform blocking if external length is bigger than local
+<span class="nc bnc" id="L574" title="All 2 branches missed.">		if (length &gt; localColumn.getFieldLength()) {</span>
+<span class="nc" id="L575">			p_errorList.add(&quot;Column &quot; + tableName + &quot;.&quot; + columnName +  &quot; has different length in dictionary, external: &quot; + length + &quot;, local: &quot; + localColumn.getFieldLength());</span>
+		}
+
+<span class="nc" id="L578">		StringBuilder sqlDataNotNullInColumn = new StringBuilder()</span>
+<span class="nc" id="L579">				.append(&quot;SELECT COUNT(*) FROM &quot;).append(tableName)</span>
+<span class="nc" id="L580">				.append(&quot; JOIN AD_Client ON (&quot;).append(tableName).append(&quot;.AD_Client_ID=AD_Client.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L581">				.append(&quot; WHERE &quot;).append(tableName).append(&quot;.&quot;).append(columnName).append(&quot; IS NOT NULL&quot;)</span>
+<span class="nc" id="L582">				.append(&quot; AND &quot;).append(p_whereClient);</span>
+<span class="nc bnc" id="L583" title="All 4 branches missed.">		if (!p_IsSkipSomeValidations &amp;&amp; refID &gt; MTable.MAX_OFFICIAL_ID) {</span>
+<span class="nc" id="L584">			int cntET = countInExternal(sqlDataNotNullInColumn.toString());</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">			if (cntET &gt; 0) {</span>
+				// TODO: Implement support for non-official data types (must implement how to obtain the foreign table with MColumn.getReferenceTableName)
+<span class="nc" id="L587">				throw new AdempiereUserError(&quot;There is data in unsupported non-official data type for column &quot; + tableName + &quot;.&quot; + columnName);</span>
+			}
+		}
+
+		// when the column is a foreign key
+<span class="nc" id="L592">		String foreignTableName = localColumn.getReferenceTableName();</span>
+<span class="nc bnc" id="L593" title="All 2 branches missed.">		if (   foreignTableName != null </span>
+<span class="nc bnc" id="L594" title="All 6 branches missed.">			&amp;&amp; (DisplayType.isMultiID(refID) || foreignTableName.equalsIgnoreCase(tableName) || &quot;AD_PInstance_Log&quot;.equalsIgnoreCase(tableName))) {</span>
+<span class="nc" id="L595">			foreignTableName = &quot;&quot;;</span>
+		}
+<span class="nc bnc" id="L597" title="All 2 branches missed.">		if (! Util.isEmpty(foreignTableName)) {</span>
+			// verify all foreign keys pointing to a different client
+			// if pointing to a different client non-system
+			//   inform cross-client data corruption error
+			// if pointing to system
+			//   add to list of columns with system foreign keys
+			//   inform if the system record is not in target database using uuid - blocking
+<span class="nc" id="L604">			String uuidCol = PO.getUUIDColumnName(foreignTableName);</span>
+<span class="nc" id="L605">			StringBuilder sqlForeignClientSB = new StringBuilder();</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">			if (&quot;AD_Ref_List&quot;.equalsIgnoreCase(foreignTableName)) {</span>
+<span class="nc" id="L607">				sqlForeignClientSB</span>
+<span class="nc" id="L608">				.append(&quot;SELECT DISTINCT AD_Ref_List.AD_Client_ID, AD_Ref_List.AD_Ref_List_ID, AD_Ref_List.&quot;).append(uuidCol)</span>
+<span class="nc" id="L609">				.append(&quot; FROM &quot;).append(tableName);</span>
+<span class="nc bnc" id="L610" title="All 2 branches missed.">				if (! &quot;AD_Client&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L611">					sqlForeignClientSB.append(&quot; JOIN AD_Client ON (&quot;).append(tableName).append(&quot;.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+				}
+<span class="nc" id="L613">				sqlForeignClientSB.append(&quot; JOIN AD_Ref_List ON (&quot;).append(tableName).append(&quot;.&quot;).append(columnName).append(&quot;=AD_Ref_List.&quot;);</span>
+<span class="nc bnc" id="L614" title="All 2 branches missed.">				if (&quot;AD_Ref_List_ID&quot;.equalsIgnoreCase(columnName)) {</span>
+<span class="nc" id="L615">					sqlForeignClientSB.append(&quot;AD_Ref_List_ID&quot;);</span>
+<span class="nc" id="L616">				} else {</span>
+<span class="nc" id="L617">					sqlForeignClientSB.append(&quot;Value&quot;);</span>
+				}
+<span class="nc" id="L619">				sqlForeignClientSB.append(&quot; AND AD_Ref_List.AD_Reference_ID=&quot;)</span>
+<span class="nc" id="L620">				.append(&quot; (SELECT AD_Column.AD_Reference_Value_ID FROM AD_Column&quot;)</span>
+<span class="nc" id="L621">				.append(&quot; JOIN AD_Table ON (AD_Column.AD_Table_ID=AD_Table.AD_Table_ID)&quot;)</span>
+<span class="nc" id="L622">				.append(&quot; WHERE UPPER(AD_Table.TableName)='&quot;).append(tableName.toUpperCase())</span>
+<span class="nc" id="L623">				.append(&quot;' AND UPPER(AD_Column.ColumnName)='&quot;).append(columnName.toUpperCase()).append(&quot;'))&quot;)</span>
+<span class="nc" id="L624">				.append(&quot; WHERE &quot;).append(p_whereClient)</span>
+<span class="nc" id="L625">				.append(&quot; AND &quot;).append(foreignTableName).append(&quot;.AD_Client_ID!=&quot;).append(tableName).append(&quot;.AD_Client_ID&quot;)</span>
+<span class="nc" id="L626">				.append(&quot; ORDER BY 2&quot;);</span>
+<span class="nc" id="L627">			} else {</span>
+<span class="nc" id="L628">				sqlForeignClientSB.append(&quot;SELECT DISTINCT &quot;).append(foreignTableName).append(&quot;.AD_Client_ID, &quot;);</span>
+<span class="nc" id="L629">				MTable foreignTable = MTable.get(getCtx(), foreignTableName);</span>
+<span class="nc bnc" id="L630" title="All 2 branches missed.">				if (foreignTable.isUUIDKeyTable()) {</span>
+<span class="nc" id="L631">					sqlForeignClientSB.append(foreignTableName).append(&quot;.&quot;).append(uuidCol).append(&quot;, &quot;);</span>
+<span class="nc" id="L632">				} else {</span>
+<span class="nc" id="L633">					sqlForeignClientSB.append(foreignTableName).append(&quot;.&quot;).append(foreignTableName).append(&quot;_ID, &quot;);</span>
+				}
+<span class="nc" id="L635">				sqlForeignClientSB.append(foreignTableName).append(&quot;.&quot;).append(uuidCol).append(&quot; FROM &quot;).append(tableName);</span>
+<span class="nc bnc" id="L636" title="All 2 branches missed.">				if (! &quot;AD_Client&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L637">					sqlForeignClientSB.append(&quot; JOIN AD_Client ON (&quot;).append(tableName).append(&quot;.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+				}
+<span class="nc bnc" id="L639" title="All 2 branches missed.">				if (&quot;AD_Client&quot;.equalsIgnoreCase(foreignTableName)) { // fix issue with foreign AD_Client_ID like AD_Replication.Remote_Client_ID</span>
+<span class="nc" id="L640">					sqlForeignClientSB.append(&quot; JOIN &quot;).append(foreignTableName)</span>
+<span class="nc" id="L641">					.append(&quot; c ON (&quot;).append(tableName).append(&quot;.&quot;).append(columnName).append(&quot;=c.&quot;);</span>
+<span class="nc" id="L642">				} else {</span>
+<span class="nc" id="L643">					sqlForeignClientSB.append(&quot; JOIN &quot;).append(foreignTableName)</span>
+<span class="nc" id="L644">					.append(&quot; ON (&quot;).append(tableName).append(&quot;.&quot;).append(columnName).append(&quot;=&quot;).append(foreignTableName).append(&quot;.&quot;);</span>
+				}
+<span class="nc bnc" id="L646" title="All 4 branches missed.">				if (&quot;AD_Language&quot;.equalsIgnoreCase(foreignTableName) &amp;&amp; !columnName.equalsIgnoreCase(&quot;AD_Language_ID&quot;)) {</span>
+<span class="nc" id="L647">					sqlForeignClientSB.append(&quot;AD_Language&quot;);</span>
+<span class="nc bnc" id="L648" title="All 4 branches missed.">				} else if (&quot;AD_EntityType&quot;.equalsIgnoreCase(foreignTableName) &amp;&amp; !columnName.equalsIgnoreCase(&quot;AD_EntityType_ID&quot;)) {</span>
+<span class="nc" id="L649">					sqlForeignClientSB.append(&quot;EntityType&quot;);</span>
+<span class="nc" id="L650">				} else {</span>
+<span class="nc bnc" id="L651" title="All 2 branches missed.">					if (foreignTable.isUUIDKeyTable()) {</span>
+<span class="nc" id="L652">						sqlForeignClientSB.append(uuidCol);</span>
+<span class="nc" id="L653">					} else {</span>
+<span class="nc" id="L654">						sqlForeignClientSB.append(foreignTableName).append(&quot;_ID&quot;);</span>
+					}
+				}
+<span class="nc" id="L657">				sqlForeignClientSB.append(&quot;)&quot;)</span>
+<span class="nc" id="L658">				.append(&quot; WHERE &quot;).append(p_whereClient)</span>
+<span class="nc" id="L659">				.append(&quot; AND &quot;).append(foreignTableName).append(&quot;.AD_Client_ID!=&quot;).append(tableName).append(&quot;.AD_Client_ID&quot;)</span>
+<span class="nc" id="L660">				.append(&quot; ORDER BY 2&quot;);</span>
+			}
+<span class="nc" id="L662">			String sqlForeignClient = DB.getDatabase().convertStatement(sqlForeignClientSB.toString());</span>
+<span class="nc" id="L663">			PreparedStatement stmtFC = null;</span>
+<span class="nc" id="L664">			ResultSet rsFC = null;</span>
+			try {
+<span class="nc" id="L666">				stmtFC = externalConn.prepareStatement(sqlForeignClient, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L667">				rsFC = stmtFC.executeQuery();</span>
+<span class="nc bnc" id="L668" title="All 2 branches missed.">				while (rsFC.next()) {</span>
+<span class="nc" id="L669">					int clientID = rsFC.getInt(1);</span>
+<span class="nc" id="L670">					Object foreignID = rsFC.getObject(2);</span>
+<span class="nc" id="L671">					String foreignUU = rsFC.getString(3);</span>
+<span class="nc bnc" id="L672" title="All 2 branches missed.">					if (clientID &gt; 0) {</span>
+<span class="nc" id="L673">						p_errorList.add(&quot;Column &quot; + tableName + &quot;.&quot; + columnName +  &quot; has invalid cross-tenant reference to tenant &quot; + clientID + &quot; on ID=&quot; + foreignID);</span>
+<span class="nc" id="L674">						continue;</span>
+					}
+<span class="nc bnc" id="L676" title="All 2 branches missed.">					if (foreignID != null) {</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">						if (! p_idSystemConversionList.contains(foreignTableName.toUpperCase() + &quot;.&quot; + foreignID)) {</span>
+<span class="nc" id="L678">							Object localID = getFromUUID(foreignTableName, uuidCol, tableName, columnName, foreignUU, foreignID);</span>
+<span class="nc bnc" id="L679" title="All 6 branches missed.">							if (localID == null || (localID instanceof Number &amp;&amp; ((Number)localID).intValue() &lt; 0)) {</span>
+								continue;
+							}
+						}
+					}
+				}
+<span class="nc" id="L685">			} catch (SQLException e) {</span>
+<span class="nc" id="L686">				throw new AdempiereException(&quot;Could not execute external query: &quot; + sqlForeignClient + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+			} finally {
+<span class="nc" id="L688">				DB.close(rsFC, stmtFC);</span>
+			}
+		}
+		// add to the list of verified columns
+<span class="nc" id="L692">		p_columnsVerifiedList.add(tableName.toUpperCase() + &quot;.&quot; + columnName.toUpperCase());</span>
+<span class="nc" id="L693">	}</span>
+
+	/**
+	 * Check for orphan records in a table
+	 * @param tableName
+	 */
+	private void validateOrphan(String tableName) {
+<span class="nc" id="L700">		MTable table = MTable.get(getCtx(), tableName);</span>
+<span class="nc bnc" id="L701" title="All 2 branches missed.">		for (MColumn column : table.getColumns(false)) {</span>
+<span class="nc bnc" id="L702" title="All 4 branches missed.">			if (!column.isActive() || column.getColumnSQL() != null) {</span>
+<span class="nc" id="L703">				continue;</span>
+			}
+<span class="nc" id="L705">			String columnName = column.getColumnName();</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">			if (&quot;AD_Client_ID&quot;.equalsIgnoreCase(columnName)) {</span>
+<span class="nc" id="L707">				continue;</span>
+			}
+<span class="nc" id="L709">			String foreignTableName = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L710" title="All 4 branches missed.">			if (! Util.isEmpty(foreignTableName) &amp;&amp; ! &quot;AD_Ref_List&quot;.equalsIgnoreCase(foreignTableName)) {</span>
+<span class="nc" id="L711">				MTable tableFK = MTable.get(getCtx(), foreignTableName);</span>
+<span class="nc bnc" id="L712" title="All 4 branches missed.">				if (tableFK == null || MTable.ACCESSLEVEL_SystemOnly.equals(tableFK.getAccessLevel())) {</span>
+<span class="nc" id="L713">					continue;</span>
+				}
+				// validate if the table has columns where the constraint is not created in database, like most AD_Org_ID for example
+<span class="nc" id="L716">				StringBuilder sqlVerifFKSB = new StringBuilder()</span>
+<span class="nc" id="L717">						.append(&quot;SELECT COUNT(*) &quot;)</span>
+<span class="nc" id="L718">						.append(&quot;FROM   AD_Table t &quot;)</span>
+<span class="nc" id="L719">						.append(&quot;       JOIN AD_Column c &quot;)</span>
+<span class="nc" id="L720">						.append(&quot;         ON ( c.AD_Table_ID = t.AD_Table_ID ) &quot;)</span>
+<span class="nc" id="L721">						.append(&quot;WHERE  UPPER(t.TableName)=&quot;).append(DB.TO_STRING(tableName.toUpperCase()))</span>
+<span class="nc" id="L722">						.append(&quot;       AND UPPER(c.ColumnName)=&quot;).append(DB.TO_STRING(columnName.toUpperCase()))</span>
+<span class="nc" id="L723">						.append(&quot;       AND ( c.FKConstraintType IS NULL OR c.FKConstraintType=&quot;).append(DB.TO_STRING(MColumn.FKCONSTRAINTTYPE_DoNotCreate_Ignore)).append(&quot;)&quot;);</span>
+<span class="nc" id="L724">				int cntFk = countInExternal(sqlVerifFKSB.toString());</span>
+<span class="nc bnc" id="L725" title="All 2 branches missed.">				if (cntFk &gt; 0) {</span>
+<span class="nc" id="L726">					statusUpdate(&quot;Validating orphans for &quot; + table.getTableName() + &quot;.&quot; + columnName);</span>
+					// target database has not defined a foreign key, validate orphans
+<span class="nc" id="L728">					MTable foreignTable = MTable.get(getCtx(), foreignTableName);</span>
+<span class="nc" id="L729">					StringBuilder sqlExternalOrgOrphanSB = new StringBuilder(&quot;SELECT COUNT(*) FROM &quot;).append(tableName);</span>
+<span class="nc bnc" id="L730" title="All 2 branches missed.">					if (! &quot;AD_Client&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L731">						sqlExternalOrgOrphanSB.append(&quot; JOIN AD_Client ON (&quot;).append(tableName).append(&quot;.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+					}
+<span class="nc" id="L733">					sqlExternalOrgOrphanSB.append(&quot; WHERE &quot;).append(tableName).append(&quot;.&quot;).append(columnName);</span>
+<span class="nc bnc" id="L734" title="All 2 branches missed.">					if (foreignTable.isUUIDKeyTable())</span>
+<span class="nc" id="L735">						sqlExternalOrgOrphanSB.append(&quot; IS NOT NULL AND &quot;);</span>
+					else
+<span class="nc" id="L737">						sqlExternalOrgOrphanSB.append(&quot;&gt;0 AND &quot;);</span>
+<span class="nc" id="L738">					sqlExternalOrgOrphanSB.append(&quot; &quot;).append(tableName).append(&quot;.&quot;).append(columnName).append(&quot; NOT IN (&quot;)</span>
+<span class="nc" id="L739">						.append(&quot; SELECT &quot;).append(foreignTableName).append(&quot;.&quot;).append(foreignTable.getKeyColumns()[0])</span>
+<span class="nc" id="L740">						.append(&quot; FROM &quot;).append(foreignTableName)</span>
+<span class="nc" id="L741">						.append(&quot; WHERE &quot;).append(foreignTableName).append(&quot;.AD_Client_ID IN (0,&quot;).append(tableName).append(&quot;.AD_Client_ID)&quot;)</span>
+<span class="nc" id="L742">						.append(&quot;)&quot;)</span>
+<span class="nc" id="L743">						.append(&quot; AND &quot;).append(p_whereClient);</span>
+<span class="nc" id="L744">					int cntOr = countInExternal(sqlExternalOrgOrphanSB.toString());</span>
+<span class="nc bnc" id="L745" title="All 2 branches missed.">					if (cntOr &gt; 0) {</span>
+<span class="nc" id="L746">						p_errorList.add(&quot;Column &quot; + tableName + &quot;.&quot; + columnName +  &quot; has orphan records in table &quot; + foreignTableName);</span>
+					}
+				}
+			}
+		}
+
+<span class="nc" id="L752">	}</span>
+
+	/**
+	 * Execute a count query in the external connection and return the count
+	 * @param sql
+	 * @return
+	 */
+	private int countInExternal(String sql) {
+<span class="nc" id="L760">		int cnt = 0;</span>
+<span class="nc" id="L761">		sql = DB.getDatabase().convertStatement(sql);</span>
+<span class="nc" id="L762">		PreparedStatement stmt = null;</span>
+<span class="nc" id="L763">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L765">			stmt = externalConn.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L766">			rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L767" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L768">				cnt = rs.getInt(1);</span>
+<span class="nc" id="L769">		} catch (SQLException e) {</span>
+<span class="nc" id="L770">			throw new AdempiereException(&quot;Could not execute external query: &quot; + sql + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L772">			DB.close(rs, stmt);</span>
+		}
+<span class="nc" id="L774">		return cnt;</span>
+	}
+
+	/**
+	 * Convert the IDs in table T_MoveClient and then proceed to do the INSERTs of new records
+	 */
+	private void moveClient() {
+		// first do the validation, process cannot be executed if there are blocking situations
+		// validation construct the list of tables and columns to process
+		// NOTE that the whole process will be done in a single transaction, foreign keys will be validated on commit
+
+<span class="nc" id="L785">		int batchFlushSize = MSysConfig.getIntValue(MSysConfig.COPY_TENANT_BATCH_FLUSH_SIZE, 10000);</span>
+<span class="nc bnc" id="L786" title="All 2 branches missed.">		if (batchFlushSize &lt;= 0)</span>
+<span class="nc" id="L787">			batchFlushSize = 10000;</span>
+
+<span class="nc" id="L789">		List&lt;MTable&gt; tables = new Query(getCtx(), MTable.Table_Name,</span>
+<span class="nc" id="L790">				&quot;IsView='N' AND &quot; + p_excludeTablesWhere,</span>
+<span class="nc" id="L791">				get_TrxName())</span>
+<span class="nc" id="L792">				.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L793">				.setOrderBy(&quot;TableName&quot;)</span>
+<span class="nc" id="L794">				.list();</span>
+
+<span class="nc" id="L796">	  PreparedStatement stmtInsertConv = null;</span>
+<span class="nc bnc" id="L797" title="All 2 branches missed.">	  if (p_IsCopyClient)</span>
+<span class="nc" id="L798">		stmtInsertConv = DB.prepareStatement(insertConversionId, get_TrxName());</span>
+	  try {
+<span class="nc" id="L800">		int batchCount = 0;</span>
+		// create/verify the ID conversions
+<span class="nc bnc" id="L802" title="All 2 branches missed.">		for (MTable table : tables) {</span>
+<span class="nc" id="L803">			String tableName = table.getTableName();</span>
+<span class="nc bnc" id="L804" title="All 2 branches missed.">			if (! p_tablesVerifiedList.contains(tableName.toUpperCase())) {</span>
+<span class="nc" id="L805">				continue;</span>
+			}
+<span class="nc" id="L807">			String uuidCol = PO.getUUIDColumnName(tableName);</span>
+			String keyCol;
+<span class="nc bnc" id="L809" title="All 2 branches missed.">			if (table.isUUIDKeyTable())</span>
+<span class="nc" id="L810">				keyCol = uuidCol.toUpperCase();</span>
+			else
+<span class="nc" id="L812">				keyCol = tableName.toUpperCase() + &quot;_ID&quot;;</span>
+<span class="nc bnc" id="L813" title="All 2 branches missed.">			if (! p_columnsVerifiedList.contains(tableName.toUpperCase() + &quot;.&quot; + keyCol))</span>
+<span class="nc" id="L814">				continue;</span>
+			
+<span class="nc" id="L816">			statusUpdate(&quot;Converting IDs for table &quot; + tableName);</span>
+<span class="nc" id="L817">			StringBuilder selectVerifyIdSB = new StringBuilder()</span>
+<span class="nc" id="L818">					.append(&quot;SELECT &quot;).append(keyCol).append(&quot; FROM &quot;).append(tableName)</span>
+<span class="nc" id="L819">					.append(&quot; WHERE &quot;).append(keyCol).append(&quot;=?&quot;);</span>
+<span class="nc" id="L820">			StringBuilder selectGetIdsSB = new StringBuilder()</span>
+<span class="nc" id="L821">					.append(&quot;SELECT &quot;).append(tableName).append(&quot;.&quot;).append(keyCol).append(&quot; FROM &quot;).append(tableName);</span>
+<span class="nc bnc" id="L822" title="All 2 branches missed.">			if (! &quot;AD_Client&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L823">				selectGetIdsSB.append(&quot; JOIN AD_Client ON (&quot;).append(tableName).append(&quot;.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+			}
+<span class="nc" id="L825">			selectGetIdsSB.append(&quot; WHERE &quot;).append(p_whereClient)</span>
+<span class="nc" id="L826">			.append(&quot; ORDER BY &quot;).append(keyCol);</span>
+<span class="nc" id="L827">			String selectGetIds = DB.getDatabase().convertStatement(selectGetIdsSB.toString());</span>
+<span class="nc" id="L828">			PreparedStatement stmtGI = null;</span>
+<span class="nc" id="L829">			ResultSet rsGI = null;</span>
+			try {
+<span class="nc" id="L831">				stmtGI = externalConn.prepareStatement(selectGetIds, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L832">				rsGI = stmtGI.executeQuery();</span>
+<span class="nc bnc" id="L833" title="All 2 branches missed.">				while (rsGI.next()) {</span>
+<span class="nc" id="L834">					Object source_Key = rsGI.getObject(1);</span>
+<span class="nc" id="L835">					Object target_Key = null;</span>
+<span class="nc bnc" id="L836" title="All 4 branches missed.">					if (p_isPreserveAll || p_tablesToPreserveIDsList.contains(tableName.toUpperCase())) {</span>
+<span class="nc" id="L837">						List&lt;Object&gt; list = DB.getSQLValueObjectsEx(get_TrxName(), selectVerifyIdSB.toString(), source_Key);</span>
+<span class="nc" id="L838">						Object localID = null;</span>
+<span class="nc bnc" id="L839" title="All 4 branches missed.">						if (list != null &amp;&amp; list.size() == 1)</span>
+<span class="nc" id="L840">							localID = list.get(0);</span>
+<span class="nc bnc" id="L841" title="All 6 branches missed.">						if (localID == null || (localID instanceof Number &amp;&amp; ((Number)localID).intValue() &lt; 0)) {</span>
+<span class="nc" id="L842">							target_Key = source_Key;</span>
+<span class="nc" id="L843">						} else {</span>
+<span class="nc" id="L844">							throw new AdempiereException(&quot;In &quot; + tableName + &quot;.&quot; + tableName + &quot;_ID already exist the ID=&quot; + source_Key);</span>
+						}
+					} else {
+<span class="nc bnc" id="L847" title="All 2 branches missed.">						if (&quot;AD_ChangeLog&quot;.equalsIgnoreCase(tableName)) {</span>
+							// AD_ChangeLog_ID is not really a unique key - validate if it was already converted before
+<span class="nc" id="L849">							int clId = DB.getSQLValueEx(get_TrxName(),</span>
+<span class="nc" id="L850">									queryT_MoveClient,</span>
+<span class="nc" id="L851">									getAD_PInstance_ID(), &quot;AD_CHANGELOG&quot;, String.valueOf(source_Key));</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">							if (clId == -1) {</span>
+<span class="nc" id="L853">								target_Key = DB.getNextID(getAD_Client_ID(), tableName, get_TrxName());</span>
+							}
+<span class="nc" id="L855">						} else {</span>
+<span class="nc bnc" id="L856" title="All 2 branches missed.">							if (table.isUUIDKeyTable())</span>
+<span class="nc" id="L857">								target_Key = Util.generateUUIDv7().toString();</span>
+							else {
+<span class="nc bnc" id="L859" title="All 6 branches missed.">								if (source_Key instanceof Number &amp;&amp; ((Number)source_Key).intValue() &lt;= MTable.MAX_OFFICIAL_ID &amp;&amp; !p_IsCopyClient)</span>
+<span class="nc" id="L860">									target_Key = source_Key;</span>
+								else
+<span class="nc" id="L862">									target_Key = DB.getNextID(getAD_Client_ID(), tableName, get_TrxName());</span>
+							}
+						}
+					}
+<span class="nc bnc" id="L866" title="All 6 branches missed.">					if (target_Key != null || (target_Key instanceof Number &amp;&amp; ((Number)target_Key).intValue() &gt;= 0)) {</span>
+<span class="nc bnc" id="L867" title="All 2 branches missed.">						if (p_IsCopyClient) {</span>
+<span class="nc" id="L868">							stmtInsertConv.setInt(1, getAD_PInstance_ID());</span>
+<span class="nc" id="L869">							stmtInsertConv.setString(2, tableName.toUpperCase());</span>
+<span class="nc" id="L870">							stmtInsertConv.setString(3, source_Key.toString());</span>
+<span class="nc" id="L871">							stmtInsertConv.setString(4, target_Key.toString());</span>
+<span class="nc" id="L872">							stmtInsertConv.setString(5, null);</span>
+<span class="nc" id="L873">							stmtInsertConv.addBatch();</span>
+<span class="nc" id="L874">							stmtInsertConv.clearParameters();</span>
+<span class="nc" id="L875">							batchCount++;</span>
+<span class="nc bnc" id="L876" title="All 2 branches missed.">							if (batchCount % batchFlushSize == 0) {</span>
+<span class="nc bnc" id="L877" title="All 2 branches missed.">								if (log.isLoggable(Level.INFO)) log.info(&quot;Flushing batch of ID conversions with batch size &quot; + batchFlushSize);</span>
+<span class="nc" id="L878">								stmtInsertConv.executeBatch();</span>
+<span class="nc" id="L879">								batchCount = 0;</span>
+							}
+<span class="nc" id="L881">						} else {</span>
+<span class="nc" id="L882">							DB.executeUpdateEx(insertConversionId,</span>
+<span class="nc" id="L883">									new Object[] {getAD_PInstance_ID(), tableName.toUpperCase(), source_Key.toString(), target_Key.toString(), null},</span>
+<span class="nc" id="L884">									get_TrxName());</span>
+						}
+					}
+				}
+<span class="nc" id="L888">			} catch (SQLException e) {</span>
+<span class="nc" id="L889">				throw new AdempiereException(&quot;Could not execute query: &quot; + selectGetIds + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+			} finally {
+<span class="nc" id="L891">				DB.close(rsGI, stmtGI);</span>
+			}
+
+		}
+<span class="nc bnc" id="L895" title="All 4 branches missed.">		if (p_IsCopyClient &amp;&amp; batchCount &gt; 0) {</span>
+<span class="nc bnc" id="L896" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;Flushing last batch of ID conversions with batch size &quot; + batchCount);</span>
+<span class="nc" id="L897">			stmtInsertConv.executeBatch();</span>
+		}
+<span class="nc" id="L899">	  } catch (SQLException e) {</span>
+<span class="nc" id="L900">		throw new AdempiereException(&quot;Could not execute insert: &quot; + insertConversionId + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+	  } finally {
+<span class="nc" id="L902">		DB.close(null, stmtInsertConv);</span>
+	  }
+
+		try {
+<span class="nc" id="L906">			commitEx(); // commit the T_MoveClient table to analyze potential problems</span>
+<span class="nc" id="L907">		} catch (SQLException e1) {</span>
+<span class="nc" id="L908">			throw new AdempiereException(e1);</span>
+		} 
+
+<span class="nc" id="L911">		int newADClientID = -1;</span>
+<span class="nc" id="L912">		String oldClientValue = null;</span>
+<span class="nc bnc" id="L913" title="All 2 branches missed.">		if (p_IsCopyClient) {</span>
+			int clientInt;
+			try {
+<span class="nc" id="L916">				clientInt = Integer.parseInt(p_ClientsToInclude);</span>
+<span class="nc" id="L917">			} catch (NumberFormatException e) {</span>
+<span class="nc" id="L918">				throw new AdempiereException(&quot;Error in parameter Tenants to Include, must be just one integer&quot;);</span>
+			}
+<span class="nc" id="L920">			newADClientID = DB.getSQLValueEx(get_TrxName(),</span>
+<span class="nc" id="L921">					queryT_MoveClient,</span>
+<span class="nc" id="L922">					getAD_PInstance_ID(), &quot;AD_CLIENT&quot;, String.valueOf(clientInt));</span>
+<span class="nc" id="L923">			oldClientValue = DB.getSQLValueStringEx(get_TrxName(),</span>
+<span class="nc" id="L924">					&quot;SELECT Value FROM AD_Client WHERE AD_Client_ID=?&quot;, clientInt);</span>
+		}
+
+		// get the source data and insert into target converting the IDs
+<span class="nc bnc" id="L928" title="All 2 branches missed.">		for (MTable table : tables) {</span>
+<span class="nc" id="L929">			String tableName = table.getTableName();</span>
+<span class="nc bnc" id="L930" title="All 2 branches missed.">			if (! p_tablesVerifiedList.contains(tableName.toUpperCase())) {</span>
+<span class="nc" id="L931">				continue;</span>
+			}
+<span class="nc" id="L933">			statusUpdate(&quot;Inserting data for table &quot; + tableName);</span>
+<span class="nc" id="L934">			StringBuilder valuesSB = new StringBuilder();</span>
+<span class="nc" id="L935">			StringBuilder columnsSB = new StringBuilder();</span>
+<span class="nc" id="L936">			StringBuilder qColumnsSB = new StringBuilder();</span>
+<span class="nc" id="L937">			int ncols = 0;</span>
+<span class="nc" id="L938">			List&lt;MColumn&gt; columns = new ArrayList&lt;MColumn&gt;();</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">			for (MColumn column : table.getColumns(false)) {</span>
+<span class="nc bnc" id="L940" title="All 4 branches missed.">				if (!column.isActive() || column.getColumnSQL() != null) {</span>
+<span class="nc" id="L941">					continue;</span>
+				}
+<span class="nc" id="L943">				String columnName = column.getColumnName();</span>
+<span class="nc bnc" id="L944" title="All 2 branches missed.">				if (! p_columnsVerifiedList.contains(tableName.toUpperCase() + &quot;.&quot; + columnName.toUpperCase())) {</span>
+<span class="nc" id="L945">					continue;</span>
+				}
+<span class="nc bnc" id="L947" title="All 2 branches missed.">				if (columnsSB.length() &gt; 0) {</span>
+<span class="nc" id="L948">					qColumnsSB.append(&quot;,&quot;);</span>
+<span class="nc" id="L949">					columnsSB.append(&quot;,&quot;);</span>
+<span class="nc" id="L950">					valuesSB.append(&quot;,&quot;);</span>
+				}
+<span class="nc" id="L952">				String quoteColumnName = DB.getDatabase().quoteColumnName(columnName);</span>
+<span class="nc" id="L953">				qColumnsSB.append(tableName).append(&quot;.&quot;).append(quoteColumnName);</span>
+<span class="nc" id="L954">				columnsSB.append(quoteColumnName);</span>
+<span class="nc" id="L955">				valuesSB.append(&quot;?&quot;);</span>
+<span class="nc" id="L956">				columns.add(column);</span>
+<span class="nc" id="L957">				ncols++;</span>
+			}
+<span class="nc" id="L959">			StringBuilder insertSB = new StringBuilder()</span>
+<span class="nc" id="L960">					.append(&quot;INSERT INTO &quot;).append(tableName).append(&quot;(&quot;).append(columnsSB).append(&quot;) VALUES (&quot;).append(valuesSB).append(&quot;)&quot;);</span>
+<span class="nc" id="L961">			StringBuilder selectGetDataSB = new StringBuilder()</span>
+<span class="nc" id="L962">					.append(&quot;SELECT &quot;).append(qColumnsSB)</span>
+<span class="nc" id="L963">					.append(&quot; FROM &quot;).append(tableName);</span>
+<span class="nc bnc" id="L964" title="All 2 branches missed.">			if (&quot;AD_PInstance_Log&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L965">				selectGetDataSB.append(&quot; JOIN AD_PInstance ON (AD_PInstance_Log.AD_PInstance_ID=AD_PInstance.AD_PInstance_ID)&quot;);</span>
+<span class="nc" id="L966">				selectGetDataSB.append(&quot; JOIN AD_Client ON (AD_PInstance.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+<span class="nc bnc" id="L967" title="All 2 branches missed.">			} else if (! &quot;AD_Client&quot;.equalsIgnoreCase(tableName)) {</span>
+<span class="nc" id="L968">				selectGetDataSB.append(&quot; JOIN AD_Client ON (&quot;).append(tableName).append(&quot;.AD_Client_ID=AD_Client.AD_Client_ID)&quot;);</span>
+			}
+<span class="nc" id="L970">			selectGetDataSB.append(&quot; WHERE &quot;).append(p_whereClient);</span>
+<span class="nc" id="L971">			String selectGetData = DB.getDatabase().convertStatement(selectGetDataSB.toString());</span>
+<span class="nc" id="L972">			PreparedStatement stmtGD = null;</span>
+<span class="nc" id="L973">			ResultSet rsGD = null;</span>
+<span class="nc" id="L974">			Object[] parameters = new Object[ncols];</span>
+<span class="nc" id="L975">			PreparedStatement stmtIns = null;</span>
+			try {
+<span class="nc" id="L977">				stmtGD = externalConn.prepareStatement(selectGetData, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc bnc" id="L978" title="All 2 branches missed.">				if (p_IsCopyClient)</span>
+<span class="nc" id="L979">					stmtIns = DB.prepareStatement(insertSB.toString(), get_TrxName());</span>
+<span class="nc" id="L980">				rsGD = stmtGD.executeQuery();</span>
+<span class="nc" id="L981">				int batchCount = 0;</span>
+<span class="nc bnc" id="L982" title="All 2 branches missed.">				while (rsGD.next()) {</span>
+<span class="nc" id="L983">					boolean insertRecord = true;</span>
+<span class="nc bnc" id="L984" title="All 2 branches missed.">					for (int i = 0; i &lt; ncols; i++) {</span>
+<span class="nc" id="L985">						MColumn column = columns.get(i);</span>
+<span class="nc" id="L986">						String columnName = column.getColumnName();</span>
+
+						// Obtain which is the table to convert the ID (the foreign table)
+<span class="nc" id="L989">						String convertTable = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L990" title="All 2 branches missed.">						if ((tableName + &quot;_ID&quot;).equalsIgnoreCase(columnName)) {</span>
+<span class="nc" id="L991">							convertTable = tableName;</span>
+<span class="nc bnc" id="L992" title="All 2 branches missed.">						} else if (DisplayType.isMultiID(column.getAD_Reference_ID())) {</span>
+<span class="nc" id="L993">							convertTable = column.getMultiReferenceTableName();</span>
+<span class="nc bnc" id="L994" title="All 2 branches missed.">						} else if (convertTable != null</span>
+<span class="nc bnc" id="L995" title="All 2 branches missed.">								&amp;&amp; (&quot;AD_Ref_List&quot;.equalsIgnoreCase(convertTable)</span>
+<span class="nc bnc" id="L996" title="All 2 branches missed.">										|| &quot;AD_Language&quot;.equalsIgnoreCase(columnName)</span>
+<span class="nc bnc" id="L997" title="All 2 branches missed.">										|| &quot;EntityType&quot;.equalsIgnoreCase(columnName))) {</span>
+<span class="nc" id="L998">							convertTable = &quot;&quot;;</span>
+<span class="nc bnc" id="L999" title="All 6 branches missed.">						} else if ((&quot;Record_ID&quot;.equalsIgnoreCase(columnName) || &quot;Record_UU&quot;.equalsIgnoreCase(columnName)) &amp;&amp; table.columnExistsInDB(&quot;AD_Table_ID&quot;)) {</span>
+							// Special case for Record_ID or Record_UU
+<span class="nc" id="L1001">							int tableId = rsGD.getInt(&quot;AD_Table_ID&quot;);</span>
+<span class="nc bnc" id="L1002" title="All 2 branches missed.">							if (tableId &gt; 0) {</span>
+<span class="nc" id="L1003">								convertTable = getExternalTableName(tableId);</span>
+<span class="nc" id="L1004">							} else {</span>
+<span class="nc" id="L1005">								convertTable = &quot;&quot;;</span>
+							}
+<span class="nc bnc" id="L1007" title="All 4 branches missed.">						} else if (&quot;Line_ID&quot;.equalsIgnoreCase(columnName) &amp;&amp; &quot;Fact_Acct&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for Fact_Acct.Line_ID
+<span class="nc" id="L1009">							int tableId = rsGD.getInt(&quot;AD_Table_ID&quot;);</span>
+<span class="nc bnc" id="L1010" title="All 2 branches missed.">							if (tableId &gt; 0) {</span>
+<span class="nc" id="L1011">								convertTable = getAcctDetailTableName(tableId);</span>
+<span class="nc" id="L1012">							} else {</span>
+<span class="nc" id="L1013">								convertTable = &quot;&quot;;</span>
+							}
+<span class="nc bnc" id="L1015" title="All 4 branches missed.">						} else if (&quot;Parent_ID&quot;.equalsIgnoreCase(columnName) &amp;&amp; &quot;AD_Tree_Favorite_Node&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_Tree_Favorite_Node.Parent_ID
+<span class="nc" id="L1017">							convertTable = &quot;AD_Tree_Favorite_Node&quot;;</span>
+<span class="nc bnc" id="L1018" title="All 4 branches missed.">						} else if (&quot;Node_ID&quot;.equalsIgnoreCase(columnName) &amp;&amp; &quot;AD_TreeBar&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeBar.Node_ID
+<span class="nc" id="L1020">							convertTable = &quot;AD_Menu&quot;;</span>
+<span class="nc bnc" id="L1021" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1022" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNodeMM&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNodeMM.Node/Parent_ID
+<span class="nc" id="L1024">							convertTable = &quot;AD_Menu&quot;;</span>
+<span class="nc bnc" id="L1025" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNodeBP&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNodeBP.Node/Parent_ID
+<span class="nc" id="L1028">							convertTable = &quot;C_BPartner&quot;;</span>
+<span class="nc bnc" id="L1029" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNodeCMC&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNodeCMC.Node/Parent_ID
+<span class="nc" id="L1032">							convertTable = &quot;CM_Container&quot;;</span>
+<span class="nc bnc" id="L1033" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNodeCMM&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNodeCMM.Node/Parent_ID
+<span class="nc" id="L1036">							convertTable = &quot;CM_Media&quot;;</span>
+<span class="nc bnc" id="L1037" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1038" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNodeCMS&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNodeCMS.Node/Parent_ID
+<span class="nc" id="L1040">							convertTable = &quot;CM_CStage&quot;;</span>
+<span class="nc bnc" id="L1041" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1042" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNodeCMT&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNodeCMT.Node/Parent_ID
+<span class="nc" id="L1044">							convertTable = &quot;CM_Template&quot;;</span>
+<span class="nc bnc" id="L1045" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1046" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNodePR&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNodePR.Node/Parent_ID
+<span class="nc" id="L1048">							convertTable = &quot;M_Product&quot;;</span>
+<span class="nc bnc" id="L1049" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName)) </span>
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">								&amp;&amp; (       &quot;AD_TreeNodeU1&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1051" title="All 2 branches missed.">										|| &quot;AD_TreeNodeU2&quot;.equalsIgnoreCase(tableName) </span>
+<span class="nc bnc" id="L1052" title="All 2 branches missed.">										|| &quot;AD_TreeNodeU3&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1053" title="All 2 branches missed.">										|| &quot;AD_TreeNodeU4&quot;.equalsIgnoreCase(tableName))) {</span>
+							// Special case for AD_TreeNodeU*.Node/Parent_ID
+<span class="nc" id="L1055">							convertTable = &quot;C_ElementValue&quot;;</span>
+<span class="nc bnc" id="L1056" title="All 4 branches missed.">						} else if ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">								&amp;&amp; &quot;AD_TreeNode&quot;.equalsIgnoreCase(tableName)) {</span>
+							// Special case for AD_TreeNode.Node/Parent_ID - depends on AD_Tree -&gt; TreeType and AD_Table_ID
+<span class="nc" id="L1059">							int treeId = rsGD.getInt(&quot;AD_Tree_ID&quot;);</span>
+<span class="nc" id="L1060">							convertTable = getExternalTableFromTree(treeId);</span>
+<span class="nc bnc" id="L1061" title="All 4 branches missed.">						} else if (&quot;AD_Preference&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Value&quot;.equalsIgnoreCase(columnName)) {</span>
+							// Special case for AD_Preference.Value
+<span class="nc" id="L1063">							String att = rsGD.getString(&quot;Attribute&quot;);</span>
+<span class="nc bnc" id="L1064" title="All 2 branches missed.">							if (att.toUpperCase().endsWith(&quot;_ID&quot;)) {</span>
+<span class="nc" id="L1065">								convertTable = att.substring(0, att.length()-3);</span>
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">								if (&quot;C_DocTypeTarget&quot;.equals(convertTable)) {</span>
+<span class="nc" id="L1067">									convertTable = &quot;C_DocType&quot;;</span>
+<span class="nc" id="L1068">								} else {</span>
+									// validate that AD_Preference points to a valid table, ignore otherwise
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">									if (MTable.getTable_ID(convertTable, get_TrxName()) &lt;= 0) {</span>
+<span class="nc" id="L1071">										convertTable = &quot;&quot;;</span>
+									}
+								}
+<span class="nc" id="L1074">							} else {</span>
+<span class="nc" id="L1075">								convertTable = &quot;&quot;;</span>
+							}
+						}
+
+						// Fill the target value
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">						if (! Util.isEmpty(convertTable)) {</span>
+							// Foreign - potential ID conversion
+<span class="nc" id="L1082">							Object key = rsGD.getObject(i + 1);</span>
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">							if (rsGD.wasNull()) {</span>
+<span class="nc" id="L1084">								parameters[i] = null;</span>
+<span class="nc" id="L1085">							} else {</span>
+<span class="nc bnc" id="L1086" title="All 2 branches missed.">								if (   ! (key instanceof Number </span>
+<span class="nc bnc" id="L1087" title="All 2 branches missed.">										  &amp;&amp; ((Number)key).intValue() == 0 </span>
+<span class="nc bnc" id="L1088" title="All 4 branches missed.">										      &amp;&amp; (   &quot;Parent_ID&quot;.equalsIgnoreCase(columnName) || &quot;Node_ID&quot;.equalsIgnoreCase(columnName)       // Parent_ID/Node_ID=0 is valid</span>
+<span class="nc bnc" id="L1089" title="All 4 branches missed.">										    	  || (&quot;Record_ID&quot;.equalsIgnoreCase(columnName) &amp;&amp; &quot;AD_Archive&quot;.equalsIgnoreCase(tableName)))) // AD_Archive.Record_ID=0 is valid</span>
+<span class="nc bnc" id="L1090" title="All 8 branches missed.">									&amp;&amp; (key instanceof String || (key instanceof Number &amp;&amp; ((Number)key).intValue() &gt;= MTable.MAX_OFFICIAL_ID) || p_IsCopyClient)) {</span>
+<span class="nc" id="L1091">									Object convertedId = null;</span>
+
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">									if (DisplayType.isMultiID(column.getAD_Reference_ID())) {</span>
+										// multiple IDs or UUIDs separated by commas
+<span class="nc" id="L1095">										String[] multiKeys = ((String)key).split(&quot;,&quot;);</span>
+<span class="nc bnc" id="L1096" title="All 2 branches missed.">										for (String multiKey : multiKeys) {</span>
+											Object keyToConvert;
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">											if (Util.isUUID(multiKey))</span>
+<span class="nc" id="L1099">												keyToConvert = multiKey;</span>
+											else
+<span class="nc" id="L1101">												keyToConvert = Integer.valueOf(multiKey);</span>
+<span class="nc" id="L1102">											Object multiConvertedId = getConvertedId(convertTable, keyToConvert, tableName, columnName);</span>
+<span class="nc bnc" id="L1103" title="All 6 branches missed.">											if (multiConvertedId == null || (multiConvertedId instanceof Number &amp;&amp; ((Number)multiConvertedId).intValue() &lt; 0)) {</span>
+<span class="nc bnc" id="L1104" title="All 2 branches missed.">												if (canIgnoreNullConvertedId(table, tableName, columnName, convertTable)) {</span>
+<span class="nc" id="L1105">													insertRecord = false;</span>
+<span class="nc" id="L1106">													break;</span>
+												} else {
+<span class="nc" id="L1108">													throw new AdempiereException(&quot;Found orphan record in &quot; + tableName + &quot;.&quot; + columnName + &quot;: &quot; + multiKey + &quot; related to table &quot; + convertTable);</span>
+												}
+											}
+<span class="nc bnc" id="L1111" title="All 2 branches missed.">											if (convertedId == null) {</span>
+<span class="nc" id="L1112">												convertedId = &quot;&quot;;</span>
+<span class="nc" id="L1113">											} else {</span>
+<span class="nc" id="L1114">												convertedId += &quot;,&quot;;</span>
+											}
+<span class="nc" id="L1116">											convertedId += String.valueOf(multiConvertedId);</span>
+										}
+<span class="nc" id="L1118">									} else {</span>
+										// single ID or UUID to convert
+<span class="nc" id="L1120">										convertedId = getConvertedId(convertTable, key, tableName, columnName);</span>
+<span class="nc bnc" id="L1121" title="All 6 branches missed.">										if (convertedId == null || (convertedId instanceof Number &amp;&amp; ((Number)convertedId).intValue() &lt; 0)) {</span>
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">											if (canIgnoreNullConvertedId(table, tableName, columnName, convertTable)) {</span>
+<span class="nc" id="L1123">												insertRecord = false;</span>
+<span class="nc" id="L1124">												break;</span>
+											} else {
+<span class="nc" id="L1126">												throw new AdempiereException(&quot;Found orphan record in &quot; + tableName + &quot;.&quot; + columnName + &quot;: &quot; + key + &quot; related to table &quot; + convertTable);</span>
+											}
+										}
+									}
+<span class="nc bnc" id="L1130" title="All 2 branches missed.">									key = convertedId instanceof Number ? ((Number)convertedId).intValue() : convertedId.toString();</span>
+								}
+<span class="nc bnc" id="L1132" title="All 4 branches missed.">								if (&quot;AD_Preference&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Value&quot;.equalsIgnoreCase(columnName)) {</span>
+<span class="nc" id="L1133">									parameters[i] = String.valueOf(key);</span>
+<span class="nc" id="L1134">								} else {</span>
+<span class="nc bnc" id="L1135" title="All 2 branches missed.">									if (DisplayType.isText(column.getAD_Reference_ID()))</span>
+<span class="nc" id="L1136">										parameters[i] = key.toString();</span>
+									else
+<span class="nc" id="L1138">										parameters[i] = Integer.valueOf(key.toString());</span>
+								}
+							}
+<span class="nc" id="L1141">						} else {</span>
+<span class="nc" id="L1142">							parameters[i] = rsGD.getObject(i + 1);</span>
+<span class="nc bnc" id="L1143" title="All 2 branches missed.">							if (rsGD.wasNull()) {</span>
+<span class="nc" id="L1144">								parameters[i] = null;</span>
+							}
+<span class="nc bnc" id="L1146" title="All 2 branches missed.">							if (p_IsCopyClient) {</span>
+<span class="nc" id="L1147">								String uuidCol = PO.getUUIDColumnName(tableName);</span>
+<span class="nc bnc" id="L1148" title="All 2 branches missed.">								if (columnName.equals(uuidCol)) {</span>
+<span class="nc bnc" id="L1149" title="All 2 branches missed.">									String oldUUID = parameters[i] == null ? null : parameters[i].toString();</span>
+									// it is possible that the UUID has been resolved before because of a foreign key Record_UU, so search in T_MoveClient first
+<span class="nc" id="L1151">									String newUUID = DB.getSQLValueStringEx(get_TrxName(), queryT_MoveClient, getAD_PInstance_ID(), tableName.toUpperCase(), oldUUID);</span>
+<span class="nc bnc" id="L1152" title="All 2 branches missed.">									if (newUUID == null) {</span>
+<span class="nc" id="L1153">										newUUID = Util.generateUUIDv7().toString();</span>
+									}
+<span class="nc" id="L1155">									parameters[i] = newUUID;</span>
+<span class="nc bnc" id="L1156" title="All 2 branches missed.">									if (! Util.isEmpty(oldUUID)) {</span>
+<span class="nc" id="L1157">										X_AD_Package_UUID_Map map = new X_AD_Package_UUID_Map(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L1158">										map.setAD_Table_ID(table.getAD_Table_ID());</span>
+<span class="nc" id="L1159">										map.set_ValueNoCheck(&quot;AD_Client_ID&quot;, newADClientID);</span>
+<span class="nc" id="L1160">										map.setSource_UUID(oldUUID);</span>
+<span class="nc" id="L1161">										map.setTarget_UUID(newUUID);</span>
+<span class="nc" id="L1162">										map.saveEx();</span>
+									}
+<span class="nc bnc" id="L1164" title="All 4 branches missed.">								} else if (&quot;AD_Client&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Value&quot;.equalsIgnoreCase(columnName)) {</span>
+<span class="nc" id="L1165">									parameters[i] = p_ClientValue;</span>
+<span class="nc bnc" id="L1166" title="All 4 branches missed.">								} else if (&quot;AD_Client&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName)) {</span>
+<span class="nc" id="L1167">									parameters[i] = p_ClientName;</span>
+<span class="nc" id="L1168">								} else if (</span>
+<span class="nc bnc" id="L1169" title="All 4 branches missed.">										   (&quot;W_Store&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;WebContext&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1170" title="All 4 branches missed.">										|| (&quot;AD_User&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Value&quot;.equalsIgnoreCase(columnName))</span>
+										) {
+<span class="nc" id="L1172">									parameters[i] = p_ClientValue.toLowerCase();</span>
+<span class="nc" id="L1173">								} else if (</span>
+<span class="nc bnc" id="L1174" title="All 4 branches missed.">										   (&quot;AD_User&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Password&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1175" title="All 4 branches missed.">										|| (&quot;AD_User&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Salt&quot;.equalsIgnoreCase(columnName))</span>
+										) {
+<span class="nc" id="L1177">									parameters[i] = null; // do not assign passwords to new users, must be managed by SuperUser or plugin</span>
+<span class="nc" id="L1178">								} else if (</span>
+<span class="nc bnc" id="L1179" title="All 4 branches missed.">										   (&quot;AD_Org&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Value&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1180" title="All 4 branches missed.">										|| (&quot;AD_Org&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1181" title="All 4 branches missed.">										|| (&quot;AD_Role&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1182" title="All 4 branches missed.">										|| (&quot;AD_Tree&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1183" title="All 4 branches missed.">										|| (&quot;AD_User&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1184" title="All 4 branches missed.">										|| (&quot;AD_User&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Description&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1185" title="All 4 branches missed.">										|| (&quot;C_AcctProcessor&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1186" title="All 4 branches missed.">										|| (&quot;C_AcctSchema&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1187" title="All 4 branches missed.">										|| (&quot;C_BPartner&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Value&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1188" title="All 4 branches missed.">										|| (&quot;C_BPartner&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1189" title="All 4 branches missed.">										|| (&quot;C_Calendar&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1190" title="All 4 branches missed.">										|| (&quot;C_Element&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1191" title="All 4 branches missed.">										|| (&quot;M_CostType&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1192" title="All 4 branches missed.">										|| (&quot;R_RequestProcessor&quot;.equalsIgnoreCase(tableName) &amp;&amp; &quot;Name&quot;.equalsIgnoreCase(columnName))</span>
+										) {
+<span class="nc bnc" id="L1194" title="All 2 branches missed.">									if (parameters[i] != null) {</span>
+<span class="nc" id="L1195">										String value = parameters[i].toString();</span>
+<span class="nc" id="L1196">										parameters[i] = value.replaceFirst(oldClientValue, p_ClientValue);</span>
+									}
+								}
+							}
+						}
+					}
+<span class="nc bnc" id="L1202" title="All 2 branches missed.">					if (insertRecord) {</span>
+						try {
+<span class="nc bnc" id="L1204" title="All 2 branches missed.">							if (p_IsCopyClient) {</span>
+<span class="nc" id="L1205">								int paramIndex = 1;</span>
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">								for (Object param : parameters)</span>
+<span class="nc" id="L1207">									stmtIns.setObject(paramIndex++, param);</span>
+<span class="nc" id="L1208">								stmtIns.addBatch();</span>
+<span class="nc" id="L1209">								stmtIns.clearParameters();</span>
+<span class="nc" id="L1210">								batchCount++;</span>
+<span class="nc bnc" id="L1211" title="All 2 branches missed.">								if (batchCount % batchFlushSize == 0) {</span>
+<span class="nc bnc" id="L1212" title="All 2 branches missed.">									if (log.isLoggable(Level.INFO)) log.info(&quot;Flushing batch of inserts for table &quot; + tableName + &quot; with batch size &quot; + batchFlushSize);</span>
+<span class="nc" id="L1213">									stmtIns.executeBatch();</span>
+<span class="nc" id="L1214">									batchCount = 0;</span>
+								}
+<span class="nc" id="L1216">							} else {</span>
+<span class="nc" id="L1217">								DB.executeUpdateEx(insertSB.toString(), parameters, get_TrxName());</span>
+							}
+<span class="nc" id="L1219">						} catch (Exception e) {</span>
+<span class="nc" id="L1220">							throw new AdempiereException(&quot;Could not execute: &quot; + insertSB + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+						}
+					}
+				}
+<span class="nc bnc" id="L1224" title="All 4 branches missed.">				if (p_IsCopyClient &amp;&amp; batchCount &gt; 0) {</span>
+					try {
+<span class="nc bnc" id="L1226" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO)) log.info(&quot;Flushing last batch of inserts for table &quot; + tableName + &quot; with batch size &quot; + batchCount);</span>
+<span class="nc" id="L1227">						stmtIns.executeBatch();</span>
+<span class="nc" id="L1228">					} catch (SQLException e) {</span>
+<span class="nc" id="L1229">						throw new AdempiereException(&quot;Could not execute batch insert: &quot; + insertSB + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+					}
+				}
+<span class="nc" id="L1232">			} catch (SQLException e) {</span>
+<span class="nc" id="L1233">				throw new AdempiereException(&quot;Could not execute query: &quot; + selectGetData + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+			} finally {
+<span class="nc" id="L1235">				DB.close(rsGD, stmtGD);</span>
+<span class="nc" id="L1236">				DB.close(null, stmtIns);</span>
+			}
+
+		}
+
+		// commit - here it can throw errors because of foreign keys, verify and inform
+<span class="nc" id="L1242">		statusUpdate(&quot;Committing.  Validating foreign keys&quot;);</span>
+		try {
+<span class="nc" id="L1244">			commitEx();</span>
+<span class="nc" id="L1245">		} catch (SQLException e) {</span>
+<span class="nc" id="L1246">			throw new AdempiereException(&quot;Could not commit,\nCause: &quot; + e.getLocalizedMessage());</span>
+		}
+<span class="nc" id="L1248">	}</span>
+
+	/**
+	 * Define if is acceptable to ignore a non existing converted ID
+	 * @return
+	 */
+	private boolean canIgnoreNullConvertedId(MTable table, String tableName, String columnName, String convertTable) {
+<span class="nc bnc" id="L1255" title="All 6 branches missed.">		if (   ((&quot;Record_ID&quot;.equalsIgnoreCase(columnName) || &quot;Record_UU&quot;.equalsIgnoreCase(columnName)) &amp;&amp; table.columnExistsInDB(&quot;AD_Table_ID&quot;))</span>
+<span class="nc bnc" id="L1256" title="All 4 branches missed.">			|| (&quot;Line_ID&quot;.equalsIgnoreCase(columnName) &amp;&amp; &quot;Fact_Acct&quot;.equalsIgnoreCase(tableName))</span>
+<span class="nc bnc" id="L1257" title="All 4 branches missed.">				|| ((&quot;Node_ID&quot;.equalsIgnoreCase(columnName) || &quot;Parent_ID&quot;.equalsIgnoreCase(columnName))</span>
+<span class="nc bnc" id="L1258" title="All 2 branches missed.">						&amp;&amp; (   &quot;AD_TreeNode&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1259" title="All 2 branches missed.">								|| &quot;AD_TreeNodeMM&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1260" title="All 2 branches missed.">								|| &quot;AD_TreeNodeBP&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1261" title="All 2 branches missed.">								|| &quot;AD_TreeNodeCMC&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1262" title="All 2 branches missed.">								|| &quot;AD_TreeNodeCMM&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1263" title="All 2 branches missed.">								|| &quot;AD_TreeNodeCMS&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1264" title="All 2 branches missed.">								|| &quot;AD_TreeNodeCMT&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1265" title="All 2 branches missed.">								|| &quot;AD_TreeNodePR&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1266" title="All 2 branches missed.">								|| &quot;AD_TreeNodeU1&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1267" title="All 2 branches missed.">								|| &quot;AD_TreeNodeU2&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1268" title="All 2 branches missed.">								|| &quot;AD_TreeNodeU3&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1269" title="All 2 branches missed.">								|| &quot;AD_TreeNodeU4&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1270" title="All 2 branches missed.">								|| &quot;AD_Tree_Favorite_Node&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1271" title="All 2 branches missed.">								|| &quot;AD_TreeBar&quot;.equalsIgnoreCase(tableName)))) {</span>
+<span class="nc bnc" id="L1272" title="All 2 branches missed.">			if (p_tablesToExcludeList.contains(convertTable.toUpperCase())) {</span>
+				// record is pointing to a table that is not included, ignore it
+<span class="nc" id="L1274">				return true;</span>
+			}
+		}
+<span class="nc bnc" id="L1277" title="All 2 branches missed.">		if (   &quot;AD_ChangeLog&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1278" title="All 2 branches missed.">			|| &quot;AD_PInstance&quot;.equalsIgnoreCase(tableName)</span>
+<span class="nc bnc" id="L1279" title="All 2 branches missed.">			|| &quot;AD_PInstance_Log&quot;.equalsIgnoreCase(tableName)) {</span>
+			// skip orphan records in AD_ChangeLog, AD_PInstance and AD_PInstance_Log, can be log of deleted records, skip
+<span class="nc" id="L1281">			return true;</span>
+		}
+<span class="nc" id="L1283">		return false;</span>
+	}
+
+	/**
+	 * Return a converted ID
+	 * @param convertTable
+	 * @param key
+	 * @param tableName
+	 * @param columnName 
+	 * @return
+	 */
+	private Object getConvertedId(String convertTable, Object key, String tableName, String columnName) {
+<span class="nc" id="L1295">		Object convertedId = null;</span>
+		try {
+<span class="nc" id="L1297">			List&lt;Object&gt; list = DB.getSQLValueObjectsEx(get_TrxName(), queryT_MoveClient,</span>
+<span class="nc" id="L1298">					getAD_PInstance_ID(), convertTable.toUpperCase(), String.valueOf(key));</span>
+<span class="nc bnc" id="L1299" title="All 4 branches missed.">			if (list != null &amp;&amp; list.size() == 1)</span>
+<span class="nc" id="L1300">				convertedId = list.get(0);</span>
+<span class="nc" id="L1301">		} catch (Exception e) {</span>
+<span class="nc" id="L1302">			throw new AdempiereException(&quot;Could not execute query: &quot; + queryT_MoveClient + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		}
+<span class="nc bnc" id="L1304" title="All 6 branches missed.">		if (convertedId == null || (convertedId instanceof Number &amp;&amp; ((Number)convertedId).intValue() &lt; 0)) {</span>
+			// when obtaining a UUID for a non-UUID table means to generate and insert the conversion
+			// for example AD_Attachment.Record_UU requires the UUID of a still not inserted record in another table
+			// when moving client from another database, the UUIDs are preserved
+<span class="nc bnc" id="L1308" title="All 2 branches missed.">			if (! p_IsCopyClient)</span>
+<span class="nc" id="L1309">				return key;</span>
+<span class="nc" id="L1310">			MTable cTable = MTable.get(getCtx(), convertTable);</span>
+<span class="nc bnc" id="L1311" title="All 8 branches missed.">			if ((key instanceof String || key instanceof UUID) &amp;&amp; ! cTable.isUUIDKeyTable() &amp;&amp; columnName.equals(&quot;Record_UU&quot;)) {</span>
+<span class="nc" id="L1312">				convertedId = Util.generateUUIDv7().toString();</span>
+<span class="nc" id="L1313">				DB.executeUpdateEx(insertConversionId,</span>
+<span class="nc" id="L1314">						new Object[] {getAD_PInstance_ID(), convertTable.toUpperCase(), key.toString(), convertedId.toString(), null},</span>
+<span class="nc" id="L1315">						get_TrxName());</span>
+<span class="nc" id="L1316">			} else {</span>
+				// not found in the T_MoveClient table - try to get it again - could be missed in first pass
+<span class="nc" id="L1318">				convertedId = getLocalKeyFor(convertTable, key, tableName);</span>
+			}
+		}
+<span class="nc" id="L1321">		return convertedId;</span>
+	}
+
+	/**
+	 * Return the table name of the table driving a tree 
+	 * @param treeId
+	 * @return
+	 */
+	private String getExternalTableFromTree(int treeId) {
+<span class="nc" id="L1330">		String tableName = null;</span>
+<span class="nc" id="L1331">		final String sqlTableTree = &quot;&quot;</span>
+				+ &quot;SELECT CASE &quot;
+				+ &quot;         WHEN TreeType = 'AY' THEN 'C_Activity' &quot;
+				+ &quot;         WHEN TreeType = 'BB' THEN 'M_BOM' &quot;
+				+ &quot;         WHEN TreeType = 'BP' THEN 'C_BPartner' &quot;
+				+ &quot;         WHEN TreeType = 'CC' THEN 'CM_Container' &quot;
+				+ &quot;         WHEN TreeType = 'CM' THEN 'CM_Media' &quot;
+				+ &quot;         WHEN TreeType = 'CS' THEN 'CM_CStage' &quot;
+				+ &quot;         WHEN TreeType = 'CT' THEN 'CM_Template' &quot;
+				+ &quot;         WHEN TreeType = 'EV' THEN 'C_ElementValue' &quot;
+				+ &quot;         WHEN TreeType = 'MC' THEN 'C_Campaign' &quot;
+				+ &quot;         WHEN TreeType = 'MM' THEN 'AD_Menu' &quot;
+				+ &quot;         WHEN TreeType = 'OO' THEN 'AD_Org' &quot;
+				+ &quot;         WHEN TreeType = 'PC' THEN 'M_Product_Category' &quot;
+				+ &quot;         WHEN TreeType = 'PJ' THEN 'C_Project' &quot;
+				+ &quot;         WHEN TreeType = 'PR' THEN 'M_Product' &quot;
+				+ &quot;         WHEN TreeType = 'SR' THEN 'C_SalesRegion' &quot;
+				+ &quot;         WHEN TreeType = 'U1' THEN 'C_ElementValue' &quot;
+				+ &quot;         WHEN TreeType = 'U2' THEN 'C_ElementValue' &quot;
+				+ &quot;         WHEN TreeType = 'U3' THEN 'C_ElementValue' &quot;
+				+ &quot;         WHEN TreeType = 'U4' THEN 'C_ElementValue' &quot;
+				+ &quot;         WHEN TreeType = 'TL' THEN AD_Table.TableName &quot;
+				+ &quot;         ELSE NULL &quot;
+				+ &quot;       END &quot;
+				+ &quot;FROM   AD_Tree &quot;
+				+ &quot;       LEFT JOIN AD_Table ON ( AD_Table.AD_Table_ID = AD_Tree.AD_Table_ID ) &quot;
+				+ &quot;WHERE  AD_Tree_ID = ?&quot;;
+<span class="nc" id="L1358">		PreparedStatement stmt = null;</span>
+<span class="nc" id="L1359">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L1361">			stmt = externalConn.prepareStatement(sqlTableTree, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L1362">			stmt.setInt(1, treeId);</span>
+<span class="nc" id="L1363">			rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L1364" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L1365">				tableName = rs.getString(1);</span>
+<span class="nc" id="L1366">		} catch (SQLException e) {</span>
+<span class="nc" id="L1367">			throw new AdempiereException(&quot;Could not execute external query: &quot; + sqlTableTree + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L1369">			DB.close(rs, stmt);</span>
+		}
+<span class="nc" id="L1371">		return tableName;</span>
+	}
+
+	/**
+	 * Get the name of a table based on the AD_Table_ID - executed against the external connection
+	 * @param tableId
+	 * @return
+	 */
+	private String getExternalTableName(int tableId) {
+<span class="nc" id="L1380">		String tableName = null;</span>
+<span class="nc" id="L1381">		String sql = DB.getDatabase().convertStatement(&quot;SELECT TableName FROM AD_Table WHERE AD_Table_ID=?&quot;);</span>
+<span class="nc" id="L1382">		PreparedStatement stmt = null;</span>
+<span class="nc" id="L1383">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L1385">			stmt = externalConn.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L1386">			stmt.setInt(1, tableId);</span>
+<span class="nc" id="L1387">			rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L1388" title="All 2 branches missed.">			if (rs.next())</span>
+<span class="nc" id="L1389">				tableName = rs.getString(1);</span>
+<span class="nc" id="L1390">		} catch (SQLException e) {</span>
+<span class="nc" id="L1391">			throw new AdempiereException(&quot;Could not execute external query: &quot; + sql + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L1393">			DB.close(rs, stmt);</span>
+		}
+<span class="nc" id="L1395">		return tableName;</span>
+	}
+
+	/**
+	 * Get the Accounting Detail table based on the document table
+	 * @param tableId
+	 * @return
+	 */
+	private String getAcctDetailTableName(int tableId) {
+<span class="nc" id="L1404">		String detailTableName = &quot;&quot;;</span>
+<span class="nc bnc" id="L1405" title="All 21 branches missed.">		switch (tableId) {</span>
+<span class="nc" id="L1406">		case X_A_Depreciation_Entry.Table_ID : detailTableName = X_A_Depreciation_Exp.Table_Name  ; break;</span>
+<span class="nc" id="L1407">		case X_C_AllocationHdr.Table_ID      : detailTableName = X_C_AllocationLine.Table_Name    ; break;</span>
+<span class="nc" id="L1408">		case X_C_BankStatement.Table_ID      : detailTableName = X_C_BankStatementLine.Table_Name ; break;</span>
+<span class="nc" id="L1409">		case X_C_Cash.Table_ID               : detailTableName = X_C_CashLine.Table_Name          ; break;</span>
+<span class="nc" id="L1410">		case X_C_Invoice.Table_ID            : detailTableName = X_C_InvoiceLine.Table_Name       ; break;</span>
+<span class="nc" id="L1411">		case X_C_Order.Table_ID              : detailTableName = X_C_OrderLine.Table_Name         ; break;</span>
+<span class="nc" id="L1412">		case X_C_ProjectIssue.Table_ID       : detailTableName = X_C_ProjectIssue.Table_Name      ; break;</span>
+<span class="nc" id="L1413">		case X_GL_Journal.Table_ID           : detailTableName = X_GL_JournalLine.Table_Name      ; break;</span>
+<span class="nc" id="L1414">		case X_M_InOut.Table_ID              : detailTableName = X_M_InOutLine.Table_Name         ; break;</span>
+<span class="nc" id="L1415">		case X_M_Inventory.Table_ID          : detailTableName = X_M_InventoryLine.Table_Name     ; break;</span>
+<span class="nc" id="L1416">		case X_M_Movement.Table_ID           : detailTableName = X_M_MovementLine.Table_Name      ; break;</span>
+<span class="nc" id="L1417">		case X_M_Production.Table_ID         : detailTableName = X_M_ProductionLine.Table_Name    ; break;</span>
+<span class="nc" id="L1418">		case X_M_Requisition.Table_ID        : detailTableName = X_M_RequisitionLine.Table_Name   ; break;</span>
+<span class="nc" id="L1419">		case X_A_Asset_Addition.Table_ID     : break;</span>
+<span class="nc" id="L1420">		case X_A_Asset_Disposed.Table_ID     : break;</span>
+<span class="nc" id="L1421">		case X_A_Asset_Reval.Table_ID        : break;</span>
+<span class="nc" id="L1422">		case X_A_Asset_Transfer.Table_ID     : break;</span>
+<span class="nc" id="L1423">		case X_M_MatchInv.Table_ID           : break;</span>
+<span class="nc" id="L1424">		case X_M_MatchPO.Table_ID            : break;</span>
+<span class="nc" id="L1425">		case X_C_Payment.Table_ID            : break;</span>
+<span class="nc" id="L1426">		default: log.warning(&quot;Fact_Acct.Line_ID detail table not identified for table ID = &quot; + tableId);</span>
+		}
+<span class="nc" id="L1428">		return detailTableName;</span>
+	}
+
+	/**
+	 * Check sequence for tables where the IDs must be preserved
+	 */
+	private void checkSequences() {
+<span class="nc bnc" id="L1435" title="All 2 branches missed.">		if (p_isPreserveAll) {</span>
+<span class="nc bnc" id="L1436" title="All 2 branches missed.">			for (String tableName : p_tablesVerifiedList) {</span>
+<span class="nc" id="L1437">				MSequence seq = MSequence.get(getCtx(), tableName, get_TrxName());</span>
+<span class="nc bnc" id="L1438" title="All 2 branches missed.">				if (seq != null) {</span>
+<span class="nc" id="L1439">					seq.validateTableIDValue(); // ignore output messages</span>
+				}
+			}
+<span class="nc" id="L1442">		} else {</span>
+<span class="nc bnc" id="L1443" title="All 2 branches missed.">			for (String tableName : p_tablesToPreserveIDsList) {</span>
+<span class="nc" id="L1444">				MSequence seq = MSequence.get(getCtx(), tableName, get_TrxName());</span>
+<span class="nc bnc" id="L1445" title="All 2 branches missed.">				if (seq != null) {</span>
+<span class="nc" id="L1446">					seq.validateTableIDValue(); // ignore output messages</span>
+				}
+			}
+		}
+<span class="nc" id="L1450">	}</span>
+
+	/**
+	 * Get the local converted ID or UUID for a record
+	 * @param tableName
+	 * @param foreign_Key
+	 * @param tableNameSource
+	 * @return
+	 */
+	private Object getLocalKeyFor(String tableName, Object foreign_Key, String tableNameSource) {
+<span class="nc" id="L1460">		String uuidCol = PO.getUUIDColumnName(tableName);</span>
+<span class="nc" id="L1461">		MTable table = MTable.get(getCtx(), tableName);</span>
+<span class="nc" id="L1462">		String remoteUUID = null;</span>
+<span class="nc bnc" id="L1463" title="All 2 branches missed.">		if (! table.isIDKeyTable()) {</span>
+<span class="nc" id="L1464">			remoteUUID = foreign_Key.toString();</span>
+<span class="nc" id="L1465">		} else {</span>
+<span class="nc" id="L1466">			StringBuilder sqlRemoteUUSB = new StringBuilder()</span>
+<span class="nc" id="L1467">					.append(&quot;SELECT &quot;).append(uuidCol).append(&quot; FROM &quot;).append(tableName)</span>
+<span class="nc" id="L1468">					.append(&quot; WHERE &quot;).append(tableName).append(&quot;_ID=?&quot;);</span>
+<span class="nc" id="L1469">			String sqlRemoteUU = DB.getDatabase().convertStatement(sqlRemoteUUSB.toString());</span>
+<span class="nc" id="L1470">			PreparedStatement stmtUU = null;</span>
+<span class="nc" id="L1471">			ResultSet rs = null;</span>
+			try {
+<span class="nc" id="L1473">				stmtUU = externalConn.prepareStatement(sqlRemoteUU, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc" id="L1474">				stmtUU.setObject(1, foreign_Key);</span>
+<span class="nc" id="L1475">				rs = stmtUU.executeQuery();</span>
+<span class="nc bnc" id="L1476" title="All 2 branches missed.">				if (rs.next())</span>
+<span class="nc" id="L1477">					remoteUUID = rs.getString(1);</span>
+<span class="nc" id="L1478">			} catch (SQLException e) {</span>
+<span class="nc" id="L1479">				throw new AdempiereException(&quot;Could not execute external query for table &quot; + tableNameSource + &quot;: &quot; + sqlRemoteUU + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+			} finally {
+<span class="nc" id="L1481">				DB.close(rs, stmtUU);</span>
+			}
+		}
+<span class="nc" id="L1484">		Object local_Key = null;</span>
+<span class="nc bnc" id="L1485" title="All 2 branches missed.">		if (remoteUUID != null) {</span>
+<span class="nc" id="L1486">			local_Key = getFromUUID(tableName, uuidCol, null, null, remoteUUID, foreign_Key);</span>
+		}
+<span class="nc" id="L1488">		return local_Key;</span>
+	}
+
+	/**
+	 * Get the local ID or UUID based on a UUID
+	 * @param foreignTableName
+	 * @param uuidCol
+	 * @param tableName
+	 * @param columnName
+	 * @param foreignUU
+	 * @param foreign_Key
+	 * @return
+	 */
+	private Object getFromUUID(String foreignTableName, String uuidCol, String tableName, String columnName, String foreignUU, Object foreign_Key) {
+<span class="nc" id="L1502">		Object local_Key = null;</span>
+<span class="nc" id="L1503">		MTable foreignTable = MTable.get(getCtx(), foreignTableName);</span>
+<span class="nc" id="L1504">		StringBuilder sqlCheckLocalUU = new StringBuilder(&quot;SELECT &quot;);</span>
+<span class="nc bnc" id="L1505" title="All 2 branches missed.">		if (foreignTable.isUUIDKeyTable()) {</span>
+<span class="nc" id="L1506">			sqlCheckLocalUU.append(PO.getUUIDColumnName(foreignTableName));</span>
+<span class="nc" id="L1507">		} else {</span>
+<span class="nc" id="L1508">			sqlCheckLocalUU.append(foreignTableName).append(&quot;_ID&quot;);</span>
+		}
+<span class="nc" id="L1510">		sqlCheckLocalUU.append(&quot; FROM &quot;).append(foreignTableName).append(&quot; WHERE &quot;).append(uuidCol).append(&quot;=?&quot;);</span>
+<span class="nc" id="L1511">		List&lt;Object&gt; list = DB.getSQLValueObjectsEx(get_TrxName(), sqlCheckLocalUU.toString(), foreignUU);</span>
+<span class="nc bnc" id="L1512" title="All 4 branches missed.">		if (list != null &amp;&amp; list.size() == 1)</span>
+<span class="nc" id="L1513">			local_Key = list.get(0);</span>
+<span class="nc" id="L1514">		String identifier = null;</span>
+<span class="nc bnc" id="L1515" title="All 6 branches missed.">		if (local_Key == null || (local_Key instanceof Number &amp;&amp; ((Number)local_Key).intValue() &lt; 0)) {</span>
+<span class="nc" id="L1516">			FallbackRecord fr = getFallbackRecordByTableName(p_fallbackRecords, foreignTableName, foreignUU);</span>
+<span class="nc" id="L1517">			PO po = null;</span>
+<span class="nc bnc" id="L1518" title="All 2 branches missed.">			if (fr != null)</span>
+<span class="nc" id="L1519">				po = fr.getPO();</span>
+<span class="nc bnc" id="L1520" title="All 2 branches missed.">			if (po == null) {</span>
+<span class="nc" id="L1521">				String missingFk = foreignTableName + &quot;.&quot; + uuidCol + &quot;=&quot; + foreignUU;</span>
+<span class="nc" id="L1522">				p_errorList.add(&quot;Column &quot; + tableName + &quot;.&quot; + columnName +  &quot; has system reference not convertible, &quot; + missingFk);</span>
+<span class="nc bnc" id="L1523" title="All 2 branches missed.">				if (! p_missingFkList.contains(missingFk))</span>
+<span class="nc" id="L1524">					p_missingFkList.add(missingFk);</span>
+<span class="nc" id="L1525">				return -1;</span>
+			} else {
+<span class="nc bnc" id="L1527" title="All 2 branches missed.">				if (foreignTable.isIDKeyTable()) {</span>
+<span class="nc" id="L1528">					local_Key = po.get_ID();</span>
+<span class="nc" id="L1529">				} else {</span>
+<span class="nc" id="L1530">					local_Key = po.get_UUID();</span>
+				}
+<span class="nc" id="L1532">				identifier = getIdentifierFromExternalRecord(foreignTable, foreign_Key);</span>
+<span class="nc bnc" id="L1533" title="All 4 branches missed.">		        if (identifier != null &amp;&amp; identifier.length() &gt; 4000)</span>
+<span class="nc" id="L1534">		        	identifier = identifier.substring(0, 4000);</span>
+			}
+		}
+<span class="nc" id="L1537">		DB.executeUpdateEx(insertConversionId,</span>
+<span class="nc" id="L1538">				new Object[] {getAD_PInstance_ID(), foreignTableName.toUpperCase(), foreign_Key, local_Key, identifier},</span>
+<span class="nc" id="L1539">				get_TrxName());</span>
+<span class="nc" id="L1540">		p_idSystemConversionList.add(foreignTableName.toUpperCase() + &quot;.&quot; + foreign_Key);</span>
+<span class="nc" id="L1541">		return local_Key;</span>
+	}
+
+	/**
+	 * Convert a string of table=ID (or table=UUID) to a List of String,PO maps
+	 * @param fallbackRecordsString
+	 * @return
+	 */
+	public List&lt;FallbackRecord&gt; parseFallbackRecordsString(String fallbackRecordsString) {
+<span class="nc" id="L1550">		List&lt;FallbackRecord&gt; records = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L1552" title="All 4 branches missed.">		if (fallbackRecordsString == null || fallbackRecordsString.trim().isEmpty()) {</span>
+<span class="nc" id="L1553">			return records; // Return empty list if no data</span>
+		}
+
+<span class="nc" id="L1556">		String[] pairs = fallbackRecordsString.split(&quot;,&quot;);</span>
+<span class="nc bnc" id="L1557" title="All 2 branches missed.">		for (String pair : pairs) {</span>
+<span class="nc" id="L1558">			String[] parts = pair.split(&quot;=&quot;);</span>
+<span class="nc bnc" id="L1559" title="All 2 branches missed.">			if (parts.length == 2) {</span>
+<span class="nc" id="L1560">				String tableName = parts[0].trim();</span>
+<span class="nc" id="L1561">				String foreignUUID = null;</span>
+<span class="nc bnc" id="L1562" title="All 2 branches missed.">				if (tableName.contains(&quot;.&quot;)) {</span>
+<span class="nc" id="L1563">					foreignUUID = tableName.substring(tableName.indexOf(&quot;.&quot;)+1);</span>
+<span class="nc" id="L1564">					tableName = tableName.substring(0, tableName.indexOf(&quot;.&quot;));</span>
+				}
+<span class="nc" id="L1566">				MTable table = MTable.get(getCtx(), tableName);</span>
+<span class="nc bnc" id="L1567" title="All 2 branches missed.">				if (table == null) {</span>
+<span class="nc" id="L1568">					throw new AdempiereUserError(&quot;Fallback Table &quot; + tableName + &quot; not found&quot;);</span>
+				}
+<span class="nc" id="L1570">				String id = parts[1].trim();</span>
+<span class="nc" id="L1571">				int recordId = -1;</span>
+<span class="nc" id="L1572">				PO po = null;</span>
+<span class="nc bnc" id="L1573" title="All 2 branches missed.">				if (Util.isUUID(id)) {</span>
+<span class="nc" id="L1574">					po = MTable.get(getCtx(), tableName).getPOByUU(id, get_TrxName());</span>
+<span class="nc" id="L1575">				} else {</span>
+					try {
+<span class="nc" id="L1577">						recordId = Integer.parseInt(id);</span>
+<span class="nc" id="L1578">					} catch (NumberFormatException e) {</span>
+<span class="nc" id="L1579">						throw new AdempiereUserError(&quot;Fallback ID &quot; + id + &quot; is not a valid number for table &quot; + tableName);</span>
+					}
+<span class="nc" id="L1581">					po = MTable.get(getCtx(), tableName).getPO(recordId, get_TrxName());</span>
+				}
+<span class="nc bnc" id="L1583" title="All 4 branches missed.">				if (po == null || po.is_new())</span>
+<span class="nc" id="L1584">					throw new AdempiereUserError(&quot;Fallback record &quot; + id + &quot; not found for table &quot; + tableName);</span>
+				else
+<span class="nc" id="L1586">					records.add(new FallbackRecord(tableName, foreignUUID, po));</span>
+			}
+		}
+
+<span class="nc" id="L1590">		return records;</span>
+	}
+
+<span class="nc" id="L1593">	private ConcurrentMap&lt;String, String&gt; externalIdentifiersMap = new ConcurrentHashMap&lt;String, String&gt;();</span>
+    /**
+     * Get the identifier of a record from the external database
+     * @param table
+     * @param id
+     * @param recordId
+     * @return
+     */
+    private String getIdentifierFromExternalRecord(MTable table, Object key) {
+<span class="nc" id="L1602">    	String mapKey = table.getTableName()+&quot;|&quot;+key.toString();</span>
+<span class="nc bnc" id="L1603" title="All 2 branches missed.">    	if (externalIdentifiersMap.containsKey(mapKey))</span>
+<span class="nc" id="L1604">    		return externalIdentifiersMap.get(mapKey);</span>
+<span class="nc" id="L1605">		String[] columns = table.getIdentifierColumns();</span>
+<span class="nc bnc" id="L1606" title="All 2 branches missed.">		if (columns.length == 0) {</span>
+<span class="nc" id="L1607">			externalIdentifiersMap.put(mapKey, null);</span>
+<span class="nc" id="L1608">			return null;</span>
+		}
+<span class="nc" id="L1610">		StringBuilder identifier = new StringBuilder();</span>
+<span class="nc" id="L1611">		StringBuilder sqlSB = new StringBuilder(&quot;SELECT &quot;).append(String.join(&quot;,&quot;, columns)).append(&quot; FROM &quot;).append(table.getTableName()).append(&quot; WHERE &quot;);</span>
+<span class="nc" id="L1612">		int recordId = -1;</span>
+<span class="nc bnc" id="L1613" title="All 2 branches missed.">		if (Util.isUUID(key.toString())) {</span>
+<span class="nc" id="L1614">			sqlSB.append(PO.getUUIDColumnName(table.getTableName()));</span>
+<span class="nc" id="L1615">		} else {</span>
+<span class="nc" id="L1616">			sqlSB.append(table.getKeyColumns()[0]);</span>
+<span class="nc" id="L1617">			recordId = Integer.valueOf(key.toString());</span>
+		}
+<span class="nc" id="L1619">		sqlSB.append(&quot;=?&quot;);</span>
+
+<span class="nc" id="L1621">		String sql = DB.getDatabase().convertStatement(sqlSB.toString());</span>
+<span class="nc" id="L1622">		PreparedStatement stmt = null;</span>
+<span class="nc" id="L1623">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L1625">			stmt = externalConn.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);</span>
+<span class="nc bnc" id="L1626" title="All 2 branches missed.">			if (recordId &gt;= 0)</span>
+<span class="nc" id="L1627">				stmt.setInt(1, recordId);</span>
+			else
+<span class="nc" id="L1629">				stmt.setString(1, key.toString());</span>
+<span class="nc" id="L1630">			rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L1631" title="All 2 branches missed.">			if (rs.next()) {</span>
+<span class="nc bnc" id="L1632" title="All 2 branches missed.">				for (int i = 0; i &lt; columns.length; i++) {</span>
+<span class="nc" id="L1633">					String val = rs.getString(i+1);</span>
+<span class="nc bnc" id="L1634" title="All 2 branches missed.">					if (identifier.length() &gt; 0)</span>
+<span class="nc" id="L1635">						identifier.append(MSysConfig.getValue(MSysConfig.IDENTIFIER_SEPARATOR, &quot;_&quot;, Env.getAD_Client_ID(Env.getCtx())));</span>
+<span class="nc" id="L1636">					identifier.append(val);</span>
+				}
+			}
+<span class="nc" id="L1639">		} catch (SQLException e) {</span>
+<span class="nc" id="L1640">			throw new AdempiereException(&quot;Could not execute external query: &quot; + sql + &quot;\nCause = &quot; + e.getLocalizedMessage());</span>
+		} finally {
+<span class="nc" id="L1642">			DB.close(rs, stmt);</span>
+		}
+
+<span class="nc bnc" id="L1645" title="All 2 branches missed.">		String retValue = ( identifier.length() == 0 ? null : identifier.toString() );</span>
+<span class="nc" id="L1646">		externalIdentifiersMap.put(mapKey, retValue);</span>
+<span class="nc" id="L1647">		return retValue;</span>
+	}
+
+	/**
+     * Get the fallback record associated to the tablename in the fallbackRecords list
+     * @param fallbackRecords
+     * @param tableName
+     * @param foreignUUID
+     * @return
+     */
+    public static FallbackRecord getFallbackRecordByTableName(List&lt;FallbackRecord&gt; records, String tableName, String foreignUUID) {
+    	// first try to find the record using the foreign UUID
+<span class="nc" id="L1659">        FallbackRecord fr = records.stream()</span>
+<span class="nc bnc" id="L1660" title="All 8 branches missed.">                .filter(fallbackRecord -&gt; fallbackRecord.getTableName().equalsIgnoreCase(tableName) &amp;&amp; foreignUUID != null &amp;&amp; fallbackRecord.getForeignUUID() != null &amp;&amp; foreignUUID.equals(fallbackRecord.getForeignUUID()))</span>
+<span class="nc" id="L1661">                .findFirst()</span>
+<span class="nc" id="L1662">                .orElse(null);</span>
+<span class="nc bnc" id="L1663" title="All 2 branches missed.">        if (fr == null) {</span>
+        	// if not found, then find a general fallback record without UUID
+<span class="nc" id="L1665">            fr = records.stream()</span>
+<span class="nc bnc" id="L1666" title="All 4 branches missed.">                    .filter(fallbackRecord -&gt; fallbackRecord.getTableName().equalsIgnoreCase(tableName) &amp;&amp; fallbackRecord.getForeignUUID() == null)</span>
+<span class="nc" id="L1667">                    .findFirst()</span>
+<span class="nc" id="L1668">                    .orElse(null);</span>
+        }
+<span class="nc" id="L1670">        return fr;</span>
+    }
+
+    /**
+     * FallbackRecord object
+     */
+    public class FallbackRecord {
+    	private final String tableName;
+    	private final String foreignUUID;
+    	private final PO po;
+
+<span class="nc" id="L1681">    	public FallbackRecord(String tableName, String foreignUUID, PO po) {</span>
+<span class="nc" id="L1682">    		this.tableName = tableName;</span>
+<span class="nc" id="L1683">    		this.foreignUUID = foreignUUID;</span>
+<span class="nc" id="L1684">    		this.po = po;</span>
+<span class="nc" id="L1685">    	}</span>
+
+    	public String getTableName() {
+<span class="nc" id="L1688">    		return tableName;</span>
+    	}
+
+    	public String getForeignUUID() {
+<span class="nc" id="L1692">    		return foreignUUID;</span>
+    	}
+
+    	public PO getPO() {
+<span class="nc" id="L1696">    		return po;</span>
+    	}
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

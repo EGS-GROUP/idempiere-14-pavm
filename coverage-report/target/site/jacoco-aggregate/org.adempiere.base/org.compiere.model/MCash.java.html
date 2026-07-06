@@ -1,0 +1,899 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MCash.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MCash.java</span></div><h1>MCash.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.compiere.process.DocAction;
+import org.compiere.process.DocumentEngine;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+
+/**
+ *	Cash Journal Model
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: MCash.java,v 1.3 2006/07/30 00:51:03 jjanke Exp $
+ *  @author victor.perez@e-evolution.com, e-Evolution http://www.e-evolution.com
+ *  &lt;li&gt;FR [ 1866214 ]  
+ *  @see https://sourceforge.net/p/adempiere/feature-requests/298/
+ * 	&lt;li&gt; FR [ 2520591 ] Support multiples calendar for Org 
+ *	@see https://sourceforge.net/p/adempiere/feature-requests/631/ 	
+ *  @author Teo Sarca, SC ARHIPAC SERVICE SRL
+ * 			&lt;li&gt;BF [ 1831997 ] Cash journal allocation reversed
+ * 			&lt;li&gt;BF [ 1894524 ] Pay an reversed invoice
+ * 			&lt;li&gt;BF [ 1899477 ] MCash.getLines should return only active lines
+ * 			&lt;li&gt;BF [ 2588326 ] Cash Lines are not correctly updated on voiding
+ */
+public class MCash extends X_C_Cash implements DocAction
+{
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = -7632011237765946083L;
+
+	/**
+	 * 	Get or create new Cash Journal for currency, org and date
+	 *	@param ctx context
+	 *	@param C_Currency_ID currency
+	 *	@param AD_Org_ID org
+	 *	@param dateAcct date
+	 *	@param trxName transaction
+	 *	@return MCash
+	 */
+	public static MCash get (Properties ctx, int AD_Org_ID, 
+		Timestamp dateAcct, int C_Currency_ID, String trxName)
+	{
+		//	Existing Journal
+<span class="nc" id="L73">		final String whereClause = &quot;C_Cash.AD_Org_ID=?&quot;						//	#1</span>
+		+ &quot; AND TRUNC(C_Cash.StatementDate)=?&quot;			//	#2
+		+ &quot; AND C_Cash.Processed='N'&quot;
+		+ &quot; AND EXISTS (SELECT * FROM C_CashBook cb &quot;
+			+ &quot;WHERE C_Cash.C_CashBook_ID=cb.C_CashBook_ID AND cb.AD_Org_ID=C_Cash.AD_Org_ID&quot;
+			+ &quot; AND cb.C_Currency_ID=?)&quot;;			//	#3
+<span class="nc" id="L79">		MCash retValue = new Query(ctx, I_C_Cash.Table_Name, whereClause, trxName)</span>
+<span class="nc" id="L80">			.setParameters(AD_Org_ID,TimeUtil.getDay(dateAcct),C_Currency_ID)</span>
+<span class="nc" id="L81">			.first()</span>
+		;
+		
+<span class="nc bnc" id="L84" title="All 2 branches missed.">		if (retValue != null)</span>
+<span class="nc" id="L85">			return retValue;</span>
+		
+		//	Get CashBook
+<span class="nc" id="L88">		MCashBook cb = MCashBook.get (ctx, AD_Org_ID, C_Currency_ID);</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">		if (cb == null)</span>
+		{
+<span class="nc" id="L91">			s_log.warning(&quot;No CashBook for AD_Org_ID=&quot; + AD_Org_ID + &quot;, C_Currency_ID=&quot; + C_Currency_ID);</span>
+<span class="nc" id="L92">			return null;</span>
+		}
+		
+		//	Create New Journal
+<span class="nc" id="L96">		retValue = new MCash (cb, dateAcct);</span>
+<span class="nc" id="L97">		retValue.saveEx(trxName);</span>
+<span class="nc" id="L98">		return retValue;</span>
+	}	//	get
+
+	/**
+	 * 	Get or create new Cash Journal for CashBook and date
+	 *	@param ctx context
+	 *	@param C_CashBook_ID cashbook
+	 *	@param dateAcct date
+	 *	@param trxName transaction
+	 *	@return cash
+	 */
+	public static MCash get (Properties ctx, int C_CashBook_ID, 
+		Timestamp dateAcct, String trxName)
+	{
+<span class="nc" id="L112">		final String whereClause =&quot;C_CashBook_ID=?&quot;			//	#1</span>
+				+ &quot; AND TRUNC(StatementDate)=?&quot;			//	#2
+				+ &quot; AND Processed='N'&quot;;
+		
+<span class="nc" id="L116">		MCash retValue = new Query(ctx, MCash.Table_Name, whereClause, trxName)</span>
+<span class="nc" id="L117">			.setParameters(C_CashBook_ID, TimeUtil.getDay(dateAcct))</span>
+<span class="nc" id="L118">			.first()</span>
+		;
+		
+<span class="nc bnc" id="L121" title="All 2 branches missed.">		if (retValue != null)</span>
+<span class="nc" id="L122">			return retValue;</span>
+		
+		//	Get CashBook
+<span class="nc" id="L125">		MCashBook cb = new MCashBook (ctx, C_CashBook_ID, trxName);</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">		if (cb.get_ID() ==0)</span>
+		{
+<span class="nc" id="L128">			s_log.warning(&quot;Not found C_CashBook_ID=&quot; + C_CashBook_ID);</span>
+<span class="nc" id="L129">			return null;</span>
+		}
+		
+		//	Create New Journal
+<span class="nc" id="L133">		retValue = new MCash (cb, dateAcct);</span>
+<span class="nc" id="L134">		retValue.saveEx(trxName);</span>
+<span class="nc" id="L135">		return retValue;</span>
+	}	//	get
+
+	/**	Static Logger	*/
+<span class="nc" id="L139">	private static CLogger	s_log	= CLogger.getCLogger (MCash.class);</span>
+	
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param C_Cash_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MCash(Properties ctx, String C_Cash_UU, String trxName) {
+<span class="nc" id="L148">        super(ctx, C_Cash_UU, trxName);</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (Util.isEmpty(C_Cash_UU))</span>
+<span class="nc" id="L150">			setInitialDefaults(ctx);</span>
+<span class="nc" id="L151">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 *	@param ctx context
+	 *	@param C_Cash_ID id
+	 *	@param trxName transaction
+	 */
+	public MCash (Properties ctx, int C_Cash_ID, String trxName)
+	{
+<span class="nc" id="L161">		super (ctx, C_Cash_ID, trxName);</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">		if (C_Cash_ID == 0)</span>
+<span class="nc" id="L163">			setInitialDefaults(ctx);</span>
+<span class="nc" id="L164">	}	//	MCash</span>
+
+	/**
+	 * Set the initial defaults for a new record
+	 */
+	private void setInitialDefaults(Properties ctx) {
+<span class="nc" id="L170">		setBeginningBalance (Env.ZERO);</span>
+<span class="nc" id="L171">		setEndingBalance (Env.ZERO);</span>
+<span class="nc" id="L172">		setStatementDifference(Env.ZERO);</span>
+<span class="nc" id="L173">		setDocAction(DOCACTION_Complete);</span>
+<span class="nc" id="L174">		setDocStatus(DOCSTATUS_Drafted);</span>
+		//
+<span class="nc" id="L176">		Timestamp today = TimeUtil.getDay(System.currentTimeMillis());</span>
+<span class="nc" id="L177">		setStatementDate (today);	// @#Date@</span>
+<span class="nc" id="L178">		setDateAcct (today);	// @#Date@</span>
+		
+<span class="nc" id="L180">		StringBuilder name = new StringBuilder(DisplayType.getDateFormat(DisplayType.Date).format(today))</span>
+<span class="nc" id="L181">		.append(&quot; &quot;).append(MOrg.get(ctx, getAD_Org_ID()).getValue());</span>
+<span class="nc" id="L182">		setName (name.toString());</span>
+<span class="nc" id="L183">		setIsApproved(false);</span>
+<span class="nc" id="L184">		setPosted (false);	// N</span>
+<span class="nc" id="L185">		setProcessed (false);</span>
+<span class="nc" id="L186">	}</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MCash (Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L196">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L197">	}	//	MCash</span>
+	
+	/**
+	 * 	Parent Constructor
+	 *	@param cb cash book
+	 *	@param today date - if null today
+	 */
+	public MCash (MCashBook cb, Timestamp today)
+	{
+<span class="nc" id="L206">		this (cb.getCtx(), 0, cb.get_TrxName());</span>
+<span class="nc" id="L207">		setClientOrg(cb);</span>
+<span class="nc" id="L208">		setC_CashBook_ID(cb.getC_CashBook_ID());</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">		if (today != null)</span>
+		{
+<span class="nc" id="L211">			setStatementDate (today);	</span>
+<span class="nc" id="L212">			setDateAcct (today);</span>
+<span class="nc" id="L213">			StringBuilder name = new StringBuilder(DisplayType.getDateFormat(DisplayType.Date).format(today))</span>
+<span class="nc" id="L214">				.append(&quot; &quot;).append(cb.getName());</span>
+<span class="nc" id="L215">			setName (name.toString());</span>
+		}
+<span class="nc" id="L217">		m_book = cb;</span>
+<span class="nc" id="L218">	}	//	MCash</span>
+
+	/**
+	 * @param ctx
+	 * @param C_Cash_ID
+	 * @param trxName
+	 * @param virtualColumns
+	 */
+	public MCash(Properties ctx, int C_Cash_ID, String trxName, String... virtualColumns) {
+<span class="nc" id="L227">		super(ctx, C_Cash_ID, trxName, virtualColumns);</span>
+<span class="nc" id="L228">	}</span>
+
+	/**	Lines					*/
+<span class="nc" id="L231">	protected MCashLine[]		m_lines = null;</span>
+	/** CashBook				*/
+<span class="nc" id="L233">	protected MCashBook		m_book = null;</span>
+	
+	/**
+	 * 	Get Lines
+	 *	@param requery true to reload from DB
+	 *	@return lines
+	 */
+	public MCashLine[] getLines (boolean requery)
+	{
+<span class="nc bnc" id="L242" title="All 4 branches missed.">		if (m_lines != null &amp;&amp; !requery) {</span>
+<span class="nc" id="L243">			set_TrxName(m_lines, get_TrxName());</span>
+<span class="nc" id="L244">			return m_lines;</span>
+		}
+		
+<span class="nc" id="L247">		final String whereClause =MCashLine.COLUMNNAME_C_Cash_ID+&quot;=?&quot;; </span>
+<span class="nc" id="L248">		List&lt;MCashLine&gt; list = new Query(getCtx(),I_C_CashLine.Table_Name,  whereClause, get_TrxName())</span>
+<span class="nc" id="L249">								.setParameters(getC_Cash_ID())</span>
+<span class="nc" id="L250">								.setOrderBy(I_C_CashLine.COLUMNNAME_Line+&quot;,&quot;+I_C_CashLine.COLUMNNAME_C_CashLine_ID)</span>
+<span class="nc" id="L251">								.setOnlyActiveRecords(true)</span>
+<span class="nc" id="L252">								.list();</span>
+		
+<span class="nc" id="L254">		m_lines =  list.toArray(new MCashLine[list.size()]);</span>
+<span class="nc" id="L255">		return m_lines;</span>
+	}	//	getLines
+
+	/**
+	 * 	Get Cash Book
+	 *	@return cash book
+	 */
+	public MCashBook getCashBook()
+	{
+<span class="nc bnc" id="L264" title="All 2 branches missed.">		if (m_book == null)</span>
+<span class="nc" id="L265">			m_book = MCashBook.getCopy(getCtx(), getC_CashBook_ID(), get_TrxName());</span>
+<span class="nc" id="L266">		return m_book;</span>
+	}	//	getCashBook
+	
+	/**
+	 * 	Get Document No 
+	 *	@return name
+	 */
+	@Override
+	public String getDocumentNo()
+	{
+<span class="nc" id="L276">		return getName();</span>
+	}	//	getDocumentNo
+
+	/**
+	 * 	Get Document Info
+	 *	@return document info (untranslated)
+	 */
+	@Override
+	public String getDocumentInfo()
+	{
+<span class="nc" id="L286">		StringBuilder msgreturn = new StringBuilder().append(Msg.getElement(getCtx(), &quot;C_Cash_ID&quot;)).append(&quot; &quot;).append(getDocumentNo());</span>
+<span class="nc" id="L287">		return msgreturn.toString();</span>
+	}	//	getDocumentInfo
+
+	/**
+	 * 	Create PDF
+	 *	@return PDF File or null
+	 */
+	@Override
+	public File createPDF ()
+	{
+		try
+		{
+<span class="nc" id="L299">			StringBuilder msgfile = new StringBuilder().append(get_TableName()).append(get_ID()).append(&quot;_&quot;);</span>
+<span class="nc" id="L300">			File temp = File.createTempFile(msgfile.toString(), &quot;.pdf&quot;);</span>
+<span class="nc" id="L301">			return createPDF (temp);</span>
+		}
+<span class="nc" id="L303">		catch (Exception e)</span>
+		{
+<span class="nc" id="L305">			log.severe(&quot;Could not create PDF - &quot; + e.getMessage());</span>
+		}
+<span class="nc" id="L307">		return null;</span>
+	}	//	getPDF
+
+	/**
+	 * 	Create PDF file
+	 *	@param file output file
+	 *	@return not implemented, always return null
+	 */
+	public File createPDF (File file)
+	{
+<span class="nc" id="L317">		return null;</span>
+	}	//	createPDF
+
+	@Override
+	protected boolean beforeSave (boolean newRecord)
+	{
+<span class="nc" id="L323">		setAD_Org_ID(getCashBook().getAD_Org_ID());</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">		if (getAD_Org_ID() == 0)</span>
+		{
+<span class="nc" id="L326">			log.saveError(&quot;Error&quot;, Msg.parseTranslation(getCtx(), &quot;@AD_Org_ID@&quot;));</span>
+<span class="nc" id="L327">			return false;</span>
+		}
+		//	Calculate End Balance
+<span class="nc" id="L330">		setEndingBalance(getBeginningBalance().add(getStatementDifference()));</span>
+<span class="nc" id="L331">		return true;</span>
+	}	//	beforeSave
+		
+	/**
+	 * 	Process document
+	 *	@param processAction document action
+	 *	@return true if performed
+	 */
+	@Override
+	public boolean processIt (String processAction)
+	{
+<span class="nc" id="L342">		m_processMsg = null;</span>
+<span class="nc" id="L343">		DocumentEngine engine = new DocumentEngine (this, getDocStatus());</span>
+<span class="nc" id="L344">		return engine.processIt (processAction, getDocAction());</span>
+	}	//	process
+	
+	/**	Process Message 			*/
+<span class="nc" id="L348">	protected String		m_processMsg = null;</span>
+	/**	Just Prepared Flag			*/
+<span class="nc" id="L350">	protected boolean		m_justPrepared = false;</span>
+
+	/**
+	 * 	Unlock Document.
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean unlockIt()
+	{
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L360">		setProcessing(false);</span>
+<span class="nc" id="L361">		return true;</span>
+	}	//	unlockIt
+	
+	/**
+	 * 	Invalidate Document
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean invalidateIt()
+	{
+<span class="nc bnc" id="L371" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L372">		setDocAction(DOCACTION_Prepare);</span>
+<span class="nc" id="L373">		return true;</span>
+	}	//	invalidateIt
+	
+	/**
+	 *	Prepare Document
+	 * 	@return new status (In Progress or Invalid) 
+	 */@Override
+	public String prepareIt()
+	{
+<span class="nc bnc" id="L382" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L383">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_BEFORE_PREPARE);</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L385">			return DocAction.STATUS_Invalid;</span>
+
+		//	Std Period open?
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		if (!MPeriod.isOpen(getCtx(), getDateAcct(), MDocType.DOCBASETYPE_CashJournal, getAD_Org_ID()))</span>
+		{
+<span class="nc" id="L390">			m_processMsg = &quot;@PeriodClosed@&quot;;</span>
+<span class="nc" id="L391">			return DocAction.STATUS_Invalid;</span>
+		}
+<span class="nc" id="L393">		MCashLine[] lines = getLines(false);</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">		if (lines.length == 0)</span>
+		{
+<span class="nc" id="L396">			m_processMsg = &quot;@NoLines@&quot;;</span>
+<span class="nc" id="L397">			return DocAction.STATUS_Invalid;</span>
+		}
+		//	Add up Amounts
+<span class="nc" id="L400">		BigDecimal difference = Env.ZERO;</span>
+<span class="nc" id="L401">		int C_Currency_ID = getC_Currency_ID();</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">		for (int i = 0; i &lt; lines.length; i++)</span>
+		{
+<span class="nc" id="L404">			MCashLine line = lines[i];</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">			if (!line.isActive())</span>
+<span class="nc" id="L406">				continue;</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">			if (C_Currency_ID == line.getC_Currency_ID())</span>
+<span class="nc" id="L408">				difference = difference.add(line.getAmount());</span>
+			else
+			{
+<span class="nc" id="L411">				BigDecimal amt = MConversionRate.convert(getCtx(), line.getAmount(), </span>
+<span class="nc" id="L412">					line.getC_Currency_ID(), C_Currency_ID, getDateAcct(), 0, </span>
+<span class="nc" id="L413">					getAD_Client_ID(), getAD_Org_ID());</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">				if (amt == null)</span>
+				{
+<span class="nc" id="L416">					m_processMsg = &quot;No Conversion Rate found - @C_CashLine_ID@= &quot; + line.getLine();</span>
+<span class="nc" id="L417">					return DocAction.STATUS_Invalid;</span>
+				}
+<span class="nc" id="L419">				difference = difference.add(amt);</span>
+			}
+		}
+<span class="nc" id="L422">		setStatementDifference(difference);</span>
+
+<span class="nc" id="L424">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_AFTER_PREPARE);</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L426">			return DocAction.STATUS_Invalid;</span>
+
+<span class="nc" id="L428">		m_justPrepared = true;</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">		if (!DOCACTION_Complete.equals(getDocAction()))</span>
+<span class="nc" id="L430">			setDocAction(DOCACTION_Complete);</span>
+<span class="nc" id="L431">		return DocAction.STATUS_InProgress;</span>
+	}	//	prepareIt
+	
+	/**
+	 * 	Approve Document
+	 * 	@return true if success 
+	 */
+	 @Override
+	public boolean  approveIt()
+	{
+<span class="nc bnc" id="L441" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L442">		setIsApproved(true);</span>
+<span class="nc" id="L443">		return true;</span>
+	}	//	approveIt
+	
+	/**
+	 * 	Reject Approval
+	 * 	@return true if success 
+	 */
+	 @Override
+	public boolean rejectIt()
+	{
+<span class="nc bnc" id="L453" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+<span class="nc" id="L454">		setIsApproved(false);</span>
+<span class="nc" id="L455">		return true;</span>
+	}	//	rejectIt
+	
+	/**
+	 * 	Complete Document
+	 * 	@return new status (Complete, In Progress, Invalid, Waiting ..)
+	 */
+	 @Override
+	public String completeIt()
+	{
+		//	Re-Check
+<span class="nc bnc" id="L466" title="All 2 branches missed.">		if (!m_justPrepared)</span>
+		{
+<span class="nc" id="L468">			String status = prepareIt();</span>
+<span class="nc" id="L469">			m_justPrepared = false;</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">			if (!DocAction.STATUS_InProgress.equals(status))</span>
+<span class="nc" id="L471">				return status;</span>
+		}
+		
+<span class="nc" id="L474">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_BEFORE_COMPLETE);</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L476">			return DocAction.STATUS_Invalid;</span>
+
+		
+		//	Implicit Approval
+<span class="nc bnc" id="L480" title="All 2 branches missed.">		if (!isApproved())</span>
+<span class="nc" id="L481">			approveIt();</span>
+		//
+<span class="nc bnc" id="L483" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		
+<span class="nc" id="L485">		MCashLine[] lines = getLines(false);</span>
+<span class="nc bnc" id="L486" title="All 2 branches missed.">		for (int i = 0; i &lt; lines.length; i++)</span>
+		{
+<span class="nc" id="L488">			MCashLine line = lines[i];</span>
+<span class="nc bnc" id="L489" title="All 2 branches missed.">			if (MCashLine.CASHTYPE_Invoice.equals(line.getCashType()))</span>
+			{
+				// Check if the invoice is completed - teo_sarca BF [ 1894524 ]
+<span class="nc" id="L492">				MInvoice invoice = line.getInvoice();</span>
+<span class="nc bnc" id="L493" title="All 2 branches missed.">				if (   !MInvoice.DOCSTATUS_Completed.equals(invoice.getDocStatus())</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">					&amp;&amp; !MInvoice.DOCSTATUS_Closed.equals(invoice.getDocStatus())</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">					&amp;&amp; !MInvoice.DOCSTATUS_Reversed.equals(invoice.getDocStatus())</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">					&amp;&amp; !MInvoice.DOCSTATUS_Voided.equals(invoice.getDocStatus())</span>
+					)
+				{
+<span class="nc" id="L499">					m_processMsg = &quot;@Line@ &quot;+line.getLine()+&quot;: @InvoiceCreateDocNotCompleted@&quot;;</span>
+<span class="nc" id="L500">					return DocAction.STATUS_Invalid;</span>
+				}
+				//
+<span class="nc" id="L503">				StringBuilder name = new StringBuilder().append(Msg.translate(getCtx(), &quot;C_Cash_ID&quot;)).append(&quot;: &quot;).append(getName())</span>
+<span class="nc" id="L504">										.append(&quot; - &quot;).append(Msg.translate(getCtx(), &quot;Line&quot;)).append(&quot; &quot;).append(line.getLine());</span>
+<span class="nc" id="L505">				MAllocationHdr hdr = new MAllocationHdr(getCtx(), false, </span>
+<span class="nc" id="L506">						getDateAcct(), line.getC_Currency_ID(),</span>
+<span class="nc" id="L507">						name.toString(), get_TrxName());</span>
+<span class="nc" id="L508">				hdr.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">				if (!hdr.save())</span>
+				{
+<span class="nc" id="L511">					m_processMsg = CLogger.retrieveErrorString(&quot;Could not create Allocation Hdr&quot;);</span>
+<span class="nc" id="L512">					return DocAction.STATUS_Invalid;</span>
+				}
+				//	Allocation Line
+<span class="nc" id="L515">				MAllocationLine aLine = new MAllocationLine (hdr, line.getAmount(),</span>
+<span class="nc" id="L516">					line.getDiscountAmt(), line.getWriteOffAmt(), Env.ZERO);</span>
+<span class="nc" id="L517">				aLine.setC_Invoice_ID(line.getC_Invoice_ID());</span>
+<span class="nc" id="L518">				aLine.setC_CashLine_ID(line.getC_CashLine_ID());</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">				if (!aLine.save())</span>
+				{
+<span class="nc" id="L521">					m_processMsg = CLogger.retrieveErrorString(&quot;Could not create Allocation Line&quot;);</span>
+<span class="nc" id="L522">					return DocAction.STATUS_Invalid;</span>
+				}
+				//	Should start WF
+<span class="nc bnc" id="L525" title="All 2 branches missed.">				if(!hdr.processIt(DocAction.ACTION_Complete)) {</span>
+<span class="nc" id="L526">					m_processMsg = CLogger.retrieveErrorString(&quot;Could not process Allocation&quot;);</span>
+<span class="nc" id="L527">					return DocAction.STATUS_Invalid;</span>
+				}
+<span class="nc bnc" id="L529" title="All 2 branches missed.">				if (!hdr.save()) {</span>
+<span class="nc" id="L530">					m_processMsg = CLogger.retrieveErrorString(&quot;Could not save Allocation&quot;);</span>
+<span class="nc" id="L531">					return DocAction.STATUS_Invalid;</span>
+				}
+			}
+<span class="nc bnc" id="L534" title="All 2 branches missed.">			else if (MCashLine.CASHTYPE_BankAccountTransfer.equals(line.getCashType()))</span>
+			{
+				//	Payment just as intermediate info
+<span class="nc" id="L537">				MPayment pay = new MPayment (getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L538">				pay.setAD_Org_ID(getAD_Org_ID());</span>
+<span class="nc" id="L539">				String documentNo = getName();</span>
+<span class="nc" id="L540">				pay.setDocumentNo(documentNo);</span>
+<span class="nc" id="L541">				pay.setR_PnRef(documentNo);</span>
+<span class="nc" id="L542">				pay.set_ValueNoCheck(&quot;TrxType&quot;, &quot;X&quot;);		//	Transfer</span>
+<span class="nc" id="L543">				pay.set_ValueNoCheck(&quot;TenderType&quot;, &quot;X&quot;);</span>
+				//
+				//Modification for cash payment - Posterita
+<span class="nc" id="L546">				pay.setC_CashBook_ID(getC_CashBook_ID());</span>
+				//End of modification - Posterita
+				
+<span class="nc" id="L549">				pay.setC_BankAccount_ID(line.getC_BankAccount_ID());</span>
+<span class="nc" id="L550">				pay.setC_DocType_ID(true);	//	Receipt</span>
+<span class="nc" id="L551">				pay.setDateTrx(getStatementDate());</span>
+<span class="nc" id="L552">				pay.setDateAcct(getDateAcct());</span>
+<span class="nc" id="L553">				pay.setAmount(line.getC_Currency_ID(), line.getAmount().negate());	//	Transfer</span>
+<span class="nc" id="L554">				pay.setDescription(line.getDescription());</span>
+<span class="nc" id="L555">				pay.setDocStatus(MPayment.DOCSTATUS_Closed);</span>
+<span class="nc" id="L556">				pay.setDocAction(MPayment.DOCACTION_None);</span>
+<span class="nc" id="L557">				pay.setPosted(true);</span>
+<span class="nc" id="L558">				pay.setIsAllocated(true);	//	Has No Allocation!</span>
+<span class="nc" id="L559">				pay.setProcessed(true);		</span>
+<span class="nc bnc" id="L560" title="All 2 branches missed.">				if (!pay.save())</span>
+				{
+<span class="nc" id="L562">					m_processMsg = CLogger.retrieveErrorString(&quot;Could not create Payment&quot;);</span>
+<span class="nc" id="L563">					return DocAction.STATUS_Invalid;</span>
+				}
+				
+<span class="nc" id="L566">				line.setC_Payment_ID(pay.getC_Payment_ID());</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">				if (!line.save())</span>
+				{
+<span class="nc" id="L569">					m_processMsg = &quot;Could not update Cash Line&quot;;</span>
+<span class="nc" id="L570">					return DocAction.STATUS_Invalid;</span>
+				}
+			}
+		}
+		
+		//	User Validation
+<span class="nc" id="L576">		String valid = ModelValidationEngine.get().fireDocValidate(this, ModelValidator.TIMING_AFTER_COMPLETE);</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">		if (valid != null)</span>
+		{
+<span class="nc" id="L579">			m_processMsg = valid;</span>
+<span class="nc" id="L580">			return DocAction.STATUS_Invalid;</span>
+		}
+		//
+<span class="nc" id="L583">		setProcessed(true);</span>
+<span class="nc" id="L584">		setDocAction(DOCACTION_Close);</span>
+<span class="nc" id="L585">		return DocAction.STATUS_Completed;</span>
+	}	//	completeIt
+	
+	/**
+	 * 	Void Document.
+	 * 	Same as Close.
+	 * 	@return true if successfully voided 
+	 */
+	 @Override
+	public boolean voidIt()
+	{
+<span class="nc bnc" id="L596" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		// Before Void
+<span class="nc" id="L598">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_VOID);</span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L600">			return false;</span>
+
+		//FR [ 1866214 ]
+<span class="nc" id="L603">		boolean retValue = reverseIt();</span>
+		
+<span class="nc bnc" id="L605" title="All 2 branches missed.">		if (retValue) {</span>
+			// After Void
+<span class="nc" id="L607">			m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_VOID);</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">			if (m_processMsg != null)</span>
+<span class="nc" id="L609">				return false;		</span>
+<span class="nc" id="L610">			setDocAction(DOCACTION_None);</span>
+		}
+
+<span class="nc" id="L613">		return retValue;</span>
+	}	//	voidIt
+	
+	/**
+	 * 	Reverse Cash
+	 * 	Period needs to be open
+	 *	@return true if reversed
+	 */
+	protected boolean reverseIt() 
+	{
+<span class="nc bnc" id="L623" title="All 2 branches missed.">		if (DOCSTATUS_Closed.equals(getDocStatus())</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">			|| DOCSTATUS_Reversed.equals(getDocStatus())</span>
+<span class="nc bnc" id="L625" title="All 2 branches missed.">			|| DOCSTATUS_Voided.equals(getDocStatus()))</span>
+		{
+<span class="nc" id="L627">			m_processMsg = &quot;Document Closed: &quot; + getDocStatus();</span>
+<span class="nc" id="L628">			setDocAction(DOCACTION_None);</span>
+<span class="nc" id="L629">			return false;</span>
+		}
+
+		//	Can we delete posting
+<span class="nc bnc" id="L633" title="All 2 branches missed.">		if (!MPeriod.isOpen(getCtx(), this.getDateAcct(), MPeriodControl.DOCBASETYPE_CashJournal, getAD_Org_ID()))</span>
+<span class="nc" id="L634">			throw new IllegalStateException(&quot;@PeriodClosed@&quot;);</span>
+		
+		//	Reverse Allocations
+<span class="nc" id="L637">		MAllocationHdr[] allocations = MAllocationHdr.getOfCash(getCtx(), getC_Cash_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L638" title="All 2 branches missed.">		for(MAllocationHdr allocation : allocations)</span>
+		{
+<span class="nc" id="L640">			allocation.reverseCorrectIt();</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">			if(!allocation.save())</span>
+<span class="nc" id="L642">				throw new IllegalStateException(&quot;Cannot reverse allocations&quot;);</span>
+		}	
+
+<span class="nc" id="L645">		MCashLine[] cashlines = getLines(true);</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">		for (MCashLine cashline : cashlines )</span>
+		{
+<span class="nc" id="L648">			BigDecimal oldAmount = cashline.getAmount();</span>
+<span class="nc" id="L649">			BigDecimal oldDiscount = cashline.getDiscountAmt();</span>
+<span class="nc" id="L650">			BigDecimal oldWriteOff = cashline.getWriteOffAmt();</span>
+<span class="nc" id="L651">			cashline.setAmount(Env.ZERO);</span>
+<span class="nc" id="L652">			cashline.setDiscountAmt(Env.ZERO);</span>
+<span class="nc" id="L653">			cashline.setWriteOffAmt(Env.ZERO);</span>
+<span class="nc" id="L654">			StringBuilder msgadd = new StringBuilder().append(Msg.getMsg(getCtx(), &quot;Voided&quot;))</span>
+<span class="nc" id="L655">				.append(&quot; (Amount=&quot;).append(oldAmount).append(&quot;, Discount=&quot;).append(oldDiscount)</span>
+<span class="nc" id="L656">				.append(&quot;, WriteOff=&quot;).append(oldWriteOff).append(&quot;, )&quot;);</span>
+<span class="nc" id="L657">			cashline.addDescription(msgadd.toString());</span>
+<span class="nc bnc" id="L658" title="All 2 branches missed.">			if (MCashLine.CASHTYPE_BankAccountTransfer.equals(cashline.getCashType()))</span>
+			{
+<span class="nc bnc" id="L660" title="All 2 branches missed.">				if (cashline.getC_Payment_ID() == 0)</span>
+<span class="nc" id="L661">					throw new IllegalStateException(&quot;Cannot reverse payment&quot;);</span>
+					
+<span class="nc" id="L663">				MPayment payment = new MPayment(getCtx(), cashline.getC_Payment_ID(),get_TrxName());</span>
+<span class="nc" id="L664">				payment.reverseCorrectIt();</span>
+<span class="nc" id="L665">				payment.saveEx();</span>
+			}
+<span class="nc" id="L667">			cashline.saveEx();</span>
+		}
+		
+<span class="nc" id="L670">		setName(getName()+&quot;^&quot;);</span>
+<span class="nc" id="L671">		addDescription(Msg.getMsg(getCtx(), &quot;Voided&quot;));</span>
+<span class="nc" id="L672">		setDocStatus(DOCSTATUS_Reversed);	//	for direct calls</span>
+<span class="nc" id="L673">		setProcessed(true);</span>
+<span class="nc" id="L674">		setPosted(true);</span>
+<span class="nc" id="L675">		setDocAction(DOCACTION_None);</span>
+<span class="nc" id="L676">		saveEx();</span>
+			
+		//	Delete Posting
+<span class="nc" id="L679">		MFactAcct.deleteEx(Table_ID, getC_Cash_ID(), get_TrxName());</span>
+		
+<span class="nc" id="L681">		return true;</span>
+	}	//	reverse
+	
+	/**
+	 * 	Add to Description
+	 *	@param description text
+	 */
+	public void addDescription (String description)
+	{
+<span class="nc" id="L690">		String desc = getDescription();</span>
+<span class="nc bnc" id="L691" title="All 2 branches missed.">		if (desc == null)</span>
+<span class="nc" id="L692">			setDescription(description);</span>
+		else{
+<span class="nc" id="L694">			StringBuilder msgd = new StringBuilder(desc).append(&quot; | &quot;).append(description);</span>
+<span class="nc" id="L695">			setDescription(msgd.toString());</span>
+		}	
+<span class="nc" id="L697">	}	//	addDescription</span>
+
+	/**
+	 * 	Close Document.
+	 * 	Cancel not delivered Quantities
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean closeIt()
+	{
+<span class="nc bnc" id="L707" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		// Before Close
+<span class="nc" id="L709">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_CLOSE);</span>
+<span class="nc bnc" id="L710" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L711">			return false;</span>
+		
+<span class="nc" id="L713">		setDocAction(DOCACTION_None);</span>
+
+		// After Close
+<span class="nc" id="L716">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_CLOSE);</span>
+<span class="nc bnc" id="L717" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L718">			return false;</span>
+<span class="nc" id="L719">		return true;</span>
+	}	//	closeIt
+	
+	/**
+	 * 	Reverse Correction
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean reverseCorrectIt()
+	{
+<span class="nc bnc" id="L729" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		// Before reverseCorrect
+<span class="nc" id="L731">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_REVERSECORRECT);</span>
+<span class="nc bnc" id="L732" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L733">			return false;</span>
+		
+		//FR [ 1866214 ]
+<span class="nc" id="L736">		boolean retValue = reverseIt();</span>
+		
+<span class="nc bnc" id="L738" title="All 2 branches missed.">		if (retValue) {</span>
+			// After reverseCorrect
+<span class="nc" id="L740">			m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_REVERSECORRECT);</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">			if (m_processMsg != null)</span>
+<span class="nc" id="L742">				return false;		</span>
+		}
+		
+<span class="nc" id="L745">		return retValue;</span>
+	}	//	reverseCorrectionIt
+	
+	/**
+	 * 	Reverse Accrual - none
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean reverseAccrualIt()
+	{
+<span class="nc bnc" id="L755" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		// Before reverseAccrual
+<span class="nc" id="L757">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_REVERSEACCRUAL);</span>
+<span class="nc bnc" id="L758" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L759">			return false;</span>
+		
+		// After reverseAccrual
+<span class="nc" id="L762">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_REVERSEACCRUAL);</span>
+<span class="nc bnc" id="L763" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L764">			return false;</span>
+				
+<span class="nc" id="L766">		return false;</span>
+	}	//	reverseAccrualIt
+	
+	/** 
+	 * 	Re-activate
+	 * 	@return true if success 
+	 */
+	@Override
+	public boolean reActivateIt()
+	{
+<span class="nc bnc" id="L776" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(toString());</span>
+		// Before reActivate
+<span class="nc" id="L778">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_BEFORE_REACTIVATE);</span>
+<span class="nc bnc" id="L779" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L780">			return false;	</span>
+				
+<span class="nc" id="L782">		setProcessed(false);</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">		if (reverseCorrectIt())</span>
+<span class="nc" id="L784">			return true;</span>
+
+		// After reActivate
+<span class="nc" id="L787">		m_processMsg = ModelValidationEngine.get().fireDocValidate(this,ModelValidator.TIMING_AFTER_REACTIVATE);</span>
+<span class="nc bnc" id="L788" title="All 2 branches missed.">		if (m_processMsg != null)</span>
+<span class="nc" id="L789">			return false;		</span>
+<span class="nc" id="L790">		return false;</span>
+	}	//	reActivateIt
+	
+	/**
+	 * 	Set Processed
+	 *	@param processed processed
+	 */
+	@Override
+	public void setProcessed (boolean processed)
+	{
+<span class="nc" id="L800">		super.setProcessed (processed);</span>
+<span class="nc" id="L801">		StringBuilder sql = new StringBuilder(&quot;UPDATE C_CashLine SET Processed='&quot;)</span>
+<span class="nc bnc" id="L802" title="All 2 branches missed.">			.append((processed ? &quot;Y&quot; : &quot;N&quot;))</span>
+<span class="nc" id="L803">			.append(&quot;' WHERE C_Cash_ID=&quot;).append(getC_Cash_ID());</span>
+<span class="nc" id="L804">		int noLine = DB.executeUpdate (sql.toString(), get_TrxName());</span>
+<span class="nc" id="L805">		m_lines = null;</span>
+<span class="nc bnc" id="L806" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(processed + &quot; - Lines=&quot; + noLine);</span>
+<span class="nc" id="L807">	}	//	setProcessed</span>
+	
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	@Override
+	public String toString ()
+	{
+<span class="nc" id="L816">		StringBuilder sb = new StringBuilder (&quot;MCash[&quot;);</span>
+<span class="nc" id="L817">		sb.append (get_ID ())</span>
+<span class="nc" id="L818">			.append (&quot;-&quot;).append (getName())</span>
+<span class="nc" id="L819">			.append(&quot;, Balance=&quot;).append(getBeginningBalance())</span>
+<span class="nc" id="L820">			.append(&quot;-&gt;&quot;).append(getEndingBalance())</span>
+<span class="nc" id="L821">			.append (&quot;]&quot;);</span>
+<span class="nc" id="L822">		return sb.toString ();</span>
+	}	//	toString
+	
+	/**
+	 * 	Get Summary
+	 *	@return Summary of Document
+	 */
+	@Override
+	public String getSummary()
+	{
+<span class="nc" id="L832">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L833">		sb.append(getName());</span>
+		//	: Total Lines = 123.00 (#1)
+<span class="nc" id="L835">		sb.append(&quot;: &quot;)</span>
+<span class="nc" id="L836">			.append(Msg.translate(getCtx(),&quot;BeginningBalance&quot;)).append(&quot;=&quot;).append(getBeginningBalance())</span>
+<span class="nc" id="L837">			.append(&quot;,&quot;)</span>
+<span class="nc" id="L838">			.append(Msg.translate(getCtx(),&quot;EndingBalance&quot;)).append(&quot;=&quot;).append(getEndingBalance())</span>
+<span class="nc" id="L839">			.append(&quot; (#&quot;).append(getLines(false).length).append(&quot;)&quot;);</span>
+		//	 - Description
+<span class="nc bnc" id="L841" title="All 4 branches missed.">		if (getDescription() != null &amp;&amp; getDescription().length() &gt; 0)</span>
+<span class="nc" id="L842">			sb.append(&quot; - &quot;).append(getDescription());</span>
+<span class="nc" id="L843">		return sb.toString();</span>
+	}	//	getSummary
+	
+	/**
+	 * 	Get Process Message
+	 *	@return clear text error message
+	 */
+	@Override
+	public String getProcessMsg()
+	{
+<span class="nc" id="L853">		return m_processMsg;</span>
+	}	//	getProcessMsg
+	
+	/**
+	 * 	Get Document Owner (Responsible)
+	 *	@return AD_User_ID
+	 */
+	@Override
+	public int getDoc_User_ID()
+	{
+<span class="nc" id="L863">		return getCreatedBy();</span>
+	}	//	getDoc_User_ID
+
+	/**
+	 * 	Get Document Approval Amount
+	 *	@return amount difference
+	 */
+	@Override
+	public BigDecimal getApprovalAmt()
+	{
+<span class="nc" id="L873">		return getStatementDifference();</span>
+	}	//	getApprovalAmt
+
+	/**
+	 * 	Get Currency
+	 *	@return Currency
+	 */
+	@Override
+	public int getC_Currency_ID ()
+	{
+<span class="nc" id="L883">		return getCashBook().getC_Currency_ID();</span>
+	}	//	getC_Currency_ID
+
+	/**
+	 * 	Document Status is Complete, Closed or Reversed
+	 *	@return true if CO, CL or RE
+	 */
+	public boolean isComplete()
+	{
+<span class="nc" id="L892">		String ds = getDocStatus();</span>
+<span class="nc bnc" id="L893" title="All 2 branches missed.">		return DOCSTATUS_Completed.equals(ds) </span>
+<span class="nc bnc" id="L894" title="All 2 branches missed.">			|| DOCSTATUS_Closed.equals(ds)</span>
+<span class="nc bnc" id="L895" title="All 2 branches missed.">			|| DOCSTATUS_Reversed.equals(ds);</span>
+	}	//	isComplete
+	
+}	//	MCash
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

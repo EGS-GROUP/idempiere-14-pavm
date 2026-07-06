@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>TOTPMechanism.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.idempiere.mfa</a> &gt; <span class="el_source">TOTPMechanism.java</span></div><h1>TOTPMechanism.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz (sponsored by FH)                                     *
+ **********************************************************************/
+
+package org.idempiere.mfa;
+
+import static dev.samstevens.totp.util.Utils.getDataUriForImage;
+
+import java.net.UnknownHostException;
+import java.sql.Timestamp;
+import java.util.Properties;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.IMFAMechanism;
+import org.compiere.model.MMFAMethod;
+import org.compiere.model.MMFARegistration;
+import org.compiere.model.MSysConfig;
+import org.compiere.model.MUser;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+import dev.samstevens.totp.code.CodeGenerator;
+import dev.samstevens.totp.code.DefaultCodeGenerator;
+import dev.samstevens.totp.code.DefaultCodeVerifier;
+import dev.samstevens.totp.exceptions.QrGenerationException;
+import dev.samstevens.totp.qr.QrData;
+import dev.samstevens.totp.qr.QrGenerator;
+import dev.samstevens.totp.qr.ZxingPngQrGenerator;
+import dev.samstevens.totp.secret.DefaultSecretGenerator;
+import dev.samstevens.totp.secret.SecretGenerator;
+import dev.samstevens.totp.time.NtpTimeProvider;
+import dev.samstevens.totp.time.SystemTimeProvider;
+import dev.samstevens.totp.time.TimeProvider;
+
+/**
+ * Time-based one-time password (TOTP) based multi-factor authentication implementation
+ */
+<span class="nc" id="L60">public class TOTPMechanism implements IMFAMechanism {</span>
+
+	/**
+	 * Implement the registration mechanism for TOTP
+	 * Generate the secret and the qrcode and return in the array
+	 * @param ctx
+	 * @param method
+	 * @param prm         optional - assigned name from the user
+	 * @param trxName
+	 * @return Object[] - first object is the String with the instructions to follow&lt;br/&gt;
+	 *                    second object is the registration generated&lt;br/&gt;
+	 *                    third message qrcode&lt;br/&gt;
+	 *                    fourth qrcode&lt;br/&gt;
+	 *                    fifth message secret&lt;br/&gt;
+	 *                    sixth secret&lt;br/&gt;
+	 */
+	@Override
+	public Object[] register(Properties ctx, MMFAMethod method, String prm, String trxName) {
+<span class="nc bnc" id="L78" title="All 2 branches missed.">		if (Util.isEmpty(method.getMFAIssuer()))</span>
+<span class="nc" id="L79">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFATOTPIssuerRequired&quot;));</span>
+
+<span class="nc bnc" id="L81" title="All 2 branches missed.">		if (MMFARegistration.alreadyExistsValid(method, prm))</span>
+<span class="nc" id="L82">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFAMethodAlreadyRegistered&quot;));</span>
+
+<span class="nc" id="L84">		MUser user = MUser.get(ctx);</span>
+		String label;
+<span class="nc" id="L86">		boolean email_login = MSysConfig.getBooleanValue(MSysConfig.USE_EMAIL_FOR_LOGIN, false);</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">		if (email_login)</span>
+<span class="nc" id="L88">			label = user.getEMail();</span>
+		else
+<span class="nc" id="L90">			label = user.getName();</span>
+
+<span class="nc" id="L92">		SecretGenerator secretGenerator = new DefaultSecretGenerator();</span>
+<span class="nc" id="L93">		String secret = secretGenerator.generate();</span>
+
+<span class="nc" id="L95">		QrData data = new QrData.Builder()</span>
+<span class="nc" id="L96">				.label(label)</span>
+<span class="nc" id="L97">				.secret(secret)</span>
+<span class="nc" id="L98">				.issuer(method.getMFAIssuer())</span>
+<span class="nc" id="L99">				.build();</span>
+
+<span class="nc" id="L101">		QrGenerator generator = new ZxingPngQrGenerator();</span>
+		byte[] imageData;
+		try {
+<span class="nc" id="L104">			imageData = generator.generate(data);</span>
+<span class="nc" id="L105">		} catch (QrGenerationException e) {</span>
+<span class="nc" id="L106">			throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;MFATOTPErrorGeneratingQR&quot;), e);</span>
+		}
+<span class="nc" id="L108">		String mimeType = generator.getImageMimeType();</span>
+<span class="nc" id="L109">		String dataUri = getDataUriForImage(imageData, mimeType);</span>
+
+<span class="nc" id="L111">		int expireMinutes = method.getExpireInMinutes();</span>
+
+<span class="nc" id="L113">		MMFARegistration reg = new MMFARegistration(ctx, 0, trxName);</span>
+<span class="nc" id="L114">		reg.set_ValueOfColumn(MMFARegistration.COLUMNNAME_AD_Client_ID, user.getAD_Client_ID());</span>
+<span class="nc" id="L115">		reg.setAD_Org_ID(0);</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">		if (! Util.isEmpty(prm)) {</span>
+<span class="nc" id="L117">			reg.setName(prm);</span>
+<span class="nc" id="L118">			reg.setParameterValue(prm);</span>
+<span class="nc" id="L119">		} else {</span>
+<span class="nc" id="L120">			reg.setName(label);</span>
+		}
+<span class="nc" id="L122">		reg.setMFA_Method_ID(method.getMFA_Method_ID());</span>
+<span class="nc" id="L123">		reg.setAD_User_ID(user.getAD_User_ID());</span>
+<span class="nc" id="L124">		reg.setMFASecret(secret);</span>
+<span class="nc" id="L125">		reg.setIsValid(false);</span>
+<span class="nc" id="L126">		reg.setIsUserMFAPreferred(false);</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">		if (expireMinutes &gt; 0)</span>
+<span class="nc" id="L128">			reg.setExpiration(new Timestamp(System.currentTimeMillis() + (expireMinutes*60000)));</span>
+<span class="nc" id="L129">		saveRegistration(reg);</span>
+
+		// Invalidate any other previous pending registration with same method
+<span class="nc" id="L132">		MMFARegistration.invalidatePreviousPending(method, prm, reg);</span>
+
+		// Notify the user that TOTP mechanism was registered and follow next step
+<span class="nc" id="L135">		Object[] ret = new Object[6];</span>
+<span class="nc" id="L136">		ret[0] = Msg.getMsg(Env.getCtx(), &quot;MFATOTPRegistered&quot;);</span>
+<span class="nc" id="L137">		ret[1] = reg;</span>
+<span class="nc" id="L138">		ret[2]  = Msg.getMsg(Env.getCtx(), &quot;MFATOTPImage&quot;);</span>
+<span class="nc" id="L139">		ret[3] = dataUri;</span>
+<span class="nc" id="L140">		ret[4]  = Msg.getMsg(Env.getCtx(), &quot;MFATOTPSecret&quot;);</span>
+<span class="nc" id="L141">		ret[5] = secret;</span>
+
+<span class="nc" id="L143">		return ret;</span>
+	}
+
+	/**
+	 * Complete/Validate a previous TOTP registration
+	 * @param ctx
+	 * @param reg                  The registration object
+	 * @param p_MFAValidationCode  The code to be validated
+	 * @param p_Name               Optional - a name to assign the registration
+	 * @param trxName
+	 * @return msg    A message indicating success, errors throw exception
+	 */
+	@Override
+	public String complete(Properties ctx, MMFARegistration reg, String code, String name, boolean preferred, String trxName) {
+<span class="nc bnc" id="L157" title="All 2 branches missed.">		if (! isValidCode(ctx, reg, code, trxName))</span>
+<span class="nc" id="L158">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFACodeInvalid&quot;));</span>
+
+		// valid code
+<span class="nc" id="L161">		reg.setIsValid(true);</span>
+<span class="nc" id="L162">		reg.setMFAValidatedAt(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L163">		reg.setExpiration(null);</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">		if (!Util.isEmpty(name))</span>
+<span class="nc" id="L165">			reg.setName(name);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">		if (preferred)</span>
+<span class="nc" id="L167">			reg.setIsUserMFAPreferred(true);</span>
+<span class="nc" id="L168">		saveRegistration(reg);</span>
+
+<span class="nc" id="L170">		return Msg.getMsg(ctx, &quot;MFARegistrationCompleted&quot;);</span>
+	}
+
+	/**
+	 * @param reg
+	 * @param code
+	 * @param trxName
+	 * @return
+	 */
+	private boolean isValidCode(Properties ctx, MMFARegistration reg, String code, String trxName) {
+<span class="nc" id="L180">		MMFAMethod method = new MMFAMethod(ctx, reg.getMFA_Method_ID(), trxName);</span>
+		TimeProvider timeProvider;
+<span class="nc bnc" id="L182" title="All 2 branches missed.">		if (MMFAMethod.MFATIMEPROVIDER_Ntp.equals(method.getMFATimeProvider())) {</span>
+<span class="nc" id="L183">			String ntpServer = method.getMFATimeServer();</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">			if (Util.isEmpty(ntpServer))</span>
+<span class="nc" id="L185">				ntpServer = &quot;pool.ntp.org&quot;;</span>
+<span class="nc" id="L186">			int timeout = MSysConfig.getIntValue(MSysConfig.MFA_NTP_TIMEOUT_IN_MILLISECONDS, 5000);</span>
+			try {
+<span class="nc" id="L188">				timeProvider = new NtpTimeProvider(ntpServer, timeout);</span>
+<span class="nc" id="L189">			} catch (UnknownHostException e) {</span>
+<span class="nc" id="L190">				throw new AdempiereException(Msg.getMsg(ctx, &quot;MFANTPServerError&quot;) + e.getLocalizedMessage(), e);</span>
+			}
+		} else { // default to System
+<span class="nc" id="L193">			timeProvider = new SystemTimeProvider();</span>
+		}
+<span class="nc" id="L195">		CodeGenerator codeGenerator = new DefaultCodeGenerator();</span>
+<span class="nc" id="L196">		DefaultCodeVerifier verifier = new DefaultCodeVerifier(codeGenerator, timeProvider);</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		if (method.getMFAAllowedTimeDiscrepancy() &gt; 0) {</span>
+			// allow codes valid for the time periods configured before/after to pass as valid (default is 1)
+<span class="nc" id="L199">			verifier.setAllowedTimePeriodDiscrepancy(method.getMFAAllowedTimeDiscrepancy());</span>
+		}
+
+<span class="nc" id="L202">		boolean valid = verifier.isValidCode(reg.getMFASecret(), code);</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">		if (valid) {</span>
+<span class="nc" id="L204">			reg.setMFALastSecret(code);</span>
+<span class="nc" id="L205">			reg.setLastSuccess(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L206">			reg.setFailedLoginCount(0);</span>
+<span class="nc" id="L207">		} else  {</span>
+<span class="nc" id="L208">			reg.setLastFailure(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L209">			reg.setFailedLoginCount(reg.getFailedLoginCount() + 1);</span>
+		}
+<span class="nc" id="L211">		saveRegistration(reg);</span>
+<span class="nc" id="L212">		return valid;</span>
+	}
+
+	/**
+	 * Generate a validation code - do nothing for TOTP
+	 * @param reg
+	 * @return
+	 */
+	@Override
+	public String generateValidationCode(MMFARegistration reg) {
+<span class="nc" id="L222">		return Msg.getMsg(Env.getCtx(), &quot;MFATOTPEnterValidationCode&quot;);</span>
+	}
+
+	/**
+	 * Validate a code
+	 * @param reg
+	 * @param code
+	 * @param setPreferred
+	 * @return message on error, null when OK
+	 */
+	@Override
+	public String validateCode(MMFARegistration reg, String code, boolean setPreferred) {
+<span class="nc" id="L234">		Properties ctx = reg.getCtx();</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		if (code.equals(reg.getMFALastSecret()))</span>
+<span class="nc" id="L236">			return Msg.getMsg(ctx, &quot;MFACodeAlreadyConsumed&quot;);</span>
+
+<span class="nc bnc" id="L238" title="All 2 branches missed.">		if (! isValidCode(ctx, reg, code, reg.get_TrxName()))</span>
+<span class="nc" id="L239">			return Msg.getMsg(ctx, &quot;MFACodeInvalid&quot;);</span>
+
+<span class="nc bnc" id="L241" title="All 2 branches missed.">		if (setPreferred) {</span>
+<span class="nc" id="L242">			reg.setIsUserMFAPreferred(true);</span>
+<span class="nc" id="L243">			saveRegistration(reg);</span>
+		}
+
+<span class="nc" id="L246">		return null;</span>
+	}
+
+	/**
+	 * Save the registration record allowing cross-tenant (saving for a user in System tenant)
+	 * @param reg
+	 */
+	private void saveRegistration(MMFARegistration reg) {
+<span class="nc" id="L254">		reg.saveCrossTenantSafeEx();</span>
+<span class="nc" id="L255">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

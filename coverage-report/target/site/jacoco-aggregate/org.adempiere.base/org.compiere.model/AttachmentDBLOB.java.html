@@ -1,0 +1,451 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AttachmentDBLOB.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">AttachmentDBLOB.java</span></div><h1>AttachmentDBLOB.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2012 Trek Global                                             *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+
+package org.compiere.model;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Blob;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.logging.Level;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.Result;
+import javax.xml.transform.Source;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.osgi.service.component.annotations.Component;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+
+/**
+ * DB LOB implementation of {@link IAttachmentStore}
+ */
+@Component(immediate = true, service = {IAttachmentStore.class}, property = {&quot;method=DB_LOB&quot;})
+<span class="nc" id="L63">public class AttachmentDBLOB implements IAttachmentStore</span>
+{
+<span class="nc" id="L65">    private static final CLogger log = CLogger.getCLogger(AttachmentDBLOB.class);</span>
+
+    @Override
+    public boolean loadLOBData(MAttachment attach, MStorageProvider prov) {
+        //	Reset
+<span class="nc" id="L70">        attach.m_items = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L71">        byte[] data = null;</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">    	if (! MAttachment.LIST_IN_ATTACHMENT_FILE.equals(attach.getTitle())) {</span>
+<span class="nc" id="L73">            data = attach.getBinaryData();</span>
+<span class="nc bnc" id="L74" title="All 4 branches missed.">            if (data == null || data.length == 0)</span>
+<span class="nc" id="L75">                return true;</span>
+    	}
+
+<span class="nc" id="L78">        return loadEntries(attach, data);</span>
+    }
+
+    /**
+     * Load attachment entries from XML or from AD_AttachmentFile
+     * @param attach attachment record
+     * @param data xml meta data
+     * @return true if success, false otherwise
+     */
+    private boolean loadEntries(MAttachment attach, byte[] data) {
+<span class="nc bnc" id="L88" title="All 2 branches missed.">    	if (MAttachment.LIST_IN_ATTACHMENT_FILE.equals(attach.getTitle())) {</span>
+<span class="nc" id="L89">			int index = 0;</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">    		for (MAttachmentFile attachFile : attach.getAttachmentFiles()) {</span>
+<span class="nc" id="L91">    			BigDecimal fileSize = attachFile.getFileSize();</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">    			String sizeStr = fileSize != null ? fileSize.toPlainString() : &quot;0&quot;;</span>
+<span class="nc" id="L93">    			IAttachmentLazyDataSource ds = new AttachmentDBLazyDataSource(attach.getAD_Attachment_ID(), index, attachFile.getFileName(), sizeStr);</span>
+<span class="nc" id="L94">				final MAttachmentEntry entry = new MAttachmentEntry(attachFile.getFileName(), attach.m_items.size() + 1, ds);</span>
+<span class="nc" id="L95">				entry.setSHA256Sum(attachFile.getSHA256Checksum());</span>
+<span class="nc" id="L96">				attach.m_items.add(entry);</span>
+<span class="nc" id="L97">				index++;</span>
+    		}
+<span class="nc" id="L99">    	} else {</span>
+    		// XML
+<span class="nc" id="L101">            NodeList entries = getEntriesFromXML(data);</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">            if (entries == null) {</span>
+<span class="nc" id="L103">            	log.severe(&quot;Failed to parse XML attachment data&quot;);</span>
+<span class="nc" id="L104">            	attach.m_items = null;</span>
+<span class="nc" id="L105">            	return false;</span>
+            }
+<span class="nc bnc" id="L107" title="All 2 branches missed.">            for (int i = 0; i &lt; entries.getLength(); i++) {</span>
+<span class="nc" id="L108">                final Node entryNode = entries.item(i);</span>
+<span class="nc" id="L109">                final NamedNodeMap attributes = entryNode.getAttributes();</span>
+<span class="nc" id="L110">                final Node nameNode = attributes.getNamedItem(&quot;name&quot;);</span>
+<span class="nc" id="L111">                final Node sizeNode = attributes.getNamedItem(&quot;size&quot;);</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">                if(nameNode==null) {</span>
+<span class="nc" id="L113">                    log.severe(&quot;No filename for entry &quot; + i);</span>
+<span class="nc" id="L114">                    attach.m_items = null;</span>
+<span class="nc" id="L115">                    return false;</span>
+                }
+<span class="nc" id="L117">                IAttachmentLazyDataSource ds = new AttachmentDBLazyDataSource(attach.getAD_Attachment_ID(), i, nameNode.getNodeValue(), sizeNode.getNodeValue());</span>
+<span class="nc" id="L118">                final MAttachmentEntry entry = new MAttachmentEntry(nameNode.getNodeValue(), attach.m_items.size() + 1, ds);</span>
+<span class="nc" id="L119">                attach.m_items.add(entry);</span>
+            }
+    	}
+<span class="nc" id="L122">        return true;</span>
+    }
+
+    @Override
+    public boolean save(MAttachment attach, MStorageProvider prov) {
+<span class="nc" id="L127">        return save(attach, prov, true);</span>
+    }
+
+    @Override
+    public boolean save(MAttachment attach, MStorageProvider prov, boolean beforeSave) {
+
+<span class="nc bnc" id="L133" title="All 4 branches missed.">        if (attach.m_items == null || attach.m_items.isEmpty()) {</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">            if (beforeSave)</span>
+<span class="nc" id="L135">                attach.setBinaryData(null);</span>
+<span class="nc" id="L136">            return true;</span>
+        }
+
+<span class="nc" id="L139">        return saveEntries(attach, beforeSave);</span>
+    }
+
+    /**
+     * Save attachment entries as XML and store the actual binary data to ad_attachment_entry, or to AD_AttachmentFile
+     * @param attach attachment record
+     * @param beforeSave true if calling from beforeSave of attachment record, false if calling from afterSave
+     * @return true if success, false otherwise
+     */
+    private boolean saveEntries(MAttachment attach, boolean beforeSave) {
+<span class="nc bnc" id="L149" title="All 2 branches missed.">    	if (beforeSave) {</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">    		if (MSysConfig.getBooleanValue(MSysConfig.ATTACHMENT_SAVE_LIST_IN_AD_ATTACHMENTFILE, true, Env.getAD_Client_ID(Env.getCtx()))) {</span>
+<span class="nc" id="L151">    			attach.setBinaryData(null);</span>
+<span class="nc" id="L152">    			attach.setTitle(MAttachment.LIST_IN_ATTACHMENT_FILE);</span>
+<span class="nc" id="L153">    			return true;</span>
+    		} else {
+<span class="nc" id="L155">    			final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();</span>
+    			try {
+<span class="nc" id="L157">    				final DocumentBuilder builder = factory.newDocumentBuilder();</span>
+<span class="nc" id="L158">    				final Document document = builder.newDocument();</span>
+<span class="nc" id="L159">    				final Element root = document.createElement(&quot;attachments&quot;);</span>
+<span class="nc" id="L160">    				document.appendChild(root);</span>
+<span class="nc" id="L161">    				document.setXmlStandalone(true);</span>
+    				// create xml entries
+<span class="nc bnc" id="L163" title="All 2 branches missed.">    				for (int i = 0; i &lt; attach.m_items.size(); i++) {</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">    					if (log.isLoggable(Level.FINE)) log.fine(attach.m_items.get(i).toString());</span>
+
+<span class="nc" id="L166">    					final Element entry = document.createElement(&quot;entry&quot;);</span>
+<span class="nc" id="L167">    					entry.setAttribute(&quot;name&quot;, attach.getEntryName(i));</span>
+<span class="nc" id="L168">    					entry.setAttribute(&quot;size&quot;, Long.toString(attach.getEntry(i).getSize()));</span>
+<span class="nc" id="L169">    					root.appendChild(entry);</span>
+    				}
+
+<span class="nc" id="L172">    				final Source source = new DOMSource(document);</span>
+<span class="nc" id="L173">    				final ByteArrayOutputStream bos = new ByteArrayOutputStream();</span>
+<span class="nc" id="L174">    				final Result result = new StreamResult(bos);</span>
+<span class="nc" id="L175">    				final Transformer xformer = TransformerFactory.newInstance().newTransformer();</span>
+<span class="nc" id="L176">    				xformer.transform(source, result);</span>
+<span class="nc" id="L177">    				final byte[] xmlData = bos.toByteArray();</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">    				if (log.isLoggable(Level.FINE)) log.fine(bos.toString());</span>
+<span class="nc" id="L179">    				attach.setBinaryData(xmlData);</span>
+<span class="nc" id="L180">    				attach.setTitle(MAttachment.XML);</span>
+<span class="nc" id="L181">    				return true;</span>
+<span class="nc" id="L182">    			} catch (Exception e) {</span>
+<span class="nc" id="L183">    				log.log(Level.SEVERE, &quot;saveLOBData&quot;, e);</span>
+    			}
+<span class="nc" id="L185">    			attach.setBinaryData(null);</span>
+<span class="nc" id="L186">    			return false;</span>
+    		}
+    	} else {
+<span class="nc bnc" id="L189" title="All 2 branches missed.">    		if (MSysConfig.getBooleanValue(MSysConfig.ATTACHMENT_SAVE_LIST_IN_AD_ATTACHMENTFILE, true, Env.getAD_Client_ID(Env.getCtx()))) {</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">    			for (int i = 0; i &lt; attach.m_items.size(); i++) {</span>
+<span class="nc" id="L191">    				MAttachmentEntry entry = attach.m_items.get(i);</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">    				if (log.isLoggable(Level.FINE)) log.fine(entry.toString());</span>
+<span class="nc" id="L193">    				MAttachmentFile af = MAttachmentFile.get(attach, entry.getName());</span>
+<span class="nc" id="L194">    				af.setFilePath(null);</span>
+<span class="nc" id="L195">    				af.setFileSize(BigDecimal.valueOf(entry.getSize()));</span>
+<span class="nc" id="L196">    				af.setSeqNo(i+1);</span>
+<span class="nc" id="L197">    				af.setSHA256Checksum(entry.getSHA256Sum());</span>
+<span class="nc" id="L198">    				af.setMIMEType(entry.getContentType());</span>
+<span class="nc" id="L199">    				af.saveEx(attach.get_TrxName());</span>
+    			}
+<span class="nc bnc" id="L201" title="All 2 branches missed.">    			for (MAttachmentFile oldAF : attach.getAttachmentFiles()) {</span>
+<span class="nc" id="L202">					boolean found = false;</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">					for (MAttachmentEntry entry : attach.m_items) {</span>
+<span class="nc bnc" id="L204" title="All 4 branches missed.">						if (oldAF.getFileName() != null &amp;&amp; oldAF.getFileName().equals(entry.getName())) {</span>
+<span class="nc" id="L205">							found = true;</span>
+<span class="nc" id="L206">							break;</span>
+						}
+					}
+<span class="nc bnc" id="L209" title="All 2 branches missed.">					if (!found) {</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(&quot;delete old attachment file &quot; + oldAF);</span>
+<span class="nc" id="L211">						oldAF.deleteEx(true, attach.get_TrxName());</span>
+					}
+				}
+
+    		}
+			try {
+<span class="nc bnc" id="L217" title="All 2 branches missed.">				for (int i = 0; i &lt; attach.m_items.size(); i++) {</span>
+<span class="nc" id="L218">					insertOrReplace(attach, i);</span>
+				}
+<span class="nc" id="L220">			} catch (Exception e) {</span>
+<span class="nc" id="L221">				log.log(Level.SEVERE, e.getMessage(), e);</span>
+<span class="nc" id="L222">				return false;</span>
+			}
+<span class="nc" id="L224">    		return true;</span>
+    	}
+    }
+
+    private static final String AD_ATTACHMENT_ENTRY_GET = &quot;SELECT BinaryData FROM AD_Attachment_Entry WHERE AD_Attachment_ID=? AND SeqNo=?&quot;;
+
+    private static final String AD_ATTACHMENT_ENTRY_INSERT = &quot;INSERT INTO AD_Attachment_Entry(AD_Attachment_ID, SeqNo, BinaryData) Values (?, ?, ?)&quot;;
+
+    private static final String AD_ATTACHMENT_ENTRY_DELETE = &quot;DELETE FROM AD_Attachment_Entry WHERE AD_Attachment_ID=? AND SeqNo=?&quot;;
+
+    private static final String AD_ATTACHMENT_ENTRIES_DELETE = &quot;DELETE FROM AD_Attachment_Entry WHERE AD_Attachment_ID=?&quot;;
+
+<span class="nc" id="L236">    private static final String AD_ATTACHMENT_AFTER_ENTRY_DELETE = &quot;UPDATE AD_Attachment_Entry SET SeqNo=SeqNo-1 WHERE AD_Attachment_ID=? AND SeqNo &gt; ?&quot;;</span>
+
+    /**
+     * Insert or update attachment entry (ad_attachment_entry)
+     * @param attach attachment record
+     * @param index entry index
+     */
+    private void insertOrReplace(MAttachment attach, int index) {
+<span class="nc" id="L244">        Connection conn = null;</span>
+        // With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L246" title="All 4 branches missed.">        if (attach.get_TrxName() == null &amp;&amp; DB.isPostgreSQL()) {</span>
+<span class="nc" id="L247">            conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+            try {
+<span class="nc" id="L249">                conn.setAutoCommit(false);</span>
+<span class="nc" id="L250">            } catch (SQLException e) {</span>
+                try {
+<span class="nc" id="L252">                    conn.close();</span>
+<span class="nc" id="L253">                } catch (SQLException e1) {</span>
+<span class="nc" id="L254">                    log.log(Level.WARNING, e1.getMessage(), e1);</span>
+                }
+<span class="nc" id="L256">                throw new AdempiereException(&quot;Error setting auto commit to false&quot;, e);</span>
+            }
+        }
+
+        // try to find existing blob
+<span class="nc" id="L261">        String sql = AD_ATTACHMENT_ENTRY_GET;</span>
+        //ORA-22920: row containing the LOB value is not locked prior to update
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        if (DB.isOracle())</span>
+<span class="nc" id="L264">            sql += &quot; FOR UPDATE &quot;;</span>
+<span class="nc" id="L265">        boolean updateBlob = false;</span>
+<span class="nc" id="L266">    	Path tempFile = null;</span>
+        try {
+<span class="nc bnc" id="L268" title="All 2 branches missed.">        	try (PreparedStatement pstmt = conn != null</span>
+<span class="nc" id="L269">        			? DB.prepareStatement(conn, sql)</span>
+<span class="nc" id="L270">        					: DB.prepareStatement(sql, attach.get_TrxName())) {</span>
+<span class="nc" id="L271">        		pstmt.setInt(1, attach.getAD_Attachment_ID());</span>
+<span class="nc" id="L272">        		pstmt.setInt(2, index);</span>
+<span class="nc" id="L273">        		try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        			if (rs.next()) {</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">        				if (attach.m_items.get(index).isUpdated()) {</span>
+<span class="nc" id="L276">        					File entryFile = attach.m_items.get(index).getFile();</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">        					if (entryFile == null) {</span>
+<span class="nc" id="L278">        						throw new AdempiereException(&quot;Attachment file not found: &quot; + attach.getEntryName(index));</span>
+        					}
+<span class="nc" id="L280">        					updateBlob = true;</span>
+<span class="nc" id="L281">        					Blob blob = rs.getBlob(1);</span>
+<span class="nc" id="L282">        					try (ZipOutputStream zos = new ZipOutputStream(blob.setBinaryStream(1));</span>
+<span class="nc" id="L283">        							InputStream inputStream = new FileInputStream(entryFile)) {</span>
+<span class="nc" id="L284">        						ZipEntry zipEntry = new ZipEntry(entryFile.getName());</span>
+<span class="nc" id="L285">        						zipEntry.setSize(entryFile.length());</span>
+<span class="nc" id="L286">        						zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L287">        						byte[] buffer = new byte[2048];</span>
+        						int length;
+<span class="nc bnc" id="L289" title="All 2 branches missed.">        						while ((length = inputStream.read(buffer)) != -1) {</span>
+<span class="nc" id="L290">        							zos.write(buffer, 0, length);</span>
+        						}
+        					} finally {
+<span class="nc" id="L293">        						blob.free();</span>
+        					}
+        				}
+<span class="nc bnc" id="L296" title="All 4 branches missed.">        				if (updateBlob &amp;&amp; conn != null)</span>
+        				{
+        					try {
+<span class="nc" id="L299">        						conn.commit();</span>
+<span class="nc" id="L300">        					} catch (SQLException e) {</span>
+<span class="nc" id="L301">        						throw new DBException(e);</span>
+        					}
+        				}
+<span class="nc" id="L304">        				return;</span>
+        			}
+        		}
+<span class="nc" id="L307">        	} catch (Exception e) {</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">        		if (conn != null) {</span>
+        			try {
+<span class="nc" id="L310">        				conn.rollback();</span>
+<span class="nc" id="L311">        			} catch (SQLException ex) {</span>
+<span class="nc" id="L312">        				log.log(Level.WARNING, ex.getMessage(), ex);</span>
+        			}
+        		}
+<span class="nc" id="L315">        		throw new AdempiereException(e);</span>
+        	}
+
+        	// no existing blob found, create a new one
+<span class="nc" id="L319">        	sql = AD_ATTACHMENT_ENTRY_INSERT;</span>
+<span class="nc" id="L320">        	File entryFile = attach.m_items.get(index).getFile();</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">        	if (entryFile == null) {</span>
+<span class="nc" id="L322">        		throw new AdempiereException(&quot;Attachment file not found: &quot; + attach.getEntryName(index));</span>
+        	}
+
+        	// compress to temp file
+        	try {
+<span class="nc" id="L327">        		Path tempDir = Files.createTempDirectory(&quot;attachment_&quot;);</span>
+<span class="nc" id="L328">        		tempFile = tempDir.resolve(entryFile.getName() + &quot;.zip&quot;);</span>
+<span class="nc" id="L329">        		try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(tempFile))) {</span>
+<span class="nc" id="L330">        			ZipEntry zipEntry = new ZipEntry(entryFile.getName());</span>
+<span class="nc" id="L331">        			zipEntry.setSize(entryFile.length());</span>
+<span class="nc" id="L332">        			zos.putNextEntry(zipEntry);</span>
+<span class="nc" id="L333">        			byte[] buffer = new byte[2048];</span>
+        			int length;
+<span class="nc" id="L335">        			try (InputStream inputStream = new FileInputStream(entryFile)) {</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">        				while ((length = inputStream.read(buffer)) != -1) {</span>
+<span class="nc" id="L337">        					zos.write(buffer, 0, length);</span>
+        				}
+        			}
+        		}
+<span class="nc" id="L341">        	} catch (Exception e) {</span>
+<span class="nc" id="L342">        		throw new AdempiereException(e);</span>
+        	}
+        	// insert compress temp file to db
+<span class="nc bnc" id="L345" title="All 2 branches missed.">        	try (PreparedStatement pstmt = conn != null</span>
+<span class="nc" id="L346">        			? DB.prepareStatement(conn, sql)</span>
+<span class="nc" id="L347">        					: DB.prepareStatement(sql, attach.get_TrxName())) {</span>
+<span class="nc" id="L348">        		pstmt.setInt(1, attach.getAD_Attachment_ID());</span>
+<span class="nc" id="L349">        		pstmt.setInt(2, index);</span>
+<span class="nc" id="L350">        		try (FileInputStream inputStream = new FileInputStream(tempFile.toFile())) {</span>
+<span class="nc" id="L351">        			pstmt.setBlob(3, inputStream);</span>
+<span class="nc" id="L352">        			pstmt.executeUpdate();</span>
+        		}
+<span class="nc" id="L354">        	} catch (Exception e) {</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">        		if (conn != null) {</span>
+        			try {
+<span class="nc" id="L357">        				conn.rollback();</span>
+<span class="nc" id="L358">        			} catch (SQLException ex) {</span>
+<span class="nc" id="L359">        				log.log(Level.WARNING, ex.getMessage(), ex);</span>
+        			}
+        		}
+<span class="nc" id="L362">        		throw new AdempiereException(e);</span>
+        	}
+<span class="nc bnc" id="L364" title="All 2 branches missed.">        	if (conn != null) {</span>
+        		try {
+<span class="nc" id="L366">        			conn.commit();</span>
+<span class="nc" id="L367">        		} catch (SQLException e) {</span>
+<span class="nc" id="L368">        			throw new DBException(e);</span>
+        		}
+        	}
+        } finally {
+<span class="nc bnc" id="L372" title="All 2 branches missed.">        	if (conn != null)</span>
+        	{
+        		try {
+<span class="nc" id="L375">        			conn.setAutoCommit(true);</span>
+<span class="nc" id="L376">        		} catch (SQLException e) {</span>
+<span class="nc" id="L377">        			log.log(Level.WARNING, e.getMessage(), e);</span>
+        		}
+        		try {
+<span class="nc" id="L380">        			conn.close();</span>
+<span class="nc" id="L381">        		} catch (SQLException e) {</span>
+<span class="nc" id="L382">        			log.log(Level.WARNING, e.getMessage(), e);</span>
+        		}
+        	}
+<span class="nc bnc" id="L385" title="All 2 branches missed.">        	if (tempFile != null) {</span>
+<span class="nc" id="L386">        		File f = tempFile.toFile();</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">        		if (f.exists()) {</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">        			if (!f.delete())</span>
+<span class="nc" id="L389">        				f.deleteOnExit();</span>
+        		}
+        		// Clean up temp directory
+<span class="nc" id="L392">        		File tempDir = f.getParentFile();</span>
+<span class="nc bnc" id="L393" title="All 6 branches missed.">        		if (tempDir != null &amp;&amp; tempDir.exists() &amp;&amp; tempDir.list().length == 0) {</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">        			if (!tempDir.delete())</span>
+<span class="nc" id="L395">        				tempDir.deleteOnExit();</span>
+        		}
+        	}
+        }
+<span class="nc" id="L399">    }</span>
+
+    /**
+     * Get the entries from the XML
+     * @param data xml meta data
+     * @return xml node list
+     */
+    private NodeList getEntriesFromXML(byte[] data) {
+<span class="nc" id="L407">        NodeList entries = null;</span>
+        try {
+<span class="nc" id="L409">            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();</span>
+<span class="nc" id="L410">            factory.setFeature(&quot;http://apache.org/xml/features/disallow-doctype-decl&quot;, true);</span>
+<span class="nc" id="L411">            final DocumentBuilder builder = factory.newDocumentBuilder();</span>
+<span class="nc" id="L412">            final Document document = builder.parse(new ByteArrayInputStream(data));</span>
+<span class="nc" id="L413">            entries = document.getElementsByTagName(&quot;entry&quot;);</span>
+<span class="nc" id="L414">        } catch (SAXException sxe) {</span>
+            // Error generated during parsing)
+<span class="nc" id="L416">            Exception x = sxe;</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">            if (sxe.getException() != null)</span>
+<span class="nc" id="L418">                x = sxe.getException();</span>
+<span class="nc" id="L419">            log.log(Level.SEVERE, x.getMessage(), x);</span>
+
+<span class="nc" id="L421">        } catch (ParserConfigurationException pce) {</span>
+            // Parser with specified options can't be built
+<span class="nc" id="L423">            log.log(Level.SEVERE, pce.getMessage(), pce);</span>
+
+<span class="nc" id="L425">        } catch (IOException ioe) {</span>
+            // I/O error
+<span class="nc" id="L427">            log.log(Level.SEVERE, ioe.getMessage(), ioe);</span>
+        }
+<span class="nc" id="L429">        return entries;</span>
+    }
+
+    @Override
+    public boolean delete(MAttachment attach, MStorageProvider prov) {
+<span class="nc" id="L434">        DB.executeUpdateEx(AD_ATTACHMENT_ENTRIES_DELETE, new Object[] {attach.getAD_Attachment_ID()}, attach.get_TrxName());</span>
+<span class="nc" id="L435">        return true;</span>
+    }
+
+    @Override
+    public boolean deleteEntry(MAttachment attach, MStorageProvider provider, int index) {
+<span class="nc" id="L440">        DB.executeUpdateEx(AD_ATTACHMENT_ENTRY_DELETE, new Object[] {attach.getAD_Attachment_ID(), index}, attach.get_TrxName());</span>
+<span class="nc" id="L441">        DB.executeUpdateEx(AD_ATTACHMENT_AFTER_ENTRY_DELETE, new Object[] {attach.getAD_Attachment_ID(), index}, attach.get_TrxName());</span>
+<span class="nc" id="L442">        attach.m_items.remove(index);</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        for (MAttachmentEntry entry : attach.m_items) {</span>
+<span class="nc" id="L444">            IAttachmentLazyDataSource ds = entry.getLazyDataSource();</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">            if (ds instanceof AttachmentDBLazyDataSource adds)</span>
+<span class="nc" id="L446">                adds.afterDelete(index);</span>
+        }
+<span class="nc" id="L448">        return true;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

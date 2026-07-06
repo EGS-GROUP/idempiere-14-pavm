@@ -1,0 +1,1474 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>DB_PostgreSQL.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.compiere.db.postgresql.provider</a> &gt; <a href="index.source.html" class="el_package">org.compiere.db</a> &gt; <span class="el_source">DB_PostgreSQL.java</span></div><h1>DB_PostgreSQL.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ * Portions created by Victor Perez are Copyright (C) 1999-2005 e-Evolution,S.C
+ * Contributor(s): Victor Perez                                               *
+ *****************************************************************************/
+package org.compiere.db;
+
+import java.io.File;
+import java.io.InputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.util.Arrays;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+
+import javax.sql.ConnectionPoolDataSource;
+import javax.sql.DataSource;
+import javax.sql.RowSet;
+
+import org.adempiere.db.postgresql.PostgreSQLBundleActivator;
+import org.adempiere.db.postgresql.partition.TablePartitionService;
+import org.adempiere.exceptions.DBException;
+import org.compiere.db.partition.ITablePartitionService;
+import org.compiere.dbPort.Convert;
+import org.compiere.dbPort.Convert_PostgreSQL;
+import org.compiere.model.MColumn;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.SystemProperties;
+import org.compiere.util.CCache;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Ini;
+import org.compiere.util.Language;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.idempiere.db.util.SQLFragment;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
+
+/**
+ *  PostgreSQL Database Port
+ *
+ *  @author      @author     Jorg Janke, Victor Perez
+ *  @version    $Id: DB_PostgreSQL.java,v 1.23 2005/03/11 20:29:01 jjanke Exp $
+ *  ---
+ *  Modifications: removed static references to database connection and instead always
+ *  get a new connection from database pool manager which manages all connections
+ *                 set rw/ro properties for the connection accordingly.
+ *  @author Ashley Ramdass (Posterita)
+ */
+public class DB_PostgreSQL implements AdempiereDatabase
+{
+
+    private static final String P_POSTGRE_SQL_NATIVE = &quot;PostgreSQLNative&quot;;
+
+	private static final String POOL_PROPERTIES = &quot;hikaricp.properties&quot;;
+
+<span class="nc" id="L90">	private static Boolean sysNative = null;</span>
+
+    final static char DOUBLE_QUOTE = '&quot;';
+    final static char ANGLED_QUOTE_LEFT = '\u00ab';   // «
+    final static char ANGLED_QUOTE_RIGHT = '\u00bb';  // »
+
+	static
+	{
+<span class="nc" id="L98">		String property = SystemProperties.getPostgreSQLNative();</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">		if (!Util.isEmpty(property, true) ) </span>
+		{
+<span class="nc" id="L101">			sysNative = &quot;Y&quot;.equalsIgnoreCase(property);</span>
+		}
+	}
+	
+	public Convert getConvert() {
+<span class="nc" id="L106">		return m_convert;</span>
+	}
+
+	/**
+	 *  PostgreSQL Database
+	 */
+<span class="nc" id="L112">	public DB_PostgreSQL() {	</span>
+<span class="nc" id="L113">	}</span>
+
+	/** Driver                  */
+<span class="nc" id="L116">	private org.postgresql.Driver   s_driver = null;</span>
+
+    /** Driver class            */
+    public static final String DRIVER = &quot;org.postgresql.Driver&quot;;
+
+	/** Default Port            */
+	public static final int         DEFAULT_PORT = 5432;
+
+	/** Data Source				*/
+	private volatile HikariDataSource m_ds;
+
+	/** Statement Converter     */
+<span class="nc" id="L128">	private Convert_PostgreSQL         m_convert = new Convert_PostgreSQL();</span>
+	/** Cached Database Name	*/
+<span class="nc" id="L130">	private String			m_dbName = null;</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L133">	private String				m_userName = null;</span>
+
+    /** Connection String       	*/
+	private String          		m_connectionURL;
+
+	/**	Logger			*/
+<span class="nc" id="L139">	private static final CLogger			log	= CLogger.getCLogger (DB_PostgreSQL.class);</span>
+
+<span class="nc" id="L141">    public static final String NATIVE_MARKER = &quot;NATIVE_&quot;+Database.DB_POSTGRESQL+&quot;_KEYWORK&quot;;</span>
+
+<span class="nc" id="L143">    private CCache&lt;String, String&gt; convertCache = new CCache&lt;String, String&gt;(null, &quot;DB_PostgreSQL_Convert_Cache&quot;, 1000, CCache.DEFAULT_EXPIRE_MINUTE, false);</span>
+
+<span class="nc" id="L145">    private static final List&lt;String&gt; reservedKeywords = Arrays.asList(&quot;limit&quot;,&quot;action&quot;,&quot;old&quot;,&quot;new&quot;);</span>
+    
+	/**
+	 *  Get Database Name
+	 *  @return database short name
+	 */
+	public String getName()
+	{
+<span class="nc" id="L153">		return Database.DB_POSTGRESQL;</span>
+	}   //  getName
+
+	/**
+	 *  Get Database Description
+	 *  @return database long name and version
+	 */
+	public String getDescription()
+	{       //begin vpj-cd e-evolution 30.09.2005
+		//return s_driver.toString();
+                try
+		{
+<span class="nc bnc" id="L165" title="All 2 branches missed.">			if (s_driver == null)</span>
+<span class="nc" id="L166">				getDriver();</span>
+<span class="nc" id="L167">		}</span>
+<span class="nc" id="L168">		catch (Exception e)</span>
+		{
+		}
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if (s_driver != null)</span>
+<span class="nc" id="L172">			return s_driver.toString();</span>
+<span class="nc" id="L173">		return &quot;No Driver&quot;;</span>
+                //end vpj-cd e-evolution 30.09.2005
+	}   //  getDescription
+
+	/**
+	 *  Get Standard JDBC Port
+	 *  @return standard port
+	 */
+	public int getStandardPort()
+	{
+<span class="nc" id="L183">		return DEFAULT_PORT;</span>
+	}   //  getStandardPort
+
+	/**
+	 *  Get and register Database Driver
+	 *  @return Driver
+	 */
+	public java.sql.Driver getDriver() throws SQLException
+	{
+<span class="nc bnc" id="L192" title="All 2 branches missed.">		if (s_driver == null)</span>
+		{
+<span class="nc" id="L194">			s_driver = new org.postgresql.Driver();</span>
+<span class="nc" id="L195">			DriverManager.registerDriver (s_driver);</span>
+<span class="nc" id="L196">			DriverManager.setLoginTimeout (Database.CONNECTION_TIMEOUT);</span>
+		}
+<span class="nc" id="L198">		return s_driver;</span>
+	}   //  getDriver
+
+	/**
+	 *  Get Database Connection String.
+	 *  Requirements:
+	 *      - createdb -E UNICODE compiere
+	 *  @param connection Connection Descriptor
+	 *  @return connection String
+	 */
+	public String getConnectionURL (CConnection connection)
+	{
+		//  jdbc:postgresql://hostname:portnumber/databasename?encoding=UNICODE
+		// tcpKeepAlive=true recommended by HikariCP https://github.com/brettwooldridge/HikariCP
+<span class="nc" id="L212">		StringBuilder sb = new StringBuilder(&quot;jdbc:postgresql://&quot;)</span>
+<span class="nc" id="L213">			.append(connection.getDbHost())</span>
+<span class="nc" id="L214">			.append(&quot;:&quot;).append(connection.getDbPort())</span>
+<span class="nc" id="L215">			.append(&quot;/&quot;).append(connection.getDbName())</span>
+<span class="nc" id="L216">			.append(&quot;?encoding=UNICODE&amp;ApplicationName=iDempiere&amp;stringtype=unspecified&amp;tcpKeepAlive=true&quot;);</span>
+
+<span class="nc" id="L218">		String urlParameters = SystemProperties.getPostgresqlURLParameters();</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">	    if (!Util.isEmpty(urlParameters)) {</span>
+<span class="nc" id="L220">   			sb.append(&quot;&amp;&quot;).append(urlParameters);  </span>
+	    }
+
+<span class="nc" id="L223">		return sb.toString();</span>
+	}   //  getConnectionString
+
+	/**
+	 * 	Get Connection URL
+	 *	@param dbHost db Host
+	 *	@param dbPort db Port
+	 *	@param dbName sb Name
+	 *	@param userName user name
+	 *	@return connection url
+	 */
+	public String getConnectionURL (String dbHost, int dbPort, String dbName,
+		String userName)
+	{
+<span class="nc" id="L237">		StringBuilder sb = new StringBuilder(&quot;jdbc:postgresql://&quot;)</span>
+<span class="nc" id="L238">			.append(dbHost)</span>
+<span class="nc" id="L239">			.append(&quot;:&quot;).append(dbPort)</span>
+<span class="nc" id="L240">			.append(&quot;/&quot;).append(dbName);</span>
+
+<span class="nc" id="L242">		String urlParameters = SystemProperties.getPostgresqlURLParameters();</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">	    if (!Util.isEmpty(urlParameters)) {</span>
+<span class="nc" id="L244">			sb.append(&quot;?&quot;).append(urlParameters);  </span>
+		}
+
+<span class="nc" id="L247">		return sb.toString();</span>
+	}	//	getConnectionURL
+
+	/**
+	 *  Get Database Connection String
+	 *  @param connectionURL Connection URL
+	 *  @param userName user name
+	 *  @return connection String
+	 */
+	public String getConnectionURL (String connectionURL, String userName)
+	{
+<span class="nc" id="L258">		m_userName = userName;</span>
+<span class="nc" id="L259">		m_connectionURL = connectionURL;</span>
+<span class="nc" id="L260">		return m_connectionURL;</span>
+	}	//	getConnectionURL
+
+	/**
+	 * 	Get JDBC Catalog
+	 *	@return catalog (database name)
+	 */
+	public String getCatalog()
+	{
+<span class="nc bnc" id="L269" title="All 2 branches missed.">		if (m_dbName != null)</span>
+<span class="nc" id="L270">			return m_dbName;</span>
+	//	log.severe(&quot;Database Name not set (yet) - call getConnectionURL first&quot;);
+<span class="nc" id="L272">		return null;</span>
+	}	//	getCatalog
+
+	/**
+	 * 	Get JDBC Schema
+	 *	@return schema (dbo)
+	 */
+	public String getSchema()
+	{
+		//begin vpj-cd e-evolution 03/04/2005
+<span class="nc" id="L282">		return &quot;adempiere&quot;;</span>
+		//end vpj-cd e-evolution 03/04/2005
+	}	//	getSchema
+
+	/**
+	 *  Supports BLOB
+	 *  @return true if BLOB is supported
+	 */
+	public boolean supportsBLOB()
+	{
+<span class="nc" id="L292">		return true;</span>
+	}   //  supportsBLOB
+
+	/**
+	 *  String Representation
+	 *  @return info
+	 */
+	public String toString()
+	{
+<span class="nc" id="L301">		StringBuilder sb = new StringBuilder(&quot;DB_PostgreSQL[&quot;);</span>
+<span class="nc" id="L302">        sb.append(m_connectionURL);</span>
+        try
+        {        	
+<span class="nc" id="L305">            StringBuilder logBuffer = new StringBuilder();</span>
+<span class="nc" id="L306">            HikariPoolMXBean mxBean = m_ds.getHikariPoolMXBean();            </span>
+            
+<span class="nc" id="L308">            logBuffer.append(&quot;# Connections: &quot;).append(mxBean.getTotalConnections());</span>
+<span class="nc" id="L309">            logBuffer.append(&quot; , # Busy Connections: &quot;).append(mxBean.getActiveConnections());</span>
+<span class="nc" id="L310">            logBuffer.append(&quot; , # Idle Connections: &quot;).append(mxBean.getIdleConnections());</span>
+<span class="nc" id="L311">            logBuffer.append(&quot; , # Threads waiting on connection: &quot;).append(mxBean.getThreadsAwaitingConnection());</span>
+<span class="nc" id="L312">        }</span>
+<span class="nc" id="L313">        catch (Exception e)</span>
+        {
+<span class="nc" id="L315">            sb.append(&quot;=&quot;).append(e.getLocalizedMessage());</span>
+        }
+<span class="nc" id="L317">        sb.append(&quot;]&quot;);</span>
+<span class="nc" id="L318">        return sb.toString();</span>
+	}   //  toString
+
+	/**
+	 * 	Get Status
+	 * 	@return status info
+	 */
+	public String getStatus()
+	{
+<span class="nc bnc" id="L327" title="All 2 branches missed.">        if (m_ds == null)</span>
+        {
+<span class="nc" id="L329">            return null;</span>
+        }
+
+<span class="nc" id="L332">        StringBuilder sb = new StringBuilder();</span>
+        try
+        {
+<span class="nc" id="L335">            HikariPoolMXBean mxBean = m_ds.getHikariPoolMXBean();            </span>
+            
+<span class="nc" id="L337">            sb.append(&quot;# Connections: &quot;).append(mxBean.getTotalConnections());</span>
+<span class="nc" id="L338">            sb.append(&quot; , # Busy Connections: &quot;).append(mxBean.getActiveConnections());</span>
+<span class="nc" id="L339">            sb.append(&quot; , # Idle Connections: &quot;).append(mxBean.getIdleConnections());</span>
+<span class="nc" id="L340">            sb.append(&quot; , # Threads waiting on connection: &quot;).append(mxBean.getThreadsAwaitingConnection());        	        	</span>
+<span class="nc" id="L341">            sb.append(&quot; , # Min Pool Size: &quot;).append(m_ds.getMinimumIdle());</span>
+<span class="nc" id="L342">            sb.append(&quot; , # Max Pool Size: &quot;).append(m_ds.getMaximumPoolSize());</span>
+<span class="nc" id="L343">            sb.append(&quot; , # Open Transactions: &quot;).append(Trx.getOpenTransactions().length);</span>
+<span class="nc" id="L344">        }</span>
+<span class="nc" id="L345">        catch (Exception e)</span>
+        {}
+<span class="nc" id="L347">        return sb.toString();</span>
+	}	//	getStatus
+
+	/*************************************************************************
+	 *  Convert an individual Oracle Style statements to target database statement syntax
+	 *
+	 *  @param oraStatement
+	 *  @return converted Statement
+	 *  @throws Exception
+	 */
+	public String convertStatement (String oraStatement)
+	{
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (!isNativeMode())</span>
+		{
+<span class="nc" id="L361">			String cache = convertCache.get(oraStatement);</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">			if (cache != null) {</span>
+<span class="nc" id="L363">				Convert.logMigrationScript(oraStatement, cache);</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">				if (SystemProperties.isDBDebug()) {</span>
+<span class="nc" id="L365">					String filterPgDebug = SystemProperties.getDBDebugFilter();</span>
+<span class="nc" id="L366">					boolean print = true;</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">					if (filterPgDebug != null)</span>
+<span class="nc" id="L368">						print = cache.matches(filterPgDebug);</span>
+					// log.warning(&quot;Oracle -&gt; &quot; + oraStatement);
+<span class="nc bnc" id="L370" title="All 2 branches missed.">					if (print)</span>
+<span class="nc" id="L371">						log.warning(&quot;Pgsql  -&gt; &quot; + cache);</span>
+				}
+<span class="nc" id="L373">				return cache;</span>
+			}
+		}
+
+<span class="nc" id="L377">		String retValue[] = m_convert.convert(oraStatement);</span>
+
+        //begin vpj-cd e-evolution 03/14/2005
+<span class="nc bnc" id="L380" title="All 4 branches missed.">		if (retValue == null || retValue.length == 0 )</span>
+<span class="nc" id="L381">			return  oraStatement;</span>
+        //end vpj-cd e-evolution 03/14/2005
+
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (retValue.length != 1)</span>
+			//begin vpj-cd 24/06/2005 e-evolution
+			{
+<span class="nc" id="L387">			log.log(Level.SEVERE, (&quot;DB_PostgreSQL.convertStatement - Convert Command Number=&quot; + retValue.length</span>
+<span class="nc" id="L388">				+ &quot; (&quot; + oraStatement + &quot;) - &quot; + m_convert.getConversionError()));</span>
+<span class="nc" id="L389">			throw new IllegalArgumentException</span>
+<span class="nc" id="L390">				(&quot;DB_PostgreSQL.convertStatement - Convert Command Number=&quot; + retValue.length</span>
+<span class="nc" id="L391">					+ &quot; (&quot; + oraStatement + &quot;) - &quot; + m_convert.getConversionError());</span>
+			}
+			//end vpj-cd 24/06/2005 e-evolution
+
+<span class="nc bnc" id="L395" title="All 2 branches missed.">		if (!isNativeMode())</span>
+<span class="nc" id="L396">			convertCache.put(oraStatement, retValue[0]);</span>
+
+		//  Diagnostics (show changed, but not if AD_Error
+<span class="nc bnc" id="L399" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE))</span>
+		{
+<span class="nc bnc" id="L401" title="All 4 branches missed.">			if (!oraStatement.equals(retValue[0]) &amp;&amp; retValue[0].indexOf(&quot;AD_Error&quot;) == -1)</span>
+			{
+				//begin vpj-cd 24/06/2005 e-evolution
+<span class="nc bnc" id="L404" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE))log.log(Level.FINE, &quot;PostgreSQL =&gt;&quot; + retValue[0] + &quot;&lt;= &lt;&quot; + oraStatement + &quot;&gt;&quot;);</span>
+			}
+		}
+		    //end vpj-cd 24/06/2005 e-evolution
+		//
+<span class="nc" id="L409">		Convert.logMigrationScript(oraStatement, retValue[0]);</span>
+<span class="nc" id="L410">		return retValue[0];</span>
+	}   //  convertStatement
+
+
+	/**
+	 *  Get Name of System User
+	 *  @return e.g. sa, system
+	 */
+	public String getSystemUser()
+	{
+<span class="nc" id="L420">    	String systemUser = SystemProperties.getAdempiereDBSystemUser();</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">    	if (systemUser == null)</span>
+<span class="nc" id="L422">    		systemUser = &quot;postgres&quot;;</span>
+<span class="nc" id="L423">        return systemUser;</span>
+	}	//	getSystemUser
+
+	/**
+	 *  Get Name of System Database
+	 *  @param databaseName database Name
+	 *  @return e.g. master or database Name
+	 */
+	public String getSystemDatabase(String databaseName)
+	{
+<span class="nc" id="L433">		return &quot;template1&quot;;</span>
+	}	//	getSystemDatabase
+
+
+	/**
+	 *  Create SQL TO Date String from Timestamp
+	 *
+	 *  @param  time Date to be converted
+	 *  @param  dayOnly true if time set to 00:00:00
+	 *
+	 *  @return TO_TIMESTAMP('2001-01-30 18:10:20',''YYYY-MM-DD HH24:MI:SS')
+	 *      or  TO_TIMESTAMP('2001-01-30',''YYYY-MM-DD')
+	 */
+	public String TO_DATE (Timestamp time, boolean dayOnly)
+	{
+<span class="nc bnc" id="L448" title="All 2 branches missed.">		if (time == null)</span>
+		{
+<span class="nc bnc" id="L450" title="All 2 branches missed.">			if (dayOnly)</span>
+<span class="nc" id="L451">				return &quot;current_date&quot;;</span>
+<span class="nc" id="L452">			return &quot;current_timestamp&quot;;</span>
+		}
+
+<span class="nc" id="L455">		StringBuilder dateString = new StringBuilder(&quot;TO_TIMESTAMP('&quot;);</span>
+		//  YYYY-MM-DD HH24:MI:SS.mmmm  JDBC Timestamp format
+<span class="nc" id="L457">		String myDate = time.toString();</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">		if (dayOnly)</span>
+		{
+<span class="nc" id="L460">			dateString.append(myDate.substring(0,10));</span>
+<span class="nc" id="L461">			dateString.append(&quot;','YYYY-MM-DD')&quot;);</span>
+<span class="nc" id="L462">		}</span>
+		else
+		{
+<span class="nc" id="L465">			dateString.append(myDate.substring(0, myDate.indexOf('.')));	//	cut off miliseconds</span>
+<span class="nc" id="L466">			dateString.append(&quot;','YYYY-MM-DD HH24:MI:SS')&quot;);</span>
+		}
+<span class="nc" id="L468">		return dateString.toString();</span>
+	}   //  TO_DATE
+
+	/**
+	 *  Create SQL for formatted Date, Number
+	 *
+	 *  @param  columnName  the column name in the SQL
+	 *  @param  displayType Display Type
+	 *  @param  AD_Language 6 character language setting (from Env.LANG_*)
+	 *
+	 *  @return TRIM(TO_CHAR(columnName,'999G999G999G990D00','NLS_NUMERIC_CHARACTERS='',.'''))
+	 *      or TRIM(TO_CHAR(columnName,'TM9')) depending on DisplayType and Language
+	 *  @see org.compiere.util.DisplayType
+	 *  @see org.compiere.util.Env
+	 *
+	 **/
+	public String TO_CHAR (String columnName, int displayType, String AD_Language)
+	{
+<span class="nc" id="L486">		StringBuilder retValue = null;</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">		if (DisplayType.isDate(displayType)) {</span>
+<span class="nc" id="L488">			retValue = new StringBuilder(&quot;TO_CHAR(&quot;);</span>
+<span class="nc" id="L489">	        retValue.append(columnName)</span>
+<span class="nc" id="L490">	        	.append(&quot;,'&quot;)</span>
+<span class="nc" id="L491">            	.append(Language.getLanguage(AD_Language).getDBdatePattern())</span>
+<span class="nc" id="L492">            	.append(&quot;')&quot;);	        </span>
+<span class="nc" id="L493">		} else {</span>
+<span class="nc" id="L494">			retValue = new StringBuilder(&quot;CAST (&quot;);</span>
+<span class="nc" id="L495">			retValue.append(columnName);</span>
+<span class="nc" id="L496">			retValue.append(&quot; AS Text)&quot;);</span>
+		}
+<span class="nc" id="L498">		return retValue.toString();</span>
+		//  Numbers
+		/*
+		if (DisplayType.isNumeric(displayType))
+		{
+			if (displayType == DisplayType.Amount)
+				retValue.append(&quot; AS TEXT&quot;);
+			else
+				retValue.append(&quot; AS TEXT&quot;);
+			//if (!Language.isDecimalPoint(AD_Language))      //  reversed
+			//retValue.append(&quot;,'NLS_NUMERIC_CHARACTERS='',.'''&quot;);
+		}
+		else if (DisplayType.isDate(displayType))
+		{
+			retValue.append(&quot;,'&quot;)
+				.append(Language.getLanguage(AD_Language).getDBdatePattern())
+				.append(&quot;'&quot;);
+		}
+		retValue.append(&quot;)&quot;);
+		//*/		
+	}   //  TO_CHAR
+
+	/**
+	 * 	Return number as string for INSERT statements with correct precision
+	 *	@param number number
+	 *	@param displayType display Type
+	 *	@return number as string
+	 */
+	public String TO_NUMBER (BigDecimal number, int displayType)
+	{
+<span class="nc bnc" id="L528" title="All 2 branches missed.">		if (number == null)</span>
+<span class="nc" id="L529">			return &quot;NULL&quot;;</span>
+<span class="nc" id="L530">		BigDecimal result = number;</span>
+<span class="nc" id="L531">		int scale = DisplayType.getDefaultPrecision(displayType);</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">		if (scale &gt; number.scale())</span>
+		{
+			try
+			{
+<span class="nc" id="L536">				result = number.setScale(scale, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L537">			}</span>
+<span class="nc" id="L538">			catch (Exception e)</span>
+			{
+			//	log.severe(&quot;Number=&quot; + number + &quot;, Scale=&quot; + &quot; - &quot; + e.getMessage());
+			}
+		}
+<span class="nc" id="L543">		return result.toString();</span>
+	}	//	TO_NUMBER
+	
+	/**
+	 *	@return string with right casting for JSON inserts
+	 */
+	public String getJSONCast () {
+<span class="nc" id="L550">		return &quot;CAST (? AS jsonb)&quot;;</span>
+	}
+	
+	/**
+	 * 	Return string as JSON object for INSERT statements
+	 *	@param value
+	 *	@return value as json
+	 */
+	public String TO_JSON (String value)
+	{
+<span class="nc bnc" id="L560" title="All 2 branches missed.">		if (value == null)</span>
+<span class="nc" id="L561">			return &quot;NULL&quot;;</span>
+
+<span class="nc" id="L563">		StringBuilder retValue = null;</span>
+<span class="nc" id="L564">		retValue = new StringBuilder(&quot;CAST (&quot;);</span>
+<span class="nc" id="L565">		retValue.append(value);</span>
+<span class="nc" id="L566">		retValue.append(&quot; AS jsonb)&quot;);</span>
+<span class="nc" id="L567">		return retValue.toString();</span>
+	}
+	
+	/**
+	 * 	Get SQL Commands
+	 *	@param cmdType CMD_*
+	 *	@return array of commands to be executed
+	 */
+	public String[] getCommands (int cmdType)
+	{
+<span class="nc bnc" id="L577" title="All 2 branches missed.">		if (CMD_CREATE_USER == cmdType)</span>
+<span class="nc" id="L578">			return new String[]</span>
+<span class="nc" id="L579">			{</span>
+<span class="nc" id="L580">			&quot;CREATE USER adempiere;&quot;,</span>
+			};
+		//
+<span class="nc bnc" id="L583" title="All 2 branches missed.">		if (CMD_CREATE_DATABASE == cmdType)</span>
+<span class="nc" id="L584">			return new String[]</span>
+<span class="nc" id="L585">			{</span>
+<span class="nc" id="L586">		    &quot;CREATE DATABASE adempiere OWNER adempiere;&quot;,</span>
+<span class="nc" id="L587">			&quot;GRANT ALL PRIVILEGES ON adempiere TO adempiere;&quot;	,</span>
+<span class="nc" id="L588">			&quot;CREATE SCHEMA adempiere;&quot;,</span>
+<span class="nc" id="L589">			&quot;SET search_path TO adempiere;&quot;</span>
+			};
+		//
+<span class="nc bnc" id="L592" title="All 2 branches missed.">		if (CMD_DROP_DATABASE == cmdType)</span>
+<span class="nc" id="L593">			return new String[]</span>
+<span class="nc" id="L594">			{</span>
+<span class="nc" id="L595">			&quot;DROP DATABASE adempiere;&quot;</span>
+			};
+		//
+<span class="nc" id="L598">		return null;</span>
+	}	//	getCommands
+
+
+	/**************************************************************************
+	 *  Get RowSet
+	 * 	@param rs ResultSet
+	 *  @return RowSet
+	 *  @throws SQLException
+	 */
+	public RowSet getRowSet (java.sql.ResultSet rs) throws SQLException
+	{
+<span class="nc" id="L610">		throw new UnsupportedOperationException(&quot;PostgreSQL does not support RowSets&quot;);</span>
+	}	//	getRowSet
+
+
+	/**
+	 * 	Get Cached Connection
+	 *	@param connection connection
+	 *	@param autoCommit auto commit
+	 *	@param transactionIsolation trx isolation
+	 *	@return Connection
+	 *	@throws Exception
+	 */
+	public Connection getCachedConnection (CConnection connection,
+			boolean autoCommit, int transactionIsolation)
+					throws Exception
+	{
+<span class="nc" id="L626">		Connection conn = null;</span>
+
+<span class="nc bnc" id="L628" title="All 2 branches missed.">		if (m_ds == null)</span>
+<span class="nc" id="L629">			getDataSource(connection);</span>
+
+
+		// If HikariCP has no available free connection this call will block until either
+		// a connection becomes available or the configured 'connectionTimeout' value is
+		// reached (after which a SQLException is thrown).
+<span class="nc" id="L635">		conn = m_ds.getConnection();</span>
+
+<span class="nc bnc" id="L637" title="All 2 branches missed.">		if (conn.getTransactionIsolation() != transactionIsolation)</span>
+		{
+<span class="nc" id="L639">			conn.setTransactionIsolation(transactionIsolation);</span>
+		}
+<span class="nc bnc" id="L641" title="All 2 branches missed.">		if (conn.getAutoCommit() != autoCommit) </span>
+		{
+<span class="nc" id="L643">			conn.setAutoCommit(autoCommit);</span>
+		}
+
+<span class="nc" id="L646">		return conn;</span>
+	}	//	getCachedConnection
+
+	private String getPoolPropertiesFile ()
+	{
+<span class="nc" id="L651">		String base = Ini.getAdempiereHome();</span>
+		
+<span class="nc bnc" id="L653" title="All 4 branches missed.">		if (base != null &amp;&amp; !base.endsWith(File.separator)) {</span>
+<span class="nc" id="L654">			base += File.separator;</span>
+		}
+		
+		//
+<span class="nc" id="L658">		return base + getName() + File.separator + POOL_PROPERTIES;</span>
+	}	//	getFileName
+		
+	/**
+	 * 	Create DataSource (Client)
+	 *	@param connection connection
+	 *	@return data dource
+	 */
+	public DataSource getDataSource(CConnection connection)
+	{
+<span class="nc" id="L668">		ensureInitialized(connection);</span>
+			
+<span class="nc" id="L670">		return m_ds;</span>
+	}
+
+	/**
+	 * 	Create Pooled DataSource (Server)
+	 *	@param connection connection
+	 *	@return data source
+	 */
+	public ConnectionPoolDataSource createPoolDataSource(CConnection connection)
+	{
+<span class="nc" id="L680">		throw new UnsupportedOperationException(&quot;Not supported/implemented&quot;);</span>
+	}
+
+	/**
+	 * 	Get Connection from Driver
+	 *	@param connection info
+	 *	@return connection or null
+	 */
+	public Connection getDriverConnection (CConnection connection) throws SQLException
+	{
+<span class="nc" id="L690">		getDriver();</span>
+<span class="nc" id="L691">		return DriverManager.getConnection (getConnectionURL (connection),</span>
+<span class="nc" id="L692">			connection.getDbUid(), connection.getDbPwd());</span>
+	}	//	getDriverConnection
+
+	/**
+	 * 	Get Driver Connection
+	 *	@param dbUrl URL
+	 *	@param dbUid user
+	 *	@param dbPwd password
+	 *	@return connection
+	 *	@throws SQLException
+	 */
+	public Connection getDriverConnection (String dbUrl, String dbUid, String dbPwd)
+		throws SQLException
+	{
+<span class="nc" id="L706">		getDriver();</span>
+<span class="nc" id="L707">		return DriverManager.getConnection (dbUrl, dbUid, dbPwd);</span>
+	}	//	getDriverConnection
+	
+	private Properties getPoolProperties() {	
+		//check property file from home
+<span class="nc" id="L712">		File userPropertyFile = new File(getPoolPropertiesFile());</span>
+<span class="nc" id="L713">		URL propertyFileURL = null;</span>
+		
+<span class="nc bnc" id="L715" title="All 4 branches missed.">		if (userPropertyFile.exists() &amp;&amp; userPropertyFile.canRead())</span>
+		{			
+			try {
+<span class="nc" id="L718">				propertyFileURL = userPropertyFile.toURI().toURL();</span>
+<span class="nc" id="L719">			} catch (Exception e) {</span>
+<span class="nc" id="L720">				e.printStackTrace();</span>
+			}
+		}
+			
+<span class="nc bnc" id="L724" title="All 2 branches missed.">		if (propertyFileURL == null)</span>
+		{
+<span class="nc" id="L726">			propertyFileURL = PostgreSQLBundleActivator.bundleContext.getBundle().getEntry(&quot;META-INF/pool/server.default.properties&quot;);						</span>
+		}
+
+<span class="nc" id="L729">		Properties poolProperties = new Properties();</span>
+<span class="nc" id="L730">		try (InputStream propertyFileInputStream = propertyFileURL.openStream()) {</span>
+<span class="nc" id="L731">			poolProperties.load(propertyFileInputStream);</span>
+<span class="nc" id="L732">		} catch (Exception e) {</span>
+<span class="nc" id="L733">			throw new DBException(e);</span>
+		} 
+
+		//auto create property file at home folder from default config
+<span class="nc bnc" id="L737" title="All 2 branches missed.">		if (!userPropertyFile.exists())			</span>
+		{
+			try {				
+<span class="nc" id="L740">				Path directory = userPropertyFile.toPath().getParent();</span>
+<span class="nc" id="L741">				Files.createDirectories(directory);</span>
+								
+<span class="nc" id="L743">				try (InputStream propertyFileInputStream = propertyFileURL.openStream()) {</span>
+<span class="nc" id="L744">					Files.copy(propertyFileInputStream, userPropertyFile.toPath(), StandardCopyOption.REPLACE_EXISTING);</span>
+				} 
+			
+<span class="nc" id="L747">			} catch (Exception e) {</span>
+<span class="nc" id="L748">				e.printStackTrace();</span>
+			}
+		}
+		
+<span class="nc" id="L752">		return poolProperties;</span>
+	}
+	
+	/** Boolean to indicate the PostgreSQL connection pool is either initializing or initialized.*/
+<span class="nc" id="L756">	private final AtomicBoolean initialized = new AtomicBoolean(false);</span>
+	/** Latch which can be used to wait for initialization completion. */
+<span class="nc" id="L758">	private final CountDownLatch initializedLatch = new CountDownLatch(1); </span>
+	
+	/**
+	 * Allows the connection pool to be lazily initialized. While it might be preferable to do
+	 * this once upon initialization of this class the current design of iDempiere makes this 
+	 * hard.
+	 * 
+	 * Calling this method will block until the pool is configured. This does NOT mean it will
+	 * block until a database connection has been setup.
+	 * 
+	 * @param connection
+	 */
+	private void ensureInitialized(CConnection connection) {
+<span class="nc bnc" id="L771" title="All 2 branches missed.">		if (!initialized.compareAndSet(false, true)) {</span>
+			try {
+<span class="nc" id="L773">				initializedLatch.await();</span>
+<span class="nc" id="L774">			} catch (InterruptedException e) {</span>
+<span class="nc" id="L775">				return;</span>
+			}
+		}
+				
+        try {
+<span class="nc" id="L780">    		Properties poolProperties = getPoolProperties();</span>
+    		// Do not override values which might have been read from the users
+    		// hikaricp.properties file.
+<span class="nc bnc" id="L783" title="All 2 branches missed.">    		if(!poolProperties.containsKey(&quot;jdbcUrl&quot;)) {</span>
+<span class="nc" id="L784">    			poolProperties.put(&quot;jdbcUrl&quot;, getConnectionURL(connection));</span>
+    		}
+<span class="nc bnc" id="L786" title="All 2 branches missed.">    		if (!poolProperties.containsKey(&quot;username&quot;)) {</span>
+<span class="nc" id="L787">    			poolProperties.put(&quot;username&quot;, connection.getDbUid());</span>
+    		}
+<span class="nc bnc" id="L789" title="All 2 branches missed.">    		if (!poolProperties.containsKey(&quot;password&quot;)) {</span>
+<span class="nc" id="L790">    			poolProperties.put(&quot;password&quot;, connection.getDbPwd());</span>
+    		}
+
+<span class="nc" id="L793">    		HikariConfig hikariConfig = new HikariConfig(poolProperties);</span>
+<span class="nc" id="L794">    		hikariConfig.setDriverClassName(DRIVER);</span>
+<span class="nc" id="L795">    		m_ds = new HikariDataSource(hikariConfig);</span>
+
+<span class="nc" id="L797">            m_connectionURL = m_ds.getJdbcUrl();</span>
+            
+<span class="nc" id="L799">            initializedLatch.countDown();</span>
+<span class="nc" id="L800">        }</span>
+<span class="nc" id="L801">        catch (Exception ex) {</span>
+<span class="nc" id="L802">        	throw new IllegalStateException(&quot;Could not initialise Hikari Datasource&quot;, ex);</span>
+        }		
+<span class="nc" id="L804">	}</span>
+	
+	/**
+	 * 	Close
+	 */
+	public void close()
+	{
+<span class="nc bnc" id="L811" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) </span>
+		{ 
+<span class="nc" id="L813">			log.config(toString());</span>
+		}
+
+		try
+		{
+<span class="nc" id="L818">			m_ds.close();</span>
+<span class="nc" id="L819">		}</span>
+<span class="nc" id="L820">		catch (Exception e)</span>
+		{
+<span class="nc" id="L822">			e.printStackTrace();</span>
+		}
+<span class="nc" id="L824">	}	//	close</span>
+
+
+	/**
+	 *  Check and generate an alternative SQL
+	 *  @reExNo number of re-execution
+	 *  @msg previous execution error message
+	 *  @sql previous executed SQL
+	 *  @return String, the alternative SQL, null if no alternative
+	 */
+	public String getAlternativeSQL(int reExNo, String msg, String sql)
+	{
+<span class="nc" id="L836">		return null; //do not do re-execution of alternative SQL</span>
+	}
+
+        	/**
+	 *  Get constraint type associated with the index
+	 *  @tableName table name
+	 *  @IXName Index name
+	 *  @return String[0] = 0: do not know, 1: Primary Key  2: Foreign Key
+	 *  		String[1] - String[n] = Constraint Name
+	 */
+	public String getConstraintType(Connection conn, String tableName, String IXName)
+	{
+<span class="nc bnc" id="L848" title="All 4 branches missed.">		if (IXName == null || IXName.length()==0)</span>
+<span class="nc" id="L849">			return &quot;0&quot;;</span>
+<span class="nc bnc" id="L850" title="All 2 branches missed.">		if (IXName.toUpperCase().endsWith(&quot;_KEY&quot;))</span>
+<span class="nc" id="L851">			return &quot;1&quot;+IXName;</span>
+		else
+<span class="nc" id="L853">			return &quot;0&quot;;</span>
+		//jz temp, modify later from user.constraints
+	}
+
+    /**
+	 *  Check if DBMS support the sql statement
+	 *  @sql SQL statement
+	 *  @return true: yes
+	 */
+	public boolean isSupported(String sql)
+	{
+<span class="nc" id="L864">		return true;</span>
+		//jz temp, modify later
+	}
+
+	/**
+	 * Dump table lock info to console for current transaction
+	 * @param conn
+	 */
+	public static void dumpLocks(Connection conn)
+	{
+<span class="nc" id="L874">		Statement stmt = null;</span>
+<span class="nc" id="L875">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L877">			String sql = &quot;select pg_class.relname,pg_locks.* from pg_class,pg_locks where pg_class.relfilenode=pg_locks.relation order by 1&quot;;</span>
+<span class="nc" id="L878">			stmt = conn.createStatement();</span>
+<span class="nc" id="L879">			rs = stmt.executeQuery(sql);</span>
+<span class="nc" id="L880">			int cnt = rs.getMetaData().getColumnCount();</span>
+<span class="nc" id="L881">			System.out.println();</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc bnc" id="L884" title="All 2 branches missed.">				for(int i = 0; i &lt; cnt; i++)</span>
+				{
+<span class="nc" id="L886">					Object value = rs.getObject(i+1);</span>
+<span class="nc bnc" id="L887" title="All 2 branches missed.">					if (i &gt; 0)</span>
+<span class="nc" id="L888">						System.out.print(&quot;, &quot;);</span>
+<span class="nc bnc" id="L889" title="All 2 branches missed.">					System.out.print(value != null ? value.toString() : &quot;&quot;);</span>
+				}
+<span class="nc" id="L891">				System.out.println();</span>
+			}
+<span class="nc" id="L893">			System.out.println();</span>
+<span class="nc" id="L894">		} catch (Exception e) {</span>
+
+		} finally {
+<span class="nc" id="L897">			DB.close(rs,stmt);</span>
+<span class="nc" id="L898">			rs = null;stmt = null;</span>
+		}
+<span class="nc" id="L900">	}</span>
+
+	public int getNextID(String name) {
+<span class="nc" id="L903">		return getNextID(name, null);</span>
+	}
+
+	public int getNextID(String name, String trxName) {
+<span class="nc" id="L907">		Trx trx = null;</span>
+<span class="nc" id="L908">		int m_sequence_id = -1;</span>
+		try {
+			// avoid cannot execute nextval() in a read-only transaction
+<span class="nc bnc" id="L911" title="All 2 branches missed.">			if (trxName == null) {</span>
+<span class="nc" id="L912">				trxName = Trx.createTrxName(&quot;getNextval&quot;);</span>
+<span class="nc" id="L913">				trx = Trx.get(trxName, true);</span>
+			}
+<span class="nc" id="L915">			m_sequence_id = DB.getSQLValueEx(trxName, &quot;SELECT nextval('&quot;+name.toLowerCase()+&quot;')&quot;);</span>
+<span class="nc" id="L916">		} catch (Exception e) {</span>
+<span class="nc bnc" id="L917" title="All 2 branches missed.">			if (trx != null) {</span>
+<span class="nc" id="L918">				trx.rollback();</span>
+			}
+		} finally {
+<span class="nc bnc" id="L921" title="All 2 branches missed.">			if (trx != null) {</span>
+<span class="nc" id="L922">				trx.close();</span>
+			}
+		}
+<span class="nc" id="L925">		return m_sequence_id;</span>
+	}
+
+	public boolean createSequence(String name , int increment , int minvalue , int maxvalue ,int  start, String trxName)
+	{
+		// Check if Sequence exists
+<span class="nc" id="L931">		final int cnt = DB.getSQLValueEx(trxName, &quot;SELECT COUNT(*) FROM pg_class WHERE UPPER(relname)=? AND relkind='S'&quot;, name.toUpperCase());</span>
+		final int no;
+<span class="nc bnc" id="L933" title="All 2 branches missed.">		if (start &lt; minvalue)</span>
+<span class="nc" id="L934">			start = minvalue;</span>
+		//
+		// New Sequence
+<span class="nc bnc" id="L937" title="All 2 branches missed.">		if (cnt == 0)</span>
+		{
+<span class="nc" id="L939">			no = DB.executeUpdate(&quot;CREATE SEQUENCE &quot;+name.toUpperCase()</span>
+<span class="nc" id="L940">								+ &quot; INCREMENT BY &quot; + increment</span>
+<span class="nc" id="L941">								+ &quot; MINVALUE &quot; + minvalue</span>
+<span class="nc" id="L942">								+ &quot; MAXVALUE &quot; + maxvalue</span>
+<span class="nc" id="L943">								+ &quot; START WITH &quot; + start, trxName);</span>
+<span class="nc" id="L944">		}</span>
+		//
+		// Already existing sequence =&gt; ALTER
+		else
+		{
+<span class="nc" id="L949">			no = DB.executeUpdate(&quot;ALTER SEQUENCE &quot;+name.toUpperCase()</span>
+<span class="nc" id="L950">					+ &quot; INCREMENT BY &quot; + increment</span>
+<span class="nc" id="L951">					+ &quot; MINVALUE &quot; + minvalue</span>
+<span class="nc" id="L952">					+ &quot; MAXVALUE &quot; + maxvalue</span>
+<span class="nc" id="L953">					+ &quot; RESTART WITH &quot; + start, trxName);</span>
+		}
+<span class="nc bnc" id="L955" title="All 2 branches missed.">		if(no == -1 )</span>
+<span class="nc" id="L956">			return false;</span>
+		else
+<span class="nc" id="L958">			return true;</span>
+	}
+
+	/**
+	 * Postgresql jdbc driver doesn't support setQueryTimeout, query/statement timeout is
+	 * implemented using the &quot;SET LOCAL statement_timeout TO&quot; statement.
+	 * @return true
+	 */
+	public boolean isQueryTimeoutSupported() {
+<span class="nc" id="L967">		return true;</span>
+	}
+
+	/**
+	 * Implemented using the fetch first and offset feature. use 1 base index for start and end parameter
+	 * @param sql
+	 * @param start
+	 * @param end
+	 */
+	public String addPagingSQL(String sql, int start, int end) {
+<span class="nc" id="L977">		StringBuilder newSql = new StringBuilder(sql);</span>
+<span class="nc bnc" id="L978" title="All 2 branches missed.">		if (start &gt; 1) {</span>
+<span class="nc" id="L979">			newSql.append(&quot; OFFSET &quot;)</span>
+<span class="nc" id="L980">				.append((start - 1))</span>
+<span class="nc" id="L981">				.append( &quot; ROWS&quot;);</span>
+		}
+<span class="nc bnc" id="L983" title="All 2 branches missed.">		if (end &gt; 0) {</span>
+<span class="nc" id="L984">			newSql.append(&quot; FETCH FIRST &quot;)</span>
+<span class="nc" id="L985">				.append(( end - start + 1 ))</span>
+<span class="nc" id="L986">				.append(&quot; ROWS ONLY&quot;);</span>
+		}
+<span class="nc" id="L988">		return newSql.toString();</span>
+	}
+
+	public boolean isPagingSupported() {
+<span class="nc" id="L992">		return true;</span>
+	}
+
+	@Override
+	public boolean forUpdate(PO po, int timeout) {
+    	//only can lock for update if using trx
+<span class="nc bnc" id="L998" title="All 2 branches missed.">    	if (po.get_TrxName() == null)</span>
+<span class="nc" id="L999">    		return false;</span>
+    	
+<span class="nc" id="L1001">    	String[] keyColumns = po.get_KeyColumns();</span>
+<span class="nc bnc" id="L1002" title="All 6 branches missed.">		if (keyColumns != null &amp;&amp; keyColumns.length &gt; 0 &amp;&amp; !po.is_new()) {</span>
+<span class="nc" id="L1003">			StringBuilder sqlBuffer = new StringBuilder(&quot; SELECT &quot;);</span>
+<span class="nc" id="L1004">			sqlBuffer.append(keyColumns[0])</span>
+<span class="nc" id="L1005">				.append(&quot; FROM &quot;)</span>
+<span class="nc" id="L1006">				.append(po.get_TableName())</span>
+<span class="nc" id="L1007">				.append(&quot; WHERE &quot;);</span>
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">			for(int i = 0; i &lt; keyColumns.length; i++) {</span>
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">				if (i &gt; 0)</span>
+<span class="nc" id="L1010">					sqlBuffer.append(&quot; AND &quot;);</span>
+<span class="nc" id="L1011">				sqlBuffer.append(keyColumns[i]).append(&quot;=?&quot;);</span>
+			}
+<span class="nc" id="L1013">			sqlBuffer.append(&quot; FOR NO KEY UPDATE &quot;);</span>
+
+<span class="nc" id="L1015">			Object[] parameters = new Object[keyColumns.length];</span>
+<span class="nc bnc" id="L1016" title="All 2 branches missed.">			for(int i = 0; i &lt; keyColumns.length; i++) {</span>
+<span class="nc" id="L1017">				Object parameter = po.get_Value(keyColumns[i]);</span>
+<span class="nc bnc" id="L1018" title="All 4 branches missed.">				if (parameter != null &amp;&amp; parameter instanceof Boolean) {</span>
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">					if ((Boolean) parameter)</span>
+<span class="nc" id="L1020">						parameter = &quot;Y&quot;;</span>
+					else
+<span class="nc" id="L1022">						parameter = &quot;N&quot;;</span>
+				}
+<span class="nc" id="L1024">				parameters[i] = parameter;</span>
+			}
+
+<span class="nc" id="L1027">			PreparedStatement stmt = null;</span>
+<span class="nc" id="L1028">			ResultSet rs = null;</span>
+			try {
+<span class="nc" id="L1030">				stmt = DB.prepareStatement(sqlBuffer.toString(),</span>
+<span class="nc" id="L1031">					ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE, po.get_TrxName());</span>
+<span class="nc bnc" id="L1032" title="All 2 branches missed.">				for(int i = 0; i &lt; keyColumns.length; i++) {</span>
+<span class="nc" id="L1033">					stmt.setObject(i+1, parameters[i]);</span>
+				}
+<span class="nc bnc" id="L1035" title="All 2 branches missed.">				stmt.setQueryTimeout(timeout &gt; 0 ? timeout : LOCK_TIME_OUT);</span>
+				
+<span class="nc" id="L1037">				rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L1038" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L1039">					return true;</span>
+				} else {
+<span class="nc" id="L1041">					return false;</span>
+				}
+<span class="nc" id="L1043">			} catch (Exception e) {</span>
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO))log.log(Level.INFO, e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L1045">				throw new DBException(&quot;Could not lock record for &quot; + po.toString() + &quot; caused by &quot; + e.getLocalizedMessage(), e);</span>
+			} finally {
+<span class="nc" id="L1047">				DB.close(rs, stmt);</span>
+<span class="nc" id="L1048">				rs = null;stmt = null;</span>
+			}			
+		}
+<span class="nc" id="L1051">		return false;</span>
+	}
+	
+	/**
+	 * Get the name of the unique constraint name based on a postgresql message
+	 * This method works for English, Spanish, German and French
+	 * The foreign key constraint name is expected to be found in the second quoted string
+	 *   English quotes -&gt; &quot;constraint&quot;
+	 *   Spanish quotes -&gt; «constraint»
+	 *   German  quotes -&gt; »constraint«
+	 *   French  quotes -&gt; « constraint »
+	 */
+	@Override
+	public String getNameOfUniqueConstraintError(Exception e) {
+<span class="nc" id="L1065">		String info = e.getMessage();</span>
+<span class="nc" id="L1066">		int start = -1;</span>
+<span class="nc" id="L1067">		int end = -1;</span>
+<span class="nc" id="L1068">		boolean open = false;</span>
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">		for (int idx = 0; idx &lt; info.length(); idx++) {</span>
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">			if (   info.charAt(idx) == DOUBLE_QUOTE</span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">				|| info.charAt(idx) == ANGLED_QUOTE_LEFT</span>
+<span class="nc bnc" id="L1072" title="All 2 branches missed.">				|| info.charAt(idx) == ANGLED_QUOTE_RIGHT) {</span>
+<span class="nc bnc" id="L1073" title="All 2 branches missed.">				open = !open;</span>
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">				if (open) {</span>
+<span class="nc" id="L1075">					start = idx;</span>
+<span class="nc" id="L1076">				} else {</span>
+<span class="nc" id="L1077">					end = idx;</span>
+<span class="nc" id="L1078">					break;</span>
+				}
+			}
+		}
+<span class="nc bnc" id="L1082" title="All 2 branches missed.">		if (end != -1)</span>
+<span class="nc" id="L1083">			return info.substring(start+1, end).trim();</span>
+<span class="nc" id="L1084">		return null;</span>
+	}
+
+	/**
+	 * Get the foreign key constraint name based on a postgresql message
+	 * This method works for English, Spanish, German and French
+	 * The foreign key constraint name is expected to be found in the second quoted string
+	 *   English quotes -&gt; &quot;constraint&quot;
+	 *   Spanish quotes -&gt; «constraint»
+	 *   German  quotes -&gt; »constraint«
+	 *   French  quotes -&gt; « constraint »
+	 */
+	@Override
+	public String getForeignKeyConstraint(Exception e) {
+<span class="nc" id="L1098">		String info = e.getMessage();</span>
+<span class="nc" id="L1099">		int start = -1;</span>
+<span class="nc" id="L1100">		int end = -1;</span>
+<span class="nc" id="L1101">		int cntword = 0;</span>
+<span class="nc" id="L1102">		boolean open = false;</span>
+<span class="nc bnc" id="L1103" title="All 2 branches missed.">		for (int idx = 0; idx &lt; info.length(); idx++) {</span>
+<span class="nc bnc" id="L1104" title="All 2 branches missed.">			if (   info.charAt(idx) == DOUBLE_QUOTE</span>
+<span class="nc bnc" id="L1105" title="All 2 branches missed.">				|| info.charAt(idx) == ANGLED_QUOTE_LEFT</span>
+<span class="nc bnc" id="L1106" title="All 2 branches missed.">				|| info.charAt(idx) == ANGLED_QUOTE_RIGHT) {</span>
+<span class="nc bnc" id="L1107" title="All 2 branches missed.">				open = !open;</span>
+<span class="nc bnc" id="L1108" title="All 2 branches missed.">				if (open) {</span>
+<span class="nc" id="L1109">					cntword++;</span>
+				}
+<span class="nc bnc" id="L1111" title="All 2 branches missed.">				if (cntword == 2) {</span>
+<span class="nc bnc" id="L1112" title="All 2 branches missed.">					if (open) {</span>
+<span class="nc" id="L1113">						start = idx;</span>
+<span class="nc" id="L1114">					} else {</span>
+<span class="nc" id="L1115">						end = idx;</span>
+<span class="nc" id="L1116">						break;</span>
+					}
+				}
+			}
+		}
+<span class="nc bnc" id="L1121" title="All 2 branches missed.">		if (end != -1)</span>
+<span class="nc" id="L1122">			return info.substring(start+1, end).trim();;</span>
+<span class="nc" id="L1123">		return null;</span>
+	}
+
+	@Override
+	public String subsetClauseForCSV(String columnName, String csv) {
+<span class="nc" id="L1128">		StringBuilder builder = new StringBuilder();</span>
+<span class="nc" id="L1129">		builder.append(&quot;string_to_array(&quot;)</span>
+<span class="nc" id="L1130">			.append(columnName)</span>
+<span class="nc" id="L1131">			.append(&quot;,',')&quot;);</span>
+<span class="nc" id="L1132">		builder.append(&quot; &lt;@ &quot;); //is contained by</span>
+<span class="nc" id="L1133">		builder.append(&quot;string_to_array(&quot;)</span>
+<span class="nc" id="L1134">			.append(DB.TO_STRING(csv))</span>
+<span class="nc" id="L1135">			.append(&quot;,',')&quot;);</span>
+
+<span class="nc" id="L1137">		return builder.toString();</span>
+	}
+
+	@Override
+	public SQLFragment subsetFilterForCSV(String columnName, String csv) {
+<span class="nc" id="L1142">		StringBuilder builder = new StringBuilder();</span>
+<span class="nc" id="L1143">		builder.append(&quot;string_to_array(&quot;)</span>
+<span class="nc" id="L1144">			.append(columnName)</span>
+<span class="nc" id="L1145">			.append(&quot;,',')&quot;);</span>
+<span class="nc" id="L1146">		builder.append(&quot; &lt;@ &quot;); //is contained by</span>
+<span class="nc" id="L1147">		builder.append(&quot;string_to_array(?,',')&quot;);</span>
+
+<span class="nc" id="L1149">		return new SQLFragment(builder.toString(), List.of(csv));</span>
+	}
+	
+	@Override
+	public String quoteColumnName(String columnName) {
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">		if (!isNativeMode()) {</span>
+<span class="nc" id="L1155">			return columnName;</span>
+		}
+		
+<span class="nc" id="L1158">		String lowerCase = columnName.toLowerCase();</span>
+<span class="nc bnc" id="L1159" title="All 2 branches missed.">		if (reservedKeywords.contains(lowerCase)) {</span>
+<span class="nc" id="L1160">			StringBuilder sql = new StringBuilder(&quot;\&quot;&quot;);</span>
+<span class="nc" id="L1161">			sql.append(lowerCase).append(&quot;\&quot;&quot;);</span>
+<span class="nc" id="L1162">			return sql.toString();</span>
+		} else {
+<span class="nc" id="L1164">			return columnName;</span>
+		}
+	}
+
+	@Override
+	public String intersectClauseForCSV(String columnName, String csv) {
+<span class="nc" id="L1170">		return intersectClauseForCSV(columnName, csv, false);</span>
+	}
+	
+	@Override
+	public String intersectClauseForCSV(String columnName, String csv, boolean isNotClause) {
+<span class="nc" id="L1175">	    StringBuilder builder = new StringBuilder();</span>
+
+<span class="nc bnc" id="L1177" title="All 2 branches missed.">	    if (isNotClause)</span>
+<span class="nc" id="L1178">	        builder.append(&quot;(&quot;).append(&quot;NOT &quot;);</span>
+
+<span class="nc" id="L1180">	    builder.append(&quot;(string_to_array(&quot;)</span>
+<span class="nc" id="L1181">	        .append(columnName)</span>
+<span class="nc" id="L1182">	        .append(&quot;,',')&quot;);</span>
+
+<span class="nc" id="L1184">	    builder.append(&quot; &amp;&amp; &quot;); // intersect</span>
+
+<span class="nc" id="L1186">	    builder.append(&quot;string_to_array(&quot;)</span>
+<span class="nc" id="L1187">	        .append(DB.TO_STRING(csv))</span>
+<span class="nc" id="L1188">	        .append(&quot;,','))&quot;);</span>
+
+<span class="nc bnc" id="L1190" title="All 2 branches missed.">	    if (isNotClause)</span>
+<span class="nc" id="L1191">	        builder.append(&quot; OR &quot;)</span>
+<span class="nc" id="L1192">	               .append(columnName)</span>
+<span class="nc" id="L1193">	               .append(&quot; IS NULL)&quot;);</span>
+
+<span class="nc" id="L1195">	    return builder.toString();</span>
+	}
+	
+	@Override
+	public SQLFragment intersectFilterForCSV(String columnName, String csv) {
+<span class="nc" id="L1200">		return intersectFilterForCSV(columnName, csv, false);</span>
+	}
+	
+	@Override
+	public SQLFragment intersectFilterForCSV(String columnName, String csv, boolean isNotClause) {
+
+<span class="nc" id="L1206">	    StringBuilder builder = new StringBuilder();</span>
+
+<span class="nc bnc" id="L1208" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L1209">	        builder.append(&quot;(&quot;).append(&quot;NOT &quot;);</span>
+	    }
+
+<span class="nc" id="L1212">	    builder.append(&quot;(string_to_array(&quot;)</span>
+<span class="nc" id="L1213">	           .append(columnName)</span>
+<span class="nc" id="L1214">	           .append(&quot;,',')&quot;);</span>
+<span class="nc" id="L1215">	    builder.append(&quot; &amp;&amp; &quot;); // intersect</span>
+<span class="nc" id="L1216">	    builder.append(&quot;string_to_array(?,','))&quot;);</span>
+
+<span class="nc bnc" id="L1218" title="All 2 branches missed.">	    if (isNotClause) {</span>
+<span class="nc" id="L1219">	        builder.append(&quot; OR &quot;)</span>
+<span class="nc" id="L1220">	               .append(columnName)</span>
+<span class="nc" id="L1221">	               .append(&quot; IS NULL)&quot;);</span>
+	    }
+
+<span class="nc" id="L1224">	    return new SQLFragment(builder.toString(), List.of(csv));</span>
+	}
+	
+	@Override
+	public boolean isNativeMode() {
+<span class="nc" id="L1229">		return isUseNativeDialect();</span>
+	}
+	
+	/**
+	 * @return true if it is using native dialect
+	 */
+	public final static boolean isUseNativeDialect() {
+<span class="nc bnc" id="L1236" title="All 2 branches missed.">		if (Convert.isLogMigrationScript())</span>
+<span class="nc" id="L1237">			return false;</span>
+<span class="nc bnc" id="L1238" title="All 2 branches missed.">		else if (sysNative != null)</span>
+<span class="nc" id="L1239">			return sysNative;</span>
+<span class="nc bnc" id="L1240" title="All 2 branches missed.">		else if (!Util.isEmpty(Ini.getProperty(P_POSTGRE_SQL_NATIVE), true))</span>
+<span class="nc" id="L1241">			return Ini.isPropertyBool(P_POSTGRE_SQL_NATIVE);</span>
+		else
+<span class="nc" id="L1243">			return true;</span>
+	}
+	
+	/**
+	 * 
+	 * @param keyword
+	 * @return if not using native dialect, return native_marker + keyword
+	 */
+	public final static String markNativeKeyword(String keyword) {
+<span class="nc bnc" id="L1252" title="All 2 branches missed.">		if (isUseNativeDialect())</span>
+<span class="nc" id="L1253">			return keyword;</span>
+		else
+<span class="nc" id="L1255">			return NATIVE_MARKER + keyword;</span>
+	}
+	
+	/**
+	 * 
+	 * @param statement
+	 * @return statement after the removal of native keyword marker
+	 */
+	public final static String removeNativeKeyworkMarker(String statement) {
+<span class="nc" id="L1264">		return statement.replace(DB_PostgreSQL.NATIVE_MARKER, &quot;&quot;);</span>
+	}
+
+	
+	@Override
+	public String getNumericDataType() {
+<span class="nc" id="L1270">		return &quot;NUMERIC&quot;;</span>
+	}
+
+	@Override
+	public String getCharacterDataType() {
+<span class="nc" id="L1275">		return &quot;CHAR&quot;;</span>
+	}
+
+	@Override
+	public String getVarcharDataType() {
+<span class="nc" id="L1280">		return &quot;VARCHAR&quot;;</span>
+	}
+
+	@Override
+	public String getBlobDataType() {
+<span class="nc" id="L1285">		return &quot;BYTEA&quot;;</span>
+	}
+
+	@Override
+	public String getClobDataType() {
+<span class="nc" id="L1290">		return &quot;TEXT&quot;;</span>
+	}
+	
+	@Override
+	public String getJsonDataType() {
+<span class="nc" id="L1295">		return &quot;JSONB&quot;;</span>
+	}
+
+	@Override
+	public String getTimestampDataType() {
+<span class="nc" id="L1300">		return &quot;TIMESTAMP&quot;;</span>
+	}
+
+	@Override
+	public String getTimestampWithTimezoneDataType() {
+<span class="nc" id="L1305">		return &quot;TIMESTAMP WITH TIME ZONE&quot;;</span>
+	}
+
+	@Override
+	public String getUUIDDataType() {
+<span class="nc" id="L1310">		return &quot;UUID&quot;;</span>
+	}
+
+	@Override
+	public String getSQLDDL(MColumn column) {				
+<span class="nc" id="L1315">		StringBuilder sql = new StringBuilder ().append(column.getColumnName())</span>
+<span class="nc" id="L1316">			.append(&quot; &quot;).append(column.getSQLDataType());</span>
+
+		//	Null
+<span class="nc bnc" id="L1319" title="All 2 branches missed.">		if (column.isMandatory())</span>
+<span class="nc" id="L1320">			sql.append(&quot; NOT NULL&quot;);</span>
+			
+		//	Inline Constraint
+<span class="nc bnc" id="L1323" title="All 2 branches missed.">		if (column.getAD_Reference_ID() == DisplayType.YesNo)</span>
+<span class="nc" id="L1324">			sql.append(&quot; CHECK (&quot;).append(column.getColumnName()).append(&quot; IN ('Y','N'))&quot;);</span>
+
+		//	Default
+<span class="nc" id="L1327">		String defaultValue = column.getDefaultValue();</span>
+<span class="nc bnc" id="L1328" title="All 2 branches missed.">		if (defaultValue != null </span>
+<span class="nc bnc" id="L1329" title="All 2 branches missed.">				&amp;&amp; defaultValue.length() &gt; 0</span>
+<span class="nc bnc" id="L1330" title="All 2 branches missed.">				&amp;&amp; defaultValue.indexOf('@') == -1		//	no variables</span>
+<span class="nc bnc" id="L1331" title="All 4 branches missed.">				&amp;&amp; ( ! (DisplayType.isID(column.getAD_Reference_ID()) &amp;&amp; defaultValue.equals(&quot;-1&quot;) ) ) )  // not for ID's with default -1</span>
+		{
+<span class="nc bnc" id="L1333" title="All 2 branches missed.">			if (DisplayType.isText(column.getAD_Reference_ID()) </span>
+<span class="nc bnc" id="L1334" title="All 2 branches missed.">					|| DisplayType.isList(column.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L1335" title="All 2 branches missed.">					|| column.getAD_Reference_ID() == DisplayType.YesNo</span>
+					// Two special columns: Defined as Table but DB Type is String 
+<span class="nc bnc" id="L1337" title="All 4 branches missed.">					|| column.getColumnName().equals(&quot;EntityType&quot;) || column.getColumnName().equals(&quot;AD_Language&quot;)</span>
+<span class="nc bnc" id="L1338" title="All 2 branches missed.">					|| (column.getAD_Reference_ID() == DisplayType.Button &amp;&amp;</span>
+<span class="nc bnc" id="L1339" title="All 2 branches missed.">							!(column.getColumnName().endsWith(&quot;_ID&quot;))))</span>
+			{
+<span class="nc bnc" id="L1341" title="All 4 branches missed.">				if (!defaultValue.startsWith(&quot;'&quot;) &amp;&amp; !defaultValue.endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1342">					defaultValue = DB.TO_STRING(defaultValue);</span>
+			}
+<span class="nc bnc" id="L1344" title="All 2 branches missed.">			if (defaultValue.equalsIgnoreCase(&quot;sysdate&quot;))</span>
+<span class="nc" id="L1345">				defaultValue = &quot;getDate()&quot;;</span>
+<span class="nc" id="L1346">			sql.append(&quot; DEFAULT &quot;).append(defaultValue);</span>
+<span class="nc" id="L1347">		}</span>
+		else
+		{
+<span class="nc bnc" id="L1350" title="All 2 branches missed.">			if (! column.isMandatory())</span>
+<span class="nc" id="L1351">				sql.append(&quot; DEFAULT NULL &quot;);</span>
+<span class="nc" id="L1352">			defaultValue = null;</span>
+		}
+		
+<span class="nc" id="L1355">		return sql.toString();</span>
+	
+	}
+	
+	/**
+	 * 	Get SQL Add command
+	 *	@param table table
+	 *	@return sql
+	 */
+	@Override
+	public String getSQLAdd (MTable table, MColumn column)
+	{
+<span class="nc" id="L1367">		StringBuilder sql = new StringBuilder (&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L1368">			.append(table.getTableName())</span>
+<span class="nc" id="L1369">			.append(&quot; ADD COLUMN &quot;).append(column.getSQLDDL());</span>
+<span class="nc" id="L1370">		String constraint = column.getConstraint(table);</span>
+<span class="nc bnc" id="L1371" title="All 4 branches missed.">		if (constraint != null &amp;&amp; constraint.length() &gt; 0) {</span>
+<span class="nc" id="L1372">			sql.append(DB.SQLSTATEMENT_SEPARATOR).append(&quot;ALTER TABLE &quot;)</span>
+<span class="nc" id="L1373">			.append(table.getTableName())</span>
+<span class="nc" id="L1374">			.append(&quot; ADD &quot;).append(constraint);</span>
+		}
+<span class="nc" id="L1376">		return sql.toString();</span>
+	}	//	getSQLAdd
+	
+	/**
+	 * 	Get SQL Modify command
+	 *	@param table table
+	 *	@param setNullOption generate null / not null statement
+	 *	@return sql separated by ;
+	 */
+	public String getSQLModify (MTable table, MColumn column, boolean setNullOption)
+	{
+<span class="nc" id="L1387">		StringBuilder sql = new StringBuilder (&quot;INSERT INTO t_alter_column values('&quot;)</span>
+<span class="nc" id="L1388">			.append(table.getTableName())</span>
+<span class="nc" id="L1389">			.append(&quot;','&quot;).append(quoteColumnName(column.getColumnName()))</span>
+<span class="nc" id="L1390">			.append(&quot;','&quot;)</span>
+<span class="nc" id="L1391">			.append(column.getSQLDataType())</span>
+<span class="nc" id="L1392">			.append(&quot;',&quot;);</span>
+		
+		//	Null
+<span class="nc bnc" id="L1395" title="All 2 branches missed.">		if (setNullOption)</span>
+		{
+<span class="nc bnc" id="L1397" title="All 2 branches missed.">			if (column.isMandatory())</span>
+<span class="nc" id="L1398">				sql.append(&quot;'NOT NULL',&quot;);</span>
+			else
+<span class="nc" id="L1400">				sql.append(&quot;'NULL',&quot;);</span>
+<span class="nc" id="L1401">		}</span>
+		else
+		{
+<span class="nc" id="L1404">			sql.append(&quot;null,&quot;);</span>
+		}
+			
+		//	Default
+<span class="nc" id="L1408">		String defaultValue = column.getDefaultValue();</span>
+<span class="nc" id="L1409">		String originalDefaultValue = defaultValue;</span>
+<span class="nc bnc" id="L1410" title="All 2 branches missed.">		if (defaultValue != null </span>
+<span class="nc bnc" id="L1411" title="All 2 branches missed.">			&amp;&amp; defaultValue.length() &gt; 0</span>
+<span class="nc bnc" id="L1412" title="All 2 branches missed.">			&amp;&amp; defaultValue.indexOf('@') == -1		//	no variables</span>
+<span class="nc bnc" id="L1413" title="All 4 branches missed.">			&amp;&amp; ( ! (DisplayType.isID(column.getAD_Reference_ID()) &amp;&amp; defaultValue.equals(&quot;-1&quot;) ) ) )  // not for ID's with default -1</span>
+		{
+<span class="nc bnc" id="L1415" title="All 2 branches missed.">			if (defaultValue.equalsIgnoreCase(&quot;sysdate&quot;))</span>
+<span class="nc" id="L1416">				defaultValue = &quot;getDate()&quot;;</span>
+<span class="nc bnc" id="L1417" title="All 4 branches missed.">			if (!defaultValue.startsWith(&quot;'&quot;) &amp;&amp; !defaultValue.endsWith(&quot;'&quot;))</span>
+<span class="nc" id="L1418">				defaultValue = DB.TO_STRING(defaultValue);</span>
+<span class="nc" id="L1419">			sql.append(defaultValue);</span>
+<span class="nc" id="L1420">		}</span>
+		else
+		{
+<span class="nc" id="L1423">			sql.append(&quot;null&quot;);</span>
+<span class="nc" id="L1424">			defaultValue = null;</span>
+		}
+<span class="nc" id="L1426">		sql.append(&quot;)&quot;);</span>
+		
+		
+		//	Null Values
+<span class="nc bnc" id="L1430" title="All 6 branches missed.">		if (column.isMandatory() &amp;&amp; defaultValue != null &amp;&amp; defaultValue.length() &gt; 0)</span>
+		{
+<span class="nc bnc" id="L1432" title="All 2 branches missed.">			if (!(DisplayType.isText(column.getAD_Reference_ID()) </span>
+<span class="nc bnc" id="L1433" title="All 2 branches missed.">					|| DisplayType.isList(column.getAD_Reference_ID())</span>
+<span class="nc bnc" id="L1434" title="All 2 branches missed.">					|| column.getAD_Reference_ID() == DisplayType.YesNo</span>
+<span class="nc bnc" id="L1435" title="All 2 branches missed.">					|| column.getAD_Reference_ID() == DisplayType.Payment</span>
+					// Two special columns: Defined as Table but DB Type is String 
+<span class="nc bnc" id="L1437" title="All 4 branches missed.">					|| column.getColumnName().equals(&quot;EntityType&quot;) || column.getColumnName().equals(&quot;AD_Language&quot;)</span>
+<span class="nc bnc" id="L1438" title="All 2 branches missed.">					|| (column.getAD_Reference_ID() == DisplayType.Button &amp;&amp;</span>
+<span class="nc bnc" id="L1439" title="All 2 branches missed.">							!(column.getColumnName().endsWith(&quot;_ID&quot;)))))</span>
+			{
+<span class="nc" id="L1441">				defaultValue = originalDefaultValue;</span>
+<span class="nc bnc" id="L1442" title="All 2 branches missed.">				if (defaultValue.equalsIgnoreCase(&quot;sysdate&quot;))</span>
+<span class="nc" id="L1443">					defaultValue = &quot;getDate()&quot;;</span>
+			}
+<span class="nc" id="L1445">			StringBuilder sqlSet = new StringBuilder(&quot;UPDATE &quot;)</span>
+<span class="nc" id="L1446">				.append(table.getTableName())</span>
+<span class="nc" id="L1447">				.append(&quot; SET &quot;).append(quoteColumnName(column.getColumnName()))</span>
+<span class="nc" id="L1448">				.append(&quot;=&quot;).append(defaultValue)</span>
+<span class="nc" id="L1449">				.append(&quot; WHERE &quot;).append(quoteColumnName(column.getColumnName())).append(&quot; IS NULL&quot;);</span>
+<span class="nc" id="L1450">			sql.append(DB.SQLSTATEMENT_SEPARATOR).append(sqlSet);</span>
+		}
+		
+		
+		//
+<span class="nc" id="L1455">		return sql.toString();</span>
+	}	//	getSQLModify
+
+	@Override
+	public boolean isQueryTimeout(SQLException ex) {
+		//org.postgresql.util.PSQLException: ERROR: canceling statement due to user request | SQL Code: 0 | SQL State: 57014
+<span class="nc" id="L1461">		return &quot;57014&quot;.equals(ex.getSQLState());</span>
+	}
+
+	@Override
+	public ITablePartitionService getTablePartitionService() {
+<span class="nc" id="L1466">		return new TablePartitionService();</span>
+	}
+
+	@Override
+	public String TO_Blob(byte[] blob) {
+<span class="nc" id="L1471">		return &quot;decode('&quot;+HexFormat.of().formatHex(blob)+&quot;','hex')&quot;;</span>
+	}
+}   //  DB_PostgreSQL
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

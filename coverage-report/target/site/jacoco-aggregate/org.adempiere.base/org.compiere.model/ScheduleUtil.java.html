@@ -1,0 +1,888 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ScheduleUtil.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">ScheduleUtil.java</span></div><h1>ScheduleUtil.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Language;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+
+/**
+ *	Resource Scheduling Utilities.
+ *
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: ScheduleUtil.java,v 1.2 2006/07/30 00:51:05 jjanke Exp $
+ */
+public class ScheduleUtil
+{
+	/**
+	 *	Constructor
+	 *  @param ctx context
+	 */
+<span class="nc" id="L50">	public ScheduleUtil (Properties ctx)</span>
+	{
+<span class="nc" id="L52">		m_ctx = ctx;</span>
+<span class="nc" id="L53">	}	//	MSchedule</span>
+
+	private Properties 	m_ctx;
+	private int			m_S_Resource_ID;
+<span class="nc" id="L57">	private boolean 	m_isAvailable = true;</span>
+	@SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L59">	private boolean 	m_isSingleAssignment = true;</span>
+<span class="nc" id="L60">	private int 		m_S_ResourceType_ID = 0;</span>
+<span class="nc" id="L61">	private int 		m_C_UOM_ID = 0;</span>
+
+<span class="nc" id="L63">	private Timestamp	m_startDate = null;</span>
+<span class="nc" id="L64">	private Timestamp	m_endDate = null;</span>
+
+	/**	Resource Type Name			*/
+<span class="nc" id="L67">	private String		m_typeName = null;</span>
+	/**	Resource Type Start Time	*/
+<span class="nc" id="L69">	private Timestamp	m_slotStartTime = null;</span>
+	/** Resource Type End Time		*/
+<span class="nc" id="L71">	private Timestamp	m_slotEndTime = null;</span>
+
+	/**	Time Slots						*/
+<span class="nc" id="L74">	private	MAssignmentSlot[] 	m_timeSlots = null;</span>
+
+	/**	Begin Timestamp		1/1/1970			*/
+<span class="nc" id="L77">	public static final Timestamp	EARLIEST = new Timestamp(new GregorianCalendar(1970,Calendar.JANUARY,1).getTimeInMillis());</span>
+	/**	End Timestamp		12/31/2070			*/
+<span class="nc" id="L79">	public static final Timestamp	LATEST = new Timestamp(new GregorianCalendar(2070,Calendar.DECEMBER,31).getTimeInMillis());</span>
+
+	/**	Logger			*/
+<span class="nc" id="L82">	private static CLogger log = CLogger.getCLogger(ScheduleUtil.class);</span>
+		
+	/**
+	 * 	Get Assignments for time frame.
+	 *  &lt;pre&gt;
+	 * 		- Resource is Active and Available
+	 * 		- Resource UnAvailability
+	 * 		- NonBusinessDay
+	 * 		- ResourceType Available
+	 *  &lt;/pre&gt;
+	 *  @param S_Resource_ID resource
+	 *  @param start_Date start date
+	 *  @param end_Date optional end date, need to provide qty to calculate it
+	 *  @param qty optional qty in ResourceType UOM. Ignored if end date is not null
+	 *  @param getAll if true return all errors
+	 *	@param trxName transaction
+	 *  @return Array of existing Assignments or null - if free
+	 */
+	public MAssignmentSlot[] getAssignmentSlots (int S_Resource_ID,
+		Timestamp start_Date, Timestamp end_Date,
+		BigDecimal qty, boolean getAll, String trxName)
+	{
+<span class="nc bnc" id="L104" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(start_Date.toString());</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">		if (m_S_Resource_ID != S_Resource_ID)</span>
+<span class="nc" id="L106">			getBaseInfo (S_Resource_ID);</span>
+		//
+<span class="nc" id="L108">		ArrayList&lt;MAssignmentSlot&gt; list = new ArrayList&lt;MAssignmentSlot&gt;();</span>
+<span class="nc" id="L109">		MAssignmentSlot ma = null;</span>
+
+<span class="nc bnc" id="L111" title="All 2 branches missed.">		if (!m_isAvailable)</span>
+		{
+<span class="nc" id="L113">			ma = new MAssignmentSlot (EARLIEST, LATEST,</span>
+<span class="nc" id="L114">				Msg.getMsg (m_ctx, &quot;ResourceNotAvailable&quot;), &quot;&quot;, MAssignmentSlot.STATUS_NotAvailable);</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">			if (!getAll)</span>
+<span class="nc" id="L116">				return new MAssignmentSlot[] {ma};</span>
+<span class="nc" id="L117">			list.add(ma);</span>
+		}
+
+<span class="nc" id="L120">		m_startDate = start_Date;</span>
+<span class="nc" id="L121">		m_endDate = end_Date;</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		if (m_endDate == null)</span>
+<span class="nc" id="L123">			m_endDate = MUOMConversion.getEndDate(m_ctx, m_startDate, m_C_UOM_ID, qty);</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine( &quot;- EndDate=&quot; + m_endDate);</span>
+
+		//	Resource Unavailability -------------------------------------------
+<span class="nc" id="L127">		String sql = &quot;SELECT Description, DateFrom, DateTo &quot;</span>
+		  + &quot;FROM S_ResourceUnavailable &quot;
+		  + &quot;WHERE S_Resource_ID=?&quot;					//	#1
+		  + &quot; AND DateTo &gt;= ?&quot;						//	#2	start
+		  + &quot; AND DateFrom &lt;= ?&quot;					//	#3	end
+		  + &quot; AND IsActive='Y'&quot;;
+<span class="nc" id="L133">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L134">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L137">			pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L138">			pstmt.setInt(1, m_S_Resource_ID);</span>
+<span class="nc" id="L139">			pstmt.setTimestamp(2, m_startDate);</span>
+<span class="nc" id="L140">			pstmt.setTimestamp(3, m_endDate);</span>
+<span class="nc" id="L141">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L144">				ma = new MAssignmentSlot (TimeUtil.getDay(rs.getTimestamp(2)),</span>
+<span class="nc" id="L145">					TimeUtil.getNextDay(rs.getTimestamp(3)),	//	user entered date need to convert to not including end time</span>
+<span class="nc" id="L146">					Msg.getMsg (m_ctx, &quot;ResourceUnAvailable&quot;), rs.getString(1),</span>
+<span class="nc" id="L147">					MAssignmentSlot.STATUS_UnAvailable);</span>
+
+<span class="nc bnc" id="L149" title="All 2 branches missed.">				if (getAll)</span>
+<span class="nc" id="L150">					createDaySlot (list, ma);</span>
+				else
+<span class="nc" id="L152">					list.add(ma);</span>
+			}
+<span class="nc" id="L154">		}</span>
+<span class="nc" id="L155">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L157">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L158">			ma = new MAssignmentSlot (EARLIEST, LATEST,</span>
+<span class="nc" id="L159">				Msg.getMsg (m_ctx, &quot;ResourceUnAvailable&quot;), e.toString(),</span>
+<span class="nc" id="L160">				MAssignmentSlot.STATUS_UnAvailable);</span>
+		}
+		finally
+		{
+<span class="nc" id="L164">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L165">			rs = null;</span>
+<span class="nc" id="L166">			pstmt = null;</span>
+		}
+		
+<span class="nc bnc" id="L169" title="All 4 branches missed.">		if (ma != null &amp;&amp; !getAll)</span>
+<span class="nc" id="L170">			return new MAssignmentSlot[] {ma};</span>
+
+		//	NonBusinessDay ----------------------------------------------------
+		//	&quot;WHERE TRUNC(Date1) BETWEEN TRUNC(?) AND TRUNC(?)&quot;   causes
+		//	ORA-00932: inconsistent datatypes: expected NUMBER got TIMESTAMP
+<span class="nc" id="L175">		sql = MRole.getDefault(m_ctx, false).addAccessSQL (</span>
+<span class="nc" id="L176">			&quot;SELECT Name, Date1 FROM C_NonBusinessDay &quot;</span>
+			+ &quot;WHERE TRUNC(Date1) BETWEEN ? AND ? AND COALESCE(C_Country_ID,0) IN (0, ?)&quot;,
+<span class="nc" id="L178">			&quot;C_NonBusinessDay&quot;, false, false);	// not qualified - RO</span>
+		try
+		{
+<span class="nc" id="L181">			Timestamp startDay = TimeUtil.getDay(m_startDate);</span>
+<span class="nc" id="L182">			Timestamp endDay = TimeUtil.getDay(m_endDate);</span>
+<span class="nc" id="L183">			pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L184">			pstmt.setTimestamp(1, startDay);</span>
+<span class="nc" id="L185">			pstmt.setTimestamp(2, endDay);</span>
+<span class="nc" id="L186">			pstmt.setInt(3, Env.getContextAsInt(m_ctx, Env.C_COUNTRY_ID));</span>
+<span class="nc" id="L187">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L190">				Timestamp date = rs.getTimestamp(2);</span>
+<span class="nc" id="L191">				ma = new MAssignmentSlot (TimeUtil.getDay(date),</span>
+<span class="nc" id="L192">					TimeUtil.getNextDay(date),	//	user entered date need to convert to not including end time</span>
+<span class="nc" id="L193">					Msg.getMsg(m_ctx, &quot;NonBusinessDay&quot;), rs.getString(1),</span>
+<span class="nc" id="L194">					MAssignmentSlot.STATUS_NonBusinessDay);</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">				if (log.isLoggable(Level.FINER)) log.finer(&quot;- NonBusinessDay &quot; + ma);</span>
+<span class="nc" id="L196">				list.add(ma);</span>
+			}
+<span class="nc" id="L198">		}</span>
+<span class="nc" id="L199">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L201">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L202">			ma = new MAssignmentSlot (EARLIEST, LATEST,</span>
+<span class="nc" id="L203">				Msg.getMsg(m_ctx, &quot;NonBusinessDay&quot;), e.toString(),</span>
+<span class="nc" id="L204">				MAssignmentSlot.STATUS_NonBusinessDay);</span>
+		}
+		finally
+		{
+<span class="nc" id="L208">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L209">			rs = null;</span>
+<span class="nc" id="L210">			pstmt = null;</span>
+		}
+<span class="nc bnc" id="L212" title="All 4 branches missed.">		if (ma != null &amp;&amp; !getAll)</span>
+<span class="nc" id="L213">			return new MAssignmentSlot[] {ma};</span>
+
+		//	ResourceType Available --------------------------------------------
+<span class="nc" id="L216">		sql = &quot;SELECT Name, IsTimeSlot,TimeSlotStart,TimeSlotEnd, &quot;	//	1..4</span>
+			+ &quot;IsDateSlot,OnMonday,OnTuesday,OnWednesday,&quot;			//	5..8
+			+ &quot;OnThursday,OnFriday,OnSaturday,OnSunday &quot;			//	9..12
+			+ &quot;FROM S_ResourceType &quot;
+			+ &quot;WHERE S_ResourceType_ID=?&quot;;
+		try
+		{
+<span class="nc" id="L223">			pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L224">			pstmt.setInt(1, m_S_ResourceType_ID);</span>
+<span class="nc" id="L225">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc" id="L228">				m_typeName = rs.getString(1);</span>
+				//	TimeSlot
+<span class="nc bnc" id="L230" title="All 2 branches missed.">				if (&quot;Y&quot;.equals(rs.getString(2)))</span>
+				{
+<span class="nc" id="L232">					m_slotStartTime = TimeUtil.getDayTime (m_startDate, rs.getTimestamp(3));</span>
+<span class="nc" id="L233">					m_slotEndTime = TimeUtil.getDayTime (m_endDate, rs.getTimestamp(4));</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">					if (TimeUtil.inRange(m_startDate, m_endDate, m_slotStartTime, m_slotEndTime))</span>
+					{
+<span class="nc" id="L236">						ma = new MAssignmentSlot (m_slotStartTime, m_slotEndTime,</span>
+<span class="nc" id="L237">							Msg.getMsg(m_ctx, &quot;ResourceNotInSlotTime&quot;), m_typeName,</span>
+<span class="nc" id="L238">							MAssignmentSlot.STATUS_NotInSlotTime);</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">						if (getAll)</span>
+<span class="nc" id="L240">							createTimeSlot (list,</span>
+<span class="nc" id="L241">								rs.getTimestamp(3), rs.getTimestamp(4));</span>
+					}
+				}	//	TimeSlot
+
+				//	DaySlot
+<span class="nc bnc" id="L246" title="All 2 branches missed.">				if (&quot;Y&quot;.equals(rs.getString(5)))</span>
+				{
+<span class="nc" id="L248">					if (TimeUtil.inRange(m_startDate, m_endDate,</span>
+<span class="nc" id="L249">						&quot;Y&quot;.equals(rs.getString(6)), &quot;Y&quot;.equals(rs.getString(7)), 				//	Mo..Tu</span>
+<span class="nc" id="L250">						&quot;Y&quot;.equals(rs.getString(8)), &quot;Y&quot;.equals(rs.getString(9)), &quot;Y&quot;.equals(rs.getString(10)),	//  We..Fr</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">						&quot;Y&quot;.equals(rs.getString(11)), &quot;Y&quot;.equals(rs.getString(12))))</span>
+					{
+<span class="nc" id="L253">						ma = new MAssignmentSlot (m_startDate, m_endDate,</span>
+<span class="nc" id="L254">							Msg.getMsg(m_ctx, &quot;ResourceNotInSlotDay&quot;), m_typeName,</span>
+<span class="nc" id="L255">							MAssignmentSlot.STATUS_NotInSlotDay);</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">						if (getAll)</span>
+<span class="nc" id="L257">							createDaySlot (list,</span>
+<span class="nc" id="L258">								&quot;Y&quot;.equals(rs.getString(6)), &quot;Y&quot;.equals(rs.getString(7)), 		//	Mo..Tu</span>
+<span class="nc" id="L259">								&quot;Y&quot;.equals(rs.getString(8)), &quot;Y&quot;.equals(rs.getString(9)), &quot;Y&quot;.equals(rs.getString(10)),	//  We..Fr</span>
+<span class="nc" id="L260">								&quot;Y&quot;.equals(rs.getString(11)), &quot;Y&quot;.equals(rs.getString(12)));</span>
+					}
+				}	//	DaySlot
+
+			}
+<span class="nc" id="L265">		}</span>
+<span class="nc" id="L266">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L268">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L269">			ma = new MAssignmentSlot (EARLIEST, LATEST,</span>
+<span class="nc" id="L270">				Msg.getMsg(m_ctx, &quot;ResourceNotInSlotDay&quot;), e.toString(),</span>
+<span class="nc" id="L271">				MAssignmentSlot.STATUS_NonBusinessDay);</span>
+		}
+		finally
+		{
+<span class="nc" id="L275">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L276">			rs = null;</span>
+<span class="nc" id="L277">			pstmt = null;</span>
+		}
+<span class="nc bnc" id="L279" title="All 4 branches missed.">		if (ma != null &amp;&amp; !getAll)</span>
+<span class="nc" id="L280">			return new MAssignmentSlot[] {ma};</span>
+
+		//	Assignments -------------------------------------------------------
+<span class="nc" id="L283">		sql = &quot;SELECT S_ResourceAssignment_ID &quot;</span>
+			+ &quot;FROM S_ResourceAssignment &quot;
+			+ &quot;WHERE S_Resource_ID=?&quot;					//	#1
+			+ &quot; AND AssignDateTo &gt;= ?&quot;					//	#2	start
+			+ &quot; AND AssignDateFrom &lt;= ?&quot;				//	#3	end
+			+ &quot; AND IsActive='Y'&quot;;
+		try
+		{
+<span class="nc" id="L291">			pstmt = DB.prepareStatement(sql, trxName);</span>
+<span class="nc" id="L292">			pstmt.setInt(1, m_S_Resource_ID);</span>
+<span class="nc" id="L293">			pstmt.setTimestamp(2, m_startDate);</span>
+<span class="nc" id="L294">			pstmt.setTimestamp(3, m_endDate);</span>
+<span class="nc" id="L295">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L298">				MResourceAssignment mAssignment = </span>
+<span class="nc" id="L299">					new MResourceAssignment(Env.getCtx(), rs.getInt(1), trxName);</span>
+<span class="nc" id="L300">				ma = new MAssignmentSlot (mAssignment);</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">				if (!getAll)</span>
+<span class="nc" id="L302">					break;</span>
+<span class="nc" id="L303">				list.add(ma);</span>
+			}
+<span class="nc" id="L305">		}</span>
+<span class="nc" id="L306">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L308">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L309">			ma = new MAssignmentSlot (EARLIEST, LATEST,</span>
+<span class="nc" id="L310">				Msg.translate(m_ctx, &quot;S_R&quot;), e.toString(),</span>
+<span class="nc" id="L311">				MAssignmentSlot.STATUS_NotConfirmed);</span>
+		}
+		finally
+		{
+<span class="nc" id="L315">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L316">			rs = null;</span>
+<span class="nc" id="L317">			pstmt = null;</span>
+		}
+<span class="nc bnc" id="L319" title="All 4 branches missed.">		if (ma != null &amp;&amp; !getAll)</span>
+<span class="nc" id="L320">			return new MAssignmentSlot[] {ma};</span>
+
+		//	fill m_timeSlots (required for layout)
+<span class="nc" id="L323">		createTimeSlots();</span>
+
+		//	Clean list - date range
+<span class="nc" id="L326">		ArrayList&lt;MAssignmentSlot&gt; clean = new ArrayList&lt;MAssignmentSlot&gt;(list.size());</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">		for (int i = 0; i &lt; list.size(); i++)</span>
+		{
+<span class="nc" id="L329">			MAssignmentSlot mas = (MAssignmentSlot)list.get(i);</span>
+<span class="nc bnc" id="L330" title="All 4 branches missed.">			if ((mas.getStartTime().equals(m_startDate) || mas.getStartTime().after(m_startDate))</span>
+<span class="nc bnc" id="L331" title="All 4 branches missed.">					&amp;&amp; (mas.getEndTime().equals(m_endDate) || mas.getEndTime().before(m_endDate)))</span>
+<span class="nc" id="L332">				clean.add(mas);</span>
+		}
+		//	Delete Unavailability TimeSlots when all day assignments exist
+<span class="nc" id="L335">		MAssignmentSlot[] sorted = new MAssignmentSlot[clean.size()];</span>
+<span class="nc" id="L336">		clean.toArray(sorted);</span>
+<span class="nc" id="L337">		Arrays.sort(sorted, new MAssignmentSlot());	//	sorted by start/end date</span>
+<span class="nc" id="L338">		list.clear();	//	used as day list</span>
+<span class="nc" id="L339">		clean.clear();	//	cleaned days</span>
+<span class="nc" id="L340">		Timestamp sortedDay = null;</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		for (int i = 0; i &lt; sorted.length; i++)</span>
+		{
+<span class="nc bnc" id="L343" title="All 2 branches missed.">			if (sortedDay == null)</span>
+<span class="nc" id="L344">				sortedDay = TimeUtil.getDay(sorted[i].getStartTime());</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">			if (sortedDay.equals(TimeUtil.getDay(sorted[i].getStartTime())))</span>
+<span class="nc" id="L346">				list.add(sorted[i]);</span>
+			else
+			{
+				//	process info list -&gt; clean
+<span class="nc" id="L350">				layoutSlots (list, clean);</span>
+				//	prepare next
+<span class="nc" id="L352">				list.clear();</span>
+<span class="nc" id="L353">				list.add(sorted[i]);</span>
+<span class="nc" id="L354">				sortedDay = TimeUtil.getDay(sorted[i].getStartTime());</span>
+			}
+		}
+		//	process info list -&gt; clean
+<span class="nc" id="L358">		layoutSlots (list, clean);</span>
+
+		//	Return
+<span class="nc" id="L361">		MAssignmentSlot[] retValue = new MAssignmentSlot[clean.size()];</span>
+<span class="nc" id="L362">		clean.toArray(retValue);</span>
+<span class="nc" id="L363">		Arrays.sort(retValue, new MAssignmentSlot());	//	sorted by start/end date</span>
+<span class="nc" id="L364">		return retValue;</span>
+	}	//	getAssignmentSlots
+
+	/**
+	 * 	Copy valid Slots of a day from list to clear and layout
+	 * 	@param list list with slots of the day
+	 * 	@param clean list with only valid slots
+	 */
+	@SuppressWarnings(&quot;unchecked&quot;)
+	private void layoutSlots (ArrayList&lt;MAssignmentSlot&gt; list, ArrayList&lt;MAssignmentSlot&gt; clean)
+	{
+<span class="nc" id="L375">		int size = list.size();</span>
+
+<span class="nc bnc" id="L377" title="All 2 branches missed.">		if (size == 0)</span>
+<span class="nc" id="L378">			return;</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">		else if (size == 1)</span>
+		{
+<span class="nc" id="L381">			MAssignmentSlot mas = (MAssignmentSlot)list.get(0);</span>
+<span class="nc" id="L382">			layoutY (mas);</span>
+<span class="nc" id="L383">			clean.add (mas);</span>
+<span class="nc" id="L384">			return;</span>
+		}
+
+		//	Delete Unavailability TimeSlots when all day assignments exist
+<span class="nc" id="L388">		boolean allDay = false;</span>
+<span class="nc bnc" id="L389" title="All 4 branches missed.">		for (int i = 0; !allDay &amp;&amp; i &lt; size; i++)</span>
+		{
+<span class="nc" id="L391">			MAssignmentSlot mas = (MAssignmentSlot)list.get(i);</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">			if (mas.getStatus() == MAssignmentSlot.STATUS_NotAvailable</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">				|| mas.getStatus() == MAssignmentSlot.STATUS_UnAvailable</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">				|| mas.getStatus() == MAssignmentSlot.STATUS_NonBusinessDay</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">				|| mas.getStatus() == MAssignmentSlot.STATUS_NotInSlotDay)</span>
+<span class="nc" id="L396">				allDay = true;</span>
+
+		}
+<span class="nc bnc" id="L399" title="All 2 branches missed.">		if (allDay)</span>
+		{
+			//	delete Time Slot
+<span class="nc bnc" id="L402" title="All 2 branches missed.">			for (int i = 0; i &lt; list.size(); i++)</span>
+			{
+<span class="nc" id="L404">				MAssignmentSlot mas = (MAssignmentSlot)list.get(i);</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">				if (mas.getStatus() == MAssignmentSlot.STATUS_NotInSlotTime)</span>
+<span class="nc" id="L406">					list.remove(i--);</span>
+			}
+		}
+
+		//	Copy &amp; Y layout remaining
+<span class="nc bnc" id="L411" title="All 2 branches missed.">		for (int i = 0; i &lt; list.size(); i++)</span>
+		{
+<span class="nc" id="L413">			MAssignmentSlot mas = (MAssignmentSlot)list.get(i);</span>
+<span class="nc" id="L414">			layoutY (mas);</span>
+<span class="nc" id="L415">			clean.add (mas);</span>
+		}
+
+		//	X layout
+<span class="nc" id="L419">		int maxYslots = m_timeSlots.length;</span>
+<span class="nc" id="L420">		int[] xSlots = new int[maxYslots];		//	number of parallel slots</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">		for (int i = 0; i &lt; list.size(); i++)</span>
+		{
+<span class="nc" id="L423">			MAssignmentSlot mas = (MAssignmentSlot)list.get(i);</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">			for (int y = mas.getYStart(); y &lt; mas.getYEnd(); y++)</span>
+<span class="nc" id="L425">				xSlots[y]++;</span>
+		}
+		//	Max parallel X Slots
+<span class="nc" id="L428">		int maxXslots = 0;</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">		for (int y = 0; y &lt; xSlots.length; y++)</span>
+		{
+<span class="nc bnc" id="L431" title="All 2 branches missed.">			if (xSlots[y] &gt; maxXslots)</span>
+<span class="nc" id="L432">				maxXslots = xSlots[y];</span>
+		}
+		//	Only one column
+<span class="nc bnc" id="L435" title="All 2 branches missed.">		if (maxXslots &lt; 2)</span>
+		{
+<span class="nc bnc" id="L437" title="All 2 branches missed.">			for (int i = 0; i &lt; list.size(); i++)</span>
+			{
+<span class="nc" id="L439">				MAssignmentSlot mas = (MAssignmentSlot)list.get(i);</span>
+<span class="nc" id="L440">				mas.setX(0, 1);</span>
+			}
+<span class="nc" id="L442">			return;</span>
+		}
+
+		//	Create xy Matrix
+<span class="nc" id="L446">		ArrayList&lt;Object&gt;[][] matrix = new ArrayList[maxXslots][maxYslots];</span>
+		//	Populate Matrix first column
+<span class="nc bnc" id="L448" title="All 2 branches missed.">		for (int y = 0; y &lt; maxYslots; y++)</span>
+		{
+<span class="nc" id="L450">			ArrayList&lt;Object&gt; xyList = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L451">			matrix[0][y] = xyList;</span>
+			//	see if one assignment fits into slot
+<span class="nc bnc" id="L453" title="All 2 branches missed.">			for (int i = 0; i &lt; list.size(); i++)</span>
+			{
+<span class="nc" id="L455">				MAssignmentSlot mas = (MAssignmentSlot)list.get(i);</span>
+<span class="nc bnc" id="L456" title="All 4 branches missed.">				if (y &gt;= mas.getYStart() &amp;&amp; y &lt;= mas.getYEnd())</span>
+<span class="nc" id="L457">					xyList.add(mas);</span>
+			}
+			//	initiate right columns
+<span class="nc bnc" id="L460" title="All 2 branches missed.">			for (int x = 1; x &lt; maxXslots; x++)</span>
+<span class="nc" id="L461">				matrix[x][y] = new ArrayList&lt;Object&gt;();</span>
+		}	//	for all y slots
+
+		/**
+		 * 	(AB)()	-&gt;	(B)(A)	-&gt;	(B)(A)
+		 *  (BC)()	-&gt;	(BC)()	-&gt;	(B)(C)
+		 * 	- if the row above is empty, move the first one right
+		 *  - else	- check col_1..x above and move any content if the same
+		 *  		- if size &gt; 0
+		 * 				- if the element is is not the same as above,
+		 * 					move to the first empty column on the right
+		 */
+		//	if in one column cell, there is more than one, move it to the right
+<span class="nc bnc" id="L474" title="All 2 branches missed.">		for (int y = 0; y &lt; maxYslots; y++)</span>
+		{
+			//	if an element is the same as the line above, move it there
+<span class="nc bnc" id="L477" title="All 4 branches missed.">			if (y &gt; 0 &amp;&amp; matrix[0][y].size() &gt; 0)</span>
+			{
+<span class="nc bnc" id="L479" title="All 2 branches missed.">				for (int x = 1; x &lt; maxXslots; x++)</span>
+				{
+<span class="nc bnc" id="L481" title="All 2 branches missed.">					if (matrix[x][y-1].size() &gt; 0)	//	above slot is not empty</span>
+					{
+<span class="nc" id="L483">						Object above = matrix[x][y-1].get(0);</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">						for (int i = 0; i &lt; matrix[x][y].size(); i++)</span>
+						{
+<span class="nc bnc" id="L486" title="All 2 branches missed.">							if (above.equals(matrix[0][y].get(i)))	//	same - move it</span>
+							{
+<span class="nc" id="L488">								matrix[x][y].add(matrix[0][y].get(i));</span>
+<span class="nc" id="L489">								matrix[0][y].remove(i--);</span>
+							}
+						}
+					}
+				}
+			}	//	if an element is the same as the line above, move it there
+
+			//	we need to move items to the right
+<span class="nc bnc" id="L497" title="All 2 branches missed.">			if (matrix[0][y].size() &gt; 1)</span>
+			{
+<span class="nc" id="L499">				Object above = null;</span>
+<span class="nc bnc" id="L500" title="All 4 branches missed.">				if (y &gt; 0 &amp;&amp; matrix[0][y-1].size() &gt; 0)</span>
+<span class="nc" id="L501">					above = matrix[0][y-1].get(0);</span>
+				//
+<span class="nc bnc" id="L503" title="All 2 branches missed.">				for (int i = 0; i &lt; matrix[0][y].size(); i++)</span>
+				{
+<span class="nc" id="L505">					Object move = matrix[0][y].get(i);</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">					if (!move.equals(above))	//	we can move it</span>
+					{
+<span class="nc bnc" id="L508" title="All 4 branches missed.">						for (int x = 1; move != null &amp;&amp; x &lt; maxXslots; x++)</span>
+						{
+<span class="nc bnc" id="L510" title="All 2 branches missed.">							if (matrix[x][y].size() == 0)	//	found an empty slot</span>
+							{
+<span class="nc" id="L512">								matrix[x][y].add(move);</span>
+<span class="nc" id="L513">								matrix[0][y].remove(i--);</span>
+<span class="nc" id="L514">								move = null;</span>
+							}
+						}
+					}
+				}
+			}	//	we need to move items to the right
+		}	//	 for all y slots
+
+		//	go through the matrix and assign the X position
+<span class="nc bnc" id="L523" title="All 2 branches missed.">		for (int y = 0; y &lt; maxYslots; y++)</span>
+		{
+<span class="nc bnc" id="L525" title="All 2 branches missed.">			for (int x = 0; x &lt; maxXslots; x++)</span>
+			{
+<span class="nc bnc" id="L527" title="All 2 branches missed.">				if (matrix[x][y].size() &gt; 0)</span>
+				{
+<span class="nc" id="L529">					MAssignmentSlot mas = (MAssignmentSlot)matrix[x][y].get(0);</span>
+<span class="nc" id="L530">					mas.setX(x, xSlots[y]);</span>
+				}
+			}
+		}
+		//	clean up
+<span class="nc" id="L535">		matrix = null;</span>
+<span class="nc" id="L536">	}	//	layoutSlots</span>
+
+	/**
+	 * 	Layout Y axis (time)
+	 * 	@param mas assignment slot
+	 */
+	private void layoutY (MAssignmentSlot mas)
+	{
+<span class="nc" id="L544">		int timeSlotStart = getTimeSlotIndex(mas.getStartTime(), false);</span>
+<span class="nc" id="L545">		int timeSlotEnd = getTimeSlotIndex(mas.getEndTime(), true);</span>
+<span class="nc bnc" id="L546" title="All 2 branches missed.">		if (TimeUtil.isAllDay(mas.getStartTime(), mas.getEndTime()))</span>
+<span class="nc" id="L547">			timeSlotEnd = m_timeSlots.length - 1;</span>
+		//
+<span class="nc" id="L549">		mas.setY (timeSlotStart, timeSlotEnd);</span>
+<span class="nc" id="L550">	}	//	layoutY</span>
+
+	/**
+	 * 	Get Time Slot index for the time. &lt;br/&gt;
+	 *  Based on start time and not including end time.
+	 * 	@param time time (day is ignored)
+	 *  @param endTime if true, the end time is included
+	 * 	@return slot index
+	 */
+	private int getTimeSlotIndex (Timestamp time, boolean endTime)
+	{
+		//	Just one slot
+<span class="nc bnc" id="L562" title="All 2 branches missed.">		if (m_timeSlots.length &lt;= 1)</span>
+<span class="nc" id="L563">			return 0;</span>
+		//	search for it
+<span class="nc bnc" id="L565" title="All 2 branches missed.">		for (int i = 0; i &lt; m_timeSlots.length; i++)</span>
+		{
+<span class="nc bnc" id="L567" title="All 2 branches missed.">			if (m_timeSlots[i].inSlot (time, endTime))</span>
+<span class="nc" id="L568">				return i;</span>
+		}
+<span class="nc" id="L570">		log.log(Level.SEVERE, &quot;MSchedule.getTimeSlotIndex - did not find Slot for &quot; + time + &quot; end=&quot; + endTime);</span>
+<span class="nc" id="L571">		return 0;</span>
+	}	//	getTimeSlotIndex
+
+	/**
+	 * 	Get Basic Info of resource
+	 *  @param S_Resource_ID resource
+	 */
+	private void getBaseInfo (int S_Resource_ID)
+	{
+		//	Resource is Active and Available
+<span class="nc" id="L581">		String sql = MRole.getDefault(m_ctx, false).addAccessSQL (</span>
+<span class="nc" id="L582">			&quot;SELECT r.IsActive,r.IsAvailable,null,&quot;	</span>
+			+ &quot;r.S_ResourceType_ID,rt.C_UOM_ID &quot;
+			+ &quot;FROM S_Resource r, S_ResourceType rt &quot;
+			+ &quot;WHERE r.S_Resource_ID=?&quot;
+			+ &quot; AND r.S_ResourceType_ID=rt.S_ResourceType_ID&quot;,
+<span class="nc" id="L587">			&quot;r&quot;, MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO);</span>
+		//
+<span class="nc" id="L589">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L590">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L593">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L594">			pstmt.setInt(1, S_Resource_ID);</span>
+<span class="nc" id="L595">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L596" title="All 2 branches missed.">			if (rs.next())</span>
+			{
+<span class="nc bnc" id="L598" title="All 2 branches missed.">				if (!&quot;Y&quot;.equals(rs.getString(1)))					//	Active</span>
+<span class="nc" id="L599">					m_isAvailable = false;</span>
+<span class="nc bnc" id="L600" title="All 4 branches missed.">				if (m_isAvailable &amp;&amp; !&quot;Y&quot;.equals(rs.getString(2)))	//	Available</span>
+<span class="nc" id="L601">					m_isAvailable = false;</span>
+<span class="nc" id="L602">				m_isSingleAssignment = &quot;Y&quot;.equals(rs.getString(3));</span>
+				//
+<span class="nc" id="L604">				m_S_ResourceType_ID = rs.getInt(4);</span>
+<span class="nc" id="L605">				m_C_UOM_ID = rs.getInt(5);</span>
+<span class="nc" id="L606">			}</span>
+			else
+<span class="nc" id="L608">				m_isAvailable = false;</span>
+<span class="nc" id="L609">		}</span>
+<span class="nc" id="L610">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L612">			log.log(Level.SEVERE, sql, e);</span>
+<span class="nc" id="L613">			m_isAvailable = false;</span>
+		}
+		finally
+		{
+<span class="nc" id="L617">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L618">			rs = null;</span>
+<span class="nc" id="L619">			pstmt = null;</span>
+		}
+<span class="nc" id="L621">		m_S_Resource_ID = S_Resource_ID;</span>
+<span class="nc" id="L622">	}	//	getBaseInfo</span>
+
+	/**
+	 * 	Create Unavailable Timeslots.&lt;br/&gt;
+	 *  For every day from startDay..endDay, create unavailable slots
+	 *  for 00:00..startTime and endTime..24:00.
+	 *  @param list list to add time slots to
+	 *  @param startTime start time in day
+	 *  @param endTime end time in day
+	 */
+	private void createTimeSlot (ArrayList&lt;MAssignmentSlot&gt; list,
+		Timestamp startTime, Timestamp endTime)
+	{
+<span class="nc" id="L635">		GregorianCalendar cal = new GregorianCalendar(Language.getLoginLanguage().getLocale());</span>
+<span class="nc" id="L636">		cal.setTimeInMillis(m_startDate.getTime());</span>
+		//	End Date for Comparison
+<span class="nc" id="L638">		GregorianCalendar calEnd = new GregorianCalendar(Language.getLoginLanguage().getLocale());</span>
+<span class="nc" id="L639">		calEnd.setTimeInMillis(m_endDate.getTime());</span>
+
+<span class="nc bnc" id="L641" title="All 2 branches missed.">		while (cal.before(calEnd))</span>
+		{
+			//	00:00..startTime
+<span class="nc" id="L644">			cal.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L645">			cal.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L646">			cal.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L647">			cal.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L648">			Timestamp start = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L650">			GregorianCalendar cal_1 = new GregorianCalendar(Language.getLoginLanguage().getLocale());</span>
+<span class="nc" id="L651">			cal_1.setTimeInMillis(startTime.getTime());</span>
+<span class="nc" id="L652">			cal.set(Calendar.HOUR_OF_DAY, cal_1.get(Calendar.HOUR_OF_DAY));</span>
+<span class="nc" id="L653">			cal.set(Calendar.MINUTE, cal_1.get(Calendar.MINUTE));</span>
+<span class="nc" id="L654">			cal.set(Calendar.SECOND, cal_1.get(Calendar.SECOND));</span>
+<span class="nc" id="L655">			Timestamp end = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L657">			MAssignmentSlot	ma = new MAssignmentSlot (start, end,</span>
+<span class="nc" id="L658">				Msg.getMsg(m_ctx, &quot;ResourceNotInSlotTime&quot;), &quot;&quot;,</span>
+<span class="nc" id="L659">				MAssignmentSlot.STATUS_NotInSlotTime);</span>
+<span class="nc" id="L660">			list.add(ma);</span>
+
+			//	endTime .. 00:00 next day
+<span class="nc" id="L663">			cal_1.setTimeInMillis(endTime.getTime());</span>
+<span class="nc" id="L664">			cal.set(Calendar.HOUR_OF_DAY, cal_1.get(Calendar.HOUR_OF_DAY));</span>
+<span class="nc" id="L665">			cal.set(Calendar.MINUTE, cal_1.get(Calendar.MINUTE));</span>
+<span class="nc" id="L666">			cal.set(Calendar.SECOND, cal_1.get(Calendar.SECOND));</span>
+<span class="nc" id="L667">			start = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L669">			cal.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L670">			cal.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L671">			cal.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L672">			cal.add(Calendar.DAY_OF_YEAR, 1);</span>
+<span class="nc" id="L673">			end = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L675">			ma = new MAssignmentSlot (start, end,</span>
+<span class="nc" id="L676">				Msg.getMsg(m_ctx, &quot;ResourceNotInSlotTime&quot;), &quot;&quot;,</span>
+<span class="nc" id="L677">				MAssignmentSlot.STATUS_NotInSlotTime);</span>
+<span class="nc" id="L678">			list.add(ma);</span>
+		}
+<span class="nc" id="L680">	}	//	createTimeSlot</span>
+
+	/**
+	 * 	Create Unavailable Day slots.&lt;br/&gt;
+	 *  For every day from startDay..endDay, create unavailable slots.
+	 *  @param list list to add Day slots to
+	 *  @param OnMonday true if OK to have appointments (i.e. blocked if false)
+	 *  @param OnTuesday true if OK
+	 *  @param OnWednesday true if OK
+	 *  @param OnThursday true if OK
+	 *  @param OnFriday true if OK
+	 *  @param OnSaturday true if OK
+	 *  @param OnSunday true if OK
+	 */
+	private void createDaySlot (ArrayList&lt;MAssignmentSlot&gt; list,
+		boolean OnMonday, boolean OnTuesday, boolean OnWednesday,
+		boolean OnThursday, boolean OnFriday, boolean OnSaturday, boolean OnSunday)
+	{
+<span class="nc" id="L698">		GregorianCalendar cal = new GregorianCalendar(Language.getLoginLanguage().getLocale());</span>
+<span class="nc" id="L699">		cal.setTimeInMillis(m_startDate.getTime());</span>
+		//	End Date for Comparison
+<span class="nc" id="L701">		GregorianCalendar calEnd = new GregorianCalendar(Language.getLoginLanguage().getLocale());</span>
+<span class="nc" id="L702">		calEnd.setTimeInMillis(m_endDate.getTime());</span>
+
+<span class="nc bnc" id="L704" title="All 2 branches missed.">		while (cal.before(calEnd))</span>
+		{
+<span class="nc" id="L706">			int weekday = cal.get(Calendar.DAY_OF_WEEK);</span>
+<span class="nc bnc" id="L707" title="All 4 branches missed.">			if ((!OnSaturday &amp;&amp; weekday == Calendar.SATURDAY)</span>
+<span class="nc bnc" id="L708" title="All 4 branches missed.">				|| (!OnSunday &amp;&amp; weekday == Calendar.SUNDAY)</span>
+<span class="nc bnc" id="L709" title="All 4 branches missed.">				|| (!OnMonday &amp;&amp; weekday == Calendar.MONDAY)</span>
+<span class="nc bnc" id="L710" title="All 4 branches missed.">				|| (!OnTuesday &amp;&amp; weekday == Calendar.TUESDAY)</span>
+<span class="nc bnc" id="L711" title="All 4 branches missed.">				|| (!OnWednesday &amp;&amp; weekday == Calendar.WEDNESDAY)</span>
+<span class="nc bnc" id="L712" title="All 4 branches missed.">				|| (!OnThursday &amp;&amp; weekday == Calendar.THURSDAY)</span>
+<span class="nc bnc" id="L713" title="All 4 branches missed.">				|| (!OnFriday &amp;&amp; weekday == Calendar.FRIDAY))</span>
+			{
+				//	00:00..00:00 next day
+<span class="nc" id="L716">				cal.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L717">				cal.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L718">				cal.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L719">				cal.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L720">				Timestamp start = new Timestamp (cal.getTimeInMillis());</span>
+<span class="nc" id="L721">				cal.add(Calendar.DAY_OF_YEAR, 1);</span>
+<span class="nc" id="L722">				Timestamp end = new Timestamp (cal.getTimeInMillis());</span>
+
+<span class="nc" id="L724">				MAssignmentSlot	ma = new MAssignmentSlot (start, end,</span>
+<span class="nc" id="L725">					Msg.getMsg(m_ctx, &quot;ResourceNotInSlotDay&quot;), &quot;&quot;,</span>
+<span class="nc" id="L726">					MAssignmentSlot.STATUS_NotInSlotDay);</span>
+<span class="nc" id="L727">				list.add(ma);</span>
+<span class="nc" id="L728">			}</span>
+			else	//	next day
+<span class="nc" id="L730">				cal.add(Calendar.DAY_OF_YEAR, 1);</span>
+		}
+<span class="nc" id="L732">	}	//	createDaySlot</span>
+
+	/**
+	 * 	Create day slots for a date range
+	 * 	@param list list to add slot to
+	 * 	@param ma assignment slot to get date range
+	 */
+	private void createDaySlot (ArrayList&lt;MAssignmentSlot&gt; list, MAssignmentSlot ma)
+	{
+		//
+<span class="nc" id="L742">		Timestamp start = ma.getStartTime();</span>
+<span class="nc" id="L743">		GregorianCalendar calStart = new GregorianCalendar();</span>
+<span class="nc" id="L744">		calStart.setTime(start);</span>
+<span class="nc" id="L745">		calStart.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L746">		calStart.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L747">		calStart.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L748">		calStart.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L749">		Timestamp end = ma.getEndTime();</span>
+<span class="nc" id="L750">		GregorianCalendar calEnd = new GregorianCalendar();</span>
+<span class="nc" id="L751">		calEnd.setTime(end);</span>
+<span class="nc" id="L752">		calEnd.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L753">		calEnd.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L754">		calEnd.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L755">		calEnd.set(Calendar.MILLISECOND, 0);</span>
+		//
+<span class="nc bnc" id="L757" title="All 2 branches missed.">		while (calStart.before(calEnd))</span>
+		{
+<span class="nc" id="L759">			Timestamp xStart = new Timestamp(calStart.getTimeInMillis());</span>
+<span class="nc" id="L760">			calStart.add(Calendar.DAY_OF_YEAR, 1);</span>
+<span class="nc" id="L761">			Timestamp xEnd = new Timestamp(calStart.getTimeInMillis());</span>
+<span class="nc" id="L762">			MAssignmentSlot myMa = new MAssignmentSlot (xStart, xEnd,</span>
+<span class="nc" id="L763">				ma.getName(), ma.getDescription(), ma.getStatus());</span>
+<span class="nc" id="L764">			list.add(myMa);</span>
+		}
+<span class="nc" id="L766">	}	//	createDaySlot</span>
+
+	/**
+	 * 	Get Day Time Slots
+	 *  @return array of day time slot
+	 */
+	public MAssignmentSlot[] getDayTimeSlots ()
+	{
+<span class="nc" id="L774">		return m_timeSlots;</span>
+	}	//	getDayTimeSlots
+
+	/**
+	 * 	Create Time Slots for start date
+	 */
+	private void createTimeSlots()
+	{
+		//	development error
+<span class="nc bnc" id="L783" title="All 2 branches missed.">		if (m_typeName == null)</span>
+<span class="nc" id="L784">			throw new IllegalStateException(&quot;ResourceTypeName not set&quot;);</span>
+
+<span class="nc" id="L786">		ArrayList&lt;MAssignmentSlot&gt; list = new ArrayList&lt;MAssignmentSlot&gt;();</span>
+		@SuppressWarnings(&quot;unused&quot;)
+<span class="nc" id="L788">		MUOM uom = MUOM.get (m_ctx, m_C_UOM_ID);</span>
+<span class="nc" id="L789">		int minutes = MUOMConversion.convertToMinutes (m_ctx, m_C_UOM_ID, Env.ONE);</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">		if (log.isLoggable(Level.CONFIG)) log.config(&quot;Minutes=&quot; + minutes);</span>
+		//
+<span class="nc bnc" id="L792" title="All 4 branches missed.">		if (minutes &gt; 0 &amp;&amp; minutes &lt; 60*24)</span>
+		{
+			//	Set Start Time
+<span class="nc" id="L795">			GregorianCalendar cal = new GregorianCalendar();</span>
+<span class="nc" id="L796">			cal.setTime(m_startDate);</span>
+<span class="nc" id="L797">			cal.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L798">			cal.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L799">			cal.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L800">			cal.set(Calendar.MILLISECOND, 0);</span>
+			//	we have slots - create first
+<span class="nc bnc" id="L802" title="All 2 branches missed.">			if (m_slotStartTime != null)</span>
+			{
+<span class="nc" id="L804">				long start = cal.getTimeInMillis();</span>
+<span class="nc" id="L805">				cal.setTime(TimeUtil.getDayTime(m_startDate, m_slotStartTime));	//	set to start time</span>
+<span class="nc" id="L806">				cal.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L807">				cal.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L808">				list.add(new MAssignmentSlot(start, cal.getTimeInMillis()));</span>
+			}
+			//	Set End Time
+<span class="nc" id="L811">			GregorianCalendar calEnd = new GregorianCalendar();</span>
+<span class="nc bnc" id="L812" title="All 2 branches missed.">			if (m_slotEndTime != null)</span>
+			{
+<span class="nc" id="L814">				calEnd.setTime(TimeUtil.getDayTime(m_startDate, m_slotEndTime));</span>
+<span class="nc" id="L815">				calEnd.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L816">				calEnd.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L817">			}</span>
+			else	//	No Slot - all day
+			{
+<span class="nc" id="L820">				calEnd.setTime(m_startDate);</span>
+<span class="nc" id="L821">				calEnd.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L822">				calEnd.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L823">				calEnd.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L824">				calEnd.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L825">				calEnd.add(Calendar.DAY_OF_YEAR, 1);</span>
+			}
+
+			//	Set end Slot Time
+<span class="nc" id="L829">			GregorianCalendar calEndSlot = new GregorianCalendar();</span>
+<span class="nc" id="L830">			calEndSlot.setTime(cal.getTime());</span>
+<span class="nc" id="L831">			calEndSlot.add(Calendar.MINUTE, minutes);</span>
+
+<span class="nc bnc" id="L833" title="All 2 branches missed.">			while (cal.before(calEnd))</span>
+			{
+<span class="nc" id="L835">				list.add(new MAssignmentSlot(cal.getTimeInMillis(), calEndSlot.getTimeInMillis()));</span>
+				//	Next Slot
+<span class="nc" id="L837">				cal.add(Calendar.MINUTE, minutes);</span>
+<span class="nc" id="L838">				calEndSlot.add(Calendar.MINUTE, minutes);</span>
+			}
+			//	create last slot
+<span class="nc" id="L841">			calEndSlot.setTime(cal.getTime());</span>
+<span class="nc" id="L842">			calEndSlot.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L843">			calEndSlot.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L844">			calEndSlot.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L845">			calEndSlot.set(Calendar.MILLISECOND, 0);</span>
+<span class="nc" id="L846">			calEndSlot.add(Calendar.DAY_OF_YEAR, 1);	//	00:00 next day</span>
+<span class="nc" id="L847">			list.add(new MAssignmentSlot(cal.getTimeInMillis(), calEndSlot.getTimeInMillis()));</span>
+<span class="nc" id="L848">		}</span>
+
+		else	//	Day, ....
+		{
+<span class="nc" id="L852">			list.add (new MAssignmentSlot(TimeUtil.getDay(m_startDate), TimeUtil.getNextDay(m_startDate)));</span>
+		}
+
+		//
+<span class="nc" id="L856">		m_timeSlots = new MAssignmentSlot[list.size()];</span>
+<span class="nc" id="L857">		list.toArray(m_timeSlots);</span>
+<span class="nc" id="L858">	}	//	createTimeSlots</span>
+
+	/**
+	 * 	Get Resource ID. Set in getAssignmentSlots method.
+	 * 	@return current resource id
+	 */
+	public int getS_Resource_ID()
+	{
+<span class="nc" id="L866">		return m_S_Resource_ID;</span>
+	}	//	getS_Resource_ID
+
+	/**
+	 * 	Get Start Date. Set in getAssignmentSlots method.
+	 * 	@return start date
+	 */
+	public Timestamp getStartDate ()
+	{
+<span class="nc" id="L875">		return m_startDate;</span>
+	}	//	getStartDate
+
+	/**
+	 * 	Get End Date. Set in getAssignmentSlots method.
+	 * 	@return end date
+	 */
+	public Timestamp getEndDate ()
+	{
+<span class="nc" id="L884">		return m_endDate;</span>
+	}	//	getEndDate
+
+}	//	MSchedule
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

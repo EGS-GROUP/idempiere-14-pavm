@@ -1,0 +1,600 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>PaySelect.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui</a> &gt; <a href="index.source.html" class="el_package">org.compiere.apps.form</a> &gt; <span class="el_source">PaySelect.java</span></div><h1>PaySelect.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2009 Low Heng Sin                                            *
+ * Copyright (C) 2009 Idalica Corporation                                     *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.apps.form;
+
+import static org.compiere.model.SystemIDs.REFERENCE_PAYMENTRULE;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.minigrid.ColumnInfo;
+import org.compiere.minigrid.IDColumn;
+import org.compiere.minigrid.IMiniTable;
+import org.compiere.model.MLookupFactory;
+import org.compiere.model.MLookupInfo;
+import org.compiere.model.MPaySelection;
+import org.compiere.model.MPaySelectionLine;
+import org.compiere.model.MRole;
+import org.compiere.model.X_C_Order;
+import org.compiere.util.AdempiereSystemError;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Language;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.ValueNamePair;
+
+/**
+ * Create Manual Payments From (AP) Invoices or (AR) Credit Memos.
+ */
+<span class="nc" id="L53">public class PaySelect</span>
+{
+	/**	Window No			*/
+<span class="nc" id="L56">	protected int         	m_WindowNo = 0;</span>
+
+	/** Format                  */
+<span class="nc" id="L59">	protected DecimalFormat   m_format = DisplayType.getNumberFormat(DisplayType.Amount);</span>
+	/** Bank Balance            */
+<span class="nc" id="L61">	private BigDecimal      m_bankBalance = Env.ZERO;</span>
+	/** SQL for Query           */
+	private String          m_sql;
+	/** Number of selected rows */
+<span class="nc" id="L65">	protected int             m_noSelected = 0;</span>
+	/** Client ID               */
+<span class="nc" id="L67">	private int             m_AD_Client_ID = 0;</span>
+	/**/
+<span class="nc" id="L69">	protected boolean         m_isLocked = false;</span>
+	/** Payment Selection		*/
+<span class="nc" id="L71">	protected MPaySelection	m_ps = null;</span>
+	/** one-To-one payment per invoice */
+<span class="nc" id="L73">	protected boolean			m_isOnePaymentPerInvoice	= false;</span>
+	/**	Logger			*/
+<span class="nc" id="L75">	protected static final CLogger log = CLogger.getCLogger(PaySelect.class);	</span>
+
+	/**
+	 * Get list of active bank account with active C_BankAccountDoc records
+	 * @return list of {@link BankInfo}
+	 */
+	public ArrayList&lt;BankInfo&gt; getBankAccountData()
+	{
+<span class="nc" id="L83">		ArrayList&lt;BankInfo&gt; data = new ArrayList&lt;BankInfo&gt;();</span>
+		//
+<span class="nc" id="L85">		m_AD_Client_ID = Env.getAD_Client_ID(Env.getCtx());</span>
+		//  Bank Account Info
+<span class="nc" id="L87">		String sql = MRole.getDefault().addAccessSQL(</span>
+<span class="nc" id="L88">			&quot;SELECT ba.C_BankAccount_ID,&quot;                       //  1</span>
+			+ &quot;b.Name || ' ' || ba.AccountNo AS Name,&quot;          //  2
+			+ &quot;ba.C_Currency_ID, c.ISO_Code,&quot;                   //  3..4
+			+ &quot;ba.CurrentBalance &quot;                              //  5
+			+ &quot;FROM C_Bank b, C_BankAccount ba, C_Currency c &quot;
+			+ &quot;WHERE b.C_Bank_ID=ba.C_Bank_ID&quot;
+			+ &quot; AND ba.C_Currency_ID=c.C_Currency_ID AND ba.IsActive='Y' &quot;
+			+ &quot; AND EXISTS (SELECT * FROM C_BankAccountDoc d WHERE d.C_BankAccount_ID=ba.C_BankAccount_ID AND d.IsActive='Y' ) &quot;
+			+ &quot;ORDER BY 2&quot;,
+<span class="nc" id="L97">			&quot;b&quot;, MRole.SQL_FULLYQUALIFIED, MRole.SQL_RW);</span>
+<span class="nc" id="L98">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L99">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L102">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L103">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L106">				boolean transfers = false;</span>
+<span class="nc" id="L107">				BankInfo bi = new BankInfo (rs.getInt(1), rs.getInt(3),</span>
+<span class="nc" id="L108">					rs.getString(2), rs.getString(4),</span>
+<span class="nc" id="L109">					rs.getBigDecimal(5), transfers);</span>
+<span class="nc" id="L110">				data.add(bi);</span>
+			}
+<span class="nc" id="L112">		}</span>
+<span class="nc" id="L113">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L115">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L119">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L120">			rs = null;</span>
+<span class="nc" id="L121">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L124">		return data;</span>
+	}
+	
+	/**
+	 * Get list of business partners (C_BPartner_ID, Name) with open vendor invoice
+	 * @return list of business partners
+	 */
+	public ArrayList&lt;KeyNamePair&gt; getBPartnerData()
+	{
+<span class="nc" id="L133">		ArrayList&lt;KeyNamePair&gt; data = new ArrayList&lt;KeyNamePair&gt;();</span>
+		
+		//  Optional BusinessPartner with unpaid AP Invoices
+<span class="nc" id="L136">		KeyNamePair pp = new KeyNamePair(0, &quot;&quot;);</span>
+<span class="nc" id="L137">		data.add(pp);</span>
+		
+<span class="nc" id="L139">		String sql = MRole.getDefault().addAccessSQL(</span>
+<span class="nc" id="L140">			&quot;SELECT bp.C_BPartner_ID, bp.Name FROM C_BPartner bp&quot;, &quot;bp&quot;,</span>
+<span class="nc" id="L141">			MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO)</span>
+			+ &quot; AND EXISTS (SELECT * FROM C_Invoice i WHERE bp.C_BPartner_ID=i.C_BPartner_ID&quot;
+			//	X_C_Order.PAYMENTRULE_DirectDebit
+			  + &quot; AND (i.IsSOTrx='N' OR (i.IsSOTrx='Y' AND i.PaymentRule='D'))&quot;
+			  + &quot; AND i.IsPaid&lt;&gt;'Y') &quot;
+			+ &quot;ORDER BY 2&quot;;
+<span class="nc" id="L147">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L148">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L151">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L152">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L155">				pp = new KeyNamePair(rs.getInt(1), rs.getString(2));</span>
+<span class="nc" id="L156">				data.add(pp);</span>
+			}
+<span class="nc" id="L158">		}</span>
+<span class="nc" id="L159">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L161">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L165">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L166">			rs = null;</span>
+<span class="nc" id="L167">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L170">		return data;</span>
+	}
+	
+	/**
+	 * Get document types (C_DocType_ID, Name) for invoice and credit memo
+	 * @return list of document types
+	 */
+	public ArrayList&lt;KeyNamePair&gt; getDocTypeData()
+	{
+<span class="nc" id="L179">		ArrayList&lt;KeyNamePair&gt; data = new ArrayList&lt;KeyNamePair&gt;();</span>
+<span class="nc" id="L180">		String sql = null;</span>
+		/**Document type**/
+<span class="nc" id="L182">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L183">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L186">			sql = MRole.getDefault().addAccessSQL(</span>
+<span class="nc" id="L187">				&quot;SELECT doc.c_doctype_id,doc.name FROM c_doctype doc WHERE doc.ad_client_id = ? AND doc.docbasetype in ('API','APC','ARI','ARC') ORDER BY 2&quot;, &quot;doc&quot;,</span>
+<span class="nc" id="L188">				MRole.SQL_FULLYQUALIFIED, MRole.SQL_RO);</span>
+
+<span class="nc" id="L190">			KeyNamePair dt = new KeyNamePair(0, &quot;&quot;);</span>
+<span class="nc" id="L191">			data.add(dt);</span>
+<span class="nc" id="L192">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L193">			pstmt.setInt(1, m_AD_Client_ID);		//	Client</span>
+<span class="nc" id="L194">			rs = pstmt.executeQuery();</span>
+
+<span class="nc bnc" id="L196" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L198">				dt = new KeyNamePair(rs.getInt(1), rs.getString(2));</span>
+<span class="nc" id="L199">				data.add(dt);</span>
+			}
+<span class="nc" id="L201">		}</span>
+<span class="nc" id="L202">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L204">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L208">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L209">			rs = null;</span>
+<span class="nc" id="L210">			pstmt = null;</span>
+		}
+		
+<span class="nc" id="L213">		return data;</span>
+	}
+	
+	/**
+	 * Setup {@link ColumnInfo}, From and Where clause
+	 * @param miniTable
+	 */
+	public void prepareTable(IMiniTable miniTable)
+	{
+<span class="nc" id="L222">		Properties ctx = Env.getCtx();</span>
+		/**  prepare MiniTable
+		 *
+		SELECT i.C_Invoice_ID, i.DateInvoiced+p.NetDays AS DateDue,
+		bp.Name, i.DocumentNo, c.ISO_Code, i.GrandTotal,
+		paymentTermDiscount(i.GrandTotal, i.C_PaymentTerm_ID, i.DateInvoiced, getDate()) AS Discount,
+		getDate()-paymentTermDueDays(i.C_PaymentTerm_ID,i.DateInvoiced) AS DiscountDate,
+		i.GrandTotal-paymentTermDiscount(i.GrandTotal,i.C_PaymentTerm_ID,i.DateInvoiced,getDate()) AS DueAmount,
+		currencyConvert(i.GrandTotal-paymentTermDiscount(i.GrandTotal,i.C_PaymentTerm_ID,i.DateInvoiced,getDate(),null),
+			i.C_Currency_ID,xx100,getDate()) AS PayAmt
+		FROM C_Invoice_v i, C_BPartner bp, C_Currency c, C_PaymentTerm p
+		WHERE i.IsSOTrx='N'
+		AND i.C_BPartner_ID=bp.C_BPartner_ID
+		AND i.C_Currency_ID=c.C_Currency_ID
+		AND i.C_PaymentTerm_ID=p.C_PaymentTerm_ID
+		AND i.DocStatus IN ('CO','CL')
+		ORDER BY 2,3
+		 */
+
+<span class="nc" id="L241">		m_sql = miniTable.prepareTable(new ColumnInfo[] {</span>
+			//  0..4
+<span class="nc" id="L243">			new ColumnInfo(&quot; &quot;, &quot;i.C_Invoice_ID&quot;, IDColumn.class, false, false, null),</span>
+<span class="nc" id="L244">			new ColumnInfo(Msg.translate(ctx, &quot;DueDate&quot;), &quot;i.DueDate AS DateDue&quot;, Timestamp.class, true, true, null),</span>
+<span class="nc" id="L245">			new ColumnInfo(Msg.translate(ctx, &quot;C_BPartner_ID&quot;), &quot;bp.Name&quot;, KeyNamePair.class, true, false, &quot;i.C_BPartner_ID&quot;),</span>
+<span class="nc" id="L246">			new ColumnInfo(Msg.translate(ctx, &quot;DocumentNo&quot;), &quot;i.DocumentNo&quot;, String.class),</span>
+<span class="nc" id="L247">			new ColumnInfo(Msg.translate(ctx, &quot;C_Currency_ID&quot;), &quot;c.ISO_Code&quot;, KeyNamePair.class, true, false, &quot;i.C_Currency_ID&quot;),</span>
+			// 5..10
+<span class="nc" id="L249">			new ColumnInfo(Msg.translate(ctx, &quot;GrandTotal&quot;), &quot;i.GrandTotal&quot;, BigDecimal.class),</span>
+<span class="nc" id="L250">			new ColumnInfo(Msg.translate(ctx, &quot;DiscountAmt&quot;), &quot;currencyConvert(invoiceDiscount(i.C_Invoice_ID,?,i.C_InvoicePaySchedule_ID),i.C_Currency_ID, ?,?,i.C_ConversionType_ID, i.AD_Client_ID,i.AD_Org_ID)&quot;, BigDecimal.class),</span>
+<span class="nc" id="L251">			new ColumnInfo(Msg.translate(ctx, &quot;WriteOffAmt&quot;), &quot;currencyConvert(invoiceWriteOff(i.C_Invoice_ID),i.C_Currency_ID, ?,?,i.C_ConversionType_ID, i.AD_Client_ID,i.AD_Org_ID)&quot;, BigDecimal.class),</span>
+<span class="nc" id="L252">			new ColumnInfo(Msg.getMsg(ctx, &quot;DiscountDate&quot;), &quot;COALESCE((SELECT discountdate from C_InvoicePaySchedule ips WHERE ips.C_InvoicePaySchedule_ID=i.C_InvoicePaySchedule_ID),i.DateInvoiced+p.DiscountDays+p.GraceDays) AS DiscountDate&quot;, Timestamp.class),</span>
+<span class="nc" id="L253">			new ColumnInfo(Msg.getMsg(ctx, &quot;AmountDue&quot;), &quot;currencyConvertInvoice(i.C_Invoice_ID,?,invoiceOpen(i.C_Invoice_ID,i.C_InvoicePaySchedule_ID),?) AS AmountDue&quot;, BigDecimal.class),</span>
+<span class="nc" id="L254">			new ColumnInfo(Msg.getMsg(ctx, &quot;AmountPay&quot;), &quot;currencyConvertInvoice(i.C_Invoice_ID,?,invoiceOpen(i.C_Invoice_ID,i.C_InvoicePaySchedule_ID)-invoiceDiscount(i.C_Invoice_ID,?,i.C_InvoicePaySchedule_ID),?) AS AmountPay&quot;, BigDecimal.class)</span>
+			},
+			//	FROM
+<span class="nc" id="L257">			&quot;C_Invoice_v i&quot;</span>
+			+ &quot; INNER JOIN C_BPartner bp ON (i.C_BPartner_ID=bp.C_BPartner_ID)&quot;
+			+ &quot; INNER JOIN C_Currency c ON (i.C_Currency_ID=c.C_Currency_ID)&quot;
+			+ &quot; INNER JOIN C_PaymentTerm p ON (i.C_PaymentTerm_ID=p.C_PaymentTerm_ID)&quot;,
+			//	WHERE
+<span class="nc" id="L262">			&quot;i.IsSOTrx=? AND IsPaid='N'&quot;</span>
+			+ &quot; AND invoiceOpenToDate(i.C_Invoice_ID, i.C_InvoicePaySchedule_ID, SysDate) != 0&quot; //Check that AmountDue &lt;&gt; 0
+			//	Different Payment Selection
+			+ &quot; AND (i.C_InvoicePaySchedule_ID &gt; 0 OR NOT EXISTS (SELECT * FROM C_PaySelectionLine psl&quot;
+			+                 &quot; INNER JOIN C_PaySelectionCheck psc ON (psl.C_PaySelectionCheck_ID=psc.C_PaySelectionCheck_ID)&quot;
+			+                 &quot; LEFT OUTER JOIN C_Payment pmt ON (pmt.C_Payment_ID=psc.C_Payment_ID)&quot;
+			+                 &quot; WHERE i.C_Invoice_ID=psl.C_Invoice_ID AND psl.IsActive='Y'&quot;
+			+				  &quot; AND (pmt.DocStatus IS NULL OR pmt.DocStatus NOT IN ('VO','RE')) ))&quot;
+			+ &quot; AND i.DocStatus IN ('CO','CL')&quot;
+			+ &quot; AND i.AD_Client_ID=?&quot;,	//	additional where &amp; order in loadTableInfo()
+<span class="nc" id="L272">			true, &quot;i&quot;);</span>
+<span class="nc" id="L273">	}   //  prepareTable</span>
+
+	/**
+	 *  Get payment rules that's applicable to bank account
+	 *  @param bi
+	 *  @return list of applicable payment rules
+	 */
+	public ArrayList&lt;ValueNamePair&gt; getPaymentRuleData(BankInfo bi)
+	{
+<span class="nc bnc" id="L282" title="All 2 branches missed.">		if (bi == null)</span>
+<span class="nc" id="L283">			return null;</span>
+<span class="nc" id="L284">		m_bankBalance = bi.Balance;</span>
+		
+<span class="nc" id="L286">		ArrayList&lt;ValueNamePair&gt; data = new ArrayList&lt;ValueNamePair&gt;();</span>
+		
+<span class="nc" id="L288">		int AD_Reference_ID = REFERENCE_PAYMENTRULE;  //  MLookupInfo.getAD_Reference_ID(&quot;All_Payment Rule&quot;);</span>
+<span class="nc" id="L289">		Language language = Env.getLanguage(Env.getCtx());</span>
+<span class="nc" id="L290">		MLookupInfo info = MLookupFactory.getLookup_List(language, AD_Reference_ID);</span>
+<span class="nc" id="L291">		String sql = info.Query.substring(0, info.Query.indexOf(&quot; ORDER BY&quot;))</span>
+<span class="nc" id="L292">			+ &quot; AND &quot; + info.KeyColumn</span>
+			+ &quot; IN (SELECT PaymentRule FROM C_BankAccountDoc WHERE C_BankAccount_ID=? AND IsActive='Y') &quot;
+<span class="nc" id="L294">			+ info.Query.substring(info.Query.indexOf(&quot; ORDER BY&quot;));</span>
+<span class="nc" id="L295">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L296">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L299">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L300">			pstmt.setInt(1, bi.C_BankAccount_ID);</span>
+<span class="nc" id="L301">			rs = pstmt.executeQuery();</span>
+<span class="nc" id="L302">			ValueNamePair vp = null;</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L305">				vp = new ValueNamePair(rs.getString(2), rs.getString(3));</span>
+<span class="nc" id="L306">				data.add(vp);</span>
+			}
+<span class="nc" id="L308">		}</span>
+<span class="nc" id="L309">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L311">			log.log(Level.SEVERE, sql, e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L315">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L316">			rs = null;</span>
+<span class="nc" id="L317">			pstmt = null;</span>
+		}
+<span class="nc" id="L319">		return data;</span>
+	}
+
+	/**
+	 * Load open invoice and credit memo documents into miniTable
+	 * @param bi
+	 * @param payDate
+	 * @param paymentRule
+	 * @param onlyDue
+	 * @param onlyPositiveBalance
+	 * @param bpartner
+	 * @param docType
+	 * @param miniTable
+	 */
+	public void loadTableInfo(BankInfo bi, Timestamp payDate, ValueNamePair paymentRule, boolean onlyDue, 
+			boolean onlyPositiveBalance, KeyNamePair bpartner, KeyNamePair docType, IMiniTable miniTable)
+	{
+		//  not yet initialized
+<span class="nc bnc" id="L337" title="All 4 branches missed.">		if (m_sql == null || paymentRule == null)</span>
+<span class="nc" id="L338">			return;</span>
+
+<span class="nc" id="L340">		String sql = m_sql;</span>
+		//  Parameters
+<span class="nc" id="L342">		String isSOTrx = &quot;N&quot;;</span>
+<span class="nc bnc" id="L343" title="All 4 branches missed.">		if (paymentRule != null &amp;&amp; X_C_Order.PAYMENTRULE_DirectDebit.equals(paymentRule.getValue()))</span>
+		{
+<span class="nc" id="L345">			isSOTrx = &quot;Y&quot;;</span>
+<span class="nc" id="L346">			sql += &quot; AND i.PaymentRule='&quot; + X_C_Order.PAYMENTRULE_DirectDebit + &quot;'&quot;;</span>
+		}
+		//
+<span class="nc bnc" id="L349" title="All 2 branches missed.">		if (onlyDue)</span>
+<span class="nc" id="L350">			sql += &quot; AND i.DueDate &lt;= ?&quot;;</span>
+		//
+<span class="nc" id="L352">		KeyNamePair pp = bpartner;</span>
+<span class="nc" id="L353">		int C_BPartner_ID = pp.getKey();</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">		if (C_BPartner_ID != 0)</span>
+<span class="nc" id="L355">			sql += &quot; AND i.C_BPartner_ID=?&quot;;</span>
+		//Document Type
+<span class="nc" id="L357">		KeyNamePair dt = docType;</span>
+<span class="nc" id="L358">		int c_doctype_id  = dt.getKey();</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (c_doctype_id   != 0)</span>
+<span class="nc" id="L360">			sql += &quot; AND i.c_doctype_id =?&quot;;</span>
+
+<span class="nc bnc" id="L362" title="All 2 branches missed.">		if (onlyPositiveBalance) {</span>
+<span class="nc" id="L363">			int innerindex = sql.indexOf(&quot;INNER&quot;);</span>
+<span class="nc" id="L364">			String subWhereClause = sql.substring(innerindex, sql.length());</span>
+
+			//Replace original aliases with new aliases
+<span class="nc" id="L367">			subWhereClause = subWhereClause.replaceAll(&quot;\\bi\\b&quot;, &quot;i1&quot;);</span>
+<span class="nc" id="L368">			subWhereClause = subWhereClause.replaceAll(&quot;\\bbp\\b&quot;, &quot;bp1&quot;);</span>
+<span class="nc" id="L369">			subWhereClause = subWhereClause.replaceAll(&quot;\\bc\\b&quot;, &quot;c1&quot;);</span>
+<span class="nc" id="L370">			subWhereClause = subWhereClause.replaceAll(&quot;\\bp\\b&quot;, &quot;p1&quot;);</span>
+<span class="nc" id="L371">			subWhereClause = subWhereClause.replaceAll(&quot;\\bpsl\\b&quot;, &quot;psl1&quot;);</span>
+<span class="nc" id="L372">			subWhereClause = subWhereClause.replaceAll(&quot;\\bpsc\\b&quot;, &quot;psc1&quot;);</span>
+<span class="nc" id="L373">			subWhereClause = subWhereClause.replaceAll(&quot;\\bpmt\\b&quot;, &quot;pmt1&quot;);</span>
+
+<span class="nc" id="L375">			sql += &quot; AND i.c_bpartner_id NOT IN ( SELECT i1.C_BPartner_ID&quot;</span>
+					+ &quot; FROM C_Invoice_v i1 &quot;
+<span class="nc" id="L377">					+ subWhereClause</span>
+					+ &quot; GROUP BY i1.C_BPartner_ID&quot;
+					+ &quot; HAVING sum(invoiceOpen(i1.C_Invoice_ID, i1.C_InvoicePaySchedule_ID)) &lt;= 0) &quot;;
+		}
+
+<span class="nc" id="L382">		sql += &quot; ORDER BY 2,3&quot;;</span>
+
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (log.isLoggable(Level.FINEST)) log.finest(sql + &quot; - C_Currency_ID=&quot; + bi.C_Currency_ID + &quot;, C_BPartner_ID=&quot; + C_BPartner_ID + &quot;, C_doctype_id=&quot; + c_doctype_id  );</span>
+		//  Get Open Invoices
+<span class="nc" id="L386">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L387">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L390">			int index = 1;</span>
+<span class="nc" id="L391">			pstmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L392">			pstmt.setTimestamp(index++, payDate);		//	DiscountAmt</span>
+<span class="nc" id="L393">			pstmt.setInt(index++, bi.C_Currency_ID);</span>
+<span class="nc" id="L394">			pstmt.setTimestamp(index++, payDate);</span>
+<span class="nc" id="L395">			pstmt.setInt(index++, bi.C_Currency_ID);	//	WriteOffAmt</span>
+<span class="nc" id="L396">			pstmt.setTimestamp(index++, payDate);</span>
+<span class="nc" id="L397">			pstmt.setInt(index++, bi.C_Currency_ID);	//	DueAmt</span>
+<span class="nc" id="L398">			pstmt.setTimestamp(index++, payDate);</span>
+<span class="nc" id="L399">			pstmt.setInt(index++, bi.C_Currency_ID);</span>
+<span class="nc" id="L400">			pstmt.setTimestamp(index++, payDate);		//	PayAmt</span>
+<span class="nc" id="L401">			pstmt.setTimestamp(index++, payDate);</span>
+<span class="nc" id="L402">			pstmt.setString(index++, isSOTrx);			//	IsSOTrx</span>
+<span class="nc" id="L403">			pstmt.setInt(index++, m_AD_Client_ID);		//	Client</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">			if (onlyDue)</span>
+<span class="nc" id="L405">				pstmt.setTimestamp(index++, payDate);</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">			if (C_BPartner_ID != 0)</span>
+<span class="nc" id="L407">				pstmt.setInt(index++, C_BPartner_ID);</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">			if (c_doctype_id  != 0)                    //Document type</span>
+<span class="nc" id="L409">				pstmt.setInt(index++, c_doctype_id );</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">			if (onlyPositiveBalance) {</span>
+<span class="nc" id="L411">				pstmt.setString(index++, isSOTrx);			//	IsSOTrx</span>
+<span class="nc" id="L412">				pstmt.setInt(index++, m_AD_Client_ID);		//	Client</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">				if (onlyDue)</span>
+<span class="nc" id="L414">					pstmt.setTimestamp(index++, payDate);</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">				if (C_BPartner_ID != 0)</span>
+<span class="nc" id="L416">					pstmt.setInt(index++, C_BPartner_ID);</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">				if (c_doctype_id  != 0)                    //Document type</span>
+<span class="nc" id="L418">					pstmt.setInt(index++, c_doctype_id );				</span>
+			}
+			//
+<span class="nc" id="L421">			rs = pstmt.executeQuery();</span>
+<span class="nc" id="L422">			miniTable.loadTable(rs);</span>
+<span class="nc" id="L423">		}</span>
+<span class="nc" id="L424">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L426">			throw new DBException(e);</span>
+		}
+<span class="nc" id="L428">		catch (Exception e)</span>
+		{
+<span class="nc" id="L430">			throw new AdempiereException(e);</span>
+		}
+		finally
+		{
+<span class="nc" id="L434">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L435">			rs = null;</span>
+<span class="nc" id="L436">			pstmt = null;</span>
+		}
+<span class="nc" id="L438">	}   //  loadTableInfo</span>
+
+	/**
+	 *  Calculate total of selected rows.
+	 *  @param miniTable
+	 *  @return info message
+	 */
+	public String calculateSelection(IMiniTable miniTable)
+	{
+<span class="nc" id="L447">		m_noSelected = 0;</span>
+<span class="nc" id="L448">		BigDecimal invoiceAmt = Env.ZERO;</span>
+
+<span class="nc" id="L450">		int rows = miniTable.getRowCount();</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">		for (int i = 0; i &lt; rows; i++)</span>
+		{
+<span class="nc" id="L453">			IDColumn id = (IDColumn)miniTable.getValueAt(i, 0);</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">			if (id.isSelected())</span>
+			{
+<span class="nc" id="L456">				BigDecimal amt = (BigDecimal)miniTable.getValueAt(i, 9);</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">				if (amt != null)</span>
+<span class="nc" id="L458">					invoiceAmt = invoiceAmt.add(amt);</span>
+<span class="nc" id="L459">				m_noSelected++;</span>
+			}
+		}
+
+		//  Information
+<span class="nc" id="L464">		BigDecimal remaining = m_bankBalance.subtract(invoiceAmt);</span>
+<span class="nc" id="L465">		StringBuilder info = new StringBuilder();</span>
+<span class="nc" id="L466">		info.append(m_noSelected).append(&quot; &quot;).append(Msg.getMsg(Env.getCtx(), &quot;Selected&quot;)).append(&quot; - &quot;);</span>
+<span class="nc" id="L467">		info.append(m_format.format(invoiceAmt)).append(&quot;, &quot;);</span>
+<span class="nc" id="L468">		info.append(Msg.getMsg(Env.getCtx(), &quot;Remaining&quot;)).append(&quot; &quot;).append(m_format.format(remaining));</span>
+<span class="nc" id="L469">		return info.toString();</span>
+	}   //  calculateSelection
+	
+	/**
+	 * Create Pay Selection (C_PaySelection and C_PaySelectionLine) records
+	 * @param miniTable
+	 * @param paymentRule
+	 * @param payDate
+	 * @param bi
+	 * @return error message (if any)
+	 */
+	public String generatePaySelect(IMiniTable miniTable, ValueNamePair paymentRule, Timestamp payDate, BankInfo bi)
+	{
+<span class="nc" id="L482">		String trxName = null;</span>
+<span class="nc" id="L483">		Trx trx = null;</span>
+		try {
+<span class="nc" id="L485">			trxName = Trx.createTrxName(&quot;PaySelect&quot;);</span>
+<span class="nc" id="L486">			trx = Trx.get(trxName, true);</span>
+<span class="nc" id="L487">			trx.setDisplayName(getClass().getName()+&quot;_generatePaySelect&quot;);</span>
+
+<span class="nc" id="L489">			String PaymentRule = paymentRule.getValue();</span>
+
+			//  Create Header
+<span class="nc" id="L492">			m_ps = new MPaySelection(Env.getCtx(), 0, trxName);</span>
+<span class="nc" id="L493">			m_ps.setName (Msg.getMsg(Env.getCtx(), &quot;VPaySelect&quot;)</span>
+<span class="nc" id="L494">					+ &quot; - &quot; + paymentRule.getName()</span>
+<span class="nc" id="L495">					+ &quot; - &quot; + payDate);</span>
+<span class="nc" id="L496">			m_ps.setPayDate (payDate);</span>
+<span class="nc" id="L497">			m_ps.setC_BankAccount_ID(bi.C_BankAccount_ID);</span>
+<span class="nc" id="L498">			m_ps.setIsApproved(true);</span>
+<span class="nc" id="L499">			m_ps.setIsOnePaymentPerInvoice(m_isOnePaymentPerInvoice);</span>
+<span class="nc" id="L500">			m_ps.saveEx();</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">			if (log.isLoggable(Level.CONFIG)) log.config(m_ps.toString());</span>
+
+			//  Create Lines
+<span class="nc" id="L504">			int rows = miniTable.getRowCount();</span>
+<span class="nc" id="L505">			int line = 0;</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">			for (int i = 0; i &lt; rows; i++)</span>
+			{
+<span class="nc" id="L508">				IDColumn id = (IDColumn)miniTable.getValueAt(i, 0);</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">				if (id.isSelected())</span>
+				{
+<span class="nc" id="L511">					line += 10;</span>
+<span class="nc" id="L512">					MPaySelectionLine psl = new MPaySelectionLine (m_ps, line, PaymentRule);</span>
+<span class="nc" id="L513">					int C_Invoice_ID = id.getRecord_ID().intValue();</span>
+<span class="nc" id="L514">					BigDecimal OpenAmt = (BigDecimal)miniTable.getValueAt(i, 9);</span>
+<span class="nc" id="L515">					BigDecimal DiscountAmt = (BigDecimal)miniTable.getValueAt(i, 6);</span>
+<span class="nc" id="L516">					BigDecimal WriteOffAmt = (BigDecimal)miniTable.getValueAt(i, 7);</span>
+<span class="nc" id="L517">					BigDecimal PayAmt = (BigDecimal)miniTable.getValueAt(i, 10);</span>
+<span class="nc" id="L518">					boolean isSOTrx = false;</span>
+<span class="nc bnc" id="L519" title="All 4 branches missed.">					if (paymentRule != null &amp;&amp; X_C_Order.PAYMENTRULE_DirectDebit.equals(paymentRule.getValue()))</span>
+<span class="nc" id="L520">						isSOTrx = true;</span>
+					//
+<span class="nc bnc" id="L522" title="All 4 branches missed.">					if (OpenAmt == null || PayAmt == null)</span>
+<span class="nc" id="L523">						throw new AdempiereSystemError(Msg.getMsg(Env.getCtx(), &quot;PaymentSelectAmtNull&quot;));</span>
+<span class="nc" id="L524">					psl.setInvoice(C_Invoice_ID, isSOTrx,</span>
+<span class="nc" id="L525">						OpenAmt, PayAmt, DiscountAmt, WriteOffAmt);</span>
+<span class="nc" id="L526">					psl.saveEx(trxName);</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(&quot;C_Invoice_ID=&quot; + C_Invoice_ID + &quot;, PayAmt=&quot; + PayAmt);</span>
+				}
+			}   //  for all rows in table
+<span class="nc" id="L530">		} catch (Exception e) {</span>
+<span class="nc bnc" id="L531" title="All 2 branches missed.">			if (trx != null) {</span>
+<span class="nc" id="L532">				trx.rollback();</span>
+<span class="nc" id="L533">				trx.close();</span>
+<span class="nc" id="L534">				trx = null;</span>
+			}
+<span class="nc" id="L536">			m_ps = null;</span>
+<span class="nc" id="L537">			throw new AdempiereException(e);</span>
+		} finally {
+<span class="nc bnc" id="L539" title="All 2 branches missed.">			if (trx != null) {</span>
+<span class="nc" id="L540">				trx.commit();</span>
+<span class="nc" id="L541">				trx.close();</span>
+			}
+<span class="nc bnc" id="L543" title="All 2 branches missed.">			if (m_ps != null)</span>
+<span class="nc" id="L544">				m_ps.set_TrxName(null);</span>
+		}
+		
+<span class="nc" id="L547">		return null;</span>
+	}   //  generatePaySelect
+
+	/**
+	 * Get balance of selected bank record (after call to {@link #getPaymentRuleData(BankInfo)})
+	 * @return bank balance
+	 */
+	protected BigDecimal getBankBalance() {
+<span class="nc" id="L555">		return m_bankBalance;</span>
+	}
+	
+	/**
+	 *  Bank Account Info
+	 */
+	public static class BankInfo
+	{
+		/**
+		 * 	BankInfo
+		 *	@param newC_BankAccount_ID
+		 *	@param newC_Currency_ID
+		 *	@param newName
+		 *	@param newCurrency
+		 *	@param newBalance
+		 *	@param newTransfers
+		 */
+<span class="nc" id="L572">		public BankInfo (int newC_BankAccount_ID, int newC_Currency_ID,</span>
+			String newName, String newCurrency, BigDecimal newBalance, boolean newTransfers)
+		{
+<span class="nc" id="L575">			C_BankAccount_ID = newC_BankAccount_ID;</span>
+<span class="nc" id="L576">			C_Currency_ID = newC_Currency_ID;</span>
+<span class="nc" id="L577">			Name = newName;</span>
+<span class="nc" id="L578">			Currency = newCurrency;</span>
+<span class="nc" id="L579">			Balance = newBalance;</span>
+<span class="nc" id="L580">		}</span>
+		
+		public int C_BankAccount_ID;
+		public int C_Currency_ID;
+		public String Name;
+		public String Currency;
+		public BigDecimal Balance;
+		public boolean Transfers;
+
+		/**
+		 * 	to String
+		 *	@return info
+		 */
+		public String toString()
+		{
+<span class="nc" id="L595">			return Name;</span>
+		}
+	}   //  BankInfo
+
+}   //  PaySelect
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

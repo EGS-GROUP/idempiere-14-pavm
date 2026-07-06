@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CreditManagerInvoice.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model.credit</a> &gt; <span class="el_source">CreditManagerInvoice.java</span></div><h1>CreditManagerInvoice.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2016 Logilite Technologies LLP								  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.model.credit;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.logging.Level;
+
+import org.adempiere.base.CreditStatus;
+import org.adempiere.base.ICreditManager;
+import org.compiere.model.MBPartner;
+import org.compiere.model.MClient;
+import org.compiere.model.MConversionRate;
+import org.compiere.model.MConversionRateUtil;
+import org.compiere.model.MCurrency;
+import org.compiere.model.MDocType;
+import org.compiere.model.MInvoice;
+import org.compiere.model.MOrder;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Util;
+
+/**
+ * Credit Status Management for Invoice
+ * 
+ * @author Logilite Technologies
+ * @since  June 25, 2023
+ */
+public class CreditManagerInvoice implements ICreditManager
+{
+	/** Logger */
+<span class="nc" id="L43">	protected transient CLogger	log	= CLogger.getCLogger(CreditManagerInvoice.class);</span>
+
+	private MInvoice			mInvoice;
+
+	/**
+	 * Invoice Credit Manager Load Constructor
+	 * 
+	 * @param po MInvoice
+	 */
+<span class="nc" id="L52">	public CreditManagerInvoice(MInvoice po)</span>
+	{
+<span class="nc" id="L54">		this.mInvoice = po;</span>
+<span class="nc" id="L55">	}</span>
+
+	@Override
+	public CreditStatus checkCreditStatus(String docAction)
+	{
+<span class="nc" id="L60">		String errorMsg = null;</span>
+<span class="nc bnc" id="L61" title="All 4 branches missed.">		if (MInvoice.DOCACTION_Prepare.equals(docAction) &amp;&amp; mInvoice.isSOTrx())</span>
+		{
+<span class="nc" id="L63">			MDocType doc = MDocType.get(mInvoice.getC_DocTypeTarget_ID());</span>
+			// IDEMPIERE-365 - just check credit if is going to increase the debt
+<span class="nc bnc" id="L65" title="All 4 branches missed.">			if ((doc.getDocBaseType().equals(MDocType.DOCBASETYPE_ARCreditMemo) &amp;&amp; mInvoice.getGrandTotal().signum() &lt; 0)</span>
+<span class="nc bnc" id="L66" title="All 4 branches missed.">				|| (doc.getDocBaseType().equals(MDocType.DOCBASETYPE_ARInvoice) &amp;&amp; mInvoice.getGrandTotal().signum() &gt; 0))</span>
+			{
+<span class="nc" id="L68">				MBPartner bp = new MBPartner(mInvoice.getCtx(), mInvoice.getC_BPartner_ID(), mInvoice.get_TrxName());</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">				if (MBPartner.SOCREDITSTATUS_CreditStop.equals(bp.getSOCreditStatus()))</span>
+				{
+<span class="nc" id="L71">					errorMsg = &quot;@BPartnerCreditStop@ - @TotalOpenBalance@=&quot; + bp.getTotalOpenBalance()</span>
+<span class="nc" id="L72">							+ &quot;, @SO_CreditLimit@=&quot; + bp.getSO_CreditLimit();</span>
+				}
+			}
+<span class="nc" id="L75">		}</span>
+<span class="nc bnc" id="L76" title="All 4 branches missed.">		else if (MInvoice.DOCACTION_Complete.equals(docAction) || MInvoice.DOCACTION_Re_Activate.equals(docAction))</span>
+		{
+			// POS supports multiple payments
+<span class="nc" id="L79">			boolean fromPOS = false;</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">			if (mInvoice.getC_Order_ID() &gt; 0)</span>
+			{
+<span class="nc" id="L82">				MOrder order = new MOrder(mInvoice.getCtx(), mInvoice.getC_Order_ID(), mInvoice.get_TrxName());</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">				fromPOS = order.getC_POS_ID() &gt; 0;</span>
+			}
+			// Update BP Statistics
+<span class="nc" id="L86">			MBPartner bp = new MBPartner(mInvoice.getCtx(), mInvoice.getC_BPartner_ID(), mInvoice.get_TrxName());</span>
+<span class="nc" id="L87">			DB.getDatabase().forUpdate(bp, 0);</span>
+			// Update total revenue and balance / credit limit (reversed on
+			// AllocationLine.processIt)
+<span class="nc" id="L90">			BigDecimal invAmt = null;</span>
+<span class="nc" id="L91">			int baseCurrencyId = Env.getContextAsInt(mInvoice.getCtx(), Env.C_CURRENCY_ID);</span>
+<span class="nc bnc" id="L92" title="All 4 branches missed.">			if (mInvoice.getC_Currency_ID() != baseCurrencyId &amp;&amp; mInvoice.isOverrideCurrencyRate())</span>
+			{
+<span class="nc" id="L94">				invAmt = mInvoice.getGrandTotal(true).multiply(mInvoice.getCurrencyRate());</span>
+<span class="nc" id="L95">				int stdPrecision = MCurrency.getStdPrecision(mInvoice.getCtx(), baseCurrencyId);</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">				if (invAmt.scale() &gt; stdPrecision)</span>
+<span class="nc" id="L97">					invAmt = invAmt.setScale(stdPrecision, RoundingMode.HALF_UP);</span>
+<span class="nc" id="L98">			}</span>
+			else
+			{
+<span class="nc" id="L101">				invAmt = MConversionRate.convertBase(	mInvoice.getCtx(),</span>
+<span class="nc" id="L102">														mInvoice.getGrandTotal(true), // CM adjusted</span>
+<span class="nc" id="L103">														mInvoice.getC_Currency_ID(),</span>
+<span class="nc" id="L104">														mInvoice.getDateAcct(),</span>
+<span class="nc" id="L105">														mInvoice.getC_ConversionType_ID(),</span>
+<span class="nc" id="L106">														mInvoice.getAD_Client_ID(),</span>
+<span class="nc" id="L107">														mInvoice.getAD_Org_ID());</span>
+			}
+<span class="nc bnc" id="L109" title="All 2 branches missed.">			if (invAmt == null)</span>
+			{
+<span class="nc" id="L111">				errorMsg = MConversionRateUtil.getErrorMessage(	mInvoice.getCtx(),</span>
+<span class="nc" id="L112">															&quot;ErrorConvertingCurrencyToBaseCurrency&quot;,</span>
+<span class="nc" id="L113">															mInvoice.getC_Currency_ID(),</span>
+<span class="nc" id="L114">															MClient.get(mInvoice.getCtx()).getC_Currency_ID(),</span>
+<span class="nc" id="L115">															mInvoice.getC_ConversionType_ID(),</span>
+<span class="nc" id="L116">															mInvoice.getDateAcct(),</span>
+<span class="nc" id="L117">															mInvoice.get_TrxName());</span>
+<span class="nc" id="L118">				return new CreditStatus(errorMsg, true);</span>
+			}
+			
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			if (MInvoice.DOCACTION_Re_Activate.equals(docAction))</span>
+<span class="nc" id="L122">				invAmt = invAmt.negate();</span>
+			
+			// Total Balance
+<span class="nc" id="L125">			BigDecimal newBalance = bp.getTotalOpenBalance();</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">			if (newBalance == null)</span>
+<span class="nc" id="L127">				newBalance = Env.ZERO;</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">			if (mInvoice.isSOTrx())</span>
+			{
+<span class="nc" id="L130">				newBalance = newBalance.add(invAmt);</span>
+				//
+<span class="nc bnc" id="L132" title="All 2 branches missed.">				if (bp.getFirstSale() == null)</span>
+<span class="nc" id="L133">					bp.setFirstSale(mInvoice.getDateInvoiced());</span>
+
+<span class="nc" id="L135">				BigDecimal newLifeAmt = bp.getActualLifeTimeValue();</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">				if (newLifeAmt == null)</span>
+<span class="nc" id="L137">					newLifeAmt = invAmt;</span>
+				else
+<span class="nc" id="L139">					newLifeAmt = newLifeAmt.add(invAmt);</span>
+
+<span class="nc" id="L141">				BigDecimal newCreditAmt = bp.getSO_CreditUsed();</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">				if (newCreditAmt == null)</span>
+<span class="nc" id="L143">					newCreditAmt = invAmt;</span>
+				else
+<span class="nc" id="L145">					newCreditAmt = newCreditAmt.add(invAmt);</span>
+				//
+<span class="nc bnc" id="L147" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L148">					log.fine(	&quot;GrandTotal=&quot;	+ mInvoice.getGrandTotal(true) + &quot;(&quot; + invAmt</span>
+<span class="nc" id="L149">								+ &quot;) BP Life=&quot; + bp.getActualLifeTimeValue() + &quot;-&gt;&quot; + newLifeAmt</span>
+<span class="nc" id="L150">								+ &quot;, Credit=&quot; + bp.getSO_CreditUsed() + &quot;-&gt;&quot; + newCreditAmt</span>
+<span class="nc" id="L151">								+ &quot;, Balance=&quot; + bp.getTotalOpenBalance() + &quot; -&gt; &quot; + newBalance);</span>
+<span class="nc" id="L152">				bp.setActualLifeTimeValue(newLifeAmt);</span>
+<span class="nc" id="L153">				bp.setSO_CreditUsed(newCreditAmt);</span>
+<span class="nc" id="L154">			} // SO</span>
+			else
+			{
+<span class="nc" id="L157">				newBalance = newBalance.subtract(invAmt);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">				if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L159">					log.fine(	&quot;GrandTotal=&quot;	+ mInvoice.getGrandTotal(true) + &quot;(&quot; + invAmt</span>
+<span class="nc" id="L160">								+ &quot;) Balance=&quot; + bp.getTotalOpenBalance() + &quot; -&gt; &quot; + newBalance);</span>
+			}
+			// the payment just created already updated the open balance
+<span class="nc bnc" id="L163" title="All 4 branches missed.">			if (!(MInvoice.PAYMENTRULE_Cash.equals(mInvoice.getPaymentRule()) &amp;&amp; !fromPOS))</span>
+			{
+<span class="nc" id="L165">				bp.setTotalOpenBalance(newBalance);</span>
+			}
+<span class="nc" id="L167">			bp.setSOCreditStatus();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">			if (!bp.save(mInvoice.get_TrxName()))</span>
+			{
+<span class="nc" id="L170">				errorMsg = &quot;Could not update Business Partner&quot;;</span>
+			}
+		}
+<span class="nc bnc" id="L173" title="All 2 branches missed.">		return new CreditStatus(errorMsg, !Util.isEmpty(errorMsg));</span>
+	} // creditCheck
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

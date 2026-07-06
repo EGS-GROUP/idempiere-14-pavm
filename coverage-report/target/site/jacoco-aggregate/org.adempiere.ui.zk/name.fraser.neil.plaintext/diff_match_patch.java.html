@@ -1,0 +1,2473 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>diff_match_patch.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">name.fraser.neil.plaintext</a> &gt; <span class="el_source">diff_match_patch.java</span></div><h1>diff_match_patch.java</h1><pre class="source lang-java linenums">/*
+ * Diff Match and Patch
+ * Copyright 2018 The diff-match-patch Authors.
+ * https://github.com/google/diff-match-patch
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package name.fraser.neil.plaintext;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/*
+ * Functions for diff, match and patch.
+ * Computes the difference between two texts to create a patch.
+ * Applies the patch onto another text, allowing for errors.
+ *
+ * @author fraser@google.com (Neil Fraser)
+ */
+
+/**
+ * Class containing the diff, match and patch methods.
+ * Also contains the behaviour settings.
+ */
+<span class="nc" id="L40">public class diff_match_patch {</span>
+
+  // Defaults.
+  // Set these on your diff_match_patch instance to override the defaults.
+
+  /**
+   * Number of seconds to map a diff before giving up (0 for infinity).
+   */
+<span class="nc" id="L48">  public float Diff_Timeout = 1.0f;</span>
+  /**
+   * Cost of an empty edit operation in terms of edit characters.
+   */
+<span class="nc" id="L52">  public short Diff_EditCost = 4;</span>
+  /**
+   * At what point is no match declared (0.0 = perfection, 1.0 = very loose).
+   */
+<span class="nc" id="L56">  public float Match_Threshold = 0.5f;</span>
+  /**
+   * How far to search for a match (0 = exact location, 1000+ = broad match).
+   * A match this many characters away from the expected location will add
+   * 1.0 to the score (0.0 is a perfect match).
+   */
+<span class="nc" id="L62">  public int Match_Distance = 1000;</span>
+  /**
+   * When deleting a large block of text (over ~64 characters), how close do
+   * the contents have to be to match the expected contents. (0.0 = perfection,
+   * 1.0 = very loose).  Note that Match_Threshold controls how closely the
+   * end points of a delete need to match.
+   */
+<span class="nc" id="L69">  public float Patch_DeleteThreshold = 0.5f;</span>
+  /**
+   * Chunk size for context length.
+   */
+<span class="nc" id="L73">  public short Patch_Margin = 4;</span>
+
+  /**
+   * The number of bits in an int.
+   */
+<span class="nc" id="L78">  private short Match_MaxBits = 32;</span>
+
+  /**
+   * Internal class for returning results from diff_linesToChars().
+   * Other less paranoid languages just use a three-element array.
+   */
+  protected static class LinesToCharsResult {
+    protected String chars1;
+    protected String chars2;
+    protected List&lt;String&gt; lineArray;
+
+<span class="nc" id="L89">    protected LinesToCharsResult(String chars1, String chars2,</span>
+        List&lt;String&gt; lineArray) {
+<span class="nc" id="L91">      this.chars1 = chars1;</span>
+<span class="nc" id="L92">      this.chars2 = chars2;</span>
+<span class="nc" id="L93">      this.lineArray = lineArray;</span>
+<span class="nc" id="L94">    }</span>
+  }
+
+
+  //  DIFF FUNCTIONS
+
+
+  /**
+   * The data structure representing a diff is a Linked list of Diff objects:
+   * {Diff(Operation.DELETE, &quot;Hello&quot;), Diff(Operation.INSERT, &quot;Goodbye&quot;),
+   *  Diff(Operation.EQUAL, &quot; world.&quot;)}
+   * which means: delete &quot;Hello&quot;, add &quot;Goodbye&quot; and keep &quot; world.&quot;
+   */
+<span class="nc" id="L107">  public enum Operation {</span>
+<span class="nc" id="L108">    DELETE, INSERT, EQUAL</span>
+  }
+
+  /**
+   * Find the differences between two texts.
+   * Run a faster, slightly less optimal diff.
+   * This method allows the 'checklines' of diff_main() to be optional.
+   * Most of the time checklines is wanted, so default to true.
+   * @param text1 Old string to be diffed.
+   * @param text2 New string to be diffed.
+   * @return Linked List of Diff objects.
+   */
+  public LinkedList&lt;Diff&gt; diff_main(String text1, String text2) {
+<span class="nc" id="L121">    return diff_main(text1, text2, true);</span>
+  }
+
+  /**
+   * Find the differences between two texts.
+   * @param text1 Old string to be diffed.
+   * @param text2 New string to be diffed.
+   * @param checklines Speedup flag.  If false, then don't run a
+   *     line-level diff first to identify the changed areas.
+   *     If true, then run a faster slightly less optimal diff.
+   * @return Linked List of Diff objects.
+   */
+  public LinkedList&lt;Diff&gt; diff_main(String text1, String text2,
+                                    boolean checklines) {
+    // Set a deadline by which time the diff must be complete.
+    long deadline;
+<span class="nc bnc" id="L137" title="All 2 branches missed.">    if (Diff_Timeout &lt;= 0) {</span>
+<span class="nc" id="L138">      deadline = Long.MAX_VALUE;</span>
+<span class="nc" id="L139">    } else {</span>
+<span class="nc" id="L140">      deadline = System.currentTimeMillis() + (long) (Diff_Timeout * 1000);</span>
+    }
+<span class="nc" id="L142">    return diff_main(text1, text2, checklines, deadline);</span>
+  }
+
+  /**
+   * Find the differences between two texts.  Simplifies the problem by
+   * stripping any common prefix or suffix off the texts before diffing.
+   * @param text1 Old string to be diffed.
+   * @param text2 New string to be diffed.
+   * @param checklines Speedup flag.  If false, then don't run a
+   *     line-level diff first to identify the changed areas.
+   *     If true, then run a faster slightly less optimal diff.
+   * @param deadline Time when the diff should be complete by.  Used
+   *     internally for recursive calls.  Users should set DiffTimeout instead.
+   * @return Linked List of Diff objects.
+   */
+  private LinkedList&lt;Diff&gt; diff_main(String text1, String text2,
+                                     boolean checklines, long deadline) {
+    // Check for null inputs.
+<span class="nc bnc" id="L160" title="All 4 branches missed.">    if (text1 == null || text2 == null) {</span>
+<span class="nc" id="L161">      throw new IllegalArgumentException(&quot;Null inputs. (diff_main)&quot;);</span>
+    }
+
+    // Check for equality (speedup).
+    LinkedList&lt;Diff&gt; diffs;
+<span class="nc bnc" id="L166" title="All 2 branches missed.">    if (text1.equals(text2)) {</span>
+<span class="nc" id="L167">      diffs = new LinkedList&lt;Diff&gt;();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">      if (text1.length() != 0) {</span>
+<span class="nc" id="L169">        diffs.add(new Diff(Operation.EQUAL, text1));</span>
+      }
+<span class="nc" id="L171">      return diffs;</span>
+    }
+
+    // Trim off common prefix (speedup).
+<span class="nc" id="L175">    int commonlength = diff_commonPrefix(text1, text2);</span>
+<span class="nc" id="L176">    String commonprefix = text1.substring(0, commonlength);</span>
+<span class="nc" id="L177">    text1 = text1.substring(commonlength);</span>
+<span class="nc" id="L178">    text2 = text2.substring(commonlength);</span>
+
+    // Trim off common suffix (speedup).
+<span class="nc" id="L181">    commonlength = diff_commonSuffix(text1, text2);</span>
+<span class="nc" id="L182">    String commonsuffix = text1.substring(text1.length() - commonlength);</span>
+<span class="nc" id="L183">    text1 = text1.substring(0, text1.length() - commonlength);</span>
+<span class="nc" id="L184">    text2 = text2.substring(0, text2.length() - commonlength);</span>
+
+    // Compute the diff on the middle block.
+<span class="nc" id="L187">    diffs = diff_compute(text1, text2, checklines, deadline);</span>
+
+    // Restore the prefix and suffix.
+<span class="nc bnc" id="L190" title="All 2 branches missed.">    if (commonprefix.length() != 0) {</span>
+<span class="nc" id="L191">      diffs.addFirst(new Diff(Operation.EQUAL, commonprefix));</span>
+    }
+<span class="nc bnc" id="L193" title="All 2 branches missed.">    if (commonsuffix.length() != 0) {</span>
+<span class="nc" id="L194">      diffs.addLast(new Diff(Operation.EQUAL, commonsuffix));</span>
+    }
+
+<span class="nc" id="L197">    diff_cleanupMerge(diffs);</span>
+<span class="nc" id="L198">    return diffs;</span>
+  }
+
+  /**
+   * Find the differences between two texts.  Assumes that the texts do not
+   * have any common prefix or suffix.
+   * @param text1 Old string to be diffed.
+   * @param text2 New string to be diffed.
+   * @param checklines Speedup flag.  If false, then don't run a
+   *     line-level diff first to identify the changed areas.
+   *     If true, then run a faster slightly less optimal diff.
+   * @param deadline Time when the diff should be complete by.
+   * @return Linked List of Diff objects.
+   */
+  private LinkedList&lt;Diff&gt; diff_compute(String text1, String text2,
+                                        boolean checklines, long deadline) {
+<span class="nc" id="L214">    LinkedList&lt;Diff&gt; diffs = new LinkedList&lt;Diff&gt;();</span>
+
+<span class="nc bnc" id="L216" title="All 2 branches missed.">    if (text1.length() == 0) {</span>
+      // Just add some text (speedup).
+<span class="nc" id="L218">      diffs.add(new Diff(Operation.INSERT, text2));</span>
+<span class="nc" id="L219">      return diffs;</span>
+    }
+
+<span class="nc bnc" id="L222" title="All 2 branches missed.">    if (text2.length() == 0) {</span>
+      // Just delete some text (speedup).
+<span class="nc" id="L224">      diffs.add(new Diff(Operation.DELETE, text1));</span>
+<span class="nc" id="L225">      return diffs;</span>
+    }
+
+<span class="nc bnc" id="L228" title="All 2 branches missed.">    String longtext = text1.length() &gt; text2.length() ? text1 : text2;</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">    String shorttext = text1.length() &gt; text2.length() ? text2 : text1;</span>
+<span class="nc" id="L230">    int i = longtext.indexOf(shorttext);</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">    if (i != -1) {</span>
+      // Shorter text is inside the longer text (speedup).
+<span class="nc bnc" id="L233" title="All 2 branches missed.">      Operation op = (text1.length() &gt; text2.length()) ?</span>
+<span class="nc" id="L234">                     Operation.DELETE : Operation.INSERT;</span>
+<span class="nc" id="L235">      diffs.add(new Diff(op, longtext.substring(0, i)));</span>
+<span class="nc" id="L236">      diffs.add(new Diff(Operation.EQUAL, shorttext));</span>
+<span class="nc" id="L237">      diffs.add(new Diff(op, longtext.substring(i + shorttext.length())));</span>
+<span class="nc" id="L238">      return diffs;</span>
+    }
+
+<span class="nc bnc" id="L241" title="All 2 branches missed.">    if (shorttext.length() == 1) {</span>
+      // Single character string.
+      // After the previous speedup, the character can't be an equality.
+<span class="nc" id="L244">      diffs.add(new Diff(Operation.DELETE, text1));</span>
+<span class="nc" id="L245">      diffs.add(new Diff(Operation.INSERT, text2));</span>
+<span class="nc" id="L246">      return diffs;</span>
+    }
+
+    // Check to see if the problem can be split in two.
+<span class="nc" id="L250">    String[] hm = diff_halfMatch(text1, text2);</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">    if (hm != null) {</span>
+      // A half-match was found, sort out the return data.
+<span class="nc" id="L253">      String text1_a = hm[0];</span>
+<span class="nc" id="L254">      String text1_b = hm[1];</span>
+<span class="nc" id="L255">      String text2_a = hm[2];</span>
+<span class="nc" id="L256">      String text2_b = hm[3];</span>
+<span class="nc" id="L257">      String mid_common = hm[4];</span>
+      // Send both pairs off for separate processing.
+<span class="nc" id="L259">      LinkedList&lt;Diff&gt; diffs_a = diff_main(text1_a, text2_a,</span>
+<span class="nc" id="L260">                                           checklines, deadline);</span>
+<span class="nc" id="L261">      LinkedList&lt;Diff&gt; diffs_b = diff_main(text1_b, text2_b,</span>
+<span class="nc" id="L262">                                           checklines, deadline);</span>
+      // Merge the results.
+<span class="nc" id="L264">      diffs = diffs_a;</span>
+<span class="nc" id="L265">      diffs.add(new Diff(Operation.EQUAL, mid_common));</span>
+<span class="nc" id="L266">      diffs.addAll(diffs_b);</span>
+<span class="nc" id="L267">      return diffs;</span>
+    }
+
+<span class="nc bnc" id="L270" title="All 6 branches missed.">    if (checklines &amp;&amp; text1.length() &gt; 100 &amp;&amp; text2.length() &gt; 100) {</span>
+<span class="nc" id="L271">      return diff_lineMode(text1, text2, deadline);</span>
+    }
+
+<span class="nc" id="L274">    return diff_bisect(text1, text2, deadline);</span>
+  }
+
+  /**
+   * Do a quick line-level diff on both strings, then rediff the parts for
+   * greater accuracy.
+   * This speedup can produce non-minimal diffs.
+   * @param text1 Old string to be diffed.
+   * @param text2 New string to be diffed.
+   * @param deadline Time when the diff should be complete by.
+   * @return Linked List of Diff objects.
+   */
+  private LinkedList&lt;Diff&gt; diff_lineMode(String text1, String text2,
+                                         long deadline) {
+    // Scan the text on a line-by-line basis first.
+<span class="nc" id="L289">    LinesToCharsResult a = diff_linesToChars(text1, text2);</span>
+<span class="nc" id="L290">    text1 = a.chars1;</span>
+<span class="nc" id="L291">    text2 = a.chars2;</span>
+<span class="nc" id="L292">    List&lt;String&gt; linearray = a.lineArray;</span>
+
+<span class="nc" id="L294">    LinkedList&lt;Diff&gt; diffs = diff_main(text1, text2, false, deadline);</span>
+
+    // Convert the diff back to original text.
+<span class="nc" id="L297">    diff_charsToLines(diffs, linearray);</span>
+    // Eliminate freak matches (e.g. blank lines)
+<span class="nc" id="L299">    diff_cleanupSemantic(diffs);</span>
+
+    // Rediff any replacement blocks, this time character-by-character.
+    // Add a dummy entry at the end.
+<span class="nc" id="L303">    diffs.add(new Diff(Operation.EQUAL, &quot;&quot;));</span>
+<span class="nc" id="L304">    int count_delete = 0;</span>
+<span class="nc" id="L305">    int count_insert = 0;</span>
+<span class="nc" id="L306">    String text_delete = &quot;&quot;;</span>
+<span class="nc" id="L307">    String text_insert = &quot;&quot;;</span>
+<span class="nc" id="L308">    ListIterator&lt;Diff&gt; pointer = diffs.listIterator();</span>
+<span class="nc" id="L309">    Diff thisDiff = pointer.next();</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">    while (thisDiff != null) {</span>
+<span class="nc bnc" id="L311" title="All 4 branches missed.">      switch (thisDiff.operation) {</span>
+      case INSERT:
+<span class="nc" id="L313">        count_insert++;</span>
+<span class="nc" id="L314">        text_insert += thisDiff.text;</span>
+<span class="nc" id="L315">        break;</span>
+      case DELETE:
+<span class="nc" id="L317">        count_delete++;</span>
+<span class="nc" id="L318">        text_delete += thisDiff.text;</span>
+<span class="nc" id="L319">        break;</span>
+      case EQUAL:
+        // Upon reaching an equality, check for prior redundancies.
+<span class="nc bnc" id="L322" title="All 4 branches missed.">        if (count_delete &gt;= 1 &amp;&amp; count_insert &gt;= 1) {</span>
+          // Delete the offending records and add the merged ones.
+<span class="nc" id="L324">          pointer.previous();</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">          for (int j = 0; j &lt; count_delete + count_insert; j++) {</span>
+<span class="nc" id="L326">            pointer.previous();</span>
+<span class="nc" id="L327">            pointer.remove();</span>
+          }
+<span class="nc bnc" id="L329" title="All 2 branches missed.">          for (Diff subDiff : diff_main(text_delete, text_insert, false,</span>
+<span class="nc" id="L330">              deadline)) {</span>
+<span class="nc" id="L331">            pointer.add(subDiff);</span>
+          }
+        }
+<span class="nc" id="L334">        count_insert = 0;</span>
+<span class="nc" id="L335">        count_delete = 0;</span>
+<span class="nc" id="L336">        text_delete = &quot;&quot;;</span>
+<span class="nc" id="L337">        text_insert = &quot;&quot;;</span>
+        break;
+      }
+<span class="nc bnc" id="L340" title="All 2 branches missed.">      thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+<span class="nc" id="L342">    diffs.removeLast();  // Remove the dummy entry at the end.</span>
+
+<span class="nc" id="L344">    return diffs;</span>
+  }
+
+  /**
+   * Find the 'middle snake' of a diff, split the problem in two
+   * and return the recursively constructed diff.
+   * See Myers 1986 paper: An O(ND) Difference Algorithm and Its Variations.
+   * @param text1 Old string to be diffed.
+   * @param text2 New string to be diffed.
+   * @param deadline Time at which to bail if not yet complete.
+   * @return LinkedList of Diff objects.
+   */
+  protected LinkedList&lt;Diff&gt; diff_bisect(String text1, String text2,
+      long deadline) {
+    // Cache the text lengths to prevent multiple calls.
+<span class="nc" id="L359">    int text1_length = text1.length();</span>
+<span class="nc" id="L360">    int text2_length = text2.length();</span>
+<span class="nc" id="L361">    int max_d = (text1_length + text2_length + 1) / 2;</span>
+<span class="nc" id="L362">    int v_offset = max_d;</span>
+<span class="nc" id="L363">    int v_length = 2 * max_d;</span>
+<span class="nc" id="L364">    int[] v1 = new int[v_length];</span>
+<span class="nc" id="L365">    int[] v2 = new int[v_length];</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">    for (int x = 0; x &lt; v_length; x++) {</span>
+<span class="nc" id="L367">      v1[x] = -1;</span>
+<span class="nc" id="L368">      v2[x] = -1;</span>
+    }
+<span class="nc" id="L370">    v1[v_offset + 1] = 0;</span>
+<span class="nc" id="L371">    v2[v_offset + 1] = 0;</span>
+<span class="nc" id="L372">    int delta = text1_length - text2_length;</span>
+    // If the total number of characters is odd, then the front path will
+    // collide with the reverse path.
+<span class="nc bnc" id="L375" title="All 2 branches missed.">    boolean front = (delta % 2 != 0);</span>
+    // Offsets for start and end of k loop.
+    // Prevents mapping of space beyond the grid.
+<span class="nc" id="L378">    int k1start = 0;</span>
+<span class="nc" id="L379">    int k1end = 0;</span>
+<span class="nc" id="L380">    int k2start = 0;</span>
+<span class="nc" id="L381">    int k2end = 0;</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">    for (int d = 0; d &lt; max_d; d++) {</span>
+      // Bail out if deadline is reached.
+<span class="nc bnc" id="L384" title="All 2 branches missed.">      if (System.currentTimeMillis() &gt; deadline) {</span>
+<span class="nc" id="L385">        break;</span>
+      }
+
+      // Walk the front path one step.
+<span class="nc bnc" id="L389" title="All 2 branches missed.">      for (int k1 = -d + k1start; k1 &lt;= d - k1end; k1 += 2) {</span>
+<span class="nc" id="L390">        int k1_offset = v_offset + k1;</span>
+        int x1;
+<span class="nc bnc" id="L392" title="All 6 branches missed.">        if (k1 == -d || (k1 != d &amp;&amp; v1[k1_offset - 1] &lt; v1[k1_offset + 1])) {</span>
+<span class="nc" id="L393">          x1 = v1[k1_offset + 1];</span>
+<span class="nc" id="L394">        } else {</span>
+<span class="nc" id="L395">          x1 = v1[k1_offset - 1] + 1;</span>
+        }
+<span class="nc" id="L397">        int y1 = x1 - k1;</span>
+<span class="nc bnc" id="L398" title="All 4 branches missed.">        while (x1 &lt; text1_length &amp;&amp; y1 &lt; text2_length</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">               &amp;&amp; text1.charAt(x1) == text2.charAt(y1)) {</span>
+<span class="nc" id="L400">          x1++;</span>
+<span class="nc" id="L401">          y1++;</span>
+        }
+<span class="nc" id="L403">        v1[k1_offset] = x1;</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">        if (x1 &gt; text1_length) {</span>
+          // Ran off the right of the graph.
+<span class="nc" id="L406">          k1end += 2;</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">        } else if (y1 &gt; text2_length) {</span>
+          // Ran off the bottom of the graph.
+<span class="nc" id="L409">          k1start += 2;</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">        } else if (front) {</span>
+<span class="nc" id="L411">          int k2_offset = v_offset + delta - k1;</span>
+<span class="nc bnc" id="L412" title="All 6 branches missed.">          if (k2_offset &gt;= 0 &amp;&amp; k2_offset &lt; v_length &amp;&amp; v2[k2_offset] != -1) {</span>
+            // Mirror x2 onto top-left coordinate system.
+<span class="nc" id="L414">            int x2 = text1_length - v2[k2_offset];</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">            if (x1 &gt;= x2) {</span>
+              // Overlap detected.
+<span class="nc" id="L417">              return diff_bisectSplit(text1, text2, x1, y1, deadline);</span>
+            }
+          }
+        }
+      }
+
+      // Walk the reverse path one step.
+<span class="nc bnc" id="L424" title="All 2 branches missed.">      for (int k2 = -d + k2start; k2 &lt;= d - k2end; k2 += 2) {</span>
+<span class="nc" id="L425">        int k2_offset = v_offset + k2;</span>
+        int x2;
+<span class="nc bnc" id="L427" title="All 6 branches missed.">        if (k2 == -d || (k2 != d &amp;&amp; v2[k2_offset - 1] &lt; v2[k2_offset + 1])) {</span>
+<span class="nc" id="L428">          x2 = v2[k2_offset + 1];</span>
+<span class="nc" id="L429">        } else {</span>
+<span class="nc" id="L430">          x2 = v2[k2_offset - 1] + 1;</span>
+        }
+<span class="nc" id="L432">        int y2 = x2 - k2;</span>
+<span class="nc bnc" id="L433" title="All 4 branches missed.">        while (x2 &lt; text1_length &amp;&amp; y2 &lt; text2_length</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">               &amp;&amp; text1.charAt(text1_length - x2 - 1)</span>
+<span class="nc" id="L435">               == text2.charAt(text2_length - y2 - 1)) {</span>
+<span class="nc" id="L436">          x2++;</span>
+<span class="nc" id="L437">          y2++;</span>
+        }
+<span class="nc" id="L439">        v2[k2_offset] = x2;</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">        if (x2 &gt; text1_length) {</span>
+          // Ran off the left of the graph.
+<span class="nc" id="L442">          k2end += 2;</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        } else if (y2 &gt; text2_length) {</span>
+          // Ran off the top of the graph.
+<span class="nc" id="L445">          k2start += 2;</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">        } else if (!front) {</span>
+<span class="nc" id="L447">          int k1_offset = v_offset + delta - k2;</span>
+<span class="nc bnc" id="L448" title="All 6 branches missed.">          if (k1_offset &gt;= 0 &amp;&amp; k1_offset &lt; v_length &amp;&amp; v1[k1_offset] != -1) {</span>
+<span class="nc" id="L449">            int x1 = v1[k1_offset];</span>
+<span class="nc" id="L450">            int y1 = v_offset + x1 - k1_offset;</span>
+            // Mirror x2 onto top-left coordinate system.
+<span class="nc" id="L452">            x2 = text1_length - x2;</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">            if (x1 &gt;= x2) {</span>
+              // Overlap detected.
+<span class="nc" id="L455">              return diff_bisectSplit(text1, text2, x1, y1, deadline);</span>
+            }
+          }
+        }
+      }
+    }
+    // Diff took too long and hit the deadline or
+    // number of diffs equals number of characters, no commonality at all.
+<span class="nc" id="L463">    LinkedList&lt;Diff&gt; diffs = new LinkedList&lt;Diff&gt;();</span>
+<span class="nc" id="L464">    diffs.add(new Diff(Operation.DELETE, text1));</span>
+<span class="nc" id="L465">    diffs.add(new Diff(Operation.INSERT, text2));</span>
+<span class="nc" id="L466">    return diffs;</span>
+  }
+
+  /**
+   * Given the location of the 'middle snake', split the diff in two parts
+   * and recurse.
+   * @param text1 Old string to be diffed.
+   * @param text2 New string to be diffed.
+   * @param x Index of split point in text1.
+   * @param y Index of split point in text2.
+   * @param deadline Time at which to bail if not yet complete.
+   * @return LinkedList of Diff objects.
+   */
+  private LinkedList&lt;Diff&gt; diff_bisectSplit(String text1, String text2,
+                                            int x, int y, long deadline) {
+<span class="nc" id="L481">    String text1a = text1.substring(0, x);</span>
+<span class="nc" id="L482">    String text2a = text2.substring(0, y);</span>
+<span class="nc" id="L483">    String text1b = text1.substring(x);</span>
+<span class="nc" id="L484">    String text2b = text2.substring(y);</span>
+
+    // Compute both diffs serially.
+<span class="nc" id="L487">    LinkedList&lt;Diff&gt; diffs = diff_main(text1a, text2a, false, deadline);</span>
+<span class="nc" id="L488">    LinkedList&lt;Diff&gt; diffsb = diff_main(text1b, text2b, false, deadline);</span>
+
+<span class="nc" id="L490">    diffs.addAll(diffsb);</span>
+<span class="nc" id="L491">    return diffs;</span>
+  }
+
+  /**
+   * Split two texts into a list of strings.  Reduce the texts to a string of
+   * hashes where each Unicode character represents one line.
+   * @param text1 First string.
+   * @param text2 Second string.
+   * @return An object containing the encoded text1, the encoded text2 and
+   *     the List of unique strings.  The zeroth element of the List of
+   *     unique strings is intentionally blank.
+   */
+  protected LinesToCharsResult diff_linesToChars(String text1, String text2) {
+<span class="nc" id="L504">    List&lt;String&gt; lineArray = new ArrayList&lt;String&gt;();</span>
+<span class="nc" id="L505">    Map&lt;String, Integer&gt; lineHash = new HashMap&lt;String, Integer&gt;();</span>
+    // e.g. linearray[4] == &quot;Hello\n&quot;
+    // e.g. linehash.get(&quot;Hello\n&quot;) == 4
+
+    // &quot;\x00&quot; is a valid character, but various debuggers don't like it.
+    // So we'll insert a junk entry to avoid generating a null character.
+<span class="nc" id="L511">    lineArray.add(&quot;&quot;);</span>
+
+    // Allocate 2/3rds of the space for text1, the rest for text2.
+<span class="nc" id="L514">    String chars1 = diff_linesToCharsMunge(text1, lineArray, lineHash, 40000);</span>
+<span class="nc" id="L515">    String chars2 = diff_linesToCharsMunge(text2, lineArray, lineHash, 65535);</span>
+<span class="nc" id="L516">    return new LinesToCharsResult(chars1, chars2, lineArray);</span>
+  }
+
+  /**
+   * Split a text into a list of strings.  Reduce the texts to a string of
+   * hashes where each Unicode character represents one line.
+   * @param text String to encode.
+   * @param lineArray List of unique strings.
+   * @param lineHash Map of strings to indices.
+   * @param maxLines Maximum length of lineArray.
+   * @return Encoded string.
+   */
+  private String diff_linesToCharsMunge(String text, List&lt;String&gt; lineArray,
+      Map&lt;String, Integer&gt; lineHash, int maxLines) {
+<span class="nc" id="L530">    int lineStart = 0;</span>
+<span class="nc" id="L531">    int lineEnd = -1;</span>
+    String line;
+<span class="nc" id="L533">    StringBuilder chars = new StringBuilder();</span>
+    // Walk the text, pulling out a substring for each line.
+    // text.split('\n') would would temporarily double our memory footprint.
+    // Modifying text would create many large strings to garbage collect.
+<span class="nc bnc" id="L537" title="All 2 branches missed.">    while (lineEnd &lt; text.length() - 1) {</span>
+<span class="nc" id="L538">      lineEnd = text.indexOf('\n', lineStart);</span>
+<span class="nc bnc" id="L539" title="All 2 branches missed.">      if (lineEnd == -1) {</span>
+<span class="nc" id="L540">        lineEnd = text.length() - 1;</span>
+      }
+<span class="nc" id="L542">      line = text.substring(lineStart, lineEnd + 1);</span>
+
+<span class="nc bnc" id="L544" title="All 2 branches missed.">      if (lineHash.containsKey(line)) {</span>
+<span class="nc" id="L545">        chars.append(String.valueOf((char) (int) lineHash.get(line)));</span>
+<span class="nc" id="L546">      } else {</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">        if (lineArray.size() == maxLines) {</span>
+          // Bail out at 65535 because
+          // String.valueOf((char) 65536).equals(String.valueOf(((char) 0)))
+<span class="nc" id="L550">          line = text.substring(lineStart);</span>
+<span class="nc" id="L551">          lineEnd = text.length();</span>
+        }
+<span class="nc" id="L553">        lineArray.add(line);</span>
+<span class="nc" id="L554">        lineHash.put(line, lineArray.size() - 1);</span>
+<span class="nc" id="L555">        chars.append(String.valueOf((char) (lineArray.size() - 1)));</span>
+      }
+<span class="nc" id="L557">      lineStart = lineEnd + 1;</span>
+    }
+<span class="nc" id="L559">    return chars.toString();</span>
+  }
+
+  /**
+   * Rehydrate the text in a diff from a string of line hashes to real lines of
+   * text.
+   * @param diffs List of Diff objects.
+   * @param lineArray List of unique strings.
+   */
+  protected void diff_charsToLines(List&lt;Diff&gt; diffs,
+                                  List&lt;String&gt; lineArray) {
+    StringBuilder text;
+<span class="nc bnc" id="L571" title="All 2 branches missed.">    for (Diff diff : diffs) {</span>
+<span class="nc" id="L572">      text = new StringBuilder();</span>
+<span class="nc bnc" id="L573" title="All 2 branches missed.">      for (int j = 0; j &lt; diff.text.length(); j++) {</span>
+<span class="nc" id="L574">        text.append(lineArray.get(diff.text.charAt(j)));</span>
+      }
+<span class="nc" id="L576">      diff.text = text.toString();</span>
+    }
+<span class="nc" id="L578">  }</span>
+
+  /**
+   * Determine the common prefix of two strings
+   * @param text1 First string.
+   * @param text2 Second string.
+   * @return The number of characters common to the start of each string.
+   */
+  public int diff_commonPrefix(String text1, String text2) {
+    // Performance analysis: https://neil.fraser.name/news/2007/10/09/
+<span class="nc" id="L588">    int n = Math.min(text1.length(), text2.length());</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">    for (int i = 0; i &lt; n; i++) {</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">      if (text1.charAt(i) != text2.charAt(i)) {</span>
+<span class="nc" id="L591">        return i;</span>
+      }
+    }
+<span class="nc" id="L594">    return n;</span>
+  }
+
+  /**
+   * Determine the common suffix of two strings
+   * @param text1 First string.
+   * @param text2 Second string.
+   * @return The number of characters common to the end of each string.
+   */
+  public int diff_commonSuffix(String text1, String text2) {
+    // Performance analysis: https://neil.fraser.name/news/2007/10/09/
+<span class="nc" id="L605">    int text1_length = text1.length();</span>
+<span class="nc" id="L606">    int text2_length = text2.length();</span>
+<span class="nc" id="L607">    int n = Math.min(text1_length, text2_length);</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">    for (int i = 1; i &lt;= n; i++) {</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">      if (text1.charAt(text1_length - i) != text2.charAt(text2_length - i)) {</span>
+<span class="nc" id="L610">        return i - 1;</span>
+      }
+    }
+<span class="nc" id="L613">    return n;</span>
+  }
+
+  /**
+   * Determine if the suffix of one string is the prefix of another.
+   * @param text1 First string.
+   * @param text2 Second string.
+   * @return The number of characters common to the end of the first
+   *     string and the start of the second string.
+   */
+  protected int diff_commonOverlap(String text1, String text2) {
+    // Cache the text lengths to prevent multiple calls.
+<span class="nc" id="L625">    int text1_length = text1.length();</span>
+<span class="nc" id="L626">    int text2_length = text2.length();</span>
+    // Eliminate the null case.
+<span class="nc bnc" id="L628" title="All 4 branches missed.">    if (text1_length == 0 || text2_length == 0) {</span>
+<span class="nc" id="L629">      return 0;</span>
+    }
+    // Truncate the longer string.
+<span class="nc bnc" id="L632" title="All 2 branches missed.">    if (text1_length &gt; text2_length) {</span>
+<span class="nc" id="L633">      text1 = text1.substring(text1_length - text2_length);</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">    } else if (text1_length &lt; text2_length) {</span>
+<span class="nc" id="L635">      text2 = text2.substring(0, text1_length);</span>
+    }
+<span class="nc" id="L637">    int text_length = Math.min(text1_length, text2_length);</span>
+    // Quick check for the worst case.
+<span class="nc bnc" id="L639" title="All 2 branches missed.">    if (text1.equals(text2)) {</span>
+<span class="nc" id="L640">      return text_length;</span>
+    }
+
+    // Start by looking for a single character match
+    // and increase length until no match is found.
+    // Performance analysis: https://neil.fraser.name/news/2010/11/04/
+<span class="nc" id="L646">    int best = 0;</span>
+<span class="nc" id="L647">    int length = 1;</span>
+<span class="nc" id="L648">    while (true) {</span>
+<span class="nc" id="L649">      String pattern = text1.substring(text_length - length);</span>
+<span class="nc" id="L650">      int found = text2.indexOf(pattern);</span>
+<span class="nc bnc" id="L651" title="All 2 branches missed.">      if (found == -1) {</span>
+<span class="nc" id="L652">        return best;</span>
+      }
+<span class="nc" id="L654">      length += found;</span>
+<span class="nc bnc" id="L655" title="All 2 branches missed.">      if (found == 0 || text1.substring(text_length - length).equals(</span>
+<span class="nc bnc" id="L656" title="All 2 branches missed.">          text2.substring(0, length))) {</span>
+<span class="nc" id="L657">        best = length;</span>
+<span class="nc" id="L658">        length++;</span>
+      }
+    }
+  }
+
+  /**
+   * Do the two texts share a substring which is at least half the length of
+   * the longer text?
+   * This speedup can produce non-minimal diffs.
+   * @param text1 First string.
+   * @param text2 Second string.
+   * @return Five element String array, containing the prefix of text1, the
+   *     suffix of text1, the prefix of text2, the suffix of text2 and the
+   *     common middle.  Or null if there was no match.
+   */
+  protected String[] diff_halfMatch(String text1, String text2) {
+<span class="nc bnc" id="L674" title="All 2 branches missed.">    if (Diff_Timeout &lt;= 0) {</span>
+      // Don't risk returning a non-optimal diff if we have unlimited time.
+<span class="nc" id="L676">      return null;</span>
+    }
+<span class="nc bnc" id="L678" title="All 2 branches missed.">    String longtext = text1.length() &gt; text2.length() ? text1 : text2;</span>
+<span class="nc bnc" id="L679" title="All 2 branches missed.">    String shorttext = text1.length() &gt; text2.length() ? text2 : text1;</span>
+<span class="nc bnc" id="L680" title="All 4 branches missed.">    if (longtext.length() &lt; 4 || shorttext.length() * 2 &lt; longtext.length()) {</span>
+<span class="nc" id="L681">      return null;  // Pointless.</span>
+    }
+
+    // First check if the second quarter is the seed for a half-match.
+<span class="nc" id="L685">    String[] hm1 = diff_halfMatchI(longtext, shorttext,</span>
+<span class="nc" id="L686">                                   (longtext.length() + 3) / 4);</span>
+    // Check again based on the third quarter.
+<span class="nc" id="L688">    String[] hm2 = diff_halfMatchI(longtext, shorttext,</span>
+<span class="nc" id="L689">                                   (longtext.length() + 1) / 2);</span>
+    String[] hm;
+<span class="nc bnc" id="L691" title="All 4 branches missed.">    if (hm1 == null &amp;&amp; hm2 == null) {</span>
+<span class="nc" id="L692">      return null;</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">    } else if (hm2 == null) {</span>
+<span class="nc" id="L694">      hm = hm1;</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">    } else if (hm1 == null) {</span>
+<span class="nc" id="L696">      hm = hm2;</span>
+<span class="nc" id="L697">    } else {</span>
+      // Both matched.  Select the longest.
+<span class="nc bnc" id="L699" title="All 2 branches missed.">      hm = hm1[4].length() &gt; hm2[4].length() ? hm1 : hm2;</span>
+    }
+
+    // A half-match was found, sort out the return data.
+<span class="nc bnc" id="L703" title="All 2 branches missed.">    if (text1.length() &gt; text2.length()) {</span>
+<span class="nc" id="L704">      return hm;</span>
+      //return new String[]{hm[0], hm[1], hm[2], hm[3], hm[4]};
+    } else {
+<span class="nc" id="L707">      return new String[]{hm[2], hm[3], hm[0], hm[1], hm[4]};</span>
+    }
+  }
+
+  /**
+   * Does a substring of shorttext exist within longtext such that the
+   * substring is at least half the length of longtext?
+   * @param longtext Longer string.
+   * @param shorttext Shorter string.
+   * @param i Start index of quarter length substring within longtext.
+   * @return Five element String array, containing the prefix of longtext, the
+   *     suffix of longtext, the prefix of shorttext, the suffix of shorttext
+   *     and the common middle.  Or null if there was no match.
+   */
+  private String[] diff_halfMatchI(String longtext, String shorttext, int i) {
+    // Start with a 1/4 length substring at position i as a seed.
+<span class="nc" id="L723">    String seed = longtext.substring(i, i + longtext.length() / 4);</span>
+<span class="nc" id="L724">    int j = -1;</span>
+<span class="nc" id="L725">    String best_common = &quot;&quot;;</span>
+<span class="nc" id="L726">    String best_longtext_a = &quot;&quot;, best_longtext_b = &quot;&quot;;</span>
+<span class="nc" id="L727">    String best_shorttext_a = &quot;&quot;, best_shorttext_b = &quot;&quot;;</span>
+<span class="nc bnc" id="L728" title="All 2 branches missed.">    while ((j = shorttext.indexOf(seed, j + 1)) != -1) {</span>
+<span class="nc" id="L729">      int prefixLength = diff_commonPrefix(longtext.substring(i),</span>
+<span class="nc" id="L730">                                           shorttext.substring(j));</span>
+<span class="nc" id="L731">      int suffixLength = diff_commonSuffix(longtext.substring(0, i),</span>
+<span class="nc" id="L732">                                           shorttext.substring(0, j));</span>
+<span class="nc bnc" id="L733" title="All 2 branches missed.">      if (best_common.length() &lt; suffixLength + prefixLength) {</span>
+<span class="nc" id="L734">        best_common = shorttext.substring(j - suffixLength, j)</span>
+<span class="nc" id="L735">            + shorttext.substring(j, j + prefixLength);</span>
+<span class="nc" id="L736">        best_longtext_a = longtext.substring(0, i - suffixLength);</span>
+<span class="nc" id="L737">        best_longtext_b = longtext.substring(i + prefixLength);</span>
+<span class="nc" id="L738">        best_shorttext_a = shorttext.substring(0, j - suffixLength);</span>
+<span class="nc" id="L739">        best_shorttext_b = shorttext.substring(j + prefixLength);</span>
+      }
+    }
+<span class="nc bnc" id="L742" title="All 2 branches missed.">    if (best_common.length() * 2 &gt;= longtext.length()) {</span>
+<span class="nc" id="L743">      return new String[]{best_longtext_a, best_longtext_b,</span>
+<span class="nc" id="L744">                          best_shorttext_a, best_shorttext_b, best_common};</span>
+    } else {
+<span class="nc" id="L746">      return null;</span>
+    }
+  }
+
+  /**
+   * Reduce the number of edits by eliminating semantically trivial equalities.
+   * @param diffs LinkedList of Diff objects.
+   */
+  public void diff_cleanupSemantic(LinkedList&lt;Diff&gt; diffs) {
+<span class="nc bnc" id="L755" title="All 2 branches missed.">    if (diffs.isEmpty()) {</span>
+<span class="nc" id="L756">      return;</span>
+    }
+<span class="nc" id="L758">    boolean changes = false;</span>
+<span class="nc" id="L759">    Deque&lt;Diff&gt; equalities = new ArrayDeque&lt;Diff&gt;();  // Double-ended queue of qualities.</span>
+<span class="nc" id="L760">    String lastEquality = null; // Always equal to equalities.peek().text</span>
+<span class="nc" id="L761">    ListIterator&lt;Diff&gt; pointer = diffs.listIterator();</span>
+    // Number of characters that changed prior to the equality.
+<span class="nc" id="L763">    int length_insertions1 = 0;</span>
+<span class="nc" id="L764">    int length_deletions1 = 0;</span>
+    // Number of characters that changed after the equality.
+<span class="nc" id="L766">    int length_insertions2 = 0;</span>
+<span class="nc" id="L767">    int length_deletions2 = 0;</span>
+<span class="nc" id="L768">    Diff thisDiff = pointer.next();</span>
+<span class="nc bnc" id="L769" title="All 2 branches missed.">    while (thisDiff != null) {</span>
+<span class="nc bnc" id="L770" title="All 2 branches missed.">      if (thisDiff.operation == Operation.EQUAL) {</span>
+        // Equality found.
+<span class="nc" id="L772">        equalities.push(thisDiff);</span>
+<span class="nc" id="L773">        length_insertions1 = length_insertions2;</span>
+<span class="nc" id="L774">        length_deletions1 = length_deletions2;</span>
+<span class="nc" id="L775">        length_insertions2 = 0;</span>
+<span class="nc" id="L776">        length_deletions2 = 0;</span>
+<span class="nc" id="L777">        lastEquality = thisDiff.text;</span>
+<span class="nc" id="L778">      } else {</span>
+        // An insertion or deletion.
+<span class="nc bnc" id="L780" title="All 2 branches missed.">        if (thisDiff.operation == Operation.INSERT) {</span>
+<span class="nc" id="L781">          length_insertions2 += thisDiff.text.length();</span>
+<span class="nc" id="L782">        } else {</span>
+<span class="nc" id="L783">          length_deletions2 += thisDiff.text.length();</span>
+        }
+        // Eliminate an equality that is smaller or equal to the edits on both
+        // sides of it.
+<span class="nc bnc" id="L787" title="All 2 branches missed.">        if (lastEquality != null &amp;&amp; (lastEquality.length()</span>
+<span class="nc bnc" id="L788" title="All 2 branches missed.">            &lt;= Math.max(length_insertions1, length_deletions1))</span>
+<span class="nc" id="L789">            &amp;&amp; (lastEquality.length()</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">                &lt;= Math.max(length_insertions2, length_deletions2))) {</span>
+          //System.out.println(&quot;Splitting: '&quot; + lastEquality + &quot;'&quot;);
+          // Walk back to offending equality.
+<span class="nc bnc" id="L793" title="All 2 branches missed.">          while (thisDiff != equalities.peek()) {</span>
+<span class="nc" id="L794">            thisDiff = pointer.previous();</span>
+          }
+<span class="nc" id="L796">          pointer.next();</span>
+
+          // Replace equality with a delete.
+<span class="nc" id="L799">          pointer.set(new Diff(Operation.DELETE, lastEquality));</span>
+          // Insert a corresponding an insert.
+<span class="nc" id="L801">          pointer.add(new Diff(Operation.INSERT, lastEquality));</span>
+
+<span class="nc" id="L803">          equalities.pop();  // Throw away the equality we just deleted.</span>
+<span class="nc bnc" id="L804" title="All 2 branches missed.">          if (!equalities.isEmpty()) {</span>
+            // Throw away the previous equality (it needs to be reevaluated).
+<span class="nc" id="L806">            equalities.pop();</span>
+          }
+<span class="nc bnc" id="L808" title="All 2 branches missed.">          if (equalities.isEmpty()) {</span>
+            // There are no previous equalities, walk back to the start.
+<span class="nc bnc" id="L810" title="All 2 branches missed.">            while (pointer.hasPrevious()) {</span>
+<span class="nc" id="L811">              pointer.previous();</span>
+            }
+<span class="nc" id="L813">          } else {</span>
+            // There is a safe equality we can fall back to.
+<span class="nc" id="L815">            thisDiff = equalities.peek();</span>
+<span class="nc bnc" id="L816" title="All 2 branches missed.">            while (thisDiff != pointer.previous()) {</span>
+              // Intentionally empty loop.
+            }
+          }
+
+<span class="nc" id="L821">          length_insertions1 = 0;  // Reset the counters.</span>
+<span class="nc" id="L822">          length_insertions2 = 0;</span>
+<span class="nc" id="L823">          length_deletions1 = 0;</span>
+<span class="nc" id="L824">          length_deletions2 = 0;</span>
+<span class="nc" id="L825">          lastEquality = null;</span>
+<span class="nc" id="L826">          changes = true;</span>
+        }
+      }
+<span class="nc bnc" id="L829" title="All 2 branches missed.">      thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+
+    // Normalize the diff.
+<span class="nc bnc" id="L833" title="All 2 branches missed.">    if (changes) {</span>
+<span class="nc" id="L834">      diff_cleanupMerge(diffs);</span>
+    }
+<span class="nc" id="L836">    diff_cleanupSemanticLossless(diffs);</span>
+
+    // Find any overlaps between deletions and insertions.
+    // e.g: &lt;del&gt;abcxxx&lt;/del&gt;&lt;ins&gt;xxxdef&lt;/ins&gt;
+    //   -&gt; &lt;del&gt;abc&lt;/del&gt;xxx&lt;ins&gt;def&lt;/ins&gt;
+    // e.g: &lt;del&gt;xxxabc&lt;/del&gt;&lt;ins&gt;defxxx&lt;/ins&gt;
+    //   -&gt; &lt;ins&gt;def&lt;/ins&gt;xxx&lt;del&gt;abc&lt;/del&gt;
+    // Only extract an overlap if it is as big as the edit ahead or behind it.
+<span class="nc" id="L844">    pointer = diffs.listIterator();</span>
+<span class="nc" id="L845">    Diff prevDiff = null;</span>
+<span class="nc" id="L846">    thisDiff = null;</span>
+<span class="nc bnc" id="L847" title="All 2 branches missed.">    if (pointer.hasNext()) {</span>
+<span class="nc" id="L848">      prevDiff = pointer.next();</span>
+<span class="nc bnc" id="L849" title="All 2 branches missed.">      if (pointer.hasNext()) {</span>
+<span class="nc" id="L850">        thisDiff = pointer.next();</span>
+      }
+    }
+<span class="nc bnc" id="L853" title="All 2 branches missed.">    while (thisDiff != null) {</span>
+<span class="nc bnc" id="L854" title="All 2 branches missed.">      if (prevDiff.operation == Operation.DELETE &amp;&amp;</span>
+<span class="nc bnc" id="L855" title="All 2 branches missed.">          thisDiff.operation == Operation.INSERT) {</span>
+<span class="nc" id="L856">        String deletion = prevDiff.text;</span>
+<span class="nc" id="L857">        String insertion = thisDiff.text;</span>
+<span class="nc" id="L858">        int overlap_length1 = this.diff_commonOverlap(deletion, insertion);</span>
+<span class="nc" id="L859">        int overlap_length2 = this.diff_commonOverlap(insertion, deletion);</span>
+<span class="nc bnc" id="L860" title="All 2 branches missed.">        if (overlap_length1 &gt;= overlap_length2) {</span>
+<span class="nc bnc" id="L861" title="All 2 branches missed.">          if (overlap_length1 &gt;= deletion.length() / 2.0 ||</span>
+<span class="nc bnc" id="L862" title="All 2 branches missed.">              overlap_length1 &gt;= insertion.length() / 2.0) {</span>
+            // Overlap found. Insert an equality and trim the surrounding edits.
+<span class="nc" id="L864">            pointer.previous();</span>
+<span class="nc" id="L865">            pointer.add(new Diff(Operation.EQUAL,</span>
+<span class="nc" id="L866">                                 insertion.substring(0, overlap_length1)));</span>
+<span class="nc" id="L867">            prevDiff.text =</span>
+<span class="nc" id="L868">                deletion.substring(0, deletion.length() - overlap_length1);</span>
+<span class="nc" id="L869">            thisDiff.text = insertion.substring(overlap_length1);</span>
+            // pointer.add inserts the element before the cursor, so there is
+            // no need to step past the new element.
+          }
+<span class="nc" id="L873">        } else {</span>
+<span class="nc bnc" id="L874" title="All 2 branches missed.">          if (overlap_length2 &gt;= deletion.length() / 2.0 ||</span>
+<span class="nc bnc" id="L875" title="All 2 branches missed.">              overlap_length2 &gt;= insertion.length() / 2.0) {</span>
+            // Reverse overlap found.
+            // Insert an equality and swap and trim the surrounding edits.
+<span class="nc" id="L878">            pointer.previous();</span>
+<span class="nc" id="L879">            pointer.add(new Diff(Operation.EQUAL,</span>
+<span class="nc" id="L880">                                 deletion.substring(0, overlap_length2)));</span>
+<span class="nc" id="L881">            prevDiff.operation = Operation.INSERT;</span>
+<span class="nc" id="L882">            prevDiff.text =</span>
+<span class="nc" id="L883">              insertion.substring(0, insertion.length() - overlap_length2);</span>
+<span class="nc" id="L884">            thisDiff.operation = Operation.DELETE;</span>
+<span class="nc" id="L885">            thisDiff.text = deletion.substring(overlap_length2);</span>
+            // pointer.add inserts the element before the cursor, so there is
+            // no need to step past the new element.
+          }
+        }
+<span class="nc bnc" id="L890" title="All 2 branches missed.">        thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+      }
+<span class="nc" id="L892">      prevDiff = thisDiff;</span>
+<span class="nc bnc" id="L893" title="All 2 branches missed.">      thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+<span class="nc" id="L895">  }</span>
+
+  /**
+   * Look for single edits surrounded on both sides by equalities
+   * which can be shifted sideways to align the edit to a word boundary.
+   * e.g: The c&lt;ins&gt;at c&lt;/ins&gt;ame. -&gt; The &lt;ins&gt;cat &lt;/ins&gt;came.
+   * @param diffs LinkedList of Diff objects.
+   */
+  public void diff_cleanupSemanticLossless(LinkedList&lt;Diff&gt; diffs) {
+    String equality1, edit, equality2;
+    String commonString;
+    int commonOffset;
+    int score, bestScore;
+    String bestEquality1, bestEdit, bestEquality2;
+    // Create a new iterator at the start.
+<span class="nc" id="L910">    ListIterator&lt;Diff&gt; pointer = diffs.listIterator();</span>
+<span class="nc bnc" id="L911" title="All 2 branches missed.">    Diff prevDiff = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc bnc" id="L912" title="All 2 branches missed.">    Diff thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc bnc" id="L913" title="All 2 branches missed.">    Diff nextDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    // Intentionally ignore the first and last element (don't need checking).
+<span class="nc bnc" id="L915" title="All 2 branches missed.">    while (nextDiff != null) {</span>
+<span class="nc bnc" id="L916" title="All 2 branches missed.">      if (prevDiff.operation == Operation.EQUAL &amp;&amp;</span>
+<span class="nc bnc" id="L917" title="All 2 branches missed.">          nextDiff.operation == Operation.EQUAL) {</span>
+        // This is a single edit surrounded by equalities.
+<span class="nc" id="L919">        equality1 = prevDiff.text;</span>
+<span class="nc" id="L920">        edit = thisDiff.text;</span>
+<span class="nc" id="L921">        equality2 = nextDiff.text;</span>
+
+        // First, shift the edit as far left as possible.
+<span class="nc" id="L924">        commonOffset = diff_commonSuffix(equality1, edit);</span>
+<span class="nc bnc" id="L925" title="All 2 branches missed.">        if (commonOffset != 0) {</span>
+<span class="nc" id="L926">          commonString = edit.substring(edit.length() - commonOffset);</span>
+<span class="nc" id="L927">          equality1 = equality1.substring(0, equality1.length() - commonOffset);</span>
+<span class="nc" id="L928">          edit = commonString + edit.substring(0, edit.length() - commonOffset);</span>
+<span class="nc" id="L929">          equality2 = commonString + equality2;</span>
+        }
+
+        // Second, step character by character right, looking for the best fit.
+<span class="nc" id="L933">        bestEquality1 = equality1;</span>
+<span class="nc" id="L934">        bestEdit = edit;</span>
+<span class="nc" id="L935">        bestEquality2 = equality2;</span>
+<span class="nc" id="L936">        bestScore = diff_cleanupSemanticScore(equality1, edit)</span>
+<span class="nc" id="L937">            + diff_cleanupSemanticScore(edit, equality2);</span>
+<span class="nc bnc" id="L938" title="All 4 branches missed.">        while (edit.length() != 0 &amp;&amp; equality2.length() != 0</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">            &amp;&amp; edit.charAt(0) == equality2.charAt(0)) {</span>
+<span class="nc" id="L940">          equality1 += edit.charAt(0);</span>
+<span class="nc" id="L941">          edit = edit.substring(1) + equality2.charAt(0);</span>
+<span class="nc" id="L942">          equality2 = equality2.substring(1);</span>
+<span class="nc" id="L943">          score = diff_cleanupSemanticScore(equality1, edit)</span>
+<span class="nc" id="L944">              + diff_cleanupSemanticScore(edit, equality2);</span>
+          // The &gt;= encourages trailing rather than leading whitespace on edits.
+<span class="nc bnc" id="L946" title="All 2 branches missed.">          if (score &gt;= bestScore) {</span>
+<span class="nc" id="L947">            bestScore = score;</span>
+<span class="nc" id="L948">            bestEquality1 = equality1;</span>
+<span class="nc" id="L949">            bestEdit = edit;</span>
+<span class="nc" id="L950">            bestEquality2 = equality2;</span>
+          }
+        }
+
+<span class="nc bnc" id="L954" title="All 2 branches missed.">        if (!prevDiff.text.equals(bestEquality1)) {</span>
+          // We have an improvement, save it back to the diff.
+<span class="nc bnc" id="L956" title="All 2 branches missed.">          if (bestEquality1.length() != 0) {</span>
+<span class="nc" id="L957">            prevDiff.text = bestEquality1;</span>
+<span class="nc" id="L958">          } else {</span>
+<span class="nc" id="L959">            pointer.previous(); // Walk past nextDiff.</span>
+<span class="nc" id="L960">            pointer.previous(); // Walk past thisDiff.</span>
+<span class="nc" id="L961">            pointer.previous(); // Walk past prevDiff.</span>
+<span class="nc" id="L962">            pointer.remove(); // Delete prevDiff.</span>
+<span class="nc" id="L963">            pointer.next(); // Walk past thisDiff.</span>
+<span class="nc" id="L964">            pointer.next(); // Walk past nextDiff.</span>
+          }
+<span class="nc" id="L966">          thisDiff.text = bestEdit;</span>
+<span class="nc bnc" id="L967" title="All 2 branches missed.">          if (bestEquality2.length() != 0) {</span>
+<span class="nc" id="L968">            nextDiff.text = bestEquality2;</span>
+<span class="nc" id="L969">          } else {</span>
+<span class="nc" id="L970">            pointer.remove(); // Delete nextDiff.</span>
+<span class="nc" id="L971">            nextDiff = thisDiff;</span>
+<span class="nc" id="L972">            thisDiff = prevDiff;</span>
+          }
+        }
+      }
+<span class="nc" id="L976">      prevDiff = thisDiff;</span>
+<span class="nc" id="L977">      thisDiff = nextDiff;</span>
+<span class="nc bnc" id="L978" title="All 2 branches missed.">      nextDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+<span class="nc" id="L980">  }</span>
+
+  /**
+   * Given two strings, compute a score representing whether the internal
+   * boundary falls on logical boundaries.
+   * Scores range from 6 (best) to 0 (worst).
+   * @param one First string.
+   * @param two Second string.
+   * @return The score.
+   */
+  private int diff_cleanupSemanticScore(String one, String two) {
+<span class="nc bnc" id="L991" title="All 4 branches missed.">    if (one.length() == 0 || two.length() == 0) {</span>
+      // Edges are the best.
+<span class="nc" id="L993">      return 6;</span>
+    }
+
+    // Each port of this function behaves slightly differently due to
+    // subtle differences in each language's definition of things like
+    // 'whitespace'.  Since this function's purpose is largely cosmetic,
+    // the choice has been made to use each language's native features
+    // rather than force total conformity.
+<span class="nc" id="L1001">    char char1 = one.charAt(one.length() - 1);</span>
+<span class="nc" id="L1002">    char char2 = two.charAt(0);</span>
+<span class="nc bnc" id="L1003" title="All 2 branches missed.">    boolean nonAlphaNumeric1 = !Character.isLetterOrDigit(char1);</span>
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">    boolean nonAlphaNumeric2 = !Character.isLetterOrDigit(char2);</span>
+<span class="nc bnc" id="L1005" title="All 4 branches missed.">    boolean whitespace1 = nonAlphaNumeric1 &amp;&amp; Character.isWhitespace(char1);</span>
+<span class="nc bnc" id="L1006" title="All 4 branches missed.">    boolean whitespace2 = nonAlphaNumeric2 &amp;&amp; Character.isWhitespace(char2);</span>
+<span class="nc bnc" id="L1007" title="All 2 branches missed.">    boolean lineBreak1 = whitespace1</span>
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">        &amp;&amp; Character.getType(char1) == Character.CONTROL;</span>
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">    boolean lineBreak2 = whitespace2</span>
+<span class="nc bnc" id="L1010" title="All 2 branches missed.">        &amp;&amp; Character.getType(char2) == Character.CONTROL;</span>
+<span class="nc bnc" id="L1011" title="All 4 branches missed.">    boolean blankLine1 = lineBreak1 &amp;&amp; BLANKLINEEND.matcher(one).find();</span>
+<span class="nc bnc" id="L1012" title="All 4 branches missed.">    boolean blankLine2 = lineBreak2 &amp;&amp; BLANKLINESTART.matcher(two).find();</span>
+
+<span class="nc bnc" id="L1014" title="All 4 branches missed.">    if (blankLine1 || blankLine2) {</span>
+      // Five points for blank lines.
+<span class="nc" id="L1016">      return 5;</span>
+<span class="nc bnc" id="L1017" title="All 4 branches missed.">    } else if (lineBreak1 || lineBreak2) {</span>
+      // Four points for line breaks.
+<span class="nc" id="L1019">      return 4;</span>
+<span class="nc bnc" id="L1020" title="All 6 branches missed.">    } else if (nonAlphaNumeric1 &amp;&amp; !whitespace1 &amp;&amp; whitespace2) {</span>
+      // Three points for end of sentences.
+<span class="nc" id="L1022">      return 3;</span>
+<span class="nc bnc" id="L1023" title="All 4 branches missed.">    } else if (whitespace1 || whitespace2) {</span>
+      // Two points for whitespace.
+<span class="nc" id="L1025">      return 2;</span>
+<span class="nc bnc" id="L1026" title="All 4 branches missed.">    } else if (nonAlphaNumeric1 || nonAlphaNumeric2) {</span>
+      // One point for non-alphanumeric.
+<span class="nc" id="L1028">      return 1;</span>
+    }
+<span class="nc" id="L1030">    return 0;</span>
+  }
+
+  // Define some regex patterns for matching boundaries.
+<span class="nc" id="L1034">  private Pattern BLANKLINEEND</span>
+<span class="nc" id="L1035">      = Pattern.compile(&quot;\\n\\r?\\n\\Z&quot;, Pattern.DOTALL);</span>
+<span class="nc" id="L1036">  private Pattern BLANKLINESTART</span>
+<span class="nc" id="L1037">      = Pattern.compile(&quot;\\A\\r?\\n\\r?\\n&quot;, Pattern.DOTALL);</span>
+
+  /**
+   * Reduce the number of edits by eliminating operationally trivial equalities.
+   * @param diffs LinkedList of Diff objects.
+   */
+  public void diff_cleanupEfficiency(LinkedList&lt;Diff&gt; diffs) {
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">    if (diffs.isEmpty()) {</span>
+<span class="nc" id="L1045">      return;</span>
+    }
+<span class="nc" id="L1047">    boolean changes = false;</span>
+<span class="nc" id="L1048">    Deque&lt;Diff&gt; equalities = new ArrayDeque&lt;Diff&gt;();  // Double-ended queue of equalities.</span>
+<span class="nc" id="L1049">    String lastEquality = null; // Always equal to equalities.peek().text</span>
+<span class="nc" id="L1050">    ListIterator&lt;Diff&gt; pointer = diffs.listIterator();</span>
+    // Is there an insertion operation before the last equality.
+<span class="nc" id="L1052">    boolean pre_ins = false;</span>
+    // Is there a deletion operation before the last equality.
+<span class="nc" id="L1054">    boolean pre_del = false;</span>
+    // Is there an insertion operation after the last equality.
+<span class="nc" id="L1056">    boolean post_ins = false;</span>
+    // Is there a deletion operation after the last equality.
+<span class="nc" id="L1058">    boolean post_del = false;</span>
+<span class="nc" id="L1059">    Diff thisDiff = pointer.next();</span>
+<span class="nc" id="L1060">    Diff safeDiff = thisDiff;  // The last Diff that is known to be unsplittable.</span>
+<span class="nc bnc" id="L1061" title="All 2 branches missed.">    while (thisDiff != null) {</span>
+<span class="nc bnc" id="L1062" title="All 2 branches missed.">      if (thisDiff.operation == Operation.EQUAL) {</span>
+        // Equality found.
+<span class="nc bnc" id="L1064" title="All 6 branches missed.">        if (thisDiff.text.length() &lt; Diff_EditCost &amp;&amp; (post_ins || post_del)) {</span>
+          // Candidate found.
+<span class="nc" id="L1066">          equalities.push(thisDiff);</span>
+<span class="nc" id="L1067">          pre_ins = post_ins;</span>
+<span class="nc" id="L1068">          pre_del = post_del;</span>
+<span class="nc" id="L1069">          lastEquality = thisDiff.text;</span>
+<span class="nc" id="L1070">        } else {</span>
+          // Not a candidate, and can never become one.
+<span class="nc" id="L1072">          equalities.clear();</span>
+<span class="nc" id="L1073">          lastEquality = null;</span>
+<span class="nc" id="L1074">          safeDiff = thisDiff;</span>
+        }
+<span class="nc" id="L1076">        post_ins = post_del = false;</span>
+<span class="nc" id="L1077">      } else {</span>
+        // An insertion or deletion.
+<span class="nc bnc" id="L1079" title="All 2 branches missed.">        if (thisDiff.operation == Operation.DELETE) {</span>
+<span class="nc" id="L1080">          post_del = true;</span>
+<span class="nc" id="L1081">        } else {</span>
+<span class="nc" id="L1082">          post_ins = true;</span>
+        }
+        /*
+         * Five types to be split:
+         * &lt;ins&gt;A&lt;/ins&gt;&lt;del&gt;B&lt;/del&gt;XY&lt;ins&gt;C&lt;/ins&gt;&lt;del&gt;D&lt;/del&gt;
+         * &lt;ins&gt;A&lt;/ins&gt;X&lt;ins&gt;C&lt;/ins&gt;&lt;del&gt;D&lt;/del&gt;
+         * &lt;ins&gt;A&lt;/ins&gt;&lt;del&gt;B&lt;/del&gt;X&lt;ins&gt;C&lt;/ins&gt;
+         * &lt;ins&gt;A&lt;/del&gt;X&lt;ins&gt;C&lt;/ins&gt;&lt;del&gt;D&lt;/del&gt;
+         * &lt;ins&gt;A&lt;/ins&gt;&lt;del&gt;B&lt;/del&gt;X&lt;del&gt;C&lt;/del&gt;
+         */
+<span class="nc bnc" id="L1092" title="All 2 branches missed.">        if (lastEquality != null</span>
+<span class="nc bnc" id="L1093" title="All 8 branches missed.">            &amp;&amp; ((pre_ins &amp;&amp; pre_del &amp;&amp; post_ins &amp;&amp; post_del)</span>
+<span class="nc bnc" id="L1094" title="All 2 branches missed.">                || ((lastEquality.length() &lt; Diff_EditCost / 2)</span>
+<span class="nc bnc" id="L1095" title="All 6 branches missed.">                    &amp;&amp; ((pre_ins ? 1 : 0) + (pre_del ? 1 : 0)</span>
+<span class="nc bnc" id="L1096" title="All 4 branches missed.">                        + (post_ins ? 1 : 0) + (post_del ? 1 : 0)) == 3))) {</span>
+          //System.out.println(&quot;Splitting: '&quot; + lastEquality + &quot;'&quot;);
+          // Walk back to offending equality.
+<span class="nc bnc" id="L1099" title="All 2 branches missed.">          while (thisDiff != equalities.peek()) {</span>
+<span class="nc" id="L1100">            thisDiff = pointer.previous();</span>
+          }
+<span class="nc" id="L1102">          pointer.next();</span>
+
+          // Replace equality with a delete.
+<span class="nc" id="L1105">          pointer.set(new Diff(Operation.DELETE, lastEquality));</span>
+          // Insert a corresponding an insert.
+<span class="nc" id="L1107">          pointer.add(thisDiff = new Diff(Operation.INSERT, lastEquality));</span>
+
+<span class="nc" id="L1109">          equalities.pop();  // Throw away the equality we just deleted.</span>
+<span class="nc" id="L1110">          lastEquality = null;</span>
+<span class="nc bnc" id="L1111" title="All 4 branches missed.">          if (pre_ins &amp;&amp; pre_del) {</span>
+            // No changes made which could affect previous entry, keep going.
+<span class="nc" id="L1113">            post_ins = post_del = true;</span>
+<span class="nc" id="L1114">            equalities.clear();</span>
+<span class="nc" id="L1115">            safeDiff = thisDiff;</span>
+<span class="nc" id="L1116">          } else {</span>
+<span class="nc bnc" id="L1117" title="All 2 branches missed.">            if (!equalities.isEmpty()) {</span>
+              // Throw away the previous equality (it needs to be reevaluated).
+<span class="nc" id="L1119">              equalities.pop();</span>
+            }
+<span class="nc bnc" id="L1121" title="All 2 branches missed.">            if (equalities.isEmpty()) {</span>
+              // There are no previous questionable equalities,
+              // walk back to the last known safe diff.
+<span class="nc" id="L1124">              thisDiff = safeDiff;</span>
+<span class="nc" id="L1125">            } else {</span>
+              // There is an equality we can fall back to.
+<span class="nc" id="L1127">              thisDiff = equalities.peek();</span>
+            }
+<span class="nc bnc" id="L1129" title="All 2 branches missed.">            while (thisDiff != pointer.previous()) {</span>
+              // Intentionally empty loop.
+            }
+<span class="nc" id="L1132">            post_ins = post_del = false;</span>
+          }
+
+<span class="nc" id="L1135">          changes = true;</span>
+        }
+      }
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">      thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+
+<span class="nc bnc" id="L1141" title="All 2 branches missed.">    if (changes) {</span>
+<span class="nc" id="L1142">      diff_cleanupMerge(diffs);</span>
+    }
+<span class="nc" id="L1144">  }</span>
+
+  /**
+   * Reorder and merge like edit sections.  Merge equalities.
+   * Any edit section can move as long as it doesn't cross an equality.
+   * @param diffs LinkedList of Diff objects.
+   */
+  public void diff_cleanupMerge(LinkedList&lt;Diff&gt; diffs) {
+<span class="nc" id="L1152">    diffs.add(new Diff(Operation.EQUAL, &quot;&quot;));  // Add a dummy entry at the end.</span>
+<span class="nc" id="L1153">    ListIterator&lt;Diff&gt; pointer = diffs.listIterator();</span>
+<span class="nc" id="L1154">    int count_delete = 0;</span>
+<span class="nc" id="L1155">    int count_insert = 0;</span>
+<span class="nc" id="L1156">    String text_delete = &quot;&quot;;</span>
+<span class="nc" id="L1157">    String text_insert = &quot;&quot;;</span>
+<span class="nc" id="L1158">    Diff thisDiff = pointer.next();</span>
+<span class="nc" id="L1159">    Diff prevEqual = null;</span>
+    int commonlength;
+<span class="nc bnc" id="L1161" title="All 2 branches missed.">    while (thisDiff != null) {</span>
+<span class="nc bnc" id="L1162" title="All 4 branches missed.">      switch (thisDiff.operation) {</span>
+      case INSERT:
+<span class="nc" id="L1164">        count_insert++;</span>
+<span class="nc" id="L1165">        text_insert += thisDiff.text;</span>
+<span class="nc" id="L1166">        prevEqual = null;</span>
+<span class="nc" id="L1167">        break;</span>
+      case DELETE:
+<span class="nc" id="L1169">        count_delete++;</span>
+<span class="nc" id="L1170">        text_delete += thisDiff.text;</span>
+<span class="nc" id="L1171">        prevEqual = null;</span>
+<span class="nc" id="L1172">        break;</span>
+      case EQUAL:
+<span class="nc bnc" id="L1174" title="All 2 branches missed.">        if (count_delete + count_insert &gt; 1) {</span>
+<span class="nc bnc" id="L1175" title="All 4 branches missed.">          boolean both_types = count_delete != 0 &amp;&amp; count_insert != 0;</span>
+          // Delete the offending records.
+<span class="nc" id="L1177">          pointer.previous();  // Reverse direction.</span>
+<span class="nc bnc" id="L1178" title="All 2 branches missed.">          while (count_delete-- &gt; 0) {</span>
+<span class="nc" id="L1179">            pointer.previous();</span>
+<span class="nc" id="L1180">            pointer.remove();</span>
+          }
+<span class="nc bnc" id="L1182" title="All 2 branches missed.">          while (count_insert-- &gt; 0) {</span>
+<span class="nc" id="L1183">            pointer.previous();</span>
+<span class="nc" id="L1184">            pointer.remove();</span>
+          }
+<span class="nc bnc" id="L1186" title="All 2 branches missed.">          if (both_types) {</span>
+            // Factor out any common prefixies.
+<span class="nc" id="L1188">            commonlength = diff_commonPrefix(text_insert, text_delete);</span>
+<span class="nc bnc" id="L1189" title="All 2 branches missed.">            if (commonlength != 0) {</span>
+<span class="nc bnc" id="L1190" title="All 2 branches missed.">              if (pointer.hasPrevious()) {</span>
+<span class="nc" id="L1191">                thisDiff = pointer.previous();</span>
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">                assert thisDiff.operation == Operation.EQUAL</span>
+<span class="nc" id="L1193">                       : &quot;Previous diff should have been an equality.&quot;;</span>
+<span class="nc" id="L1194">                thisDiff.text += text_insert.substring(0, commonlength);</span>
+<span class="nc" id="L1195">                pointer.next();</span>
+<span class="nc" id="L1196">              } else {</span>
+<span class="nc" id="L1197">                pointer.add(new Diff(Operation.EQUAL,</span>
+<span class="nc" id="L1198">                    text_insert.substring(0, commonlength)));</span>
+              }
+<span class="nc" id="L1200">              text_insert = text_insert.substring(commonlength);</span>
+<span class="nc" id="L1201">              text_delete = text_delete.substring(commonlength);</span>
+            }
+            // Factor out any common suffixies.
+<span class="nc" id="L1204">            commonlength = diff_commonSuffix(text_insert, text_delete);</span>
+<span class="nc bnc" id="L1205" title="All 2 branches missed.">            if (commonlength != 0) {</span>
+<span class="nc" id="L1206">              thisDiff = pointer.next();</span>
+<span class="nc" id="L1207">              thisDiff.text = text_insert.substring(text_insert.length()</span>
+<span class="nc" id="L1208">                  - commonlength) + thisDiff.text;</span>
+<span class="nc" id="L1209">              text_insert = text_insert.substring(0, text_insert.length()</span>
+<span class="nc" id="L1210">                  - commonlength);</span>
+<span class="nc" id="L1211">              text_delete = text_delete.substring(0, text_delete.length()</span>
+<span class="nc" id="L1212">                  - commonlength);</span>
+<span class="nc" id="L1213">              pointer.previous();</span>
+            }
+          }
+          // Insert the merged records.
+<span class="nc bnc" id="L1217" title="All 2 branches missed.">          if (text_delete.length() != 0) {</span>
+<span class="nc" id="L1218">            pointer.add(new Diff(Operation.DELETE, text_delete));</span>
+          }
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">          if (text_insert.length() != 0) {</span>
+<span class="nc" id="L1221">            pointer.add(new Diff(Operation.INSERT, text_insert));</span>
+          }
+          // Step forward to the equality.
+<span class="nc bnc" id="L1224" title="All 2 branches missed.">          thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">        } else if (prevEqual != null) {</span>
+          // Merge this equality with the previous one.
+<span class="nc" id="L1227">          prevEqual.text += thisDiff.text;</span>
+<span class="nc" id="L1228">          pointer.remove();</span>
+<span class="nc" id="L1229">          thisDiff = pointer.previous();</span>
+<span class="nc" id="L1230">          pointer.next();  // Forward direction</span>
+        }
+<span class="nc" id="L1232">        count_insert = 0;</span>
+<span class="nc" id="L1233">        count_delete = 0;</span>
+<span class="nc" id="L1234">        text_delete = &quot;&quot;;</span>
+<span class="nc" id="L1235">        text_insert = &quot;&quot;;</span>
+<span class="nc" id="L1236">        prevEqual = thisDiff;</span>
+        break;
+      }
+<span class="nc bnc" id="L1239" title="All 2 branches missed.">      thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+<span class="nc bnc" id="L1241" title="All 2 branches missed.">    if (diffs.getLast().text.length() == 0) {</span>
+<span class="nc" id="L1242">      diffs.removeLast();  // Remove the dummy entry at the end.</span>
+    }
+
+    /*
+     * Second pass: look for single edits surrounded on both sides by equalities
+     * which can be shifted sideways to eliminate an equality.
+     * e.g: A&lt;ins&gt;BA&lt;/ins&gt;C -&gt; &lt;ins&gt;AB&lt;/ins&gt;AC
+     */
+<span class="nc" id="L1250">    boolean changes = false;</span>
+    // Create a new iterator at the start.
+    // (As opposed to walking the current one back.)
+<span class="nc" id="L1253">    pointer = diffs.listIterator();</span>
+<span class="nc bnc" id="L1254" title="All 2 branches missed.">    Diff prevDiff = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc bnc" id="L1255" title="All 2 branches missed.">    thisDiff = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc bnc" id="L1256" title="All 2 branches missed.">    Diff nextDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    // Intentionally ignore the first and last element (don't need checking).
+<span class="nc bnc" id="L1258" title="All 2 branches missed.">    while (nextDiff != null) {</span>
+<span class="nc bnc" id="L1259" title="All 2 branches missed.">      if (prevDiff.operation == Operation.EQUAL &amp;&amp;</span>
+<span class="nc bnc" id="L1260" title="All 2 branches missed.">          nextDiff.operation == Operation.EQUAL) {</span>
+        // This is a single edit surrounded by equalities.
+<span class="nc bnc" id="L1262" title="All 2 branches missed.">        if (thisDiff.text.endsWith(prevDiff.text)) {</span>
+          // Shift the edit over the previous equality.
+<span class="nc" id="L1264">          thisDiff.text = prevDiff.text</span>
+<span class="nc" id="L1265">              + thisDiff.text.substring(0, thisDiff.text.length()</span>
+<span class="nc" id="L1266">                                           - prevDiff.text.length());</span>
+<span class="nc" id="L1267">          nextDiff.text = prevDiff.text + nextDiff.text;</span>
+<span class="nc" id="L1268">          pointer.previous(); // Walk past nextDiff.</span>
+<span class="nc" id="L1269">          pointer.previous(); // Walk past thisDiff.</span>
+<span class="nc" id="L1270">          pointer.previous(); // Walk past prevDiff.</span>
+<span class="nc" id="L1271">          pointer.remove(); // Delete prevDiff.</span>
+<span class="nc" id="L1272">          pointer.next(); // Walk past thisDiff.</span>
+<span class="nc" id="L1273">          thisDiff = pointer.next(); // Walk past nextDiff.</span>
+<span class="nc bnc" id="L1274" title="All 2 branches missed.">          nextDiff = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc" id="L1275">          changes = true;</span>
+<span class="nc bnc" id="L1276" title="All 2 branches missed.">        } else if (thisDiff.text.startsWith(nextDiff.text)) {</span>
+          // Shift the edit over the next equality.
+<span class="nc" id="L1278">          prevDiff.text += nextDiff.text;</span>
+<span class="nc" id="L1279">          thisDiff.text = thisDiff.text.substring(nextDiff.text.length())</span>
+<span class="nc" id="L1280">              + nextDiff.text;</span>
+<span class="nc" id="L1281">          pointer.remove(); // Delete nextDiff.</span>
+<span class="nc bnc" id="L1282" title="All 2 branches missed.">          nextDiff = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc" id="L1283">          changes = true;</span>
+        }
+      }
+<span class="nc" id="L1286">      prevDiff = thisDiff;</span>
+<span class="nc" id="L1287">      thisDiff = nextDiff;</span>
+<span class="nc bnc" id="L1288" title="All 2 branches missed.">      nextDiff = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+    // If shifts were made, the diff needs reordering and another shift sweep.
+<span class="nc bnc" id="L1291" title="All 2 branches missed.">    if (changes) {</span>
+<span class="nc" id="L1292">      diff_cleanupMerge(diffs);</span>
+    }
+<span class="nc" id="L1294">  }</span>
+
+  /**
+   * loc is a location in text1, compute and return the equivalent location in
+   * text2.
+   * e.g. &quot;The cat&quot; vs &quot;The big cat&quot;, 1-&gt;1, 5-&gt;8
+   * @param diffs List of Diff objects.
+   * @param loc Location within text1.
+   * @return Location within text2.
+   */
+  public int diff_xIndex(List&lt;Diff&gt; diffs, int loc) {
+<span class="nc" id="L1305">    int chars1 = 0;</span>
+<span class="nc" id="L1306">    int chars2 = 0;</span>
+<span class="nc" id="L1307">    int last_chars1 = 0;</span>
+<span class="nc" id="L1308">    int last_chars2 = 0;</span>
+<span class="nc" id="L1309">    Diff lastDiff = null;</span>
+<span class="nc bnc" id="L1310" title="All 2 branches missed.">    for (Diff aDiff : diffs) {</span>
+<span class="nc bnc" id="L1311" title="All 2 branches missed.">      if (aDiff.operation != Operation.INSERT) {</span>
+        // Equality or deletion.
+<span class="nc" id="L1313">        chars1 += aDiff.text.length();</span>
+      }
+<span class="nc bnc" id="L1315" title="All 2 branches missed.">      if (aDiff.operation != Operation.DELETE) {</span>
+        // Equality or insertion.
+<span class="nc" id="L1317">        chars2 += aDiff.text.length();</span>
+      }
+<span class="nc bnc" id="L1319" title="All 2 branches missed.">      if (chars1 &gt; loc) {</span>
+        // Overshot the location.
+<span class="nc" id="L1321">        lastDiff = aDiff;</span>
+<span class="nc" id="L1322">        break;</span>
+      }
+<span class="nc" id="L1324">      last_chars1 = chars1;</span>
+<span class="nc" id="L1325">      last_chars2 = chars2;</span>
+    }
+<span class="nc bnc" id="L1327" title="All 4 branches missed.">    if (lastDiff != null &amp;&amp; lastDiff.operation == Operation.DELETE) {</span>
+      // The location was deleted.
+<span class="nc" id="L1329">      return last_chars2;</span>
+    }
+    // Add the remaining character length.
+<span class="nc" id="L1332">    return last_chars2 + (loc - last_chars1);</span>
+  }
+
+  /**
+   * Convert a Diff list into a pretty HTML report.
+   * @param diffs List of Diff objects.
+   * @return HTML representation.
+   */
+  public String diff_prettyHtml(List&lt;Diff&gt; diffs) {
+<span class="nc" id="L1341">    StringBuilder html = new StringBuilder();</span>
+<span class="nc bnc" id="L1342" title="All 2 branches missed.">    for (Diff aDiff : diffs) {</span>
+<span class="nc" id="L1343">      String text = aDiff.text.replace(&quot;&amp;&quot;, &quot;&amp;amp;&quot;).replace(&quot;&lt;&quot;, &quot;&amp;lt;&quot;)</span>
+<span class="nc" id="L1344">          .replace(&quot;&gt;&quot;, &quot;&amp;gt;&quot;).replace(&quot;\n&quot;, &quot;&amp;para;&lt;br&gt;&quot;);</span>
+<span class="nc bnc" id="L1345" title="All 4 branches missed.">      switch (aDiff.operation) {</span>
+      case INSERT:
+<span class="nc" id="L1347">        html.append(&quot;&lt;ins style=\&quot;background:#e6ffe6;\&quot;&gt;&quot;).append(text)</span>
+<span class="nc" id="L1348">            .append(&quot;&lt;/ins&gt;&quot;);</span>
+<span class="nc" id="L1349">        break;</span>
+      case DELETE:
+<span class="nc" id="L1351">        html.append(&quot;&lt;del style=\&quot;background:#ffe6e6;\&quot;&gt;&quot;).append(text)</span>
+<span class="nc" id="L1352">            .append(&quot;&lt;/del&gt;&quot;);</span>
+<span class="nc" id="L1353">        break;</span>
+      case EQUAL:
+<span class="nc" id="L1355">        html.append(&quot;&lt;span&gt;&quot;).append(text).append(&quot;&lt;/span&gt;&quot;);</span>
+        break;
+      }
+    }
+<span class="nc" id="L1359">    return html.toString();</span>
+  }
+
+  /**
+   * Compute and return the source text (all equalities and deletions).
+   * @param diffs List of Diff objects.
+   * @return Source text.
+   */
+  public String diff_text1(List&lt;Diff&gt; diffs) {
+<span class="nc" id="L1368">    StringBuilder text = new StringBuilder();</span>
+<span class="nc bnc" id="L1369" title="All 2 branches missed.">    for (Diff aDiff : diffs) {</span>
+<span class="nc bnc" id="L1370" title="All 2 branches missed.">      if (aDiff.operation != Operation.INSERT) {</span>
+<span class="nc" id="L1371">        text.append(aDiff.text);</span>
+      }
+    }
+<span class="nc" id="L1374">    return text.toString();</span>
+  }
+
+  /**
+   * Compute and return the destination text (all equalities and insertions).
+   * @param diffs List of Diff objects.
+   * @return Destination text.
+   */
+  public String diff_text2(List&lt;Diff&gt; diffs) {
+<span class="nc" id="L1383">    StringBuilder text = new StringBuilder();</span>
+<span class="nc bnc" id="L1384" title="All 2 branches missed.">    for (Diff aDiff : diffs) {</span>
+<span class="nc bnc" id="L1385" title="All 2 branches missed.">      if (aDiff.operation != Operation.DELETE) {</span>
+<span class="nc" id="L1386">        text.append(aDiff.text);</span>
+      }
+    }
+<span class="nc" id="L1389">    return text.toString();</span>
+  }
+
+  /**
+   * Compute the Levenshtein distance; the number of inserted, deleted or
+   * substituted characters.
+   * @param diffs List of Diff objects.
+   * @return Number of changes.
+   */
+  public int diff_levenshtein(List&lt;Diff&gt; diffs) {
+<span class="nc" id="L1399">    int levenshtein = 0;</span>
+<span class="nc" id="L1400">    int insertions = 0;</span>
+<span class="nc" id="L1401">    int deletions = 0;</span>
+<span class="nc bnc" id="L1402" title="All 2 branches missed.">    for (Diff aDiff : diffs) {</span>
+<span class="nc bnc" id="L1403" title="All 4 branches missed.">      switch (aDiff.operation) {</span>
+      case INSERT:
+<span class="nc" id="L1405">        insertions += aDiff.text.length();</span>
+<span class="nc" id="L1406">        break;</span>
+      case DELETE:
+<span class="nc" id="L1408">        deletions += aDiff.text.length();</span>
+<span class="nc" id="L1409">        break;</span>
+      case EQUAL:
+        // A deletion and an insertion is one substitution.
+<span class="nc" id="L1412">        levenshtein += Math.max(insertions, deletions);</span>
+<span class="nc" id="L1413">        insertions = 0;</span>
+<span class="nc" id="L1414">        deletions = 0;</span>
+        break;
+      }
+    }
+<span class="nc" id="L1418">    levenshtein += Math.max(insertions, deletions);</span>
+<span class="nc" id="L1419">    return levenshtein;</span>
+  }
+
+  /**
+   * Crush the diff into an encoded string which describes the operations
+   * required to transform text1 into text2.
+   * E.g. =3\t-2\t+ing  -&gt; Keep 3 chars, delete 2 chars, insert 'ing'.
+   * Operations are tab-separated.  Inserted text is escaped using %xx notation.
+   * @param diffs List of Diff objects.
+   * @return Delta text.
+   */
+  public String diff_toDelta(List&lt;Diff&gt; diffs) {
+<span class="nc" id="L1431">    StringBuilder text = new StringBuilder();</span>
+<span class="nc bnc" id="L1432" title="All 2 branches missed.">    for (Diff aDiff : diffs) {</span>
+<span class="nc bnc" id="L1433" title="All 4 branches missed.">      switch (aDiff.operation) {</span>
+      case INSERT:
+        try {
+<span class="nc" id="L1436">          text.append(&quot;+&quot;).append(URLEncoder.encode(aDiff.text, &quot;UTF-8&quot;)</span>
+<span class="nc" id="L1437">                                            .replace('+', ' ')).append(&quot;\t&quot;);</span>
+<span class="nc" id="L1438">        } catch (UnsupportedEncodingException e) {</span>
+          // Not likely on modern system.
+<span class="nc" id="L1440">          throw new Error(&quot;This system does not support UTF-8.&quot;, e);</span>
+        }
+        break;
+      case DELETE:
+<span class="nc" id="L1444">        text.append(&quot;-&quot;).append(aDiff.text.length()).append(&quot;\t&quot;);</span>
+<span class="nc" id="L1445">        break;</span>
+      case EQUAL:
+<span class="nc" id="L1447">        text.append(&quot;=&quot;).append(aDiff.text.length()).append(&quot;\t&quot;);</span>
+        break;
+      }
+    }
+<span class="nc" id="L1451">    String delta = text.toString();</span>
+<span class="nc bnc" id="L1452" title="All 2 branches missed.">    if (delta.length() != 0) {</span>
+      // Strip off trailing tab character.
+<span class="nc" id="L1454">      delta = delta.substring(0, delta.length() - 1);</span>
+<span class="nc" id="L1455">      delta = unescapeForEncodeUriCompatability(delta);</span>
+    }
+<span class="nc" id="L1457">    return delta;</span>
+  }
+
+  /**
+   * Given the original text1, and an encoded string which describes the
+   * operations required to transform text1 into text2, compute the full diff.
+   * @param text1 Source string for the diff.
+   * @param delta Delta text.
+   * @return Array of Diff objects or null if invalid.
+   * @throws IllegalArgumentException If invalid input.
+   */
+  public LinkedList&lt;Diff&gt; diff_fromDelta(String text1, String delta)
+      throws IllegalArgumentException {
+<span class="nc" id="L1470">    LinkedList&lt;Diff&gt; diffs = new LinkedList&lt;Diff&gt;();</span>
+<span class="nc" id="L1471">    int pointer = 0;  // Cursor in text1</span>
+<span class="nc" id="L1472">    String[] tokens = delta.split(&quot;\t&quot;);</span>
+<span class="nc bnc" id="L1473" title="All 2 branches missed.">    for (String token : tokens) {</span>
+<span class="nc bnc" id="L1474" title="All 2 branches missed.">      if (token.length() == 0) {</span>
+        // Blank tokens are ok (from a trailing \t).
+<span class="nc" id="L1476">        continue;</span>
+      }
+      // Each token begins with a one character parameter which specifies the
+      // operation of this token (delete, insert, equality).
+<span class="nc" id="L1480">      String param = token.substring(1);</span>
+<span class="nc bnc" id="L1481" title="All 3 branches missed.">      switch (token.charAt(0)) {</span>
+      case '+':
+        // decode would change all &quot;+&quot; to &quot; &quot;
+<span class="nc" id="L1484">        param = param.replace(&quot;+&quot;, &quot;%2B&quot;);</span>
+        try {
+<span class="nc" id="L1486">          param = URLDecoder.decode(param, &quot;UTF-8&quot;);</span>
+<span class="nc" id="L1487">        } catch (UnsupportedEncodingException e) {</span>
+          // Not likely on modern system.
+<span class="nc" id="L1489">          throw new Error(&quot;This system does not support UTF-8.&quot;, e);</span>
+<span class="nc" id="L1490">        } catch (IllegalArgumentException e) {</span>
+          // Malformed URI sequence.
+<span class="nc" id="L1492">          throw new IllegalArgumentException(</span>
+<span class="nc" id="L1493">              &quot;Illegal escape in diff_fromDelta: &quot; + param, e);</span>
+        }
+<span class="nc" id="L1495">        diffs.add(new Diff(Operation.INSERT, param));</span>
+<span class="nc" id="L1496">        break;</span>
+      case '-':
+        // Fall through.
+      case '=':
+        int n;
+        try {
+<span class="nc" id="L1502">          n = Integer.parseInt(param);</span>
+<span class="nc" id="L1503">        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L1504">          throw new IllegalArgumentException(</span>
+<span class="nc" id="L1505">              &quot;Invalid number in diff_fromDelta: &quot; + param, e);</span>
+        }
+<span class="nc bnc" id="L1507" title="All 2 branches missed.">        if (n &lt; 0) {</span>
+<span class="nc" id="L1508">          throw new IllegalArgumentException(</span>
+<span class="nc" id="L1509">              &quot;Negative number in diff_fromDelta: &quot; + param);</span>
+        }
+        String text;
+        try {
+<span class="nc" id="L1513">          text = text1.substring(pointer, pointer += n);</span>
+<span class="nc" id="L1514">        } catch (StringIndexOutOfBoundsException e) {</span>
+<span class="nc" id="L1515">          throw new IllegalArgumentException(&quot;Delta length (&quot; + pointer</span>
+<span class="nc" id="L1516">              + &quot;) larger than source text length (&quot; + text1.length()</span>
+<span class="nc" id="L1517">              + &quot;).&quot;, e);</span>
+        }
+<span class="nc bnc" id="L1519" title="All 2 branches missed.">        if (token.charAt(0) == '=') {</span>
+<span class="nc" id="L1520">          diffs.add(new Diff(Operation.EQUAL, text));</span>
+<span class="nc" id="L1521">        } else {</span>
+<span class="nc" id="L1522">          diffs.add(new Diff(Operation.DELETE, text));</span>
+        }
+<span class="nc" id="L1524">        break;</span>
+      default:
+        // Anything else is an error.
+<span class="nc" id="L1527">        throw new IllegalArgumentException(</span>
+<span class="nc" id="L1528">            &quot;Invalid diff operation in diff_fromDelta: &quot; + token.charAt(0));</span>
+      }
+    }
+<span class="nc bnc" id="L1531" title="All 2 branches missed.">    if (pointer != text1.length()) {</span>
+<span class="nc" id="L1532">      throw new IllegalArgumentException(&quot;Delta length (&quot; + pointer</span>
+<span class="nc" id="L1533">          + &quot;) smaller than source text length (&quot; + text1.length() + &quot;).&quot;);</span>
+    }
+<span class="nc" id="L1535">    return diffs;</span>
+  }
+
+
+  //  MATCH FUNCTIONS
+
+
+  /**
+   * Locate the best instance of 'pattern' in 'text' near 'loc'.
+   * Returns -1 if no match found.
+   * @param text The text to search.
+   * @param pattern The pattern to search for.
+   * @param loc The location to search around.
+   * @return Best match index or -1.
+   */
+  public int match_main(String text, String pattern, int loc) {
+    // Check for null inputs.
+<span class="nc bnc" id="L1552" title="All 4 branches missed.">    if (text == null || pattern == null) {</span>
+<span class="nc" id="L1553">      throw new IllegalArgumentException(&quot;Null inputs. (match_main)&quot;);</span>
+    }
+
+<span class="nc" id="L1556">    loc = Math.max(0, Math.min(loc, text.length()));</span>
+<span class="nc bnc" id="L1557" title="All 2 branches missed.">    if (text.equals(pattern)) {</span>
+      // Shortcut (potentially not guaranteed by the algorithm)
+<span class="nc" id="L1559">      return 0;</span>
+<span class="nc bnc" id="L1560" title="All 2 branches missed.">    } else if (text.length() == 0) {</span>
+      // Nothing to match.
+<span class="nc" id="L1562">      return -1;</span>
+<span class="nc bnc" id="L1563" title="All 2 branches missed.">    } else if (loc + pattern.length() &lt;= text.length()</span>
+<span class="nc bnc" id="L1564" title="All 2 branches missed.">        &amp;&amp; text.substring(loc, loc + pattern.length()).equals(pattern)) {</span>
+      // Perfect match at the perfect spot!  (Includes case of null pattern)
+<span class="nc" id="L1566">      return loc;</span>
+    } else {
+      // Do a fuzzy compare.
+<span class="nc" id="L1569">      return match_bitap(text, pattern, loc);</span>
+    }
+  }
+
+  /**
+   * Locate the best instance of 'pattern' in 'text' near 'loc' using the
+   * Bitap algorithm.  Returns -1 if no match found.
+   * @param text The text to search.
+   * @param pattern The pattern to search for.
+   * @param loc The location to search around.
+   * @return Best match index or -1.
+   */
+  protected int match_bitap(String text, String pattern, int loc) {
+<span class="nc bnc" id="L1582" title="All 4 branches missed.">    assert (Match_MaxBits == 0 || pattern.length() &lt;= Match_MaxBits)</span>
+<span class="nc" id="L1583">        : &quot;Pattern too long for this application.&quot;;</span>
+
+    // Initialise the alphabet.
+<span class="nc" id="L1586">    Map&lt;Character, Integer&gt; s = match_alphabet(pattern);</span>
+
+    // Highest score beyond which we give up.
+<span class="nc" id="L1589">    double score_threshold = Match_Threshold;</span>
+    // Is there a nearby exact match? (speedup)
+<span class="nc" id="L1591">    int best_loc = text.indexOf(pattern, loc);</span>
+<span class="nc bnc" id="L1592" title="All 2 branches missed.">    if (best_loc != -1) {</span>
+<span class="nc" id="L1593">      score_threshold = Math.min(match_bitapScore(0, best_loc, loc, pattern),</span>
+<span class="nc" id="L1594">          score_threshold);</span>
+      // What about in the other direction? (speedup)
+<span class="nc" id="L1596">      best_loc = text.lastIndexOf(pattern, loc + pattern.length());</span>
+<span class="nc bnc" id="L1597" title="All 2 branches missed.">      if (best_loc != -1) {</span>
+<span class="nc" id="L1598">        score_threshold = Math.min(match_bitapScore(0, best_loc, loc, pattern),</span>
+<span class="nc" id="L1599">            score_threshold);</span>
+      }
+    }
+
+    // Initialise the bit arrays.
+<span class="nc" id="L1604">    int matchmask = 1 &lt;&lt; (pattern.length() - 1);</span>
+<span class="nc" id="L1605">    best_loc = -1;</span>
+
+    int bin_min, bin_mid;
+<span class="nc" id="L1608">    int bin_max = pattern.length() + text.length();</span>
+    // Empty initialization added to appease Java compiler.
+<span class="nc" id="L1610">    int[] last_rd = new int[0];</span>
+<span class="nc bnc" id="L1611" title="All 2 branches missed.">    for (int d = 0; d &lt; pattern.length(); d++) {</span>
+      // Scan for the best match; each iteration allows for one more error.
+      // Run a binary search to determine how far from 'loc' we can stray at
+      // this error level.
+<span class="nc" id="L1615">      bin_min = 0;</span>
+<span class="nc" id="L1616">      bin_mid = bin_max;</span>
+<span class="nc bnc" id="L1617" title="All 2 branches missed.">      while (bin_min &lt; bin_mid) {</span>
+<span class="nc" id="L1618">        if (match_bitapScore(d, loc + bin_mid, loc, pattern)</span>
+<span class="nc bnc" id="L1619" title="All 2 branches missed.">            &lt;= score_threshold) {</span>
+<span class="nc" id="L1620">          bin_min = bin_mid;</span>
+<span class="nc" id="L1621">        } else {</span>
+<span class="nc" id="L1622">          bin_max = bin_mid;</span>
+        }
+<span class="nc" id="L1624">        bin_mid = (bin_max - bin_min) / 2 + bin_min;</span>
+      }
+      // Use the result from this iteration as the maximum for the next.
+<span class="nc" id="L1627">      bin_max = bin_mid;</span>
+<span class="nc" id="L1628">      int start = Math.max(1, loc - bin_mid + 1);</span>
+<span class="nc" id="L1629">      int finish = Math.min(loc + bin_mid, text.length()) + pattern.length();</span>
+
+<span class="nc" id="L1631">      int[] rd = new int[finish + 2];</span>
+<span class="nc" id="L1632">      rd[finish + 1] = (1 &lt;&lt; d) - 1;</span>
+<span class="nc bnc" id="L1633" title="All 2 branches missed.">      for (int j = finish; j &gt;= start; j--) {</span>
+        int charMatch;
+<span class="nc bnc" id="L1635" title="All 4 branches missed.">        if (text.length() &lt;= j - 1 || !s.containsKey(text.charAt(j - 1))) {</span>
+          // Out of range.
+<span class="nc" id="L1637">          charMatch = 0;</span>
+<span class="nc" id="L1638">        } else {</span>
+<span class="nc" id="L1639">          charMatch = s.get(text.charAt(j - 1));</span>
+        }
+<span class="nc bnc" id="L1641" title="All 2 branches missed.">        if (d == 0) {</span>
+          // First pass: exact match.
+<span class="nc" id="L1643">          rd[j] = ((rd[j + 1] &lt;&lt; 1) | 1) &amp; charMatch;</span>
+<span class="nc" id="L1644">        } else {</span>
+          // Subsequent passes: fuzzy match.
+<span class="nc" id="L1646">          rd[j] = (((rd[j + 1] &lt;&lt; 1) | 1) &amp; charMatch)</span>
+<span class="nc" id="L1647">              | (((last_rd[j + 1] | last_rd[j]) &lt;&lt; 1) | 1) | last_rd[j + 1];</span>
+        }
+<span class="nc bnc" id="L1649" title="All 2 branches missed.">        if ((rd[j] &amp; matchmask) != 0) {</span>
+<span class="nc" id="L1650">          double score = match_bitapScore(d, j - 1, loc, pattern);</span>
+          // This match will almost certainly be better than any existing
+          // match.  But check anyway.
+<span class="nc bnc" id="L1653" title="All 2 branches missed.">          if (score &lt;= score_threshold) {</span>
+            // Told you so.
+<span class="nc" id="L1655">            score_threshold = score;</span>
+<span class="nc" id="L1656">            best_loc = j - 1;</span>
+<span class="nc bnc" id="L1657" title="All 2 branches missed.">            if (best_loc &gt; loc) {</span>
+              // When passing loc, don't exceed our current distance from loc.
+<span class="nc" id="L1659">              start = Math.max(1, 2 * loc - best_loc);</span>
+            } else {
+              // Already passed loc, downhill from here on in.
+              break;
+            }
+          }
+        }
+      }
+<span class="nc bnc" id="L1667" title="All 2 branches missed.">      if (match_bitapScore(d + 1, loc, loc, pattern) &gt; score_threshold) {</span>
+        // No hope for a (better) match at greater error levels.
+<span class="nc" id="L1669">        break;</span>
+      }
+<span class="nc" id="L1671">      last_rd = rd;</span>
+    }
+<span class="nc" id="L1673">    return best_loc;</span>
+  }
+
+  /**
+   * Compute and return the score for a match with e errors and x location.
+   * @param e Number of errors in match.
+   * @param x Location of match.
+   * @param loc Expected location of match.
+   * @param pattern Pattern being sought.
+   * @return Overall score for match (0.0 = good, 1.0 = bad).
+   */
+  private double match_bitapScore(int e, int x, int loc, String pattern) {
+<span class="nc" id="L1685">    float accuracy = (float) e / pattern.length();</span>
+<span class="nc" id="L1686">    int proximity = Math.abs(loc - x);</span>
+<span class="nc bnc" id="L1687" title="All 2 branches missed.">    if (Match_Distance == 0) {</span>
+      // Dodge divide by zero error.
+<span class="nc bnc" id="L1689" title="All 2 branches missed.">      return proximity == 0 ? accuracy : 1.0;</span>
+    }
+<span class="nc" id="L1691">    return accuracy + (proximity / (float) Match_Distance);</span>
+  }
+
+  /**
+   * Initialise the alphabet for the Bitap algorithm.
+   * @param pattern The text to encode.
+   * @return Hash of character locations.
+   */
+  protected Map&lt;Character, Integer&gt; match_alphabet(String pattern) {
+<span class="nc" id="L1700">    Map&lt;Character, Integer&gt; s = new HashMap&lt;Character, Integer&gt;();</span>
+<span class="nc" id="L1701">    char[] char_pattern = pattern.toCharArray();</span>
+<span class="nc bnc" id="L1702" title="All 2 branches missed.">    for (char c : char_pattern) {</span>
+<span class="nc" id="L1703">      s.put(c, 0);</span>
+    }
+<span class="nc" id="L1705">    int i = 0;</span>
+<span class="nc bnc" id="L1706" title="All 2 branches missed.">    for (char c : char_pattern) {</span>
+<span class="nc" id="L1707">      s.put(c, s.get(c) | (1 &lt;&lt; (pattern.length() - i - 1)));</span>
+<span class="nc" id="L1708">      i++;</span>
+    }
+<span class="nc" id="L1710">    return s;</span>
+  }
+
+
+  //  PATCH FUNCTIONS
+
+
+  /**
+   * Increase the context until it is unique,
+   * but don't let the pattern expand beyond Match_MaxBits.
+   * @param patch The patch to grow.
+   * @param text Source text.
+   */
+  protected void patch_addContext(Patch patch, String text) {
+<span class="nc bnc" id="L1724" title="All 2 branches missed.">    if (text.length() == 0) {</span>
+<span class="nc" id="L1725">      return;</span>
+    }
+<span class="nc" id="L1727">    String pattern = text.substring(patch.start2, patch.start2 + patch.length1);</span>
+<span class="nc" id="L1728">    int padding = 0;</span>
+
+    // Look for the first and last matches of pattern in text.  If two different
+    // matches are found, increase the pattern length.
+<span class="nc bnc" id="L1732" title="All 4 branches missed.">    while (text.indexOf(pattern) != text.lastIndexOf(pattern)</span>
+<span class="nc" id="L1733">        &amp;&amp; pattern.length() &lt; Match_MaxBits - Patch_Margin - Patch_Margin) {</span>
+<span class="nc" id="L1734">      padding += Patch_Margin;</span>
+<span class="nc" id="L1735">      pattern = text.substring(Math.max(0, patch.start2 - padding),</span>
+<span class="nc" id="L1736">          Math.min(text.length(), patch.start2 + patch.length1 + padding));</span>
+    }
+    // Add one chunk for good luck.
+<span class="nc" id="L1739">    padding += Patch_Margin;</span>
+
+    // Add the prefix.
+<span class="nc" id="L1742">    String prefix = text.substring(Math.max(0, patch.start2 - padding),</span>
+<span class="nc" id="L1743">        patch.start2);</span>
+<span class="nc bnc" id="L1744" title="All 2 branches missed.">    if (prefix.length() != 0) {</span>
+<span class="nc" id="L1745">      patch.diffs.addFirst(new Diff(Operation.EQUAL, prefix));</span>
+    }
+    // Add the suffix.
+<span class="nc" id="L1748">    String suffix = text.substring(patch.start2 + patch.length1,</span>
+<span class="nc" id="L1749">        Math.min(text.length(), patch.start2 + patch.length1 + padding));</span>
+<span class="nc bnc" id="L1750" title="All 2 branches missed.">    if (suffix.length() != 0) {</span>
+<span class="nc" id="L1751">      patch.diffs.addLast(new Diff(Operation.EQUAL, suffix));</span>
+    }
+
+    // Roll back the start points.
+<span class="nc" id="L1755">    patch.start1 -= prefix.length();</span>
+<span class="nc" id="L1756">    patch.start2 -= prefix.length();</span>
+    // Extend the lengths.
+<span class="nc" id="L1758">    patch.length1 += prefix.length() + suffix.length();</span>
+<span class="nc" id="L1759">    patch.length2 += prefix.length() + suffix.length();</span>
+<span class="nc" id="L1760">  }</span>
+
+  /**
+   * Compute a list of patches to turn text1 into text2.
+   * A set of diffs will be computed.
+   * @param text1 Old text.
+   * @param text2 New text.
+   * @return LinkedList of Patch objects.
+   */
+  public LinkedList&lt;Patch&gt; patch_make(String text1, String text2) {
+<span class="nc bnc" id="L1770" title="All 4 branches missed.">    if (text1 == null || text2 == null) {</span>
+<span class="nc" id="L1771">      throw new IllegalArgumentException(&quot;Null inputs. (patch_make)&quot;);</span>
+    }
+    // No diffs provided, compute our own.
+<span class="nc" id="L1774">    LinkedList&lt;Diff&gt; diffs = diff_main(text1, text2, true);</span>
+<span class="nc bnc" id="L1775" title="All 2 branches missed.">    if (diffs.size() &gt; 2) {</span>
+<span class="nc" id="L1776">      diff_cleanupSemantic(diffs);</span>
+<span class="nc" id="L1777">      diff_cleanupEfficiency(diffs);</span>
+    }
+<span class="nc" id="L1779">    return patch_make(text1, diffs);</span>
+  }
+
+  /**
+   * Compute a list of patches to turn text1 into text2.
+   * text1 will be derived from the provided diffs.
+   * @param diffs Array of Diff objects for text1 to text2.
+   * @return LinkedList of Patch objects.
+   */
+  public LinkedList&lt;Patch&gt; patch_make(LinkedList&lt;Diff&gt; diffs) {
+<span class="nc bnc" id="L1789" title="All 2 branches missed.">    if (diffs == null) {</span>
+<span class="nc" id="L1790">      throw new IllegalArgumentException(&quot;Null inputs. (patch_make)&quot;);</span>
+    }
+    // No origin string provided, compute our own.
+<span class="nc" id="L1793">    String text1 = diff_text1(diffs);</span>
+<span class="nc" id="L1794">    return patch_make(text1, diffs);</span>
+  }
+
+  /**
+   * Compute a list of patches to turn text1 into text2.
+   * text2 is ignored, diffs are the delta between text1 and text2.
+   * @param text1 Old text
+   * @param text2 Ignored.
+   * @param diffs Array of Diff objects for text1 to text2.
+   * @return LinkedList of Patch objects.
+   * @deprecated Prefer patch_make(String text1, LinkedList&lt;Diff&gt; diffs).
+   */
+  @Deprecated (since=&quot;13&quot;, forRemoval=true)
+  public LinkedList&lt;Patch&gt; patch_make(String text1, String text2,
+      LinkedList&lt;Diff&gt; diffs) {
+<span class="nc" id="L1809">    return patch_make(text1, diffs);</span>
+  }
+
+  /**
+   * Compute a list of patches to turn text1 into text2.
+   * text2 is not provided, diffs are the delta between text1 and text2.
+   * @param text1 Old text.
+   * @param diffs Array of Diff objects for text1 to text2.
+   * @return LinkedList of Patch objects.
+   */
+  public LinkedList&lt;Patch&gt; patch_make(String text1, LinkedList&lt;Diff&gt; diffs) {
+<span class="nc bnc" id="L1820" title="All 4 branches missed.">    if (text1 == null || diffs == null) {</span>
+<span class="nc" id="L1821">      throw new IllegalArgumentException(&quot;Null inputs. (patch_make)&quot;);</span>
+    }
+
+<span class="nc" id="L1824">    LinkedList&lt;Patch&gt; patches = new LinkedList&lt;Patch&gt;();</span>
+<span class="nc bnc" id="L1825" title="All 2 branches missed.">    if (diffs.isEmpty()) {</span>
+<span class="nc" id="L1826">      return patches;  // Get rid of the null case.</span>
+    }
+<span class="nc" id="L1828">    Patch patch = new Patch();</span>
+<span class="nc" id="L1829">    int char_count1 = 0;  // Number of characters into the text1 string.</span>
+<span class="nc" id="L1830">    int char_count2 = 0;  // Number of characters into the text2 string.</span>
+    // Start with text1 (prepatch_text) and apply the diffs until we arrive at
+    // text2 (postpatch_text). We recreate the patches one by one to determine
+    // context info.
+<span class="nc" id="L1834">    String prepatch_text = text1;</span>
+<span class="nc" id="L1835">    String postpatch_text = text1;</span>
+<span class="nc bnc" id="L1836" title="All 2 branches missed.">    for (Diff aDiff : diffs) {</span>
+<span class="nc bnc" id="L1837" title="All 4 branches missed.">      if (patch.diffs.isEmpty() &amp;&amp; aDiff.operation != Operation.EQUAL) {</span>
+        // A new patch starts here.
+<span class="nc" id="L1839">        patch.start1 = char_count1;</span>
+<span class="nc" id="L1840">        patch.start2 = char_count2;</span>
+      }
+
+<span class="nc bnc" id="L1843" title="All 4 branches missed.">      switch (aDiff.operation) {</span>
+      case INSERT:
+<span class="nc" id="L1845">        patch.diffs.add(aDiff);</span>
+<span class="nc" id="L1846">        patch.length2 += aDiff.text.length();</span>
+<span class="nc" id="L1847">        postpatch_text = postpatch_text.substring(0, char_count2)</span>
+<span class="nc" id="L1848">            + aDiff.text + postpatch_text.substring(char_count2);</span>
+<span class="nc" id="L1849">        break;</span>
+      case DELETE:
+<span class="nc" id="L1851">        patch.length1 += aDiff.text.length();</span>
+<span class="nc" id="L1852">        patch.diffs.add(aDiff);</span>
+<span class="nc" id="L1853">        postpatch_text = postpatch_text.substring(0, char_count2)</span>
+<span class="nc" id="L1854">            + postpatch_text.substring(char_count2 + aDiff.text.length());</span>
+<span class="nc" id="L1855">        break;</span>
+      case EQUAL:
+<span class="nc bnc" id="L1857" title="All 2 branches missed.">        if (aDiff.text.length() &lt;= 2 * Patch_Margin</span>
+<span class="nc bnc" id="L1858" title="All 4 branches missed.">            &amp;&amp; !patch.diffs.isEmpty() &amp;&amp; aDiff != diffs.getLast()) {</span>
+          // Small equality inside a patch.
+<span class="nc" id="L1860">          patch.diffs.add(aDiff);</span>
+<span class="nc" id="L1861">          patch.length1 += aDiff.text.length();</span>
+<span class="nc" id="L1862">          patch.length2 += aDiff.text.length();</span>
+        }
+
+<span class="nc bnc" id="L1865" title="All 4 branches missed.">        if (aDiff.text.length() &gt;= 2 * Patch_Margin &amp;&amp; !patch.diffs.isEmpty()) {</span>
+          // Time for a new patch.
+<span class="nc bnc" id="L1867" title="All 2 branches missed.">          if (!patch.diffs.isEmpty()) {</span>
+<span class="nc" id="L1868">            patch_addContext(patch, prepatch_text);</span>
+<span class="nc" id="L1869">            patches.add(patch);</span>
+<span class="nc" id="L1870">            patch = new Patch();</span>
+            // Unlike Unidiff, our patch lists have a rolling context.
+            // https://github.com/google/diff-match-patch/wiki/Unidiff
+            // Update prepatch text &amp; pos to reflect the application of the
+            // just completed patch.
+<span class="nc" id="L1875">            prepatch_text = postpatch_text;</span>
+<span class="nc" id="L1876">            char_count1 = char_count2;</span>
+          }
+        }
+        break;
+<span class="nc" id="L1880">      }</span>
+
+      // Update the current character count.
+<span class="nc bnc" id="L1883" title="All 2 branches missed.">      if (aDiff.operation != Operation.INSERT) {</span>
+<span class="nc" id="L1884">        char_count1 += aDiff.text.length();</span>
+      }
+<span class="nc bnc" id="L1886" title="All 2 branches missed.">      if (aDiff.operation != Operation.DELETE) {</span>
+<span class="nc" id="L1887">        char_count2 += aDiff.text.length();</span>
+      }
+    }
+    // Pick up the leftover patch if not empty.
+<span class="nc bnc" id="L1891" title="All 2 branches missed.">    if (!patch.diffs.isEmpty()) {</span>
+<span class="nc" id="L1892">      patch_addContext(patch, prepatch_text);</span>
+<span class="nc" id="L1893">      patches.add(patch);</span>
+    }
+
+<span class="nc" id="L1896">    return patches;</span>
+  }
+
+  /**
+   * Given an array of patches, return another array that is identical.
+   * @param patches Array of Patch objects.
+   * @return Array of Patch objects.
+   */
+  public LinkedList&lt;Patch&gt; patch_deepCopy(LinkedList&lt;Patch&gt; patches) {
+<span class="nc" id="L1905">    LinkedList&lt;Patch&gt; patchesCopy = new LinkedList&lt;Patch&gt;();</span>
+<span class="nc bnc" id="L1906" title="All 2 branches missed.">    for (Patch aPatch : patches) {</span>
+<span class="nc" id="L1907">      Patch patchCopy = new Patch();</span>
+<span class="nc bnc" id="L1908" title="All 2 branches missed.">      for (Diff aDiff : aPatch.diffs) {</span>
+<span class="nc" id="L1909">        Diff diffCopy = new Diff(aDiff.operation, aDiff.text);</span>
+<span class="nc" id="L1910">        patchCopy.diffs.add(diffCopy);</span>
+      }
+<span class="nc" id="L1912">      patchCopy.start1 = aPatch.start1;</span>
+<span class="nc" id="L1913">      patchCopy.start2 = aPatch.start2;</span>
+<span class="nc" id="L1914">      patchCopy.length1 = aPatch.length1;</span>
+<span class="nc" id="L1915">      patchCopy.length2 = aPatch.length2;</span>
+<span class="nc" id="L1916">      patchesCopy.add(patchCopy);</span>
+    }
+<span class="nc" id="L1918">    return patchesCopy;</span>
+  }
+
+  /**
+   * Merge a set of patches onto the text.  Return a patched text, as well
+   * as an array of true/false values indicating which patches were applied.
+   * @param patches Array of Patch objects
+   * @param text Old text.
+   * @return Two element Object array, containing the new text and an array of
+   *      boolean values.
+   */
+  public Object[] patch_apply(LinkedList&lt;Patch&gt; patches, String text) {
+<span class="nc bnc" id="L1930" title="All 2 branches missed.">    if (patches.isEmpty()) {</span>
+<span class="nc" id="L1931">      return new Object[]{text, new boolean[0]};</span>
+    }
+
+    // Deep copy the patches so that no changes are made to originals.
+<span class="nc" id="L1935">    patches = patch_deepCopy(patches);</span>
+
+<span class="nc" id="L1937">    String nullPadding = patch_addPadding(patches);</span>
+<span class="nc" id="L1938">    text = nullPadding + text + nullPadding;</span>
+<span class="nc" id="L1939">    patch_splitMax(patches);</span>
+
+<span class="nc" id="L1941">    int x = 0;</span>
+    // delta keeps track of the offset between the expected and actual location
+    // of the previous patch.  If there are patches expected at positions 10 and
+    // 20, but the first patch was found at 12, delta is 2 and the second patch
+    // has an effective expected position of 22.
+<span class="nc" id="L1946">    int delta = 0;</span>
+<span class="nc" id="L1947">    boolean[] results = new boolean[patches.size()];</span>
+<span class="nc bnc" id="L1948" title="All 2 branches missed.">    for (Patch aPatch : patches) {</span>
+<span class="nc" id="L1949">      int expected_loc = aPatch.start2 + delta;</span>
+<span class="nc" id="L1950">      String text1 = diff_text1(aPatch.diffs);</span>
+      int start_loc;
+<span class="nc" id="L1952">      int end_loc = -1;</span>
+<span class="nc bnc" id="L1953" title="All 2 branches missed.">      if (text1.length() &gt; this.Match_MaxBits) {</span>
+        // patch_splitMax will only provide an oversized pattern in the case of
+        // a monster delete.
+<span class="nc" id="L1956">        start_loc = match_main(text,</span>
+<span class="nc" id="L1957">            text1.substring(0, this.Match_MaxBits), expected_loc);</span>
+<span class="nc bnc" id="L1958" title="All 2 branches missed.">        if (start_loc != -1) {</span>
+<span class="nc" id="L1959">          end_loc = match_main(text,</span>
+<span class="nc" id="L1960">              text1.substring(text1.length() - this.Match_MaxBits),</span>
+<span class="nc" id="L1961">              expected_loc + text1.length() - this.Match_MaxBits);</span>
+<span class="nc bnc" id="L1962" title="All 4 branches missed.">          if (end_loc == -1 || start_loc &gt;= end_loc) {</span>
+            // Can't find valid trailing context.  Drop this patch.
+<span class="nc" id="L1964">            start_loc = -1;</span>
+          }
+        }
+<span class="nc" id="L1967">      } else {</span>
+<span class="nc" id="L1968">        start_loc = match_main(text, text1, expected_loc);</span>
+      }
+<span class="nc bnc" id="L1970" title="All 2 branches missed.">      if (start_loc == -1) {</span>
+        // No match found.  :(
+<span class="nc" id="L1972">        results[x] = false;</span>
+        // Subtract the delta for this failed patch from subsequent patches.
+<span class="nc" id="L1974">        delta -= aPatch.length2 - aPatch.length1;</span>
+<span class="nc" id="L1975">      } else {</span>
+        // Found a match.  :)
+<span class="nc" id="L1977">        results[x] = true;</span>
+<span class="nc" id="L1978">        delta = start_loc - expected_loc;</span>
+        String text2;
+<span class="nc bnc" id="L1980" title="All 2 branches missed.">        if (end_loc == -1) {</span>
+<span class="nc" id="L1981">          text2 = text.substring(start_loc,</span>
+<span class="nc" id="L1982">              Math.min(start_loc + text1.length(), text.length()));</span>
+<span class="nc" id="L1983">        } else {</span>
+<span class="nc" id="L1984">          text2 = text.substring(start_loc,</span>
+<span class="nc" id="L1985">              Math.min(end_loc + this.Match_MaxBits, text.length()));</span>
+        }
+<span class="nc bnc" id="L1987" title="All 2 branches missed.">        if (text1.equals(text2)) {</span>
+          // Perfect match, just shove the replacement text in.
+<span class="nc" id="L1989">          text = text.substring(0, start_loc) + diff_text2(aPatch.diffs)</span>
+<span class="nc" id="L1990">              + text.substring(start_loc + text1.length());</span>
+<span class="nc" id="L1991">        } else {</span>
+          // Imperfect match.  Run a diff to get a framework of equivalent
+          // indices.
+<span class="nc" id="L1994">          LinkedList&lt;Diff&gt; diffs = diff_main(text1, text2, false);</span>
+<span class="nc bnc" id="L1995" title="All 2 branches missed.">          if (text1.length() &gt; this.Match_MaxBits</span>
+<span class="nc" id="L1996">              &amp;&amp; diff_levenshtein(diffs) / (float) text1.length()</span>
+<span class="nc bnc" id="L1997" title="All 2 branches missed.">              &gt; this.Patch_DeleteThreshold) {</span>
+            // The end points match, but the content is unacceptably bad.
+<span class="nc" id="L1999">            results[x] = false;</span>
+<span class="nc" id="L2000">          } else {</span>
+<span class="nc" id="L2001">            diff_cleanupSemanticLossless(diffs);</span>
+<span class="nc" id="L2002">            int index1 = 0;</span>
+<span class="nc bnc" id="L2003" title="All 2 branches missed.">            for (Diff aDiff : aPatch.diffs) {</span>
+<span class="nc bnc" id="L2004" title="All 2 branches missed.">              if (aDiff.operation != Operation.EQUAL) {</span>
+<span class="nc" id="L2005">                int index2 = diff_xIndex(diffs, index1);</span>
+<span class="nc bnc" id="L2006" title="All 2 branches missed.">                if (aDiff.operation == Operation.INSERT) {</span>
+                  // Insertion
+<span class="nc" id="L2008">                  text = text.substring(0, start_loc + index2) + aDiff.text</span>
+<span class="nc" id="L2009">                      + text.substring(start_loc + index2);</span>
+<span class="nc bnc" id="L2010" title="All 2 branches missed.">                } else if (aDiff.operation == Operation.DELETE) {</span>
+                  // Deletion
+<span class="nc" id="L2012">                  text = text.substring(0, start_loc + index2)</span>
+<span class="nc" id="L2013">                      + text.substring(start_loc + diff_xIndex(diffs,</span>
+<span class="nc" id="L2014">                      index1 + aDiff.text.length()));</span>
+                }
+              }
+<span class="nc bnc" id="L2017" title="All 2 branches missed.">              if (aDiff.operation != Operation.DELETE) {</span>
+<span class="nc" id="L2018">                index1 += aDiff.text.length();</span>
+              }
+            }
+          }
+        }
+      }
+<span class="nc" id="L2024">      x++;</span>
+    }
+    // Strip the padding off.
+<span class="nc" id="L2027">    text = text.substring(nullPadding.length(), text.length()</span>
+<span class="nc" id="L2028">        - nullPadding.length());</span>
+<span class="nc" id="L2029">    return new Object[]{text, results};</span>
+  }
+
+  /**
+   * Add some padding on text start and end so that edges can match something.
+   * Intended to be called only from within patch_apply.
+   * @param patches Array of Patch objects.
+   * @return The padding string added to each side.
+   */
+  public String patch_addPadding(LinkedList&lt;Patch&gt; patches) {
+<span class="nc" id="L2039">    short paddingLength = this.Patch_Margin;</span>
+<span class="nc" id="L2040">    String nullPadding = &quot;&quot;;</span>
+<span class="nc bnc" id="L2041" title="All 2 branches missed.">    for (short x = 1; x &lt;= paddingLength; x++) {</span>
+<span class="nc" id="L2042">      nullPadding += String.valueOf((char) x);</span>
+    }
+
+    // Bump all the patches forward.
+<span class="nc bnc" id="L2046" title="All 2 branches missed.">    for (Patch aPatch : patches) {</span>
+<span class="nc" id="L2047">      aPatch.start1 += paddingLength;</span>
+<span class="nc" id="L2048">      aPatch.start2 += paddingLength;</span>
+    }
+
+    // Add some padding on start of first diff.
+<span class="nc" id="L2052">    Patch patch = patches.getFirst();</span>
+<span class="nc" id="L2053">    LinkedList&lt;Diff&gt; diffs = patch.diffs;</span>
+<span class="nc bnc" id="L2054" title="All 4 branches missed.">    if (diffs.isEmpty() || diffs.getFirst().operation != Operation.EQUAL) {</span>
+      // Add nullPadding equality.
+<span class="nc" id="L2056">      diffs.addFirst(new Diff(Operation.EQUAL, nullPadding));</span>
+<span class="nc" id="L2057">      patch.start1 -= paddingLength;  // Should be 0.</span>
+<span class="nc" id="L2058">      patch.start2 -= paddingLength;  // Should be 0.</span>
+<span class="nc" id="L2059">      patch.length1 += paddingLength;</span>
+<span class="nc" id="L2060">      patch.length2 += paddingLength;</span>
+<span class="nc bnc" id="L2061" title="All 2 branches missed.">    } else if (paddingLength &gt; diffs.getFirst().text.length()) {</span>
+      // Grow first equality.
+<span class="nc" id="L2063">      Diff firstDiff = diffs.getFirst();</span>
+<span class="nc" id="L2064">      int extraLength = paddingLength - firstDiff.text.length();</span>
+<span class="nc" id="L2065">      firstDiff.text = nullPadding.substring(firstDiff.text.length())</span>
+<span class="nc" id="L2066">          + firstDiff.text;</span>
+<span class="nc" id="L2067">      patch.start1 -= extraLength;</span>
+<span class="nc" id="L2068">      patch.start2 -= extraLength;</span>
+<span class="nc" id="L2069">      patch.length1 += extraLength;</span>
+<span class="nc" id="L2070">      patch.length2 += extraLength;</span>
+    }
+
+    // Add some padding on end of last diff.
+<span class="nc" id="L2074">    patch = patches.getLast();</span>
+<span class="nc" id="L2075">    diffs = patch.diffs;</span>
+<span class="nc bnc" id="L2076" title="All 4 branches missed.">    if (diffs.isEmpty() || diffs.getLast().operation != Operation.EQUAL) {</span>
+      // Add nullPadding equality.
+<span class="nc" id="L2078">      diffs.addLast(new Diff(Operation.EQUAL, nullPadding));</span>
+<span class="nc" id="L2079">      patch.length1 += paddingLength;</span>
+<span class="nc" id="L2080">      patch.length2 += paddingLength;</span>
+<span class="nc bnc" id="L2081" title="All 2 branches missed.">    } else if (paddingLength &gt; diffs.getLast().text.length()) {</span>
+      // Grow last equality.
+<span class="nc" id="L2083">      Diff lastDiff = diffs.getLast();</span>
+<span class="nc" id="L2084">      int extraLength = paddingLength - lastDiff.text.length();</span>
+<span class="nc" id="L2085">      lastDiff.text += nullPadding.substring(0, extraLength);</span>
+<span class="nc" id="L2086">      patch.length1 += extraLength;</span>
+<span class="nc" id="L2087">      patch.length2 += extraLength;</span>
+    }
+
+<span class="nc" id="L2090">    return nullPadding;</span>
+  }
+
+  /**
+   * Look through the patches and break up any which are longer than the
+   * maximum limit of the match algorithm.
+   * Intended to be called only from within patch_apply.
+   * @param patches LinkedList of Patch objects.
+   */
+  public void patch_splitMax(LinkedList&lt;Patch&gt; patches) {
+<span class="nc" id="L2100">    short patch_size = Match_MaxBits;</span>
+    String precontext, postcontext;
+    Patch patch;
+    int start1, start2;
+    boolean empty;
+    Operation diff_type;
+    String diff_text;
+<span class="nc" id="L2107">    ListIterator&lt;Patch&gt; pointer = patches.listIterator();</span>
+<span class="nc bnc" id="L2108" title="All 2 branches missed.">    Patch bigpatch = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc bnc" id="L2109" title="All 2 branches missed.">    while (bigpatch != null) {</span>
+<span class="nc bnc" id="L2110" title="All 2 branches missed.">      if (bigpatch.length1 &lt;= Match_MaxBits) {</span>
+<span class="nc bnc" id="L2111" title="All 2 branches missed.">        bigpatch = pointer.hasNext() ? pointer.next() : null;</span>
+<span class="nc" id="L2112">        continue;</span>
+      }
+      // Remove the big old patch.
+<span class="nc" id="L2115">      pointer.remove();</span>
+<span class="nc" id="L2116">      start1 = bigpatch.start1;</span>
+<span class="nc" id="L2117">      start2 = bigpatch.start2;</span>
+<span class="nc" id="L2118">      precontext = &quot;&quot;;</span>
+<span class="nc bnc" id="L2119" title="All 2 branches missed.">      while (!bigpatch.diffs.isEmpty()) {</span>
+        // Create one of several smaller patches.
+<span class="nc" id="L2121">        patch = new Patch();</span>
+<span class="nc" id="L2122">        empty = true;</span>
+<span class="nc" id="L2123">        patch.start1 = start1 - precontext.length();</span>
+<span class="nc" id="L2124">        patch.start2 = start2 - precontext.length();</span>
+<span class="nc bnc" id="L2125" title="All 2 branches missed.">        if (precontext.length() != 0) {</span>
+<span class="nc" id="L2126">          patch.length1 = patch.length2 = precontext.length();</span>
+<span class="nc" id="L2127">          patch.diffs.add(new Diff(Operation.EQUAL, precontext));</span>
+        }
+<span class="nc bnc" id="L2129" title="All 4 branches missed.">        while (!bigpatch.diffs.isEmpty()</span>
+<span class="nc" id="L2130">            &amp;&amp; patch.length1 &lt; patch_size - Patch_Margin) {</span>
+<span class="nc" id="L2131">          diff_type = bigpatch.diffs.getFirst().operation;</span>
+<span class="nc" id="L2132">          diff_text = bigpatch.diffs.getFirst().text;</span>
+<span class="nc bnc" id="L2133" title="All 2 branches missed.">          if (diff_type == Operation.INSERT) {</span>
+            // Insertions are harmless.
+<span class="nc" id="L2135">            patch.length2 += diff_text.length();</span>
+<span class="nc" id="L2136">            start2 += diff_text.length();</span>
+<span class="nc" id="L2137">            patch.diffs.addLast(bigpatch.diffs.removeFirst());</span>
+<span class="nc" id="L2138">            empty = false;</span>
+<span class="nc bnc" id="L2139" title="All 4 branches missed.">          } else if (diff_type == Operation.DELETE &amp;&amp; patch.diffs.size() == 1</span>
+<span class="nc bnc" id="L2140" title="All 2 branches missed.">              &amp;&amp; patch.diffs.getFirst().operation == Operation.EQUAL</span>
+<span class="nc bnc" id="L2141" title="All 2 branches missed.">              &amp;&amp; diff_text.length() &gt; 2 * patch_size) {</span>
+            // This is a large deletion.  Let it pass in one chunk.
+<span class="nc" id="L2143">            patch.length1 += diff_text.length();</span>
+<span class="nc" id="L2144">            start1 += diff_text.length();</span>
+<span class="nc" id="L2145">            empty = false;</span>
+<span class="nc" id="L2146">            patch.diffs.add(new Diff(diff_type, diff_text));</span>
+<span class="nc" id="L2147">            bigpatch.diffs.removeFirst();</span>
+<span class="nc" id="L2148">          } else {</span>
+            // Deletion or equality.  Only take as much as we can stomach.
+<span class="nc" id="L2150">            diff_text = diff_text.substring(0, Math.min(diff_text.length(),</span>
+<span class="nc" id="L2151">                patch_size - patch.length1 - Patch_Margin));</span>
+<span class="nc" id="L2152">            patch.length1 += diff_text.length();</span>
+<span class="nc" id="L2153">            start1 += diff_text.length();</span>
+<span class="nc bnc" id="L2154" title="All 2 branches missed.">            if (diff_type == Operation.EQUAL) {</span>
+<span class="nc" id="L2155">              patch.length2 += diff_text.length();</span>
+<span class="nc" id="L2156">              start2 += diff_text.length();</span>
+<span class="nc" id="L2157">            } else {</span>
+<span class="nc" id="L2158">              empty = false;</span>
+            }
+<span class="nc" id="L2160">            patch.diffs.add(new Diff(diff_type, diff_text));</span>
+<span class="nc bnc" id="L2161" title="All 2 branches missed.">            if (diff_text.equals(bigpatch.diffs.getFirst().text)) {</span>
+<span class="nc" id="L2162">              bigpatch.diffs.removeFirst();</span>
+<span class="nc" id="L2163">            } else {</span>
+<span class="nc" id="L2164">              bigpatch.diffs.getFirst().text = bigpatch.diffs.getFirst().text</span>
+<span class="nc" id="L2165">                  .substring(diff_text.length());</span>
+            }
+          }
+        }
+        // Compute the head context for the next patch.
+<span class="nc" id="L2170">        precontext = diff_text2(patch.diffs);</span>
+<span class="nc" id="L2171">        precontext = precontext.substring(Math.max(0, precontext.length()</span>
+<span class="nc" id="L2172">            - Patch_Margin));</span>
+        // Append the end context for this patch.
+<span class="nc bnc" id="L2174" title="All 2 branches missed.">        if (diff_text1(bigpatch.diffs).length() &gt; Patch_Margin) {</span>
+<span class="nc" id="L2175">          postcontext = diff_text1(bigpatch.diffs).substring(0, Patch_Margin);</span>
+<span class="nc" id="L2176">        } else {</span>
+<span class="nc" id="L2177">          postcontext = diff_text1(bigpatch.diffs);</span>
+        }
+<span class="nc bnc" id="L2179" title="All 2 branches missed.">        if (postcontext.length() != 0) {</span>
+<span class="nc" id="L2180">          patch.length1 += postcontext.length();</span>
+<span class="nc" id="L2181">          patch.length2 += postcontext.length();</span>
+<span class="nc bnc" id="L2182" title="All 2 branches missed.">          if (!patch.diffs.isEmpty()</span>
+<span class="nc bnc" id="L2183" title="All 2 branches missed.">              &amp;&amp; patch.diffs.getLast().operation == Operation.EQUAL) {</span>
+<span class="nc" id="L2184">            patch.diffs.getLast().text += postcontext;</span>
+<span class="nc" id="L2185">          } else {</span>
+<span class="nc" id="L2186">            patch.diffs.add(new Diff(Operation.EQUAL, postcontext));</span>
+          }
+        }
+<span class="nc bnc" id="L2189" title="All 2 branches missed.">        if (!empty) {</span>
+<span class="nc" id="L2190">          pointer.add(patch);</span>
+        }
+      }
+<span class="nc bnc" id="L2193" title="All 2 branches missed.">      bigpatch = pointer.hasNext() ? pointer.next() : null;</span>
+    }
+<span class="nc" id="L2195">  }</span>
+
+  /**
+   * Take a list of patches and return a textual representation.
+   * @param patches List of Patch objects.
+   * @return Text representation of patches.
+   */
+  public String patch_toText(List&lt;Patch&gt; patches) {
+<span class="nc" id="L2203">    StringBuilder text = new StringBuilder();</span>
+<span class="nc bnc" id="L2204" title="All 2 branches missed.">    for (Patch aPatch : patches) {</span>
+<span class="nc" id="L2205">      text.append(aPatch);</span>
+    }
+<span class="nc" id="L2207">    return text.toString();</span>
+  }
+
+  /**
+   * Parse a textual representation of patches and return a List of Patch
+   * objects.
+   * @param textline Text representation of patches.
+   * @return List of Patch objects.
+   * @throws IllegalArgumentException If invalid input.
+   */
+  public List&lt;Patch&gt; patch_fromText(String textline)
+      throws IllegalArgumentException {
+<span class="nc" id="L2219">    List&lt;Patch&gt; patches = new LinkedList&lt;Patch&gt;();</span>
+<span class="nc bnc" id="L2220" title="All 2 branches missed.">    if (textline.length() == 0) {</span>
+<span class="nc" id="L2221">      return patches;</span>
+    }
+<span class="nc" id="L2223">    List&lt;String&gt; textList = Arrays.asList(textline.split(&quot;\n&quot;));</span>
+<span class="nc" id="L2224">    LinkedList&lt;String&gt; text = new LinkedList&lt;String&gt;(textList);</span>
+    Patch patch;
+<span class="nc" id="L2226">    Pattern patchHeader</span>
+<span class="nc" id="L2227">        = Pattern.compile(&quot;^@@ -(\\d+),?(\\d*) \\+(\\d+),?(\\d*) @@$&quot;);</span>
+    Matcher m;
+    char sign;
+    String line;
+<span class="nc bnc" id="L2231" title="All 2 branches missed.">    while (!text.isEmpty()) {</span>
+<span class="nc" id="L2232">      m = patchHeader.matcher(text.getFirst());</span>
+<span class="nc bnc" id="L2233" title="All 2 branches missed.">      if (!m.matches()) {</span>
+<span class="nc" id="L2234">        throw new IllegalArgumentException(</span>
+<span class="nc" id="L2235">            &quot;Invalid patch string: &quot; + text.getFirst());</span>
+      }
+<span class="nc" id="L2237">      patch = new Patch();</span>
+<span class="nc" id="L2238">      patches.add(patch);</span>
+<span class="nc" id="L2239">      patch.start1 = Integer.parseInt(m.group(1));</span>
+<span class="nc bnc" id="L2240" title="All 2 branches missed.">      if (m.group(2).length() == 0) {</span>
+<span class="nc" id="L2241">        patch.start1--;</span>
+<span class="nc" id="L2242">        patch.length1 = 1;</span>
+<span class="nc bnc" id="L2243" title="All 2 branches missed.">      } else if (m.group(2).equals(&quot;0&quot;)) {</span>
+<span class="nc" id="L2244">        patch.length1 = 0;</span>
+<span class="nc" id="L2245">      } else {</span>
+<span class="nc" id="L2246">        patch.start1--;</span>
+<span class="nc" id="L2247">        patch.length1 = Integer.parseInt(m.group(2));</span>
+      }
+
+<span class="nc" id="L2250">      patch.start2 = Integer.parseInt(m.group(3));</span>
+<span class="nc bnc" id="L2251" title="All 2 branches missed.">      if (m.group(4).length() == 0) {</span>
+<span class="nc" id="L2252">        patch.start2--;</span>
+<span class="nc" id="L2253">        patch.length2 = 1;</span>
+<span class="nc bnc" id="L2254" title="All 2 branches missed.">      } else if (m.group(4).equals(&quot;0&quot;)) {</span>
+<span class="nc" id="L2255">        patch.length2 = 0;</span>
+<span class="nc" id="L2256">      } else {</span>
+<span class="nc" id="L2257">        patch.start2--;</span>
+<span class="nc" id="L2258">        patch.length2 = Integer.parseInt(m.group(4));</span>
+      }
+<span class="nc" id="L2260">      text.removeFirst();</span>
+
+<span class="nc bnc" id="L2262" title="All 2 branches missed.">      while (!text.isEmpty()) {</span>
+        try {
+<span class="nc" id="L2264">          sign = text.getFirst().charAt(0);</span>
+<span class="nc" id="L2265">        } catch (IndexOutOfBoundsException e) {</span>
+          // Blank line?  Whatever.
+<span class="nc" id="L2267">          text.removeFirst();</span>
+<span class="nc" id="L2268">          continue;</span>
+        }
+<span class="nc" id="L2270">        line = text.getFirst().substring(1);</span>
+<span class="nc" id="L2271">        line = line.replace(&quot;+&quot;, &quot;%2B&quot;);  // decode would change all &quot;+&quot; to &quot; &quot;</span>
+        try {
+<span class="nc" id="L2273">          line = URLDecoder.decode(line, &quot;UTF-8&quot;);</span>
+<span class="nc" id="L2274">        } catch (UnsupportedEncodingException e) {</span>
+          // Not likely on modern system.
+<span class="nc" id="L2276">          throw new Error(&quot;This system does not support UTF-8.&quot;, e);</span>
+<span class="nc" id="L2277">        } catch (IllegalArgumentException e) {</span>
+          // Malformed URI sequence.
+<span class="nc" id="L2279">          throw new IllegalArgumentException(</span>
+<span class="nc" id="L2280">              &quot;Illegal escape in patch_fromText: &quot; + line, e);</span>
+        }
+<span class="nc bnc" id="L2282" title="All 2 branches missed.">        if (sign == '-') {</span>
+          // Deletion.
+<span class="nc" id="L2284">          patch.diffs.add(new Diff(Operation.DELETE, line));</span>
+<span class="nc bnc" id="L2285" title="All 2 branches missed.">        } else if (sign == '+') {</span>
+          // Insertion.
+<span class="nc" id="L2287">          patch.diffs.add(new Diff(Operation.INSERT, line));</span>
+<span class="nc bnc" id="L2288" title="All 2 branches missed.">        } else if (sign == ' ') {</span>
+          // Minor equality.
+<span class="nc" id="L2290">          patch.diffs.add(new Diff(Operation.EQUAL, line));</span>
+<span class="nc bnc" id="L2291" title="All 2 branches missed.">        } else if (sign == '@') {</span>
+          // Start of next patch.
+<span class="nc" id="L2293">          break;</span>
+        } else {
+          // WTF?
+<span class="nc" id="L2296">          throw new IllegalArgumentException(</span>
+<span class="nc" id="L2297">              &quot;Invalid patch mode '&quot; + sign + &quot;' in: &quot; + line);</span>
+        }
+<span class="nc" id="L2299">        text.removeFirst();</span>
+      }
+    }
+<span class="nc" id="L2302">    return patches;</span>
+  }
+
+
+  /**
+   * Class representing one diff operation.
+   */
+  public static class Diff {
+    /**
+     * One of: INSERT, DELETE or EQUAL.
+     */
+    public Operation operation;
+    /**
+     * The text associated with this diff operation.
+     */
+    public String text;
+
+    /**
+     * Constructor.  Initializes the diff with the provided values.
+     * @param operation One of INSERT, DELETE or EQUAL.
+     * @param text The text being applied.
+     */
+<span class="nc" id="L2324">    public Diff(Operation operation, String text) {</span>
+      // Construct a diff with the specified operation and text.
+<span class="nc" id="L2326">      this.operation = operation;</span>
+<span class="nc" id="L2327">      this.text = text;</span>
+<span class="nc" id="L2328">    }</span>
+
+    /**
+     * Display a human-readable version of this Diff.
+     * @return text version.
+     */
+    public String toString() {
+<span class="nc" id="L2335">      String prettyText = this.text.replace('\n', '\u00b6');</span>
+<span class="nc" id="L2336">      return &quot;Diff(&quot; + this.operation + &quot;,\&quot;&quot; + prettyText + &quot;\&quot;)&quot;;</span>
+    }
+
+    /**
+     * Create a numeric hash value for a Diff.
+     * This function is not used by DMP.
+     * @return Hash value.
+     */
+    @Override
+    public int hashCode() {
+<span class="nc" id="L2346">      final int prime = 31;</span>
+<span class="nc bnc" id="L2347" title="All 2 branches missed.">      int result = (operation == null) ? 0 : operation.hashCode();</span>
+<span class="nc bnc" id="L2348" title="All 2 branches missed.">      result += prime * ((text == null) ? 0 : text.hashCode());</span>
+<span class="nc" id="L2349">      return result;</span>
+    }
+
+    /**
+     * Is this Diff equivalent to another Diff?
+     * @param obj Another Diff to compare against.
+     * @return true or false.
+     */
+    @Override
+    public boolean equals(Object obj) {
+<span class="nc bnc" id="L2359" title="All 2 branches missed.">      if (this == obj) {</span>
+<span class="nc" id="L2360">        return true;</span>
+      }
+<span class="nc bnc" id="L2362" title="All 2 branches missed.">      if (obj == null) {</span>
+<span class="nc" id="L2363">        return false;</span>
+      }
+<span class="nc bnc" id="L2365" title="All 2 branches missed.">      if (getClass() != obj.getClass()) {</span>
+<span class="nc" id="L2366">        return false;</span>
+      }
+<span class="nc" id="L2368">      Diff other = (Diff) obj;</span>
+<span class="nc bnc" id="L2369" title="All 2 branches missed.">      if (operation != other.operation) {</span>
+<span class="nc" id="L2370">        return false;</span>
+      }
+<span class="nc bnc" id="L2372" title="All 2 branches missed.">      if (text == null) {</span>
+<span class="nc bnc" id="L2373" title="All 2 branches missed.">        if (other.text != null) {</span>
+<span class="nc" id="L2374">          return false;</span>
+        }
+<span class="nc bnc" id="L2376" title="All 2 branches missed.">      } else if (!text.equals(other.text)) {</span>
+<span class="nc" id="L2377">        return false;</span>
+      }
+<span class="nc" id="L2379">      return true;</span>
+    }
+  }
+
+
+  /**
+   * Class representing one patch operation.
+   */
+  public static class Patch {
+    public LinkedList&lt;Diff&gt; diffs;
+    public int start1;
+    public int start2;
+    public int length1;
+    public int length2;
+
+    /**
+     * Constructor.  Initializes with an empty list of diffs.
+     */
+<span class="nc" id="L2397">    public Patch() {</span>
+<span class="nc" id="L2398">      this.diffs = new LinkedList&lt;Diff&gt;();</span>
+<span class="nc" id="L2399">    }</span>
+
+    /**
+     * Emulate GNU diff's format.
+     * Header: @@ -382,8 +481,9 @@
+     * Indices are printed as 1-based, not 0-based.
+     * @return The GNU diff string.
+     */
+    public String toString() {
+      String coords1, coords2;
+<span class="nc bnc" id="L2409" title="All 2 branches missed.">      if (this.length1 == 0) {</span>
+<span class="nc" id="L2410">        coords1 = this.start1 + &quot;,0&quot;;</span>
+<span class="nc bnc" id="L2411" title="All 2 branches missed.">      } else if (this.length1 == 1) {</span>
+<span class="nc" id="L2412">        coords1 = Integer.toString(this.start1 + 1);</span>
+<span class="nc" id="L2413">      } else {</span>
+<span class="nc" id="L2414">        coords1 = (this.start1 + 1) + &quot;,&quot; + this.length1;</span>
+      }
+<span class="nc bnc" id="L2416" title="All 2 branches missed.">      if (this.length2 == 0) {</span>
+<span class="nc" id="L2417">        coords2 = this.start2 + &quot;,0&quot;;</span>
+<span class="nc bnc" id="L2418" title="All 2 branches missed.">      } else if (this.length2 == 1) {</span>
+<span class="nc" id="L2419">        coords2 = Integer.toString(this.start2 + 1);</span>
+<span class="nc" id="L2420">      } else {</span>
+<span class="nc" id="L2421">        coords2 = (this.start2 + 1) + &quot;,&quot; + this.length2;</span>
+      }
+<span class="nc" id="L2423">      StringBuilder text = new StringBuilder();</span>
+<span class="nc" id="L2424">      text.append(&quot;@@ -&quot;).append(coords1).append(&quot; +&quot;).append(coords2)</span>
+<span class="nc" id="L2425">          .append(&quot; @@\n&quot;);</span>
+      // Escape the body of the patch with %xx notation.
+<span class="nc bnc" id="L2427" title="All 2 branches missed.">      for (Diff aDiff : this.diffs) {</span>
+<span class="nc bnc" id="L2428" title="All 4 branches missed.">        switch (aDiff.operation) {</span>
+        case INSERT:
+<span class="nc" id="L2430">          text.append('+');</span>
+<span class="nc" id="L2431">          break;</span>
+        case DELETE:
+<span class="nc" id="L2433">          text.append('-');</span>
+<span class="nc" id="L2434">          break;</span>
+        case EQUAL:
+<span class="nc" id="L2436">          text.append(' ');</span>
+          break;
+        }
+        try {
+<span class="nc" id="L2440">          text.append(URLEncoder.encode(aDiff.text, &quot;UTF-8&quot;).replace('+', ' '))</span>
+<span class="nc" id="L2441">              .append(&quot;\n&quot;);</span>
+<span class="nc" id="L2442">        } catch (UnsupportedEncodingException e) {</span>
+          // Not likely on modern system.
+<span class="nc" id="L2444">          throw new Error(&quot;This system does not support UTF-8.&quot;, e);</span>
+        }
+      }
+<span class="nc" id="L2447">      return unescapeForEncodeUriCompatability(text.toString());</span>
+    }
+  }
+
+  /**
+   * Unescape selected chars for compatability with JavaScript's encodeURI.
+   * In speed critical applications this could be dropped since the
+   * receiving application will certainly decode these fine.
+   * Note that this function is case-sensitive.  Thus &quot;%3f&quot; would not be
+   * unescaped.  But this is ok because it is only called with the output of
+   * URLEncoder.encode which returns uppercase hex.
+   *
+   * Example: &quot;%3F&quot; -&gt; &quot;?&quot;, &quot;%24&quot; -&gt; &quot;$&quot;, etc.
+   *
+   * @param str The string to escape.
+   * @return The escaped string.
+   */
+  private static String unescapeForEncodeUriCompatability(String str) {
+<span class="nc" id="L2465">    return str.replace(&quot;%21&quot;, &quot;!&quot;).replace(&quot;%7E&quot;, &quot;~&quot;)</span>
+<span class="nc" id="L2466">        .replace(&quot;%27&quot;, &quot;'&quot;).replace(&quot;%28&quot;, &quot;(&quot;).replace(&quot;%29&quot;, &quot;)&quot;)</span>
+<span class="nc" id="L2467">        .replace(&quot;%3B&quot;, &quot;;&quot;).replace(&quot;%2F&quot;, &quot;/&quot;).replace(&quot;%3F&quot;, &quot;?&quot;)</span>
+<span class="nc" id="L2468">        .replace(&quot;%3A&quot;, &quot;:&quot;).replace(&quot;%40&quot;, &quot;@&quot;).replace(&quot;%26&quot;, &quot;&amp;&quot;)</span>
+<span class="nc" id="L2469">        .replace(&quot;%3D&quot;, &quot;=&quot;).replace(&quot;%2B&quot;, &quot;+&quot;).replace(&quot;%24&quot;, &quot;$&quot;)</span>
+<span class="nc" id="L2470">        .replace(&quot;%2C&quot;, &quot;,&quot;).replace(&quot;%23&quot;, &quot;#&quot;);</span>
+  }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

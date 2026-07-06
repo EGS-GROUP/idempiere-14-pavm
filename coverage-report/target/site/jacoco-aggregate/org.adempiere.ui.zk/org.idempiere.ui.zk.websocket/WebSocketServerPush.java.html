@@ -1,0 +1,442 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>WebSocketServerPush.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.ui.zk</a> &gt; <a href="index.source.html" class="el_package">org.idempiere.ui.zk.websocket</a> &gt; <span class="el_source">WebSocketServerPush.java</span></div><h1>WebSocketServerPush.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - hengsin                         								   *
+ **********************************************************************/
+package org.idempiere.ui.zk.websocket;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.hc.client5.http.cookie.BasicCookieStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.zkoss.zk.au.out.AuScript;
+import org.zkoss.zk.ui.AbstractComponent;
+import org.zkoss.zk.ui.Desktop;
+import org.zkoss.zk.ui.DesktopUnavailableException;
+import org.zkoss.zk.ui.Execution;
+import org.zkoss.zk.ui.Executions;
+import org.zkoss.zk.ui.UiException;
+import org.zkoss.zk.ui.event.Event;
+import org.zkoss.zk.ui.event.EventListener;
+import org.zkoss.zk.ui.event.Events;
+import org.zkoss.zk.ui.impl.ExecutionCarryOver;
+import org.zkoss.zk.ui.sys.Scheduler;
+import org.zkoss.zk.ui.sys.ServerPush;
+import org.zkoss.zk.ui.util.Clients;
+import org.zkoss.zk.ui.util.ExecutionInit;
+
+/**
+ * Server push implementation using web socket
+ * @author hengsin
+ *
+ */
+public class WebSocketServerPush implements ServerPush {
+
+    protected static final String WEBSOCKET_EVENT_COOKIE_STORE = &quot;websocket.event.cookie.store&quot;;
+
+	private static final String ON_ECHO = &quot;onEcho&quot;;
+
+	private static final String ON_SCHEDULE = &quot;onSchedule&quot;;
+
+	private static final String WEBSOCKET_SERVERPUSH_ECHO = &quot;WebSocketServerPush.Echo&quot;;
+
+	private static final String ON_ACTIVATE_DESKTOP = &quot;onActivateDesktop&quot;;
+
+<span class="nc" id="L74">    private final AtomicReference&lt;Desktop&gt; desktop = new AtomicReference&lt;Desktop&gt;();</span>
+    
+<span class="nc" id="L76">    private final Logger log = LoggerFactory.getLogger(this.getClass());</span>
+    
+    private ThreadInfo _active;
+    private ExecutionCarryOver _carryOver;
+<span class="nc" id="L80">    private final Object _mutex = new Object();</span>
+    
+<span class="nc" id="L82">    private final static Map&lt;String, ServerPushEndPoint&gt; endPointMap = new ConcurrentHashMap&lt;&gt;();</span>
+<span class="nc" id="L83">    private final static Map&lt;String, Boolean&gt; unregisterMap = new ConcurrentHashMap&lt;&gt;();</span>
+<span class="nc" id="L84">    private final static ServerPushEndPoint STUB = new ServerPushEndPoint();</span>
+<span class="nc" id="L85">    private List&lt;Schedule&lt;Event&gt;&gt; schedules = new ArrayList&lt;&gt;();</span>
+
+    private AbstractComponent dummyTarget;
+    
+<span class="nc" id="L89">    protected static final String WS_CLIENT_IP = &quot;ws-client-ip&quot;;</span>
+
+    private static class OnScheduleEvent extends Event {
+		private static final long serialVersionUID = 1L;
+		
+		private Schedule&lt;Event&gt;[] schedules;
+		
+		public OnScheduleEvent(Schedule&lt;Event&gt;[] schedules) {
+<span class="nc" id="L97">			super(ON_SCHEDULE);</span>
+<span class="nc" id="L98">			this.schedules = schedules;</span>
+<span class="nc" id="L99">		}</span>
+		
+		public Schedule&lt;Event&gt;[] getSchedules() {
+<span class="nc" id="L102">			return schedules;</span>
+		}
+	}
+    
+<span class="nc" id="L106">    public WebSocketServerPush() {</span>
+<span class="nc" id="L107">    	dummyTarget = new AbstractComponent();</span>
+<span class="nc" id="L108">    	dummyTarget.addEventListener(ON_SCHEDULE, (OnScheduleEvent e) -&gt; {</span>
+<span class="nc" id="L109">    		Schedule&lt;Event&gt;[] pendings = e.getSchedules();</span>
+<span class="nc bnc" id="L110" title="All 4 branches missed.">    		if (pendings != null &amp;&amp; pendings.length &gt; 0) {</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">				for (Schedule&lt;Event&gt; schedule : pendings) {</span>
+					try {
+<span class="nc" id="L113">						schedule.task.onEvent(schedule.event);</span>
+<span class="nc" id="L114">					} catch (Exception ex) {</span>
+<span class="nc" id="L115">						log.error(&quot;Failed to execute scheduled task &quot; + schedule.task, ex);</span>
+					}
+				}
+			}
+<span class="nc" id="L119">    	});</span>
+<span class="nc" id="L120">    	dummyTarget.addEventListener(ON_ECHO, e -&gt; {</span>
+<span class="nc" id="L121">    		StringBuilder script = new StringBuilder();</span>
+<span class="nc" id="L122">    		String dtid = e.getData().toString();</span>
+<span class="nc" id="L123">    		script.append(&quot;setTimeout(function() {let dt = zk.Desktop.$('&quot;).append(dtid).append(&quot;');\n&quot;);</span>
+<span class="nc" id="L124">    		script.append(&quot;if (dt._serverpush &amp;&amp; dt._serverpush.socket) {&quot;);</span>
+<span class="nc" id="L125">    		script.append(&quot;  let evt = new Object(); evt.data = 'echo';\n&quot;);</span>
+<span class="nc" id="L126">    		script.append(&quot;  dt._serverpush.socket.onmessage(evt);\n&quot;);</span>
+<span class="nc" id="L127">    		script.append(&quot;}}, 300);&quot;);</span>
+<span class="nc" id="L128">    		Clients.response(new AuScript(null, script.toString()));</span>
+<span class="nc" id="L129">    	});</span>
+<span class="nc" id="L130">    }</span>
+
+    @Override
+    public boolean activate(long timeout) throws InterruptedException, DesktopUnavailableException {
+<span class="nc" id="L134">    	final Thread curr = Thread.currentThread();</span>
+<span class="nc bnc" id="L135" title="All 4 branches missed.">    	if (_active != null &amp;&amp; _active.thread.equals(curr)) { //re-activate</span>
+<span class="nc" id="L136">			++_active.nActive;</span>
+<span class="nc" id="L137">			return true;</span>
+		}
+    	
+<span class="nc" id="L140">		final ThreadInfo info = new ThreadInfo(curr);</span>
+
+<span class="nc" id="L142">		EventListener&lt;Event&gt; task = new EventListener&lt;Event&gt;() {</span>
+			@Override
+			public void onEvent(Event event) throws Exception {
+<span class="nc bnc" id="L145" title="All 2 branches missed.">				if (event.getName().equals(ON_ACTIVATE_DESKTOP))</span>
+				{
+<span class="nc" id="L147">					synchronized (_mutex) {</span>
+<span class="nc" id="L148">						_carryOver = new ExecutionCarryOver(desktop.get());</span>
+						
+<span class="nc" id="L150">						synchronized (info) {</span>
+<span class="nc" id="L151">							info.nActive = 1; //granted</span>
+<span class="nc" id="L152">							info.notifyAll();</span>
+						}
+						
+						try {
+<span class="nc" id="L156">							_mutex.wait(); //wait until the server push is done</span>
+<span class="nc" id="L157">						} catch (InterruptedException ex) {</span>
+<span class="nc" id="L158">							throw UiException.Aide.wrap(ex);</span>
+						}
+					}
+				}
+<span class="nc" id="L162">			}</span>
+		};
+		
+<span class="nc" id="L165">		synchronized (info) {</span>
+<span class="nc" id="L166">			Executions.schedule(desktop.get(), task, new Event(ON_ACTIVATE_DESKTOP));</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">			if (info.nActive == 0)</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">				info.wait(timeout &lt;= 0 ? 10*60*1000: timeout);</span>
+		}
+    	
+<span class="nc" id="L171">    	_carryOver.carryOver();</span>
+<span class="nc" id="L172">    	_active = info;</span>
+    	
+<span class="nc" id="L174">    	return true;</span>
+    }
+
+    private boolean echo() {
+<span class="nc" id="L178">    	Desktop dt = desktop.get();</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (dt != null) {</span>
+<span class="nc" id="L180">        	ServerPushEndPoint endPoint = getEndPoint(dt.getId());</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        	if (endPoint == null) {</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">        		if (dt.isServerPushEnabled()) {</span>
+        			try {
+<span class="nc" id="L184">						Thread.sleep(300);</span>
+<span class="nc" id="L185">					} catch (InterruptedException e) {</span>
+					}
+<span class="nc" id="L187">        			endPoint = getEndPoint(dt.getId());</span>
+        		}
+        	}
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        	if (endPoint != null) {</span>
+<span class="nc" id="L191">        		endPoint.echo();</span>
+<span class="nc" id="L192">        		return true;</span>
+        	}
+        } 
+<span class="nc" id="L195">        return false;</span>
+    }
+
+    @Override
+    public boolean deactivate(boolean stop) {
+<span class="nc" id="L200">    	boolean stopped = false;</span>
+<span class="nc bnc" id="L201" title="All 4 branches missed.">		if (_active != null &amp;&amp; Thread.currentThread().equals(_active.thread)) {</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">			if (--_active.nActive &lt;= 0) {</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">				if (stop)</span>
+				{
+<span class="nc" id="L205">					stop();</span>
+<span class="nc" id="L206">					stopped = true;</span>
+				}
+
+<span class="nc" id="L209">				_carryOver.cleanup();</span>
+<span class="nc" id="L210">				_carryOver = null;</span>
+<span class="nc" id="L211">				_active.nActive = 0; //just in case</span>
+<span class="nc" id="L212">				_active = null;</span>
+								
+<span class="nc" id="L214">				synchronized (_mutex) {</span>
+<span class="nc" id="L215">					_mutex.notifyAll();</span>
+				}
+			}
+		}
+<span class="nc" id="L219">		return stopped;</span>
+    }
+
+    @Override
+    public boolean isActive() {
+<span class="nc bnc" id="L224" title="All 4 branches missed.">    	return _active != null &amp;&amp; _active.nActive &gt; 0;</span>
+    }
+
+    @SuppressWarnings(&quot;unchecked&quot;)
+	@Override
+    public void onPiggyback() {
+
+    	//Process pending schedule event
+<span class="nc" id="L232">    	Schedule&lt;Event&gt;[] pendings = null;</span>
+<span class="nc" id="L233">    	synchronized (schedules) {</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">    		if (!schedules.isEmpty()) {</span>
+<span class="nc" id="L235">    			pendings = schedules.toArray(new Schedule[0]);</span>
+<span class="nc" id="L236">    			schedules.clear();</span>
+    		}
+    	}
+<span class="nc bnc" id="L239" title="All 4 branches missed.">    	if (pendings != null &amp;&amp; pendings.length &gt; 0) {</span>
+<span class="nc" id="L240">    		Events.sendEvent(dummyTarget, new OnScheduleEvent(pendings));</span>
+    	}
+    	
+    	//check web socket end point 
+<span class="nc" id="L244">    	Desktop dt = desktop.get(); </span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">    	if (dt != null) {</span>
+<span class="nc" id="L246">        	ServerPushEndPoint endPoint = getEndPoint(dt.getId());</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">        	if (endPoint == null) {</span>
+<span class="nc bnc" id="L248" title="All 4 branches missed.">        		if (dt.isServerPushEnabled() &amp;&amp; unregisterMap.remove(dt.getId(), Boolean.TRUE)) {</span>
+<span class="nc" id="L249">        			registerEndPoint(dt.getId(), STUB);</span>
+<span class="nc" id="L250">        			startServerPushAtClient(dt);</span>
+        		}
+        	}
+    	}    	
+<span class="nc" id="L254">    }</span>
+
+    private static class EventListenerWrapper&lt;T extends Event&gt; implements EventListener&lt;T&gt; {
+    	private EventListener&lt;T&gt; wrappedListener;
+    	private AtomicBoolean runOnce;
+
+<span class="nc" id="L260">    	private EventListenerWrapper(EventListener&lt;T&gt; wrappedListener) {</span>
+<span class="nc" id="L261">    		this.wrappedListener=wrappedListener;</span>
+<span class="nc" id="L262">    		this.runOnce = new AtomicBoolean(false);</span>
+<span class="nc" id="L263">    	}</span>
+
+    	@Override
+    	public void onEvent(T event) throws Exception {
+    		//if the wrapped event listener throws exception, the scheduled listener is not clean up
+    		//this atomic boolean help prevent repeated call when that happens
+<span class="nc bnc" id="L269" title="All 2 branches missed.">    		if (!runOnce.compareAndSet(false, true))</span>
+<span class="nc" id="L270">    			return;</span>
+
+<span class="nc" id="L272">    		wrappedListener.onEvent(event);</span>
+<span class="nc" id="L273">    	}</span>
+
+    }
+    
+    @SuppressWarnings({ &quot;unchecked&quot;, &quot;rawtypes&quot; })
+	@Override
+	public &lt;T extends Event&gt; void schedule(EventListener&lt;T&gt; task, T event,
+			Scheduler&lt;T&gt; scheduler) {
+<span class="nc" id="L281">    	EventListenerWrapper&lt;T&gt; wrapper = new EventListenerWrapper&lt;T&gt;(task);</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">    	if (Executions.getCurrent() == null) {</span>
+    		//schedule and execute in onPiggyBack
+<span class="nc" id="L284">    		synchronized (schedules) {</span>
+<span class="nc" id="L285">				schedules.add(new Schedule(wrapper, event));</span>
+			}
+<span class="nc" id="L287">	        echo();</span>
+<span class="nc" id="L288">    	} else {</span>
+    		// in event listener thread, process this asynchronously in onPiggyback
+<span class="nc" id="L290">    		synchronized (schedules) {</span>
+<span class="nc" id="L291">				schedules.add(new Schedule(wrapper, event));</span>
+			}
+<span class="nc bnc" id="L293" title="All 2 branches missed.">    		if (Executions.getCurrent().getAttribute(WEBSOCKET_SERVERPUSH_ECHO) == null) {</span>
+<span class="nc" id="L294">    			Executions.getCurrent().setAttribute(WEBSOCKET_SERVERPUSH_ECHO, Boolean.TRUE);</span>
+<span class="nc" id="L295">    			Events.postEvent(-9999, ON_ECHO, dummyTarget, Executions.getCurrent().getDesktop().getId());</span>
+    		}
+    	}
+<span class="nc" id="L298">    }</span>
+
+    private class Schedule&lt;T extends Event&gt; {
+    	private EventListener&lt;T&gt; task;
+		private T event;
+
+<span class="nc" id="L304">		private Schedule(EventListener&lt;T&gt; task, T event) {</span>
+<span class="nc" id="L305">    		this.task = task;</span>
+<span class="nc" id="L306">    		this.event = event;</span>
+<span class="nc" id="L307">    	}</span>
+    }
+    
+    @Override
+    public void start(Desktop desktop) {
+<span class="nc" id="L312">        Desktop oldDesktop = this.desktop.getAndSet(desktop);</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">        if (oldDesktop != null) {</span>
+<span class="nc" id="L314">            log.warn(&quot;Server push already started for desktop &quot; + desktop.getId());</span>
+<span class="nc" id="L315">            return;</span>
+        }
+
+<span class="nc bnc" id="L318" title="All 2 branches missed.">        if (log.isDebugEnabled())</span>
+<span class="nc" id="L319">        	log.debug(&quot;Starting server push for &quot; + desktop);</span>
+<span class="nc" id="L320">        registerEndPoint(desktop.getId(), STUB);</span>
+
+        // Store client IP address in session attribute for later use in EndpointConfigurator
+<span class="nc" id="L323">        var execution = Executions.getCurrent();</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        if (execution != null) {</span>
+<span class="nc" id="L325">        	var request = execution.getNativeRequest();</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">        	if (request instanceof HttpServletRequest httpRequest) {</span>
+<span class="nc" id="L327">				var clientIp = httpRequest.getRemoteAddr();</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">				if (clientIp != null) {</span>
+<span class="nc" id="L329">					var session = desktop.getSession();</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">					if (session != null) {</span>
+<span class="nc" id="L331">						session.setAttribute(WS_CLIENT_IP, clientIp);</span>
+					}
+				}
+			}
+        }
+<span class="nc" id="L336">        startServerPushAtClient(desktop);</span>
+
+<span class="nc" id="L338">		ExecutionInit cookieHandler = (Execution exec, Execution parent) -&gt; {</span>
+<span class="nc" id="L339">			var responseObject = exec.getNativeResponse();</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">			if (responseObject instanceof HttpServletResponse servletResponse) {</span>
+<span class="nc" id="L341">				var session = desktop.getSession();</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">				var cookieStore = session != null ? session.removeAttribute(WEBSOCKET_EVENT_COOKIE_STORE) : null;</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">				if (cookieStore instanceof BasicCookieStore basicCookieStore) {</span>
+					//add cookies from ServerPushEndPoint response to browser
+<span class="nc" id="L345">					basicCookieStore.getCookies().forEach(cookie -&gt; {</span>
+<span class="nc" id="L346">						Cookie browserCookie = new Cookie(cookie.getName(), cookie.getValue());</span>
+<span class="nc" id="L347">						browserCookie.setSecure(true);</span>
+<span class="nc" id="L348">						browserCookie.setHttpOnly(true);</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">						if (cookie.getExpiryDate() != null) {</span>
+<span class="nc" id="L350">							long maxAgeSeconds = Math.max(0L,</span>
+<span class="nc" id="L351">									(cookie.getExpiryDate().getTime() - System.currentTimeMillis()) / 1000L);</span>
+<span class="nc" id="L352">							browserCookie.setMaxAge((int) Math.min(Integer.MAX_VALUE, maxAgeSeconds));</span>
+						}
+<span class="nc" id="L354">						servletResponse.addCookie(browserCookie);</span>
+<span class="nc" id="L355">					});</span>
+				}
+			}
+<span class="nc" id="L358">		};			</span>
+<span class="nc" id="L359">		desktop.addListener(cookieHandler);</span>
+<span class="nc" id="L360">    }</span>
+
+	private void startServerPushAtClient(Desktop desktop) {
+<span class="nc" id="L363">		Clients.response(&quot;org.idempiere.websocket.serverpush.start&quot;, new AuScript(null, &quot;org.idempiere.websocket.startServerPush('&quot; + desktop.getId() + &quot;');&quot;));</span>
+<span class="nc" id="L364">	}</span>
+
+    @Override
+    public void stop() {
+<span class="nc" id="L368">        Desktop desktop = this.desktop.getAndSet(null);</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">        if (desktop == null) {</span>
+<span class="nc" id="L370">            log.warn(&quot;Server push hasn't been started or has already stopped&quot;);</span>
+<span class="nc" id="L371">            return;</span>
+        }
+
+<span class="nc bnc" id="L374" title="All 2 branches missed.">        if (log.isDebugEnabled())</span>
+<span class="nc" id="L375">        	log.debug(&quot;Stopping server push for &quot; + desktop);</span>
+<span class="nc" id="L376">        Clients.response(&quot;org.idempiere.websocket.serverpush.stop&quot;, new AuScript(null, &quot;org.idempiere.websocket.stopServerPush('&quot; + desktop.getId() + &quot;');&quot;));</span>
+<span class="nc" id="L377">    }</span>
+
+	private static class ThreadInfo {
+		private final Thread thread;
+		/** # of activate() was called. */
+		private int nActive;
+<span class="nc" id="L383">		private ThreadInfo(Thread thread) {</span>
+<span class="nc" id="L384">			this.thread = thread;</span>
+<span class="nc" id="L385">		}</span>
+		public String toString() {
+<span class="nc" id="L387">			return &quot;[&quot; + thread + ',' + nActive + ']';</span>
+		}
+	}
+
+	@Override
+	public void resume() {
+<span class="nc bnc" id="L393" title="All 2 branches missed.">		if (this.desktop.get() != null) {</span>
+<span class="nc" id="L394">			Desktop desktop = this.desktop.getAndSet(null);</span>
+<span class="nc" id="L395">			start(desktop);</span>
+		}
+<span class="nc" id="L397">	}</span>
+	
+	/**
+	 * Register web socket end point for desktop
+	 * @param dtid Desktop id
+	 * @param endpoint Connected web socket end point
+	 */
+	public static void registerEndPoint(String dtid, ServerPushEndPoint endpoint) {
+<span class="nc" id="L405">		endPointMap.put(dtid, endpoint);</span>
+<span class="nc" id="L406">	}</span>
+	
+	/**
+	 * Remove web socket end point for desktop
+	 * @param dtid Desktop id
+	 * @return true if there's end point register previously for desktop, false otherwise
+	 */
+	public static boolean unregisterEndPoint(String dtid) {
+<span class="nc" id="L414">		ServerPushEndPoint endpoint = endPointMap.remove(dtid);</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">		if (endpoint != null) {</span>
+<span class="nc" id="L416">			unregisterMap.put(dtid, Boolean.TRUE);</span>
+		}
+<span class="nc bnc" id="L418" title="All 2 branches missed.">		return endpoint != null;</span>
+	}
+	
+	/**
+	 * Get web socket end point for desktop
+	 * @param dtid Desktop id
+	 * @return Web socket end point
+	 */
+	public static ServerPushEndPoint getEndPoint(String dtid) {
+<span class="nc" id="L427">		ServerPushEndPoint endpoint = endPointMap.get(dtid);</span>
+<span class="nc bnc" id="L428" title="All 2 branches missed.">		if (endpoint == STUB)</span>
+<span class="nc" id="L429">			return null;</span>
+		else
+<span class="nc" id="L431">			return endpoint;</span>
+	}
+	
+	/**
+	 * @param dtid desktop id
+	 * @return true if serverpush started for dtid, false otherwise
+	 */
+	public static boolean isValidDesktopId(String dtid) {
+<span class="nc" id="L439">		return endPointMap.containsKey(dtid);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

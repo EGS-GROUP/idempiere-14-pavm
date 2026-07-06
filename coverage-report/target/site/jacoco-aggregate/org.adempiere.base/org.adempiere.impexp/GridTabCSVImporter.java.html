@@ -1,0 +1,1863 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>GridTabCSVImporter.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.impexp</a> &gt; <span class="el_source">GridTabCSVImporter.java</span></div><h1>GridTabCSVImporter.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: iDempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 2012 Carlos Ruiz                                             *
+ * Copyright (C) 2012 Trek Global                                             *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.adempiere.impexp;
+
+import static org.compiere.model.SystemIDs.REFERENCE_DOCUMENTACTION;
+import static org.compiere.model.SystemIDs.REFERENCE_PAYMENTRULE;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.math.BigDecimal;
+import java.nio.charset.Charset;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.DecimalFormatSymbols;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.logging.Level;
+
+import org.adempiere.base.IGridTabImporter;
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.util.IProcessUI;
+import org.adempiere.util.ProcessUtil;
+import org.compiere.model.GridField;
+import org.compiere.model.GridTab;
+import org.compiere.model.GridWindow;
+import org.compiere.model.GridWindowVO;
+import org.compiere.model.MColumn;
+import org.compiere.model.MLocation;
+import org.compiere.model.MProcess;
+import org.compiere.model.MQuery;
+import org.compiere.model.MRefList;
+import org.compiere.model.MRefTable;
+import org.compiere.model.MTable;
+import org.compiere.model.PO;
+import org.compiere.model.Query;
+import org.compiere.process.ProcessInfo;
+import org.compiere.tools.FileUtil;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Env;
+import org.compiere.util.Language;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+import org.compiere.wf.MWFProcess;
+import org.supercsv.cellprocessor.Optional;
+import org.supercsv.cellprocessor.ParseBigDecimal;
+import org.supercsv.cellprocessor.ParseBool;
+import org.supercsv.cellprocessor.ParseDate;
+import org.supercsv.cellprocessor.ParseInt;
+import org.supercsv.cellprocessor.constraint.StrMinMax;
+import org.supercsv.cellprocessor.ift.CellProcessor;
+import org.supercsv.exception.SuperCsvCellProcessorException;
+import org.supercsv.io.CsvMapReader;
+import org.supercsv.io.ICsvMapReader;
+import org.supercsv.prefs.CsvPreference;
+
+/**
+ * CSV Importer for GridTab
+ * @author Carlos Ruiz
+ * @author Juan David Arboleda 
+ */
+<span class="nc" id="L88">public class GridTabCSVImporter implements IGridTabImporter</span>
+{
+	private static final String ERROR_HEADER = &quot;_ERROR_&quot;;
+	private static final String LOG_HEADER = &quot;_LOG_&quot;;
+	private static final String IMPORT_MODE_MERGE = &quot;M&quot;;
+	private static final String IMPORT_MODE_UPDATE = &quot;U&quot;;
+	private static final String IMPORT_MODE_INSERT = &quot;I&quot;;
+	
+<span class="nc" id="L96">	private boolean m_isError = false;</span>
+<span class="nc" id="L97">	private String m_import_mode = null;</span>
+	private List&lt;String&gt; header;  
+    private List&lt;CellProcessor&gt; readProcArray;
+    private List&lt;GridField&gt; locationFields;
+	private boolean isThereKey;
+    private boolean isThereDocAction;
+    private Map&lt;GridTab,Integer&gt; tabMapIndexes;
+    private List&lt;Map&lt;String, Object&gt;&gt; data;
+    private ICsvMapReader mapReader;
+    private TreeMap&lt;GridTab,Integer&gt; sortedtTabMapIndexes;
+    private List&lt;String&gt; rawData;
+<span class="nc" id="L108">    private boolean isMasterok = true; </span>
+<span class="nc" id="L109">	private boolean isDetailok = true;</span>
+<span class="nc" id="L110">	private boolean error = false;</span>
+	private List&lt;String&gt;  rowsTmpResult;
+	private PO masterRecord;
+    
+    //Files management
+	private File errFile;
+	private File logFile;
+	private PrintWriter errFileW;
+	private PrintWriter logFileW;
+
+<span class="nc" id="L120">	private String delimiterChar = &quot;,&quot;;</span>
+<span class="nc" id="L121">	private String quoteChar = &quot;\&quot;&quot;;</span>
+
+	//Trx
+	private Trx trx;
+	private String trxName;
+<span class="nc" id="L126">	private boolean isSingleTrx = false;</span>
+
+	/**	Logger			*/
+<span class="nc" id="L129">	private static final CLogger log = CLogger.getCLogger(GridTabCSVImporter.class);</span>
+	
+	@Override
+	public File fileImport(GridTab gridTab, List&lt;GridTab&gt; childs, InputStream filestream, Charset charset , String importMode) {		
+<span class="nc" id="L133">		return fileImport(gridTab, childs, filestream, charset, importMode, null, null, null);</span>
+	}//fileImport
+
+	@Override
+	public File fileImport(GridTab gridTab, List&lt;GridTab&gt; childs, InputStream filestream, Charset charset, String importMode, IProcessUI processUI) {
+<span class="nc" id="L138">		return fileImport(gridTab, childs, filestream, charset, importMode, null, null, processUI);</span>
+	}
+
+	@Override
+	public File fileImport(GridTab gridTab, List&lt;GridTab&gt; childs, InputStream filestream, Charset charset, String importMode, String p_delimiterChar, String p_quoteChar, IProcessUI processUI) {
+
+<span class="nc bnc" id="L144" title="All 4 branches missed.">		if(!gridTab.isInsertRecord() &amp;&amp; isInsertMode())</span>
+<span class="nc" id="L145">			throwAdempiereException(&quot;Insert record disabled for Tab&quot;);</span>
+
+		try {
+<span class="nc" id="L148">			String errFileName = FileUtil.getTempMailName(&quot;Import_&quot; + gridTab.getTableName(), &quot;_err.csv&quot;);</span>
+<span class="nc" id="L149">			initValues();</span>
+<span class="nc" id="L150">			m_import_mode = importMode;</span>
+<span class="nc" id="L151">			errFile = new File(errFileName);</span>
+<span class="nc" id="L152">			errFileW = new PrintWriter(errFile, charset.name());</span>
+
+<span class="nc bnc" id="L154" title="All 2 branches missed.">			if (p_delimiterChar != null)</span>
+<span class="nc" id="L155">				delimiterChar = p_delimiterChar;</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">			if (p_quoteChar != null)</span>
+<span class="nc" id="L157">				quoteChar = p_quoteChar;</span>
+<span class="nc" id="L158">			CsvPreference csvpref = new CsvPreference.Builder(quoteChar.charAt(0), delimiterChar.charAt(0), &quot;\r\n&quot; /* ignored */).build();</span>
+
+<span class="nc" id="L160">			mapReader = new CsvMapReader(new InputStreamReader(filestream, charset), csvpref);</span>
+<span class="nc" id="L161">			header =  Arrays.asList(mapReader.getHeader(true));  </span>
+
+			//Mapping header
+<span class="nc" id="L164">			int indxDetail = mapCSVHeader(gridTab);</span>
+
+<span class="nc bnc" id="L166" title="All 4 branches missed.">			if(isUpdateOrMergeMode() &amp;&amp; !isThereKey)</span>
+<span class="nc" id="L167">				throwAdempiereException(gridTab.getTableName()+&quot;: &quot;+Msg.getMsg(Env.getCtx(), &quot;NoKeyFound&quot;));</span>
+
+<span class="nc" id="L169">			tabMapIndexes.put(gridTab,indxDetail-1);</span>
+<span class="nc" id="L170">			isThereKey = false;</span>
+<span class="nc" id="L171">			locationFields = null;</span>
+
+			//Mapping details 
+<span class="nc" id="L174">			mapCSVDetail(indxDetail, childs);</span>
+
+<span class="nc" id="L176">			sortedtTabMapIndexes = null;</span>
+<span class="nc bnc" id="L177" title="All 4 branches missed.">			if (childs.size()&gt;0 &amp;&amp; !tabMapIndexes.isEmpty()){</span>
+<span class="nc" id="L178">				ValueComparator bvc =  new ValueComparator(tabMapIndexes);</span>
+<span class="nc" id="L179">				sortedtTabMapIndexes = new TreeMap&lt;GridTab,Integer&gt;(bvc);</span>
+<span class="nc" id="L180">				sortedtTabMapIndexes.putAll(tabMapIndexes);</span>
+<span class="nc" id="L181">			}else{</span>
+<span class="nc" id="L182">				Map&lt;GridTab,Integer&gt; localMapIndexes = new HashMap&lt;GridTab,Integer&gt;();</span>
+<span class="nc" id="L183">				localMapIndexes.put(gridTab, header.size()-1);</span>
+<span class="nc" id="L184">				ValueComparator bvc =  new ValueComparator(localMapIndexes);</span>
+<span class="nc" id="L185">				sortedtTabMapIndexes = new TreeMap&lt;GridTab,Integer&gt;(bvc);</span>
+<span class="nc" id="L186">				sortedtTabMapIndexes.putAll(localMapIndexes);</span>
+			}
+
+<span class="nc" id="L189">			m_isError = false;</span>
+			// write the header
+<span class="nc" id="L191">			String rawHeader = mapReader.getUntokenizedRow();</span>
+<span class="nc" id="L192">			errFileW.write(rawHeader + delimiterChar + ERROR_HEADER + &quot;\n&quot;);</span>
+<span class="nc" id="L193">			data = new ArrayList&lt;Map&lt;String, Object&gt;&gt;();</span>
+<span class="nc" id="L194">			rawData = new ArrayList&lt;String&gt;();</span>
+
+			// pre-process to check for errors
+<span class="nc" id="L197">			preProcess(processUI, gridTab, indxDetail);</span>
+
+<span class="nc bnc" id="L199" title="All 2 branches missed.">			if ( !m_isError ) {</span>
+
+<span class="nc" id="L201">				String logFileName = FileUtil.getTempMailName(&quot;Import_&quot; + gridTab.getTableName(), &quot;_log.csv&quot;);</span>
+<span class="nc" id="L202">				logFile = new File(logFileName);</span>
+<span class="nc" id="L203">				logFileW = new PrintWriter(logFile, charset.name());</span>
+				// write the header
+<span class="nc" id="L205">				logFileW.write(rawHeader + delimiterChar + LOG_HEADER + &quot;\n&quot;);</span>
+				// no errors found - process header and then details 
+<span class="nc" id="L207">				isMasterok = true; </span>
+<span class="nc" id="L208">				isDetailok = true;</span>
+<span class="nc" id="L209">				error = false;</span>
+<span class="nc" id="L210">				trx = null;</span>
+<span class="nc" id="L211">				trxName = null;</span>
+<span class="nc" id="L212">				rowsTmpResult = new ArrayList&lt;String&gt;();</span>
+
+<span class="nc" id="L214">				long lastOutput = new Date().getTime();</span>
+
+<span class="nc bnc" id="L216" title="All 2 branches missed.">				for (int idx = 0; idx &lt; data.size(); idx++) {</span>
+
+<span class="nc bnc" id="L218" title="All 4 branches missed.">					if( processUI != null &amp;&amp; new Date().getTime()-lastOutput &gt; 1000 /* one second */){</span>
+<span class="nc" id="L219">						processUI.statusUpdate(refreshImportStatus(idx + 1, data.size() + 1));</span>
+<span class="nc" id="L220">						lastOutput = new Date().getTime();</span>
+					}
+
+<span class="nc" id="L223">					String rawLine = rawData.get(idx);</span>
+<span class="nc" id="L224">					StringBuilder rowResult = new StringBuilder();</span>
+<span class="nc" id="L225">					boolean isDetail = false;</span>
+
+<span class="nc bnc" id="L227" title="All 2 branches missed.">					if (rawLine.charAt(0)==','){</span>
+<span class="nc" id="L228">						isDetail=true;</span>
+						//check out if master row comes empty  
+<span class="nc" id="L230">						Map&lt;String, Object&gt; rowMap = data.get(idx);</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">						for(int i=0; i &lt; indxDetail-1; i++){	</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">							if(rowMap.get(header.get(i))!=null){</span>
+<span class="nc" id="L233">								isDetail=false;</span>
+<span class="nc" id="L234">								break;</span>
+							}
+						}
+					}
+
+<span class="nc bnc" id="L239" title="All 4 branches missed.">					if (!isMasterok &amp;&amp; isDetail){</span>
+<span class="nc" id="L240">						rawLine = rawLine + delimiterChar + quoteChar + Msg.getMsg(Env.getCtx(),&quot;NotProcessed&quot;) + quoteChar + &quot;\n&quot;;</span>
+<span class="nc" id="L241">						rowsTmpResult.add(rawLine);</span>
+<span class="nc" id="L242">						continue;		 </span>
+<span class="nc bnc" id="L243" title="All 6 branches missed.">					}else if(isMasterok &amp;&amp; isDetail &amp;&amp; !isDetailok){</span>
+<span class="nc" id="L244">						rawLine = rawLine + delimiterChar + quoteChar + &quot;Record not processed due to detail record failure&quot; + quoteChar + &quot;\n&quot;;</span>
+<span class="nc" id="L245">						rowsTmpResult.add(rawLine);</span>
+<span class="nc" id="L246">						continue;	 </span>
+					}
+					
+<span class="nc bnc" id="L249" title="All 4 branches missed.">					if( isSingleTrx() &amp;&amp; trx == null )</span>
+<span class="nc" id="L250">						createTrx(gridTab);</span>
+
+<span class="nc bnc" id="L252" title="All 4 branches missed.">					if( !isDetail &amp;&amp; !isSingleTrx() ){</span>
+<span class="nc" id="L253">						manageMasterTrx(gridTab, null);</span>
+<span class="nc" id="L254">						createTrx(gridTab);</span>
+					}
+<span class="nc bnc" id="L256" title="All 2 branches missed.">					if (trx != null)</span>
+<span class="nc" id="L257">						trx.setDisplayName(GridTabCSVImporter.class.getName()+&quot;_fileImport_&quot; + gridTab.getTableName());</span>
+
+<span class="nc" id="L259">					String recordResult = processRecord(importMode, gridTab, indxDetail, isDetail, idx, rowResult, childs);</span>
+<span class="nc" id="L260">					rowResult.append(recordResult);</span>
+
+					// write
+<span class="nc" id="L263">					rawLine = rawLine + delimiterChar + quoteChar + rowResult.toString().replaceAll(delimiterChar, &quot;&quot;) + quoteChar + &quot;\n&quot;;</span>
+<span class="nc" id="L264">					rowsTmpResult.add(rawLine);</span>
+					
+<span class="nc bnc" id="L266" title="All 4 branches missed.">					if( isSingleTrx() &amp;&amp; isError() )</span>
+<span class="nc" id="L267">						break;</span>
+
+				}
+
+<span class="nc" id="L271">				manageMasterTrx(gridTab,childs);</span>
+
+			}
+<span class="nc" id="L274">		} catch (IOException e) {</span>
+<span class="nc" id="L275">			throw new AdempiereException(e);</span>
+<span class="nc" id="L276">		} catch (Exception ex) {</span>
+<span class="nc" id="L277">			throw new AdempiereException(ex);</span>
+		} finally {
+			try {
+<span class="nc bnc" id="L280" title="All 2 branches missed.">				if (mapReader != null)</span>
+<span class="nc" id="L281">					mapReader.close();</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">				if (errFileW != null) {</span>
+<span class="nc" id="L283">					errFileW.flush();</span>
+<span class="nc" id="L284">					errFileW.close();</span>
+				}
+<span class="nc bnc" id="L286" title="All 2 branches missed.">				if (logFileW != null) {</span>
+<span class="nc" id="L287">					logFileW.flush();</span>
+<span class="nc" id="L288">					logFileW.close();</span>
+				}
+<span class="nc" id="L290">			} catch (IOException e) {</span>
+<span class="nc" id="L291">				e.printStackTrace();</span>
+			}
+
+<span class="nc" id="L294">			gridTab.getTableModel().setImportingMode(false,null);</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">			for (GridTab detail : childs) {</span>
+<span class="nc" id="L296">				detail.getTableModel().setImportingMode(false,null);</span>
+			}
+<span class="nc" id="L298">			gridTab.dataRefreshAll();</span>
+
+		}		
+<span class="nc bnc" id="L301" title="All 2 branches missed.">		if (logFile != null)</span>
+<span class="nc" id="L302">			return logFile;</span>
+		else
+<span class="nc" id="L304">			return errFile;</span>
+	}//fileImport
+	
+	private void initValues(){
+<span class="nc" id="L308">		mapReader = null;</span>
+<span class="nc" id="L309">		errFile = null;</span>
+<span class="nc" id="L310">		logFile = null;</span>
+<span class="nc" id="L311">		errFileW = null;</span>
+<span class="nc" id="L312">		logFileW = null;</span>
+<span class="nc" id="L313">		masterRecord = null;</span>
+<span class="nc" id="L314">		readProcArray = new ArrayList&lt;CellProcessor&gt;();</span>
+<span class="nc" id="L315">		tabMapIndexes = new HashMap&lt;GridTab,Integer&gt;();</span>
+<span class="nc" id="L316">		locationFields = null;</span>
+<span class="nc" id="L317">		isThereKey = false;</span>
+<span class="nc" id="L318">		isThereDocAction = false;</span>
+<span class="nc" id="L319">	}</span>
+	
+	/**
+	 * Rollback trx and update the text in log file
+	 */
+	private void rollbackTrx(){
+<span class="nc" id="L325">		trx.rollback();</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">		for( String row : rowsTmpResult ){</span>
+<span class="nc" id="L327">			row = row.replace(&quot;Updated&quot;,&quot;RolledBack&quot;);</span>
+<span class="nc" id="L328">			row = row.replace(&quot;Inserted&quot;,&quot;RolledBack&quot;);</span>
+<span class="nc" id="L329">			logFileW.write(row);</span>
+		}
+<span class="nc" id="L331">	}</span>
+	
+	/**
+	 * Commit trx and writes in log file
+	 * @return error message or null
+	 */
+	private String commitTrx(){
+		try {
+<span class="nc" id="L339">			trx.commit(true);</span>
+<span class="nc" id="L340">		} catch (SQLException e) {</span>
+<span class="nc" id="L341">			setError(true);</span>
+<span class="nc" id="L342">			return e.getLocalizedMessage();</span>
+		}
+<span class="nc bnc" id="L344" title="All 2 branches missed.">		for( String row : rowsTmpResult )</span>
+<span class="nc" id="L345">			logFileW.write(row);</span>
+<span class="nc" id="L346">		return null;</span>
+	}
+	
+	/**
+	 * Map the header and returns the index where the detail starts
+	 * @param gridTab
+	 * @return index where detail start
+	 */
+	private int mapCSVHeader(GridTab gridTab){
+		
+<span class="nc" id="L356">		int indxDetail = 0;</span>
+		
+<span class="nc bnc" id="L358" title="All 2 branches missed.">		for(int idx = 0; idx &lt; header.size(); idx++) {</span>
+<span class="nc" id="L359">			String headName = header.get(idx);</span>
+
+<span class="nc bnc" id="L361" title="All 2 branches missed.">			if (headName==null) {</span>
+<span class="nc" id="L362">				throwAdempiereException(&quot;Header column cannot be empty, Col: &quot; + (idx + 1));</span>
+			}
+
+<span class="nc bnc" id="L365" title="All 4 branches missed.">			if (headName.equals(ERROR_HEADER) || headName.equals(LOG_HEADER)){</span>
+<span class="nc" id="L366">				header.set(idx, null);</span>
+<span class="nc" id="L367">				readProcArray.add(null);</span>
+<span class="nc" id="L368">				continue;</span>
+			}
+<span class="nc bnc" id="L370" title="All 2 branches missed.">			if (headName.indexOf(&quot;&gt;&quot;) &gt; 0) {</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">				if(idx==0){</span>
+<span class="nc" id="L372">					throwAdempiereException(Msg.getMsg(Env.getCtx(),&quot;WrongHeader&quot;, new Object[] {headName}));</span>
+<span class="nc bnc" id="L373" title="All 4 branches missed.">				}else if (headName.contains(MTable.getTableName(Env.getCtx(), MLocation.Table_ID)) &amp;&amp; locationFields==null){ </span>
+<span class="nc" id="L374">					locationFields = getSpecialMColumn(header,MTable.getTableName(Env.getCtx(), MLocation.Table_ID),idx);</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">					for(GridField sField:locationFields){</span>
+<span class="nc" id="L376">						readProcArray.add(getProccesorFromColumn(sField)); </span>
+<span class="nc" id="L377">						indxDetail++;</span>
+					}
+<span class="nc" id="L379">					idx=indxDetail;</span>
+				}else
+					break;
+
+<span class="nc" id="L383">			}else{</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">				boolean isKeyColumn = headName.indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L385" title="All 4 branches missed.">				boolean isForeing 	= headName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; headName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc" id="L386">				String  columnName  = getColumnName (isKeyColumn,isForeing,false,headName);</span>
+<span class="nc" id="L387">				GridField field 	= gridTab.getField(columnName);</span>
+
+<span class="nc bnc" id="L389" title="All 2 branches missed.">				if (field == null)</span>
+<span class="nc" id="L390">					throwAdempiereException(Msg.getMsg(Env.getCtx(), &quot;FieldNotFoundInTab&quot; , new Object[] {columnName, gridTab.getName()}) );</span>
+<span class="nc bnc" id="L391" title="All 4 branches missed.">				else if(isKeyColumn &amp;&amp; !isThereKey)</span>
+<span class="nc" id="L392">					isThereKey =true;</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">				else if (!isThereDocAction &amp;&amp;</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">						MColumn.get(Env.getCtx(),field.getAD_Column_ID()).getAD_Reference_Value_ID() == REFERENCE_DOCUMENTACTION )</span>
+<span class="nc" id="L395">					isThereDocAction= true;</span>
+
+<span class="nc" id="L397">				readProcArray.add(getProccesorFromColumn(field)); </span>
+<span class="nc" id="L398">				indxDetail++;</span>
+			}
+		}
+		
+<span class="nc" id="L402">		return indxDetail;</span>
+	}//mapCSVHeader
+	
+	/**
+	 * Map details fields in the csv file
+	 * @param indxDetail
+	 * @param childs
+	 */
+	private void mapCSVDetail(int indxDetail, List&lt;GridTab&gt; childs){
+
+<span class="nc" id="L412">		String  childTableName = null;</span>
+<span class="nc" id="L413">		GridTab currentDetailTab = null;</span>
+
+<span class="nc bnc" id="L415" title="All 2 branches missed.">		for(int idx = indxDetail; idx &lt; header.size(); idx++) {	</span>
+<span class="nc" id="L416">			String detailName = header.get(idx);</span>
+<span class="nc bnc" id="L417" title="All 4 branches missed.">			if(detailName!=null &amp;&amp; detailName.indexOf(&quot;&gt;&quot;) &gt; 0){</span>
+<span class="nc" id="L418">				childTableName = detailName.substring(0,detailName.indexOf(&quot;&gt;&quot;));  </span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">				if (currentDetailTab==null || </span>
+<span class="nc bnc" id="L420" title="All 4 branches missed.">						(currentDetailTab!=null &amp;&amp; !childTableName.equals(currentDetailTab.getTableName()))){</span>
+
+<span class="nc bnc" id="L422" title="All 2 branches missed.">					if(currentDetailTab!=null){ </span>
+						//check out key per Tab   
+<span class="nc bnc" id="L424" title="All 4 branches missed.">						if(isUpdateOrMergeMode() &amp;&amp; !isThereKey){</span>
+<span class="nc" id="L425">							throwAdempiereException(currentDetailTab.getTableName()+&quot;: &quot;+Msg.getMsg(Env.getCtx(), &quot;NoKeyFound&quot;));</span>
+<span class="nc" id="L426">						}else{</span>
+<span class="nc" id="L427">							tabMapIndexes.put(currentDetailTab,idx-1); 	</span>
+<span class="nc" id="L428">							isThereKey =false; </span>
+						} 
+					}
+
+<span class="nc bnc" id="L432" title="All 2 branches missed.">					for(GridTab detail: childs){</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">						if(detail.getTableName().equals(childTableName)){</span>
+<span class="nc" id="L434">							currentDetailTab = detail;</span>
+<span class="nc" id="L435">							break;</span>
+						}
+					} 
+				}
+
+<span class="nc bnc" id="L440" title="All 2 branches missed.">				if(currentDetailTab == null) </span>
+<span class="nc" id="L441">					throwAdempiereException(Msg.getMsg(Env.getCtx(),&quot;NoChildTab&quot;,new Object[] {childTableName}));</span>
+
+<span class="nc" id="L443">				String columnName = detailName;</span>
+<span class="nc bnc" id="L444" title="All 4 branches missed.">				if (columnName.contains(MTable.getTableName(Env.getCtx(), MLocation.Table_ID)) &amp;&amp; locationFields==null){</span>
+<span class="nc" id="L445">					locationFields = getSpecialMColumn(header,MTable.getTableName(Env.getCtx(), MLocation.Table_ID),idx);</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">					for(GridField sField:locationFields){</span>
+<span class="nc" id="L447">						readProcArray.add(getProccesorFromColumn(sField)); </span>
+<span class="nc" id="L448">						idx++;</span>
+					}
+<span class="nc" id="L450">					idx--;</span>
+<span class="nc" id="L451">				}else{</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">					boolean isKeyColumn= columnName.indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L453" title="All 4 branches missed.">					boolean isForeing  = columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc" id="L454">					columnName = getColumnName(isKeyColumn,isForeing,true,columnName);</span>
+<span class="nc" id="L455">					GridField field = currentDetailTab.getField(columnName);</span>
+
+<span class="nc bnc" id="L457" title="All 2 branches missed.">					if(field == null)</span>
+<span class="nc" id="L458">						throwAdempiereException(Msg.getMsg(Env.getCtx(), &quot;FieldNotFound&quot;,new Object[] {detailName}));</span>
+<span class="nc bnc" id="L459" title="All 4 branches missed.">					else if(isKeyColumn &amp;&amp; !isThereKey)</span>
+<span class="nc" id="L460">						isThereKey =true;</span>
+
+<span class="nc" id="L462">					readProcArray.add(getProccesorFromColumn(field));  </span>
+				}				   
+<span class="nc" id="L464">			}else</span>
+<span class="nc" id="L465">				throwAdempiereException(Msg.getMsg(Env.getCtx(),&quot;WrongDetailName&quot;,new Object[] {&quot; col(&quot;+idx+&quot;) &quot;,detailName}));</span>
+
+		}
+<span class="nc bnc" id="L468" title="All 2 branches missed.">		if(currentDetailTab!=null){</span>
+<span class="nc bnc" id="L469" title="All 4 branches missed.">			if(isUpdateOrMergeMode() &amp;&amp; !isThereKey)</span>
+<span class="nc" id="L470">				throwAdempiereException(currentDetailTab.getTableName()+&quot;: &quot;+Msg.getMsg(Env.getCtx(), &quot;NoKeyFound&quot;));</span>
+
+<span class="nc" id="L472">			tabMapIndexes.put(currentDetailTab,header.size()-1); 	   </span>
+		}
+
+<span class="nc" id="L475">	}//mapCSVDetail</span>
+	
+	/**
+	 * Pre-process the input csv file and look for errors
+	 * @param processUI
+	 * @param gridTab
+	 * @param indxDetail
+	 */
+	private void preProcess(IProcessUI processUI, GridTab gridTab, int indxDetail){
+
+<span class="nc" id="L485">		CellProcessor[] processors = readProcArray.toArray(new CellProcessor[readProcArray.size()]);	</span>
+<span class="nc" id="L486">		long lastOutput = new Date().getTime();</span>
+
+<span class="nc" id="L488">		while (true) {</span>
+<span class="nc bnc" id="L489" title="All 4 branches missed.">			if( processUI != null &amp;&amp; new Date().getTime()-lastOutput &gt; 1000 /* one second */){</span>
+<span class="nc" id="L490">				processUI.statusUpdate(refreshImportStatus(data.size(), 0));</span>
+<span class="nc" id="L491">				lastOutput = new Date().getTime();</span>
+			}
+
+<span class="nc" id="L494">			Map&lt;String, Object&gt; map = null;</span>
+<span class="nc" id="L495">			boolean isLineError = false; </span>
+<span class="nc" id="L496">			StringBuilder errMsg = new StringBuilder();</span>
+
+			try {			
+				// devCoffee #6141 - IDEMPIERE-3832
+<span class="nc" id="L500">				String[] hdrs = new String[header.size()];</span>
+<span class="nc" id="L501">				header.toArray(hdrs);</span>
+<span class="nc" id="L502">				map = mapReader.read( hdrs, processors);</span>
+<span class="nc" id="L503">			} catch (SuperCsvCellProcessorException e) {</span>
+<span class="nc" id="L504">				int idx = e.getCsvContext().getColumnNumber() - 1;</span>
+<span class="nc" id="L505">				errMsg.append(header.get(idx)).append(&quot;: &quot;).append(e.getMessage());</span>
+<span class="nc" id="L506">				isLineError = true;</span>
+<span class="nc" id="L507">			} catch (IOException e) {</span>
+<span class="nc" id="L508">				throw new AdempiereException(e);</span>
+			}
+
+<span class="nc" id="L511">			String rawLine = mapReader.getUntokenizedRow();</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">			if (! isLineError) {</span>
+<span class="nc bnc" id="L513" title="All 2 branches missed.">				if(map == null)</span>
+<span class="nc" id="L514">					break;</span>
+
+				//Re-order information coming from map
+<span class="nc" id="L517">				List&lt;Object&gt; tmpRow = getOrderedRowFromMap(header,map);	  					</span>
+				//read master and detail
+<span class="nc" id="L519">				int initIndx= 0;</span>
+<span class="nc bnc" id="L520" title="All 2 branches missed.">				for(Map.Entry&lt;GridTab, Integer&gt; tabIndex : sortedtTabMapIndexes.entrySet()) {</span>
+<span class="nc" id="L521">					GridTab tmpGrid = tabIndex.getKey(); 						</span>
+<span class="nc bnc" id="L522" title="All 4 branches missed.">					if(gridTab.equals(tmpGrid) &amp;&amp; tmpRow.get(0)==null){</span>
+<span class="nc" id="L523">						initIndx = indxDetail;</span>
+<span class="nc" id="L524">						continue;	</span>
+					}						
+<span class="nc" id="L526">					int endindx = tabIndex.getValue();</span>
+<span class="nc" id="L527">					StringBuilder lineError = preprocessRow (tmpGrid,header,tmpRow,initIndx,endindx);</span>
+<span class="nc bnc" id="L528" title="All 4 branches missed.">					if( lineError!= null &amp;&amp; lineError.length() &gt; 0 ){</span>
+<span class="nc" id="L529">						isLineError = true;</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">						if (errMsg.length() &gt; 0)</span>
+<span class="nc" id="L531">							errMsg.append(&quot; / &quot;);</span>
+<span class="nc" id="L532">						errMsg.append(lineError);</span>
+					}
+<span class="nc" id="L534">					initIndx = endindx + 1;</span>
+				}
+			}
+<span class="nc bnc" id="L537" title="All 4 branches missed.">			if (isLineError &amp;&amp; ! m_isError)</span>
+<span class="nc" id="L538">				m_isError = true;</span>
+<span class="nc bnc" id="L539" title="All 2 branches missed.">			if (!m_isError) {</span>
+<span class="nc" id="L540">				data.add(map);</span>
+<span class="nc" id="L541">				rawData.add(rawLine);</span>
+			}
+			// write
+<span class="nc" id="L544">			rawLine = rawLine + delimiterChar + quoteChar + errMsg.toString().replaceAll(quoteChar, &quot;&quot;) + quoteChar + &quot;\n&quot;;</span>
+<span class="nc" id="L545">			errFileW.write(rawLine);</span>
+		}
+<span class="nc" id="L547">	}//preProcess</span>
+	
+	/**
+	 * Manage the trx
+	 * if the trx exists - commits when no errors, rollback when errors.
+	 * @param gridTab
+	 * @param childs
+	 */
+	private void manageMasterTrx(GridTab gridTab, List&lt;GridTab&gt; childs){
+<span class="nc bnc" id="L556" title="All 2 branches missed.">		if (trx != null) {</span>
+			try {
+<span class="nc bnc" id="L558" title="All 2 branches missed.">				if (isError()) {</span>
+<span class="nc" id="L559">					gridTab.dataDelete();</span>
+<span class="nc" id="L560">					rollbackTrx();</span>
+<span class="nc" id="L561">					setError(false);</span>
+<span class="nc" id="L562">				} else {</span>
+<span class="nc" id="L563">					boolean commit = false;</span>
+<span class="nc bnc" id="L564" title="All 2 branches missed.">					if (isThereDocAction) {</span>
+	
+<span class="nc" id="L566">						boolean isError = false;</span>
+<span class="nc" id="L567">						int AD_Process_ID = MColumn.get(Env.getCtx(), gridTab.getField(&quot;DocAction&quot;).getAD_Column_ID()).getAD_Process_ID(); </span>
+	
+<span class="nc bnc" id="L569" title="All 2 branches missed.">						if (AD_Process_ID &gt; 0){</span>
+<span class="nc" id="L570">							String docResult = processDocAction(masterRecord, AD_Process_ID); </span>
+	
+<span class="nc bnc" id="L572" title="All 2 branches missed.">							if (docResult.contains(&quot;error&quot;)) </span>
+<span class="nc" id="L573">								isError = true; </span>
+	
+<span class="nc" id="L575">							rowsTmpResult.set(0,rowsTmpResult.get(0).replace(quoteChar + &quot;\n&quot;,docResult + quoteChar + &quot;\n&quot;)); </span>
+<span class="nc" id="L576">						} else {</span>
+<span class="nc" id="L577">							throwAdempiereException(&quot;No Process found for document action.&quot;);	  </span>
+						}
+	
+<span class="nc bnc" id="L580" title="All 2 branches missed.">						if (isError){</span>
+<span class="nc" id="L581">							gridTab.dataDelete();</span>
+<span class="nc" id="L582">							rollbackTrx();</span>
+<span class="nc" id="L583">						} else {</span>
+<span class="nc" id="L584">							commit = true;</span>
+						}
+<span class="nc" id="L586">					} else {</span>
+<span class="nc" id="L587">						commit = true;</span>
+					}
+<span class="nc bnc" id="L589" title="All 2 branches missed.">					if (commit) {</span>
+<span class="nc" id="L590">						String commitResult = commitTrx();</span>
+<span class="nc bnc" id="L591" title="All 2 branches missed.">						if (isError()) {</span>
+<span class="nc" id="L592">							rowsTmpResult.set(0,rowsTmpResult.get(0).replace(quoteChar + &quot;\n&quot;,commitResult + quoteChar + &quot;\n&quot;)); </span>
+<span class="nc" id="L593">							gridTab.dataDelete();</span>
+<span class="nc" id="L594">							rollbackTrx();</span>
+						}
+					}
+				}
+<span class="nc" id="L598">			} finally {</span>
+<span class="nc" id="L599">				trx.close();</span>
+<span class="nc" id="L600">				trx=null;</span>
+			}
+		}
+
+<span class="nc" id="L604">	}//manageMasterTrx</span>
+	
+	/**
+	 * Create a new Trx with a random Name
+	 * @param gridTab
+	 */
+	private void createTrx(GridTab gridTab){
+<span class="nc" id="L611">		trxName = Trx.createTrxName(&quot;CSVImport&quot;);</span>
+<span class="nc" id="L612">		gridTab.getTableModel().setImportingMode(true,trxName);	</span>
+<span class="nc" id="L613">		trx = Trx.get(trxName,true);</span>
+<span class="nc" id="L614">		masterRecord = null;</span>
+<span class="nc" id="L615">		rowsTmpResult.clear();</span>
+<span class="nc" id="L616">		isMasterok = true;</span>
+<span class="nc" id="L617">		isDetailok = true;</span>
+		
+<span class="nc" id="L619">	} //createTrx</span>
+	
+	/**
+	 * Process the record for each row.&lt;br/&gt;
+	 * First insert the master tab - if no errors found proceeds with the details tabs when existing.&lt;br/&gt;
+	 * Stops at the first error found in the row.
+	 * @param importMode
+	 * @param gridTab
+	 * @param indxDetail
+	 * @param isDetail
+	 * @param idx
+	 * @param rowResult
+	 * @return message or empty string
+	 */
+	private String processRecord(String importMode, GridTab gridTab, int indxDetail, boolean isDetail, int idx, StringBuilder rowResult, List&lt;GridTab&gt; childs){
+		
+<span class="nc" id="L635">		String logMsg = null;</span>
+<span class="nc" id="L636">		GridTab currentGridTab = null;</span>
+<span class="nc" id="L637">		int currentColumn = 0;</span>
+
+		try {
+
+<span class="nc bnc" id="L641" title="All 2 branches missed.">			for( Map.Entry&lt;GridTab, Integer&gt; tabIndex : sortedtTabMapIndexes.entrySet() ) {</span>
+
+<span class="nc" id="L643">				currentGridTab = tabIndex.getKey(); 			</span>
+
+<span class="nc bnc" id="L645" title="All 4 branches missed.">				if( isDetail &amp;&amp; gridTab.equals(currentGridTab) ){</span>
+<span class="nc" id="L646">					currentColumn = indxDetail;</span>
+<span class="nc" id="L647">					continue;			</span>
+				}
+
+				//Assign master trx to its children
+<span class="nc bnc" id="L651" title="All 2 branches missed.">				if( !gridTab.equals(currentGridTab) ){</span>
+<span class="nc" id="L652">					currentGridTab.getTableModel().setImportingMode(true,trxName);	</span>
+<span class="nc" id="L653">					isDetail=true;</span>
+				}
+
+<span class="nc" id="L656">				int j = tabIndex.getValue();	</span>
+<span class="nc" id="L657">				logMsg = areValidKeysAndColumns(currentGridTab,data.get(idx),header,currentColumn,j,masterRecord,trx);</span>
+
+<span class="nc bnc" id="L659" title="All 2 branches missed.">				if (logMsg == null){</span>
+
+<span class="nc bnc" id="L661" title="All 2 branches missed.">					if ( isInsertMode() ){</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">						if( !currentGridTab.getTableModel().isOpen() )</span>
+<span class="nc" id="L663">							currentGridTab.getTableModel().open(0);</span>
+						//how to read from status since the warning is coming empty ?
+<span class="nc bnc" id="L665" title="All 2 branches missed.">						if ( !currentGridTab.dataNew(false) ){</span>
+<span class="nc" id="L666">							logMsg = &quot;[&quot;+currentGridTab.getName()+&quot;]&quot;+&quot;- Was not able to create a new record!&quot;;</span>
+<span class="nc" id="L667">						}else{</span>
+<span class="nc" id="L668">							currentGridTab.navigateCurrent();</span>
+<span class="nc bnc" id="L669" title="All 2 branches missed.">							if (! isDetail) {</span>
+<span class="nc bnc" id="L670" title="All 2 branches missed.">								for (GridTab child : childs) {</span>
+<span class="nc" id="L671">									child.getTableModel().setImportingMode(true,trxName);</span>
+<span class="nc" id="L672">									child.query(false);</span>
+								}
+							}
+						}
+					} 
+
+<span class="nc bnc" id="L678" title="All 2 branches missed.">					if( logMsg==null )</span>
+<span class="nc" id="L679">						logMsg = proccessRow(currentGridTab,header,data.get(idx),currentColumn,j,masterRecord,trx);</span>
+
+<span class="nc" id="L681">					currentColumn = j + 1;</span>
+<span class="nc bnc" id="L682" title="All 2 branches missed.">					if( !(logMsg == null) ){</span>
+<span class="nc" id="L683">						m_import_mode = importMode;   </span>
+						//Ignore row since there is no data 
+<span class="nc bnc" id="L685" title="All 2 branches missed.">						if(&quot;NO_DATA_TO_IMPORT&quot;.equals(logMsg)){</span>
+<span class="nc" id="L686">							logMsg = &quot;&quot;;</span>
+<span class="nc" id="L687">							continue;</span>
+						}else 
+<span class="nc" id="L689">							setError(true);</span>
+					}
+
+<span class="nc" id="L692">				}else {</span>
+<span class="nc" id="L693">					setError(true);</span>
+<span class="nc" id="L694">					currentColumn = j + 1;</span>
+				}
+
+<span class="nc bnc" id="L697" title="All 2 branches missed.">				if ( !isError() ) {</span>
+<span class="nc bnc" id="L698" title="All 2 branches missed.">					if ( currentGridTab.dataSave(false) ){						</span>
+<span class="nc" id="L699">						PO po = currentGridTab.getTableModel().getPO(currentGridTab.getCurrentRow());		</span>
+						//Keep master record for details validation 
+<span class="nc bnc" id="L701" title="All 2 branches missed.">						if(currentGridTab.equals(gridTab))</span>
+<span class="nc" id="L702">							masterRecord = po;</span>
+
+<span class="nc bnc" id="L704" title="All 2 branches missed.">						if( isInsertMode() ) {</span>
+<span class="nc" id="L705">							logMsg = Msg.getMsg(Env.getCtx(), &quot;Inserted&quot;) + &quot; &quot; + po.toString();</span>
+<span class="nc bnc" id="L706" title="All 4 branches missed.">							if (!Util.isEmpty(currentGridTab.getKeyColumnName()) &amp;&amp; currentGridTab.getKeyColumnName().endsWith(&quot;_ID&quot;)) {</span>
+<span class="nc" id="L707">								int recordId = currentGridTab.getRecord_ID();</span>
+<span class="nc bnc" id="L708" title="All 2 branches missed.">								if (recordId &gt; 0) {</span>
+<span class="nc bnc" id="L709" title="All 2 branches missed.">									if (currentGridTab.getTabNo() == 0)</span>
+<span class="nc" id="L710">										Env.setContext(Env.getCtx(), currentGridTab.getWindowNo(), currentGridTab.getKeyColumnName(), recordId);</span>
+<span class="nc" id="L711">									Env.setContext(Env.getCtx(), currentGridTab.getWindowNo(), currentGridTab.getTabNo(), currentGridTab.getKeyColumnName(), Integer.toString(recordId));</span>
+								}
+							}
+<span class="nc bnc" id="L714" title="All 2 branches missed.">							if (! isDetail) {</span>
+<span class="nc bnc" id="L715" title="All 2 branches missed.">								for (GridTab child : childs) {</span>
+<span class="nc" id="L716">									child.query(false);</span>
+								}
+							}
+<span class="nc" id="L719">						} else {</span>
+<span class="nc" id="L720">							logMsg = Msg.getMsg(Env.getCtx(), &quot;Updated&quot;) + &quot; &quot; + po.toString(); </span>
+<span class="nc bnc" id="L721" title="All 4 branches missed.">							if( currentGridTab.equals(gridTab) &amp;&amp; sortedtTabMapIndexes.size()&gt;1 )</span>
+<span class="nc" id="L722">								currentGridTab.dataRefresh(true); </span>
+						}
+<span class="nc" id="L724">					} else {</span>
+<span class="nc" id="L725">						ValueNamePair ppE = CLogger.retrieveWarning();</span>
+<span class="nc bnc" id="L726" title="All 2 branches missed.">						if (ppE==null)   </span>
+<span class="nc" id="L727">							ppE = CLogger.retrieveError();</span>
+
+<span class="nc" id="L729">						String info = null;</span>
+
+<span class="nc bnc" id="L731" title="All 2 branches missed.">						if ( ppE != null )</span>
+<span class="nc" id="L732">							info = ppE.getName();</span>
+<span class="nc bnc" id="L733" title="All 2 branches missed.">						if ( info == null )</span>
+<span class="nc" id="L734">							info = &quot;&quot;;</span>
+
+<span class="nc" id="L736">						logMsg = Msg.getMsg(Env.getCtx(), &quot;Error&quot;) + &quot; &quot; + Msg.getMsg(Env.getCtx(), &quot;SaveError&quot;) + &quot; (&quot; + info + &quot;)&quot;;</span>
+<span class="nc" id="L737">						currentGridTab.dataIgnore();</span>
+
+						//Problem in the master record
+<span class="nc bnc" id="L740" title="All 4 branches missed.">						if( currentGridTab.equals(gridTab) &amp;&amp; masterRecord == null ){</span>
+<span class="nc" id="L741">							isMasterok = false;</span>
+<span class="nc" id="L742">							rowResult.append( &quot;&lt;&quot; + currentGridTab.getTableName() + &quot;&gt;: &quot; );</span>
+<span class="nc" id="L743">							rowResult.append(logMsg);</span>
+<span class="nc" id="L744">							rowResult.append(&quot; / &quot;);</span>
+<span class="nc" id="L745">							break;</span>
+						}
+
+						//Problem in the detail record
+<span class="nc bnc" id="L749" title="All 4 branches missed.">						if( !currentGridTab.equals(gridTab) &amp;&amp; masterRecord != null ){</span>
+<span class="nc" id="L750">							isDetailok = false;</span>
+<span class="nc" id="L751">							rowResult.append( &quot;&lt;&quot; + currentGridTab.getTableName() + &quot;&gt;: &quot; );</span>
+<span class="nc" id="L752">							rowResult.append(logMsg);</span>
+<span class="nc" id="L753">							rowResult.append(&quot; / &quot;);</span>
+<span class="nc" id="L754">							break;</span>
+						}
+					}
+					
+<span class="nc" id="L758">					rowResult.append( &quot;&lt;&quot; + currentGridTab.getTableName() + &quot;&gt;: &quot; );</span>
+<span class="nc" id="L759">					rowResult.append(logMsg);</span>
+<span class="nc" id="L760">					rowResult.append(&quot; / &quot;);</span>
+
+<span class="nc" id="L762">				} else { //if error true</span>
+<span class="nc" id="L763">					currentGridTab.dataIgnore();</span>
+
+<span class="nc" id="L765">					rowResult.append( &quot;&lt;&quot; + currentGridTab.getTableName() + &quot;&gt;: &quot; );</span>
+<span class="nc" id="L766">					rowResult.append(logMsg);</span>
+<span class="nc" id="L767">					rowResult.append(&quot; / &quot;);</span>
+
+					//Master Failed, thus details cannot be imported 
+<span class="nc bnc" id="L770" title="All 4 branches missed.">					if( currentGridTab.equals(gridTab) &amp;&amp; masterRecord == null ){</span>
+<span class="nc" id="L771">						isMasterok = false;</span>
+<span class="nc" id="L772">						break;</span>
+					}
+					
+					//Detail failed
+<span class="nc bnc" id="L776" title="All 4 branches missed.">					if( !currentGridTab.equals(gridTab) &amp;&amp; masterRecord != null ){</span>
+<span class="nc" id="L777">						isDetailok = false;</span>
+<span class="nc" id="L778">						break;</span>
+					}
+				}	
+<span class="nc" id="L781">				m_import_mode = importMode;	</span>
+			}
+<span class="nc" id="L783">		} catch (Exception e) {</span>
+
+<span class="nc" id="L785">			rowResult.append( &quot;&lt;&quot; + currentGridTab.getTableName() + &quot;&gt;: &quot; );</span>
+<span class="nc" id="L786">			rowResult.append(Msg.getMsg(Env.getCtx(), &quot;Error&quot;) + &quot; &quot; + e);</span>
+<span class="nc" id="L787">			rowResult.append(&quot; / &quot;);</span>
+<span class="nc" id="L788">			currentGridTab.dataIgnore();</span>
+
+<span class="nc" id="L790">			setError(true);</span>
+
+			//Master Failed, thus details cannot be imported 
+<span class="nc bnc" id="L793" title="All 4 branches missed.">			if( currentGridTab.equals(gridTab) &amp;&amp; masterRecord == null )</span>
+<span class="nc" id="L794">				isMasterok = false;</span>
+
+<span class="nc bnc" id="L796" title="All 4 branches missed.">			if( !currentGridTab.equals(gridTab) &amp;&amp; masterRecord != null )</span>
+<span class="nc" id="L797">				isDetailok = false;</span>
+
+		} finally {
+<span class="nc" id="L800">			m_import_mode = importMode;</span>
+		}
+		
+<span class="nc" id="L803">		return rowResult.toString();</span>
+
+	}//processRecord
+	
+	private void throwAdempiereException(String msg){
+<span class="nc" id="L808">	    throw new AdempiereException(msg);</span>
+	}
+	
+	/**
+	 * @param currentRecord
+	 * @param total
+	 * @return status text
+	 */
+	private String refreshImportStatus(int currentRecord, int total){
+<span class="nc" id="L817">		int percent = currentRecord * 100;</span>
+<span class="nc bnc" id="L818" title="All 2 branches missed.">		if (total &gt; 0)</span>
+<span class="nc" id="L819">			percent = percent / total;</span>
+		else
+<span class="nc" id="L821">			percent = 0;</span>
+		
+<span class="nc bnc" id="L823" title="All 2 branches missed.">		if( percent == 0 ){</span>
+<span class="nc" id="L824">			Object[] args = new Object[] {currentRecord};</span>
+<span class="nc" id="L825">			return Msg.getMsg(Env.getCtx(), &quot;PreProcessingCVSProgress&quot;, args);</span>
+		}else{
+<span class="nc" id="L827">			Object[] args = new Object[] {currentRecord, total, percent};</span>
+<span class="nc" id="L828">			return Msg.getMsg(Env.getCtx(), &quot;PercentProcessingProgress&quot;, args);</span>
+		}
+	}
+
+	/**
+	 * 
+	 * @param document
+	 * @param AD_Process_ID
+	 * @return message
+	 */
+	private String processDocAction(PO document, int AD_Process_ID){
+<span class="nc" id="L839">		int AD_Workflow_ID = MProcess.get(Env.getCtx(),AD_Process_ID).getAD_Workflow_ID();  </span>
+		
+<span class="nc bnc" id="L841" title="All 2 branches missed.">		if (AD_Workflow_ID &gt; 0){</span>
+<span class="nc" id="L842">			ProcessInfo wfProcess = new ProcessInfo (document.get_TrxName(),AD_Process_ID,document.get_Table_ID(),document.get_ID());</span>
+<span class="nc" id="L843">			wfProcess.setTransactionName(document.get_TrxName());  </span>
+<span class="nc" id="L844">			MWFProcess wdPro = ProcessUtil.startWorkFlow(Env.getCtx(),wfProcess, AD_Workflow_ID);</span>
+<span class="nc bnc" id="L845" title="All 2 branches missed.">			if(wdPro == null) </span>
+<span class="nc" id="L846">			   return &quot;Document action could not be processed&quot;; </span>
+<span class="nc bnc" id="L847" title="All 2 branches missed.">			else if (wfProcess.isError())</span>
+<span class="nc" id="L848">			   return &quot;Document action error: &quot;+wfProcess.getSummary();</span>
+			else  	
+<span class="nc" id="L850">			   return &quot;Document action processed [&quot;+wfProcess.getSummary()+&quot;]&quot;;</span>
+		}else {
+<span class="nc" id="L852">		   return &quot;No workflow was found&quot;;	</span>
+		}
+	}
+	
+	private boolean isInsertMode() {
+<span class="nc" id="L857">		return IMPORT_MODE_INSERT.equals(m_import_mode);</span>
+	}
+	
+	private boolean isUpdateMode() {
+<span class="nc" id="L861">		return IMPORT_MODE_UPDATE.equals(m_import_mode);</span>
+	}
+
+	private boolean isMergeMode() {
+<span class="nc" id="L865">		return IMPORT_MODE_MERGE.equals(m_import_mode);</span>
+	}
+
+	private boolean isUpdateOrMergeMode() {
+<span class="nc bnc" id="L869" title="All 4 branches missed.">		return isUpdateMode() || isMergeMode();</span>
+	}
+
+	/**
+	 * @param isKey
+	 * @param isForeing
+	 * @param isDetail
+	 * @param headName
+	 * @return column name
+	 */
+	private String getColumnName(boolean isKey ,boolean isForeing ,boolean isDetail , String headName){		
+		
+<span class="nc bnc" id="L881" title="All 2 branches missed.">		if(isKey){</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">		   if(headName.indexOf(&quot;/&quot;) &gt; 0){</span>
+<span class="nc bnc" id="L883" title="All 2 branches missed.">			  if(headName.endsWith(&quot;K&quot;))</span>
+<span class="nc" id="L884">				  headName = headName.substring(0,headName.length()-2);</span>
+<span class="nc bnc" id="L885" title="All 2 branches missed.">			  else if (headName.endsWith(&quot;KT&quot;)){</span>
+<span class="nc" id="L886">				  setSingleTrx(true);</span>
+<span class="nc" id="L887">				  headName = headName.substring(0,headName.length()-3);</span>
+<span class="nc" id="L888">			  }</span>
+			  else
+<span class="nc" id="L890">				 throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;ColumnKey&quot;)+&quot; &quot;+headName);</span>
+		   } 
+		}
+		
+<span class="nc bnc" id="L894" title="All 2 branches missed.">		if(isForeing)</span>
+<span class="nc" id="L895">		   headName = headName.substring(0, headName.indexOf(&quot;[&quot;));		</span>
+		
+<span class="nc bnc" id="L897" title="All 2 branches missed.">        if(isDetail){</span>
+<span class="nc" id="L898">           headName = headName.substring(headName.indexOf(&quot;&gt;&quot;)+ 1,headName.length());</span>
+<span class="nc bnc" id="L899" title="All 2 branches missed.">           if (headName.indexOf(&quot;&gt;&quot;)&gt;0)</span>
+<span class="nc" id="L900">        	   headName = headName.substring(headName.indexOf(&quot;&gt;&quot;)+ 1,headName.length());</span>
+        }
+<span class="nc" id="L902">        return headName;</span>
+	}
+	
+	/**
+	 * Get extra fields for Location display type
+	 * @param header
+	 * @param tableName
+	 * @param idx
+	 * @return Extra fields for Location display type
+	 */
+	private List&lt;GridField&gt; getSpecialMColumn(List&lt;String&gt; header, String tableName, int idx) {
+		
+<span class="nc" id="L914">		List&lt;GridField&gt; lsField = new ArrayList&lt;GridField&gt;();		</span>
+<span class="nc bnc" id="L915" title="All 2 branches missed.">		if (tableName.equals(MTable.getTableName(Env.getCtx(), MLocation.Table_ID))){</span>
+<span class="nc" id="L916">			GridWindowVO gWindowVO = Env.getMWindowVO(0,121,0); </span>
+<span class="nc" id="L917">			GridWindow m_mWindow = new GridWindow (gWindowVO);</span>
+<span class="nc" id="L918">			GridTab m_mTab = m_mWindow.getTab(0);</span>
+<span class="nc" id="L919">			m_mWindow.initTab(0);</span>
+<span class="nc bnc" id="L920" title="All 2 branches missed.">			for(int i = idx;i&lt; header.size();i++){</span>
+<span class="nc bnc" id="L921" title="All 2 branches missed.">				if (header.get(i).contains(MTable.getTableName(Env.getCtx(), MLocation.Table_ID))) {</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">					boolean isKeyColumn = header.get(i).indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L923" title="All 4 branches missed.">					boolean isForeing 	= header.get(i).indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; header.get(i).indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc" id="L924">					String  columnName  = getColumnName (isKeyColumn,isForeing,true,header.get(i)); </span>
+<span class="nc" id="L925">					GridField field  = m_mTab.getField(columnName);</span>
+<span class="nc bnc" id="L926" title="All 2 branches missed.">					if (field == null)</span>
+<span class="nc" id="L927">						throw new AdempiereException(Msg.getMsg(Env.getCtx(), &quot;FieldNotFound&quot;, new Object[] {header.get(i)}));</span>
+					
+<span class="nc" id="L929">					lsField.add(field);</span>
+				}else
+					break;
+			}
+		}
+<span class="nc" id="L934">		return lsField;</span>
+	}
+
+	/**
+	 * Get column value from map, order by header 
+	 * @param header
+	 * @param map
+	 * @return Value list for row
+	 */
+	private List&lt;Object&gt; getOrderedRowFromMap (List&lt;String&gt; header,Map&lt;String, Object&gt; map){
+<span class="nc" id="L944">		List&lt;Object&gt; tmpRow= new ArrayList&lt;Object&gt;();  </span>
+<span class="nc bnc" id="L945" title="All 2 branches missed.">		for (int i = 0; i &lt; header.size(); i++)</span>
+<span class="nc" id="L946">			tmpRow.add(null);</span>
+		
+<span class="nc bnc" id="L948" title="All 2 branches missed.">		for(Map.Entry&lt;String, Object&gt; record : map.entrySet()) {</span>
+<span class="nc" id="L949">			String Column =record.getKey();</span>
+<span class="nc" id="L950">			Object value  = record.getValue();</span>
+<span class="nc" id="L951">		    int toIndx= header.indexOf(Column);</span>
+<span class="nc" id="L952">		    tmpRow.set(toIndx, value);</span>
+        }	
+<span class="nc" id="L954">		return tmpRow;	</span>
+	}
+	
+	/**
+	 * Pre-process tmpRow and looks for error
+	 * @param gridTab
+	 * @param header
+	 * @param tmpRow
+	 * @param startindx
+	 * @param endindx
+	 * @return error message or null
+	 */
+	private StringBuilder preprocessRow (GridTab gridTab,List&lt;String&gt; header,List&lt;Object&gt; tmpRow,int startindx,int endindx){
+		
+<span class="nc" id="L968">	    boolean isEmptyRow = true;</span>
+<span class="nc" id="L969">	    boolean isAddressValidated = false ;</span>
+<span class="nc" id="L970">	    StringBuilder  mandatoryColumns = new StringBuilder();</span>
+<span class="nc bnc" id="L971" title="All 2 branches missed.">	    for(int i = startindx;  i &lt; endindx +1; i++){</span>
+<span class="nc" id="L972">			String columnName = header.get(i);	</span>
+<span class="nc" id="L973">			Object value = tmpRow.get(i); 	</span>
+			//Validate Address
+<span class="nc bnc" id="L975" title="All 2 branches missed.">			if (!&quot;C_Location&quot;.equals(gridTab.getTableName()))</span>
+			{
+				//Validate Address
+<span class="nc bnc" id="L978" title="All 4 branches missed.">				if(header.get(i).contains(MTable.getTableName(Env.getCtx(),MLocation.Table_ID)) &amp;&amp; !isAddressValidated){</span>
+<span class="nc" id="L979">				   StringBuilder specialColumns = new StringBuilder();</span>
+<span class="nc" id="L980">				   specialColumns = validateSpecialFields(gridTab,header,tmpRow,i,&quot;C_Location_ID&quot;);</span>
+<span class="nc" id="L981">				   isAddressValidated = true;</span>
+<span class="nc bnc" id="L982" title="All 2 branches missed.">				   if(specialColumns==null)</span>
+<span class="nc" id="L983">					  continue;   </span>
+				   else
+<span class="nc" id="L985">					  return specialColumns;     </span>
+<span class="nc bnc" id="L986" title="All 4 branches missed.">				}else if (header.get(i).contains(MTable.getTableName(Env.getCtx(),MLocation.Table_ID)) &amp;&amp; isAddressValidated){</span>
+<span class="nc" id="L987">					continue;</span>
+				}
+			}
+			
+<span class="nc bnc" id="L991" title="All 2 branches missed.">			if(value!=null)</span>
+<span class="nc" id="L992">			   isEmptyRow=false;</span>
+			
+<span class="nc bnc" id="L994" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Setting &quot; + columnName + &quot; to &quot; + value);</span>
+
+<span class="nc bnc" id="L996" title="All 2 branches missed.">			boolean isKeyColumn = columnName.indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L997" title="All 4 branches missed.">			boolean isForeing 	= columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc bnc" id="L998" title="All 2 branches missed.">			boolean isDetail    = columnName.indexOf(&quot;&gt;&quot;) &gt; 0;</span>
+<span class="nc" id="L999">			columnName = getColumnName(isKeyColumn,isForeing,isDetail,columnName);</span>
+<span class="nc" id="L1000">			String foreignColumn=null; </span>
+<span class="nc bnc" id="L1001" title="All 2 branches missed.">			if(isForeing) </span>
+<span class="nc" id="L1002">			   foreignColumn = header.get(i).substring(header.get(i).indexOf(&quot;[&quot;)+1, header.get(i).indexOf(&quot;]&quot;));</span>
+		
+<span class="nc" id="L1004">			GridField field=gridTab.getField(columnName);					</span>
+<span class="nc bnc" id="L1005" title="All 2 branches missed.">			if (field == null) </span>
+<span class="nc" id="L1006">				return new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;NotAWindowField&quot; , new Object[] {header.get(i)}));</span>
+
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">			if (field.isParentValue())</span>
+<span class="nc" id="L1009">				continue;</span>
+			
+<span class="nc bnc" id="L1011" title="All 4 branches missed.">			if (!(field.isDisplayed() || field.isDisplayedGrid())) </span>
+<span class="nc" id="L1012">				return new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;FieldNotDisplayed&quot;,new Object[] {header.get(i)}));</span>
+			
+<span class="nc" id="L1014">			MColumn column = MColumn.get(Env.getCtx(), field.getAD_Column_ID());</span>
+<span class="nc" id="L1015">			boolean isWrongValueForMandatory = false;</span>
+<span class="nc bnc" id="L1016" title="All 4 branches missed.">			if (field.isMandatory(false) || column.isMandatory()){</span>
+<span class="nc bnc" id="L1017" title="All 6 branches missed.">				if (isInsertMode() &amp;&amp; value == null &amp;&amp; field.getDefault()==null){</span>
+<span class="nc" id="L1018">					isWrongValueForMandatory = true;</span>
+<span class="nc bnc" id="L1019" title="All 4 branches missed.">				}else if (!isInsertMode() &amp;&amp; &quot;(null)&quot;.equals(value)){</span>
+<span class="nc" id="L1020">					isWrongValueForMandatory = true;</span>
+				}
+			}
+			
+<span class="nc bnc" id="L1024" title="All 2 branches missed.">			if(isWrongValueForMandatory){ </span>
+<span class="nc" id="L1025">				mandatoryColumns.append(&quot; / &quot;);</span>
+<span class="nc" id="L1026">				mandatoryColumns.append(header.get(i));</span>
+			} 
+			
+<span class="nc bnc" id="L1029" title="All 6 branches missed.">			if (isForeing &amp;&amp; value != null &amp;&amp; !&quot;(null)&quot;.equals(value)){</span>
+<span class="nc" id="L1030">				String foreignTable = column.getReferenceTableName();</span>
+<span class="nc" id="L1031">				Object idS = null;</span>
+<span class="nc bnc" id="L1032" title="All 2 branches missed.">				if(&quot;AD_Ref_List&quot;.equals(foreignTable))</span>
+<span class="nc" id="L1033">				   idS = resolveForeignList(column,foreignColumn,value,null);</span>
+				else 
+<span class="nc" id="L1035">				   idS = resolveForeign(foreignTable,foreignColumn,value,field,null);</span>
+				
+<span class="nc bnc" id="L1037" title="All 2 branches missed.">				if(idS == null){	</span>
+				   //it could be that record still doesn't exist if import mode is inserting or merging   	
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">				   if(isUpdateMode())</span>
+<span class="nc bnc" id="L1040" title="All 4 branches missed.">				     return new StringBuilder(Msg.getMsg(Env.getCtx(),(idS instanceof Integer &amp;&amp; (int)idS==-2)?&quot;ForeignMultipleResolved&quot;:&quot;ForeignNotResolved&quot;,new Object[]{header.get(i),value}));</span>
+				}
+			} else {
+				// TODO: we could validate length of string or min/max
+			}
+		}
+	    
+<span class="nc bnc" id="L1047" title="All 4 branches missed.">		if(mandatoryColumns.length()&gt;1 &amp;&amp; !isEmptyRow) </span>
+<span class="nc" id="L1048">		   return new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;FillMandatory&quot;)+&quot; &quot;+mandatoryColumns);</span>
+		else
+<span class="nc" id="L1050">		   return null;		</span>
+	}
+	
+	/**
+	 * Validate extra fields for DisplayType.Location.
+	 * @param gridTab
+	 * @param header
+	 * @param tmpRow
+	 * @param i
+	 * @param sField
+	 * @return error message or null
+	 */
+	private StringBuilder validateSpecialFields(GridTab gridTab,List&lt;String&gt; header,List&lt;Object&gt; tmpRow,int i,String sField){
+
+<span class="nc" id="L1064">	   GridField field = gridTab.getField(sField);</span>
+<span class="nc bnc" id="L1065" title="All 2 branches missed.">	   if(field == null) </span>
+<span class="nc" id="L1066">		  return new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;NotAWindowField&quot;,new Object[] {sField}));</span>
+	    
+<span class="nc bnc" id="L1068" title="All 4 branches missed.">	   if(!(field.isDisplayed() || field.isDisplayedGrid())) </span>
+<span class="nc" id="L1069">		  return new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;FieldNotDisplayed&quot;,new Object[] {field.getColumnName()}));</span>
+	   
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">	   if (header.get(i).contains(MTable.getTableName(Env.getCtx(),MLocation.Table_ID)))</span>
+	   {
+		   //without Country any address would be invalid 
+<span class="nc" id="L1074">		   boolean thereIsCountry = false ;</span>
+<span class="nc" id="L1075">		   boolean isEmptyRow = true;</span>
+<span class="nc" id="L1076">		   Object countryId = null;</span>
+<span class="nc" id="L1077">		   int regionIndex = -1;</span>
+<span class="nc bnc" id="L1078" title="All 2 branches missed.">		   for(int j= i;j&lt; header.size();j++){</span>
+<span class="nc bnc" id="L1079" title="All 2 branches missed.">			   if(!header.get(j).contains(MTable.getTableName(Env.getCtx(),MLocation.Table_ID)))</span>
+<span class="nc" id="L1080">			       break;</span>
+			    //validate if location contains its parent table 
+<span class="nc bnc" id="L1082" title="All 2 branches missed.">				if(!header.get(j).contains(gridTab.getTableName()))</span>
+<span class="nc" id="L1083">				    return new StringBuilder().append(&quot;Invalid location column's name, it must contain its parent table: &quot;)</span>
+<span class="nc" id="L1084">				    		   .append(gridTab.getTableName().toString())</span>
+<span class="nc" id="L1085">				    		   .append(&quot;[&quot;).append(header.get(j)).append(&quot;]&quot;);</span>
+				
+<span class="nc" id="L1087">			   String columnName = header.get(j);	</span>
+<span class="nc" id="L1088">			   Object value = tmpRow.get(j);   </span>
+<span class="nc bnc" id="L1089" title="All 2 branches missed.">			   if(value!=null){ </span>
+<span class="nc bnc" id="L1090" title="All 2 branches missed.">				  if(columnName.contains(&quot;C_Country_ID&quot;)) {</span>
+<span class="nc" id="L1091">					 thereIsCountry= true;</span>
+<span class="nc" id="L1092">					 countryId = value;</span>
+				  }
+			   }else
+				  continue;
+			   			    
+<span class="nc bnc" id="L1097" title="All 2 branches missed.">			   boolean isKeyColumn = columnName.indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L1098" title="All 4 branches missed.">			   boolean isForeign   = columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc bnc" id="L1099" title="All 2 branches missed.">			   boolean isDetail    = columnName.indexOf(&quot;&gt;&quot;) &gt; 0;</span>
+<span class="nc" id="L1100">			   String  foreignColumn = null; </span>
+<span class="nc" id="L1101">			   columnName = getColumnName(isKeyColumn,isForeign,isDetail,columnName);</span>
+<span class="nc bnc" id="L1102" title="All 2 branches missed.">			   if(isForeign) </span>
+<span class="nc" id="L1103">				  foreignColumn = header.get(j).substring(header.get(j).indexOf(&quot;[&quot;)+1, header.get(j).indexOf(&quot;]&quot;));</span>
+			   
+<span class="nc bnc" id="L1105" title="All 4 branches missed.">			   if(isForeign &amp;&amp; !&quot;(null)&quot;.equals(value)){ </span>
+<span class="nc" id="L1106">			      String foreignTable = columnName.substring(0,columnName.length()-3);</span>
+<span class="nc bnc" id="L1107" title="All 2 branches missed.">			      if (&quot;C_Region&quot;.equals(foreignTable)) {</span>
+<span class="nc" id="L1108">			    	  regionIndex = j;</span>
+<span class="nc" id="L1109">			      } else {</span>
+<span class="nc" id="L1110">			    	  Object id = resolveForeign(foreignTable,foreignColumn,value,field,null);</span>
+<span class="nc bnc" id="L1111" title="All 6 branches missed.">					  if (id == null || (id instanceof Integer &amp;&amp; (int)id &lt; 0))</span>
+<span class="nc bnc" id="L1112" title="All 4 branches missed.">						  return new StringBuilder(Msg.getMsg(Env.getCtx(),(id instanceof Integer &amp;&amp; (int)id==-2)?&quot;ForeignMultipleResolved&quot;:&quot;ForeignNotResolved&quot; ,new Object[]{header.get(j),value}));   </span>
+<span class="nc bnc" id="L1113" title="All 2 branches missed.">					  if (columnName.contains(&quot;C_Country_ID&quot;)) {</span>
+<span class="nc" id="L1114">						  countryId = id;</span>
+					  }
+			      }
+			   }	   
+<span class="nc" id="L1118">			   isEmptyRow=false;</span>
+	      }	   
+<span class="nc" id="L1120">		  MColumn column = MColumn.get(Env.getCtx(), field.getAD_Column_ID());		</span>
+<span class="nc bnc" id="L1121" title="All 8 branches missed.">		  if((field.isMandatory(true) || column.isMandatory()) &amp;&amp; !isEmptyRow &amp;&amp; !thereIsCountry) </span>
+<span class="nc" id="L1122">			  return new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;FillMandatory&quot;)+&quot; &quot;+field.getColumnName()+&quot;[&quot;+&quot;C_Country_ID]&quot;);</span>
+		  
+<span class="nc bnc" id="L1124" title="All 4 branches missed.">		  if (countryId != null &amp;&amp; regionIndex != -1) {</span>
+<span class="nc" id="L1125">			  String columnName = header.get(regionIndex);	</span>
+<span class="nc" id="L1126">			  Object value = tmpRow.get(regionIndex);</span>
+			  
+<span class="nc bnc" id="L1128" title="All 2 branches missed.">			  boolean isKeyColumn = columnName.indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L1129" title="All 4 branches missed.">			  boolean isForeign = columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L1130" title="All 2 branches missed.">			  boolean isDetail = columnName.indexOf(&quot;&gt;&quot;) &gt; 0;</span>
+<span class="nc" id="L1131">			  String foreignColumn = null;</span>
+<span class="nc" id="L1132">			  columnName = getColumnName(isKeyColumn, isForeign, isDetail, columnName);</span>
+<span class="nc bnc" id="L1133" title="All 2 branches missed.">			  if (isForeign)</span>
+<span class="nc" id="L1134">				foreignColumn = header.get(regionIndex).substring(header.get(regionIndex).indexOf(&quot;[&quot;) + 1, header.get(regionIndex).indexOf(&quot;]&quot;));</span>
+
+<span class="nc bnc" id="L1136" title="All 4 branches missed.">			  if (isForeign &amp;&amp; !&quot;(null)&quot;.equals(value)) {</span>
+<span class="nc" id="L1137">				int id = resolveForeignRegionByCountry(foreignColumn, value, field, null, (Integer) countryId);</span>
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">				if (id &lt; 0)</span>
+<span class="nc bnc" id="L1139" title="All 2 branches missed.">					return new StringBuilder(Msg.getMsg(Env.getCtx(), id == -2 ? &quot;ForeignMultipleResolved&quot; : &quot;ForeignNotResolved&quot;,new Object[] { header.get(regionIndex), value }));</span>
+			  }
+		  }
+			
+	   }
+<span class="nc" id="L1144">	   return null;</span>
+	}	
+	
+	/**
+	 * Process row for import
+	 * @param gridTab
+	 * @param header
+	 * @param map
+	 * @param startindx
+	 * @param endindx
+	 * @param masterRecord
+	 * @param trx
+	 * @return error message or null
+	 */
+	private String proccessRow(GridTab gridTab,List&lt;String&gt; header, Map&lt;String, Object&gt; map,int startindx,int endindx,PO masterRecord,Trx trx){
+		
+<span class="nc" id="L1160">		String logMsg = null;	</span>
+<span class="nc" id="L1161">		boolean isThereRow = false;</span>
+<span class="nc" id="L1162">		MLocation address = null;</span>
+<span class="nc" id="L1163">		List&lt;String&gt; parentColumns = new ArrayList&lt;String&gt;(); </span>
+<span class="nc" id="L1164">		int regionIndex = -1;</span>
+<span class="nc bnc" id="L1165" title="All 2 branches missed.">		for(int i = startindx ; i &lt; endindx + 1 ; i++){</span>
+<span class="nc" id="L1166">			String columnName = header.get(i);</span>
+<span class="nc" id="L1167">			Object value = map.get(header.get(i));</span>
+<span class="nc" id="L1168">			boolean isDetail = false;</span>
+<span class="nc bnc" id="L1169" title="All 2 branches missed.">			if(value == null)</span>
+<span class="nc" id="L1170">			   continue;</span>
+				
+<span class="nc bnc" id="L1172" title="All 6 branches missed.">			if (columnName.endsWith(&quot;_ID&quot;) &amp;&amp; &quot;0&quot;.equals(value) &amp;&amp; ! MTable.isZeroIDTable(gridTab.getTableName()))</span>
+<span class="nc" id="L1173">			   continue;</span>
+				
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">			boolean isKeyColumn= columnName.indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L1176" title="All 4 branches missed.">			boolean isForeign  = columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc bnc" id="L1177" title="All 2 branches missed.">			isDetail   = columnName.indexOf(&quot;&gt;&quot;) &gt; 0;</span>
+<span class="nc" id="L1178">			columnName = getColumnName(isKeyColumn,isForeign,isDetail,columnName);</span>
+<span class="nc" id="L1179">			String foreignColumn = null;</span>
+<span class="nc" id="L1180">			Object setValue = null;</span>
+			
+<span class="nc bnc" id="L1182" title="All 2 branches missed.">			if(isForeign) </span>
+<span class="nc" id="L1183">			   foreignColumn = header.get(i).substring(header.get(i).indexOf(&quot;[&quot;)+1,header.get(i).indexOf(&quot;]&quot;));</span>
+<span class="nc bnc" id="L1184" title="All 8 branches missed.">			if(!isForeign &amp;&amp; !isKeyColumn &amp;&amp; (&quot;AD_Language&quot;.equals(columnName) || &quot;EntityType&quot;.equals(columnName))) {</span>
+<span class="nc" id="L1185">				setValue = value;</span>
+<span class="nc" id="L1186">				GridField field = gridTab.getField(columnName);</span>
+<span class="nc" id="L1187">			    logMsg = gridTab.setValue(field,setValue);</span>
+<span class="nc bnc" id="L1188" title="All 4 branches missed.">			    if(logMsg!=null &amp;&amp; logMsg.equals(&quot;&quot;))</span>
+<span class="nc" id="L1189">			    	logMsg= null;</span>
+<span class="nc bnc" id="L1190" title="All 4 branches missed.">			}else if(!&quot;C_Location&quot;.equals(gridTab.getTableName()) &amp;&amp; header.get(i).contains(MTable.getTableName(Env.getCtx(),MLocation.Table_ID))){</span>
+		    
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">				if(address == null){</span>
+<span class="nc bnc" id="L1193" title="All 2 branches missed.">				    if(isInsertMode()){</span>
+<span class="nc" id="L1194">					   address = new MLocation (Env.getCtx(),0,trx.getTrxName());	   </span>
+<span class="nc" id="L1195">				    }else{</span>
+<span class="nc bnc" id="L1196" title="All 2 branches missed.">				       Object location = gridTab.getValue(&quot;C_Location_ID&quot;)==null?0:gridTab.getValue(&quot;C_Location_ID&quot;).toString();</span>
+<span class="nc" id="L1197">					   int C_Location_ID = Integer.parseInt(location.toString());  </span>
+<span class="nc" id="L1198">					   address =  new MLocation (Env.getCtx(),C_Location_ID,trx.getTrxName());	</span>
+				    }
+				}
+<span class="nc" id="L1201">				GridField field = gridTab.getField(columnName);</span>
+<span class="nc bnc" id="L1202" title="All 2 branches missed.">				if(!&quot;(null)&quot;.equals(value.toString().trim())){</span>
+<span class="nc bnc" id="L1203" title="All 2 branches missed.">				   if(isForeign) {</span>
+<span class="nc" id="L1204">					  String foreignTable = columnName.substring(0,columnName.length()-3);</span>
+<span class="nc bnc" id="L1205" title="All 2 branches missed.">					  if(&quot;C_Region&quot;.equals(foreignTable))</span>
+<span class="nc" id="L1206">						  regionIndex = i;</span>
+					  else
+<span class="nc" id="L1208">						  setValue = resolveForeign(foreignTable,foreignColumn,value,field,trx);</span>
+<span class="nc bnc" id="L1209" title="All 2 branches missed.">					  if(&quot;C_City&quot;.equals(foreignTable))</span>
+<span class="nc" id="L1210">						 address.setCity(value.toString());  </span>
+<span class="nc" id="L1211">					}else</span>
+<span class="nc" id="L1212">					  setValue = value;			</span>
+				}
+<span class="nc" id="L1214">				address.set_ValueOfColumn(columnName,setValue);</span>
+<span class="nc" id="L1215">			}else{</span>
+<span class="nc bnc" id="L1216" title="All 4 branches missed.">				if(isKeyColumn &amp;&amp; isUpdateMode())</span>
+<span class="nc" id="L1217">				   continue;</span>
+				
+<span class="nc" id="L1219">				GridField field = gridTab.getField(columnName);</span>
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">				if (field.isParentValue()){</span>
+					
+<span class="nc bnc" id="L1222" title="All 2 branches missed.">					if(&quot;(null)&quot;.equals(value.toString())){</span>
+<span class="nc" id="L1223">					   logMsg = Msg.getMsg(Env.getCtx(),&quot;NoParentDelete&quot;, new Object[] {header.get(i)}); </span>
+<span class="nc" id="L1224">					   break;</span>
+					}
+					
+<span class="nc bnc" id="L1227" title="All 4 branches missed.">					if(isForeign &amp;&amp; masterRecord!=null){</span>
+<span class="nc bnc" id="L1228" title="All 2 branches missed.">					   if (masterRecord.get_Value(foreignColumn).toString().equals(value)){</span>
+<span class="nc" id="L1229">						   logMsg = gridTab.setValue(field,masterRecord.get_ID());</span>
+<span class="nc bnc" id="L1230" title="All 2 branches missed.">						   if(logMsg.equals(&quot;&quot;))</span>
+<span class="nc" id="L1231">							  logMsg= null;</span>
+						   else break;
+<span class="nc" id="L1233">					   }else{</span>
+<span class="nc bnc" id="L1234" title="All 2 branches missed.">						   if(value!=null){					      </span>
+<span class="nc" id="L1235">						      logMsg = header.get(i)+&quot; - &quot;+Msg.getMsg(Env.getCtx(),&quot;DiffParentValue&quot;, new Object[] {masterRecord.get_Value(foreignColumn).toString(),value});</span>
+<span class="nc" id="L1236">						      break;</span>
+						   }   
+					   }
+<span class="nc bnc" id="L1239" title="All 6 branches missed.">					}else if(isForeign &amp;&amp; masterRecord==null &amp;&amp; gridTab.getTabLevel()&gt;0){</span>
+<span class="nc" id="L1240">						Object master =gridTab.getParentTab().getValue(foreignColumn);</span>
+<span class="nc bnc" id="L1241" title="All 6 branches missed.">						if (master!=null &amp;&amp; value!=null &amp;&amp; !master.toString().equals(value)){</span>
+<span class="nc" id="L1242">							logMsg = header.get(i)+&quot; - &quot;+Msg.getMsg(Env.getCtx(),&quot;DiffParentValue&quot;, new Object[] {master.toString(),value});</span>
+<span class="nc" id="L1243">							break;</span>
+						}			
+<span class="nc bnc" id="L1245" title="All 4 branches missed.">					}else if (masterRecord==null &amp;&amp; isDetail){</span>
+<span class="nc" id="L1246">						MColumn column = MColumn.get(Env.getCtx(),field.getAD_Column_ID());</span>
+<span class="nc" id="L1247">						String foreignTable = column.getReferenceTableName();</span>
+<span class="nc" id="L1248">						Object idS = null;</span>
+						
+<span class="nc bnc" id="L1250" title="All 2 branches missed.">						if (&quot;AD_Ref_List&quot;.equals(foreignTable)) </span>
+<span class="nc" id="L1251">							idS = resolveForeignList(column, foreignColumn, value,trx);</span>
+						else 
+<span class="nc" id="L1253">							idS = resolveForeign(foreignTable,foreignColumn,value, field, trx);</span>
+						
+<span class="nc bnc" id="L1255" title="All 6 branches missed.">					    if (idS == null || (idS instanceof Integer &amp;&amp; (int)idS &lt; 0))</span>
+<span class="nc bnc" id="L1256" title="All 4 branches missed.">						   return Msg.getMsg(Env.getCtx(),(idS instanceof Integer &amp;&amp; (int)idS==-2)?&quot;ForeignMultipleResolved&quot;:&quot;ForeignNotResolved&quot;,new Object[]{header.get(i),value});</span>
+						
+<span class="nc bnc" id="L1258" title="All 4 branches missed.">						if (idS instanceof Integer &amp;&amp; (int)idS &gt;= 0)</span>
+<span class="nc" id="L1259">						   logMsg = gridTab.setValue(field,idS);</span>
+<span class="nc bnc" id="L1260" title="All 2 branches missed.">						else if (idS != null)</span>
+<span class="nc" id="L1261">						   logMsg = gridTab.setValue(field,idS);</span>
+						
+<span class="nc bnc" id="L1263" title="All 4 branches missed.">						if(logMsg !=null &amp;&amp; logMsg.equals(&quot;&quot;))</span>
+<span class="nc" id="L1264">						   logMsg = null;</span>
+						else break;
+					}
+<span class="nc" id="L1267">					parentColumns.add(columnName);	</span>
+<span class="nc" id="L1268">					continue;</span>
+				}
+				//this field should not be inserted or updated 
+<span class="nc bnc" id="L1271" title="All 2 branches missed.">				if(!field.isDisplayed(true)) </span>
+<span class="nc" id="L1272">					continue;</span>
+					
+<span class="nc bnc" id="L1274" title="All 2 branches missed.">				if(&quot;(null)&quot;.equals(value.toString().trim())){</span>
+<span class="nc" id="L1275">				   logMsg = gridTab.setValue(field,null);	</span>
+<span class="nc bnc" id="L1276" title="All 2 branches missed.">				   if(logMsg.equals(&quot;&quot;))</span>
+<span class="nc" id="L1277">					  logMsg= null;</span>
+				   else break;
+<span class="nc" id="L1279">				}else{</span>
+				   
+<span class="nc" id="L1281">				   MColumn column = MColumn.get(Env.getCtx(),field.getAD_Column_ID());</span>
+<span class="nc bnc" id="L1282" title="All 2 branches missed.">				   if (isForeign){</span>
+<span class="nc" id="L1283">						String foreignTable = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L1284" title="All 2 branches missed.">						if (&quot;AD_Ref_List&quot;.equals(foreignTable)) {</span>
+<span class="nc" id="L1285">							String idS = resolveForeignList(column, foreignColumn, value,trx);</span>
+<span class="nc bnc" id="L1286" title="All 2 branches missed.">							if(idS == null)	</span>
+<span class="nc" id="L1287">							   return Msg.getMsg(Env.getCtx(),&quot;ForeignNotResolved&quot;,new Object[]{header.get(i),value});</span>
+							
+<span class="nc" id="L1289">							setValue = idS;</span>
+<span class="nc" id="L1290">							isThereRow =true;</span>
+<span class="nc" id="L1291">						} else {</span>
+							
+<span class="nc" id="L1293">							Object id = resolveForeign(foreignTable, foreignColumn, value,field,trx);</span>
+<span class="nc bnc" id="L1294" title="All 6 branches missed.">						    if (id == null || (id instanceof Integer &amp;&amp; (int)id &lt; 0))</span>
+<span class="nc bnc" id="L1295" title="All 4 branches missed.">								return Msg.getMsg(Env.getCtx(),(id instanceof Integer &amp;&amp; (int)id==-2)?&quot;ForeignMultipleResolved&quot;:&quot;ForeignNotResolved&quot;,new Object[]{header.get(i),value});</span>
+
+<span class="nc" id="L1297">							setValue = id;</span>
+<span class="nc bnc" id="L1298" title="All 2 branches missed.">							if (field.isParentValue()) {</span>
+<span class="nc" id="L1299">								Object actualId = field.getValue();</span>
+<span class="nc bnc" id="L1300" title="All 4 branches missed.">								if (actualId != null &amp;&amp; ! actualId.equals(id)) {</span>
+<span class="nc" id="L1301">									logMsg = Msg.getMsg(Env.getCtx(), &quot;ParentCannotChange&quot;,new Object[]{header.get(i)});</span>
+<span class="nc" id="L1302">									break;</span>
+								}
+							}
+<span class="nc" id="L1305">							isThereRow =true;</span>
+						}
+<span class="nc" id="L1307">				   }else{</span>
+<span class="nc bnc" id="L1308" title="All 2 branches missed.">					   if(value != null) {</span>
+<span class="nc bnc" id="L1309" title="All 2 branches missed.">						  if(value instanceof java.util.Date)</span>
+<span class="nc" id="L1310">							 value = new Timestamp(((java.util.Date)value).getTime());</span>
+							
+<span class="nc bnc" id="L1312" title="All 2 branches missed.">						  if(DisplayType.Payment == field.getDisplayType()){</span>
+<span class="nc" id="L1313">   							 String oldValue = value.toString(); </span>
+<span class="nc bnc" id="L1314" title="All 2 branches missed.">							 for(ValueNamePair pList: MRefList.getList(Env.getCtx(),REFERENCE_PAYMENTRULE,false)){</span>
+<span class="nc bnc" id="L1315" title="All 2 branches missed.">								 if(pList.getName().equals(oldValue.toString())){</span>
+<span class="nc" id="L1316">									oldValue = pList.getValue(); </span>
+<span class="nc" id="L1317">									break;</span>
+								 }
+							 }
+<span class="nc bnc" id="L1320" title="All 2 branches missed.">							 if(!value.toString().equals(oldValue)) </span>
+<span class="nc" id="L1321">							     value = oldValue;</span>
+							 else
+<span class="nc" id="L1323">								 return Msg.getMsg(Env.getCtx(),&quot;ForeignNotResolved&quot;,new Object[]{header.get(i),value}); </span>
+<span class="nc bnc" id="L1324" title="All 2 branches missed.">						  }else if(DisplayType.Button == field.getDisplayType()){</span>
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">							 if(column.getAD_Reference_Value_ID()== REFERENCE_DOCUMENTACTION){</span>
+<span class="nc" id="L1326">								String oldValue = value.toString(); </span>
+<span class="nc bnc" id="L1327" title="All 2 branches missed.">							    for(ValueNamePair pList: MRefList.getList(Env.getCtx(),REFERENCE_DOCUMENTACTION,false)){</span>
+<span class="nc bnc" id="L1328" title="All 2 branches missed.">								    if(pList.getName().equals(oldValue.toString())){</span>
+<span class="nc" id="L1329">									   oldValue = pList.getValue(); </span>
+<span class="nc" id="L1330">									   break;</span>
+									}
+								}
+<span class="nc bnc" id="L1333" title="All 2 branches missed.">								if(!value.toString().equals(oldValue)) </span>
+<span class="nc" id="L1334">									value = oldValue;</span>
+							    else
+<span class="nc" id="L1336">								    return Msg.getMsg(Env.getCtx(),&quot;ForeignNotResolved&quot;,new Object[]{header.get(i),value});  </span>
+							 }else{
+<span class="nc" id="L1338">								 return Msg.getMsg(Env.getCtx(),&quot;Invalid&quot;) + &quot; Column [&quot;+column.getColumnName()+&quot;]&quot;;   </span>
+							 } 
+<span class="nc bnc" id="L1340" title="All 4 branches missed.">						  }  else if (DisplayType.isNumeric(field.getDisplayType()) || DisplayType.isID(field.getDisplayType())) {</span>
+<span class="nc bnc" id="L1341" title="All 2 branches missed.">							  if (columnName.endsWith(&quot;_ID&quot;)) {</span>
+<span class="nc bnc" id="L1342" title="All 2 branches missed.">								  if (!(value instanceof Integer)) {</span>
+<span class="nc" id="L1343">									  Integer idValue = Integer.valueOf(value.toString());</span>
+<span class="nc" id="L1344">									  value = idValue;</span>
+								  }
+<span class="nc bnc" id="L1346" title="All 2 branches missed.">							  } else if (!(value instanceof BigDecimal)) {</span>
+<span class="nc" id="L1347">								  BigDecimal decValue = new BigDecimal(value.toString());</span>
+<span class="nc" id="L1348">								  value = decValue;</span>
+							  }
+						  }
+<span class="nc" id="L1351">						  setValue = value;</span>
+<span class="nc" id="L1352">						  isThereRow =true;</span>
+					   }
+				   }
+									   
+<span class="nc bnc" id="L1356" title="All 2 branches missed.">				   if(setValue != null) {</span>
+<span class="nc" id="L1357">					  Object oldValue = gridTab.getValue(field);</span>
+<span class="nc bnc" id="L1358" title="All 2 branches missed.">					  if (isValueChanged(oldValue, setValue)) {</span>
+<span class="nc bnc" id="L1359" title="All 2 branches missed.">						  if (!field.isEditable(true)) {</span>
+<span class="nc" id="L1360">							  return Msg.getMsg(Env.getCtx(), &quot;FieldIsReadOnly&quot;,new Object[] {header.get(i)});</span>
+						  }
+<span class="nc" id="L1362">						  logMsg = gridTab.setValue(field,setValue);</span>
+<span class="nc" id="L1363">					  } else {</span>
+<span class="nc" id="L1364">						  logMsg = &quot;&quot;;</span>
+					  }
+				   }
+				   
+<span class="nc bnc" id="L1368" title="All 4 branches missed.">				   if(logMsg!=null &amp;&amp; logMsg.equals(&quot;&quot;))</span>
+<span class="nc" id="L1369">					  logMsg= null;</span>
+				   else break;
+			   }
+			}	
+		}
+			 
+<span class="nc bnc" id="L1375" title="All 2 branches missed.">		if(address!=null){  </span>
+<span class="nc bnc" id="L1376" title="All 4 branches missed.">			if (regionIndex != -1 &amp;&amp; address.getC_Country_ID() &gt; 0) {</span>
+<span class="nc" id="L1377">				String columnName = header.get(regionIndex);</span>
+<span class="nc" id="L1378">				Object value = map.get(header.get(regionIndex));</span>
+<span class="nc" id="L1379">				boolean isDetail = false;</span>
+<span class="nc bnc" id="L1380" title="All 2 branches missed.">				boolean isKeyColumn= columnName.indexOf(&quot;/&quot;) &gt; 0;</span>
+<span class="nc bnc" id="L1381" title="All 4 branches missed.">				boolean isForeign  = columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc bnc" id="L1382" title="All 2 branches missed.">				isDetail   = columnName.indexOf(&quot;&gt;&quot;) &gt; 0;</span>
+<span class="nc" id="L1383">				columnName = getColumnName(isKeyColumn,isForeign,isDetail,columnName);</span>
+<span class="nc" id="L1384">				String foreignColumn = null;</span>
+<span class="nc" id="L1385">				Object setValue = null;</span>
+				
+<span class="nc bnc" id="L1387" title="All 2 branches missed.">				if(isForeign) </span>
+<span class="nc" id="L1388">				   foreignColumn = header.get(regionIndex).substring(header.get(regionIndex).indexOf(&quot;[&quot;)+1,header.get(regionIndex).indexOf(&quot;]&quot;));</span>
+				
+<span class="nc" id="L1390">					GridField field = gridTab.getField(columnName);</span>
+<span class="nc bnc" id="L1391" title="All 2 branches missed.">					if(!&quot;(null)&quot;.equals(value.toString().trim())){</span>
+<span class="nc bnc" id="L1392" title="All 2 branches missed.">					   if(isForeign) {</span>
+<span class="nc" id="L1393">						  setValue = resolveForeignRegionByCountry(foreignColumn, value, field, trx, address.getC_Country_ID());</span>
+<span class="nc" id="L1394">						}else</span>
+<span class="nc" id="L1395">						  setValue = value;			</span>
+					}
+<span class="nc" id="L1397">					address.set_ValueOfColumn(columnName,setValue);</span>
+				}
+<span class="nc bnc" id="L1399" title="All 2 branches missed.">			if (!address.save()){</span>
+<span class="nc" id="L1400">			    logMsg = CLogger.retrieveError()+&quot; Address : &quot;+address;</span>
+<span class="nc" id="L1401">			}else {</span>
+<span class="nc" id="L1402">				logMsg = gridTab.setValue(&quot;C_Location_ID&quot;,address.getC_Location_ID());</span>
+<span class="nc bnc" id="L1403" title="All 2 branches missed.">				if(logMsg.equals(&quot;&quot;))</span>
+<span class="nc" id="L1404">				   logMsg= null;</span>
+				else 
+<span class="nc" id="L1406">				   return logMsg;</span>
+				
+<span class="nc" id="L1408">				isThereRow =true;	</span>
+			}
+		}	
+	    
+<span class="nc bnc" id="L1412" title="All 2 branches missed.">		boolean checkParentKey = parentColumns.size()!=gridTab.getParentColumnNames().size();</span>
+<span class="nc bnc" id="L1413" title="All 10 branches missed.">		if(isThereRow &amp;&amp; logMsg==null &amp;&amp; (masterRecord!=null||gridTab.getParentTab()!=null) &amp;&amp; checkParentKey){</span>
+<span class="nc bnc" id="L1414" title="All 2 branches missed.">			for(String linkColumn : gridTab.getParentColumnNames()){</span>
+<span class="nc" id="L1415">				String columnName = linkColumn;</span>
+<span class="nc bnc" id="L1416" title="All 2 branches missed.">				Object setValue   = masterRecord != null ? masterRecord.get_Value(linkColumn) : gridTab.getParentTab().getValue(linkColumn);</span>
+		        //resolve missing key 
+<span class="nc bnc" id="L1418" title="All 2 branches missed.">				if(setValue==null){</span>
+<span class="nc" id="L1419">			       columnName = null;</span>
+<span class="nc bnc" id="L1420" title="All 2 branches missed.">		           for(int j = startindx;j &lt; endindx + 1;j++){</span>
+<span class="nc bnc" id="L1421" title="All 2 branches missed.">		        	   if(header.get(j).contains(linkColumn)){</span>
+<span class="nc" id="L1422">		        		   columnName = header.get(j);</span>
+<span class="nc" id="L1423">		        		   setValue   = map.get(columnName);</span>
+<span class="nc" id="L1424">		        		   break;</span>
+		        	   }
+		           }
+<span class="nc bnc" id="L1427" title="All 2 branches missed.">		           if( columnName!=null ){</span>
+<span class="nc" id="L1428">					   String foreignColumn = null;						</span>
+<span class="nc bnc" id="L1429" title="All 4 branches missed.">					   boolean isForeing = columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc bnc" id="L1430" title="All 2 branches missed.">					   if(isForeing) </span>
+<span class="nc" id="L1431">						  foreignColumn  = columnName.substring(columnName.indexOf(&quot;[&quot;)+1,columnName.indexOf(&quot;]&quot;));   </span>
+			           
+<span class="nc" id="L1433">					   columnName = getColumnName(false,isForeing,true,columnName);</span>
+<span class="nc" id="L1434">					   GridField field = gridTab.getField(columnName);</span>
+<span class="nc" id="L1435">					   MColumn column = MColumn.get(Env.getCtx(),field.getAD_Column_ID());</span>
+<span class="nc bnc" id="L1436" title="All 2 branches missed.">					   if (isForeing){</span>
+<span class="nc" id="L1437">							String foreignTable = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L1438" title="All 2 branches missed.">							if (&quot;AD_Ref_List&quot;.equals(foreignTable)) {</span>
+<span class="nc" id="L1439">								String idS = resolveForeignList(column,foreignColumn,setValue,trx);</span>
+<span class="nc bnc" id="L1440" title="All 2 branches missed.">								if(idS == null)	</span>
+<span class="nc" id="L1441">								   return Msg.getMsg(Env.getCtx(),&quot;ForeignNotResolved&quot;,new Object[]{columnName,setValue});</span>
+								
+<span class="nc" id="L1443">								setValue = idS;</span>
+<span class="nc" id="L1444">							} else {</span>
+<span class="nc" id="L1445">								Object id = resolveForeign(foreignTable, foreignColumn, setValue, field, trx);</span>
+<span class="nc bnc" id="L1446" title="All 6 branches missed.">							    if (id == null || (id instanceof Integer &amp;&amp; (int)id &lt; 0))</span>
+<span class="nc bnc" id="L1447" title="All 4 branches missed.">								   return Msg.getMsg(Env.getCtx(),(id instanceof Integer &amp;&amp; (int)id==-2)?&quot;ForeignMultipleResolved&quot;:&quot;ForeignNotResolved&quot;,new Object[]{columnName,setValue});</span>
+								
+<span class="nc" id="L1449">								setValue = id;</span>
+							}
+					   }	   
+<span class="nc" id="L1452">		           }else{ </span>
+<span class="nc" id="L1453">		    	       logMsg = &quot;Key: &quot;+linkColumn+&quot; &quot;+ Msg.getMsg(Env.getCtx(),&quot;NotFound&quot;); </span>
+<span class="nc" id="L1454">		    	       break; </span>
+		           }
+			    }
+<span class="nc" id="L1457">				logMsg = gridTab.setValue(linkColumn,setValue);		   </span>
+<span class="nc bnc" id="L1458" title="All 2 branches missed.">			    if(logMsg.equals(&quot;&quot;))</span>
+<span class="nc" id="L1459">			       logMsg= null;</span>
+			    else continue;
+		   }
+		}
+		
+<span class="nc bnc" id="L1464" title="All 4 branches missed.">		if(logMsg == null &amp;&amp; !isThereRow)</span>
+<span class="nc" id="L1465">		   logMsg =&quot;NO_DATA_TO_IMPORT&quot;;</span>
+		
+<span class="nc" id="L1467">		return logMsg;</span>
+	}
+	
+	/**
+	 * @param field
+	 * @return CellProcessor
+	 */
+	private CellProcessor getProccesorFromColumn(GridField field) {
+		// TODO: List columns can use RequireSubStr constraint
+<span class="nc bnc" id="L1476" title="All 2 branches missed.">		if (DisplayType.Date == field.getDisplayType()) {</span>
+<span class="nc" id="L1477">			return (new Optional(new ParseDate(DisplayType.DEFAULT_DATE_FORMAT)));</span>
+<span class="nc bnc" id="L1478" title="All 2 branches missed.">		} else if (DisplayType.DateTime == field.getDisplayType()) {</span>
+<span class="nc" id="L1479">			return (new Optional(new ParseDate(DisplayType.DEFAULT_TIMESTAMP_FORMAT)));</span>
+<span class="nc bnc" id="L1480" title="All 2 branches missed.">		} else if (DisplayType.Time == field.getDisplayType()) {</span>
+<span class="nc" id="L1481">			return (new Optional(new ParseDate(DisplayType.DEFAULT_TIME_FORMAT)));</span>
+<span class="nc bnc" id="L1482" title="All 2 branches missed.">		} else if (DisplayType.Integer == field.getDisplayType()) {</span>
+<span class="nc" id="L1483">			return (new Optional(new ParseInt()));</span>
+<span class="nc bnc" id="L1484" title="All 2 branches missed.">		} else if (DisplayType.isNumeric(field.getDisplayType())) {</span>
+<span class="nc" id="L1485">			return (new Optional(new ParseBigDecimal(new DecimalFormatSymbols(Language.getLoginLanguage().getLocale()))));</span>
+<span class="nc bnc" id="L1486" title="All 2 branches missed.">		} else if (DisplayType.YesNo == field.getDisplayType()) {</span>
+<span class="nc" id="L1487">			return (new Optional(new ParseBool(&quot;y&quot;, &quot;n&quot;)));</span>
+<span class="nc bnc" id="L1488" title="All 4 branches missed.">		} else if (DisplayType.TextLong == field.getDisplayType() || DisplayType.JSON == field.getDisplayType()) {</span>
+<span class="nc" id="L1489">			return (new Optional(new StrMinMax(1, Long.MAX_VALUE)));</span>
+<span class="nc bnc" id="L1490" title="All 2 branches missed.">		} else if (DisplayType.isText(field.getDisplayType())) {</span>
+<span class="nc" id="L1491">			return (new Optional(new StrMinMax(1, field.getFieldLength())));</span>
+		} else {  // optional lookups and text
+<span class="nc" id="L1493">			return null;</span>
+		}
+	}
+	
+	/**
+	 * @param gridTab
+	 * @param map
+	 * @param header
+	 * @param startindx
+	 * @param endindx
+	 * @param masterRecord
+	 * @param trx
+	 * @return error message or null
+	 */
+	private String areValidKeysAndColumns(GridTab gridTab, Map&lt;String, Object&gt; map,List&lt;String&gt; header,int startindx,int endindx,PO masterRecord,Trx trx){
+<span class="nc" id="L1508">		MQuery pquery = new MQuery(gridTab.getAD_Table_ID());</span>
+<span class="nc" id="L1509">		String logMsg= null;</span>
+<span class="nc" id="L1510">		Object tmpValue=null;</span>
+<span class="nc" id="L1511">		String columnwithKey=null;</span>
+<span class="nc" id="L1512">		Object setValue = null;</span>
+<span class="nc" id="L1513">		List&lt;String&gt; parentColumns = new ArrayList&lt;String&gt;(); </span>
+		//Process columnKeys + Foreign to add restrictions.
+<span class="nc bnc" id="L1515" title="All 2 branches missed.">		for (int i = startindx ; i &lt; endindx + 1 ; i++){					  </span>
+<span class="nc bnc" id="L1516" title="All 6 branches missed.">		    boolean isKeyColumn = header.get(i).indexOf(&quot;/&quot;) &gt; 0 &amp;&amp; ( header.get(i).endsWith(&quot;K&quot;) || header.get(i).endsWith(&quot;KT&quot;));	</span>
+<span class="nc bnc" id="L1517" title="All 6 branches missed.">		    if(isKeyColumn &amp;&amp; (&quot;C_Location&quot;.equals(gridTab.getTableName()) || !header.get(i).contains(MTable.getTableName(Env.getCtx(),MLocation.Table_ID)))){  </span>
+<span class="nc bnc" id="L1518" title="All 4 branches missed.">			   boolean isForeing = header.get(i).indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; header.get(i).indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc bnc" id="L1519" title="All 2 branches missed.">			   boolean isDetail  = header.get(i).indexOf(&quot;&gt;&quot;) &gt; 0;</span>
+<span class="nc" id="L1520">			   columnwithKey = getColumnName(isKeyColumn,isForeing,isDetail,header.get(i));</span>
+			   
+<span class="nc bnc" id="L1522" title="All 2 branches missed.">			   if(map.get(header.get(i)) instanceof java.util.Date)</span>
+<span class="nc" id="L1523">				  tmpValue = new Timestamp(((java.util.Date)map.get(header.get(i))).getTime());</span>
+			   else 
+<span class="nc" id="L1525">				  tmpValue = map.get(header.get(i));</span>
+				
+<span class="nc bnc" id="L1527" title="All 2 branches missed.">			   if (tmpValue==null)</span>
+<span class="nc" id="L1528">				   continue;</span>
+			   
+<span class="nc" id="L1530">			   GridField field = gridTab.getField(columnwithKey);</span>
+<span class="nc" id="L1531">			   MColumn column  = MColumn.get(Env.getCtx(), field.getAD_Column_ID());</span>
+<span class="nc bnc" id="L1532" title="All 2 branches missed.">			   if(field.isParentValue()){</span>
+<span class="nc" id="L1533">				  parentColumns.add(column.getColumnName());</span>
+			   }
+<span class="nc" id="L1535">			   String foreignColumn = null;		   </span>
+<span class="nc bnc" id="L1536" title="All 2 branches missed.">			   if(isForeing){</span>
+<span class="nc" id="L1537">				  foreignColumn  = header.get(i).substring(header.get(i).indexOf(&quot;[&quot;)+1,header.get(i).indexOf(&quot;]&quot;));</span>
+<span class="nc" id="L1538">				  String foreignTable = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L1539" title="All 2 branches missed.">				  if (&quot;AD_Ref_List&quot;.equals(foreignTable)) {</span>
+<span class="nc" id="L1540">					  String idS = resolveForeignList(column, foreignColumn, tmpValue,trx);</span>
+<span class="nc" id="L1541">					  setValue = idS;</span>
+<span class="nc" id="L1542">				  }else {</span>
+<span class="nc" id="L1543">					  Object id = resolveForeign(foreignTable, foreignColumn, tmpValue,field,trx);</span>
+<span class="nc" id="L1544">					  setValue = id;</span>
+	             }
+<span class="nc" id="L1546">			   }else{</span>
+<span class="nc" id="L1547">				   setValue = tmpValue ;</span>
+			   }
+<span class="nc" id="L1549">			   pquery.addRestriction(columnwithKey,MQuery.EQUAL,setValue);</span>
+		   }
+		}
+		
+<span class="nc bnc" id="L1553" title="All 2 branches missed.">		if (pquery.getRestrictionCount() &gt; 0){</span>
+			//check out if parent keys were completed properly 
+<span class="nc bnc" id="L1555" title="All 2 branches missed.">			if (gridTab.isDetail()){</span>
+<span class="nc bnc" id="L1556" title="All 2 branches missed.">				for(String linkColumn : gridTab.getParentColumnNames()){</span>
+<span class="nc bnc" id="L1557" title="All 2 branches missed.">					if(!pquery.getSQLFilter().sqlClause().contains(linkColumn)){</span>
+<span class="nc bnc" id="L1558" title="All 2 branches missed.">						Object value = masterRecord!=null</span>
+<span class="nc" id="L1559">								    ? masterRecord.get_Value(linkColumn)</span>
+<span class="nc bnc" id="L1560" title="All 2 branches missed.">									: gridTab.getParentTab() != null ? gridTab.getParentTab().getValue(linkColumn) : null;</span>
+						//resolve key
+<span class="nc bnc" id="L1562" title="All 2 branches missed.">						if(value==null){</span>
+<span class="nc" id="L1563">						   String columnName = null;</span>
+<span class="nc bnc" id="L1564" title="All 2 branches missed.">				           for(int j = startindx;j&lt;endindx + 1;j++){</span>
+<span class="nc bnc" id="L1565" title="All 2 branches missed.">				        	   if(header.get(j).contains(linkColumn)){</span>
+<span class="nc" id="L1566">				        		   columnName = header.get(j);</span>
+<span class="nc" id="L1567">				        		   value = map.get(header.get(j));</span>
+<span class="nc" id="L1568">				        		   break;</span>
+				        	   }
+				           }
+<span class="nc bnc" id="L1571" title="All 2 branches missed.">				           if(columnName!=null){</span>
+<span class="nc bnc" id="L1572" title="All 4 branches missed.">				        	   boolean isForeing = columnName.indexOf(&quot;[&quot;) &gt; 0 &amp;&amp; columnName.indexOf(&quot;]&quot;)&gt;0;</span>
+<span class="nc" id="L1573">							   columnwithKey     = getColumnName(false,isForeing,true,columnName);</span>
+<span class="nc" id="L1574">							   GridField field = gridTab.getField(columnwithKey);</span>
+<span class="nc" id="L1575">							   MColumn column    = MColumn.get(Env.getCtx(), field.getAD_Column_ID());</span>
+<span class="nc" id="L1576">							   String foreignColumn = null;		   </span>
+<span class="nc bnc" id="L1577" title="All 2 branches missed.">							   if(isForeing){</span>
+<span class="nc" id="L1578">								  foreignColumn       = columnName.substring(columnName.indexOf(&quot;[&quot;)+1,columnName.indexOf(&quot;]&quot;));</span>
+<span class="nc" id="L1579">								  String foreignTable = column.getReferenceTableName();</span>
+<span class="nc bnc" id="L1580" title="All 2 branches missed.">								  if (&quot;AD_Ref_List&quot;.equals(foreignTable)) {</span>
+<span class="nc" id="L1581">									  String idS = resolveForeignList(column,foreignColumn,value,trx);</span>
+<span class="nc" id="L1582">									  value = idS;</span>
+<span class="nc" id="L1583">								  }else {</span>
+<span class="nc" id="L1584">									  value = resolveForeign(foreignTable,foreignColumn,value,field,trx);</span>
+					             }
+							   }
+<span class="nc" id="L1587">				           }else{ //mandatory key not found </span>
+<span class="nc" id="L1588">				    	       return Msg.getMsg(Env.getCtx(),&quot;FillMandatory&quot;)+&quot; &quot;+linkColumn;   </span>
+				           }
+					    }
+<span class="nc bnc" id="L1591" title="All 2 branches missed.">						if(value!=null)</span>
+<span class="nc" id="L1592">						   pquery.addRestriction(linkColumn,MQuery.EQUAL,value);  	</span>
+					}
+				}	
+			}
+<span class="nc" id="L1596">			gridTab.getTableModel().dataRequery(pquery.getSQLFilter(), false, 0, false);</span>
+<span class="nc bnc" id="L1597" title="All 2 branches missed.">	    	if (isInsertMode()){</span>
+<span class="nc bnc" id="L1598" title="All 2 branches missed.">				if(gridTab.getTableModel().getRowCount()&gt;=1)</span>
+<span class="nc" id="L1599">				   logMsg = Msg.getMsg(Env.getCtx(), &quot;AlreadyExists&quot;)+&quot; &quot;+pquery;</span>
+				else  
+<span class="nc" id="L1601">				  return null;	</span>
+			}
+<span class="nc bnc" id="L1603" title="All 2 branches missed.">			if (isUpdateMode()){</span>
+<span class="nc bnc" id="L1604" title="All 2 branches missed.">				if(gridTab.getTableModel().getRowCount()==1){</span>
+<span class="nc" id="L1605">			       gridTab.navigateCurrent();</span>
+<span class="nc" id="L1606">				   return null;</span>
+				}
+<span class="nc bnc" id="L1608" title="All 2 branches missed.">				else if(gridTab.getTableModel().getRowCount()&lt;=0)</span>
+<span class="nc" id="L1609">				   logMsg = Msg.getMsg(Env.getCtx(), &quot;not.found&quot;)+&quot; &quot;+pquery; </span>
+<span class="nc bnc" id="L1610" title="All 2 branches missed.">				else if(gridTab.getTableModel().getRowCount()&gt;1)</span>
+<span class="nc" id="L1611">			       logMsg = Msg.getMsg(Env.getCtx(),&quot;TooManyRows&quot;)+&quot; &quot;+pquery; </span>
+			}
+<span class="nc bnc" id="L1613" title="All 2 branches missed.">		    if (isMergeMode()){</span>
+<span class="nc bnc" id="L1614" title="All 2 branches missed.">			   if(gridTab.getTableModel().getRowCount()==1){</span>
+<span class="nc" id="L1615">			      gridTab.navigateCurrent();</span>
+<span class="nc" id="L1616">				  m_import_mode = IMPORT_MODE_UPDATE;</span>
+<span class="nc bnc" id="L1617" title="All 2 branches missed.">			   }else if(gridTab.getTableModel().getRowCount()&lt;=0)</span>
+<span class="nc" id="L1618">				  m_import_mode = IMPORT_MODE_INSERT;</span>
+<span class="nc bnc" id="L1619" title="All 2 branches missed.">			   else if(gridTab.getTableModel().getRowCount()&gt;1)</span>
+<span class="nc" id="L1620">				  logMsg = Msg.getMsg(Env.getCtx(),&quot;TooManyRows&quot;)+&quot; &quot;+pquery; 	</span>
+		   }
+	   }
+		
+<span class="nc" id="L1624">	   return logMsg;</span>
+	}
+	
+	/**
+	 * @param column
+	 * @param foreignColumn
+	 * @param value
+	 * @param trx
+	 * @return value from matching ad_ref_list record
+	 */
+	private String resolveForeignList(MColumn column, String foreignColumn, Object value ,Trx trx) {
+<span class="nc" id="L1635">		String idS = null;</span>
+<span class="nc bnc" id="L1636" title="All 2 branches missed.">		String trxName = (trx!=null?trx.getTrxName():null); </span>
+<span class="nc" id="L1637">		StringBuilder select = new StringBuilder(&quot;SELECT Value FROM AD_Ref_List WHERE &quot;)</span>
+<span class="nc" id="L1638">			.append(foreignColumn).append(&quot;=? AND AD_Reference_ID=? AND IsActive='Y'&quot;);</span>
+<span class="nc" id="L1639">		idS = DB.getSQLValueStringEx(trxName, select.toString(), value, column.getAD_Reference_Value_ID());</span>
+<span class="nc" id="L1640">		return idS;</span>
+	}
+
+	/**
+	 * @param foreignTable
+	 * @param foreignColumn
+	 * @param value
+	 * @param field
+	 * @param trx
+	 * @return -3 for not found, -2 for more than 1 match and &gt; 0 for foreign id
+	 */
+	private Object resolveForeign(String foreignTable, String foreignColumn, Object value, GridField field, Trx trx) {
+<span class="nc" id="L1652">		boolean systemAccess = false;</span>
+<span class="nc bnc" id="L1653" title="All 2 branches missed.">		if (!&quot;AD_Client&quot;.equals(foreignTable)) {</span>
+<span class="nc" id="L1654">			MTable ft = MTable.get(Env.getCtx(), foreignTable);</span>
+<span class="nc" id="L1655">			String accessLevel = ft.getAccessLevel();</span>
+<span class="nc bnc" id="L1656" title="All 2 branches missed.">			if (   MTable.ACCESSLEVEL_All.equals(accessLevel)</span>
+<span class="nc bnc" id="L1657" title="All 2 branches missed.">				|| MTable.ACCESSLEVEL_SystemOnly.equals(accessLevel)</span>
+<span class="nc bnc" id="L1658" title="All 2 branches missed.">				|| MTable.ACCESSLEVEL_SystemPlusClient.equals(accessLevel)) {</span>
+<span class="nc" id="L1659">				systemAccess = true;</span>
+			}
+		}
+<span class="nc" id="L1662">		int thisClientId = Env.getAD_Client_ID(Env.getCtx());</span>
+
+<span class="nc bnc" id="L1664" title="All 2 branches missed.">		String trxName = (trx!=null?trx.getTrxName():null); </span>
+
+<span class="nc" id="L1666">		StringBuilder postSelect = new StringBuilder(&quot; FROM &quot;)</span>
+<span class="nc" id="L1667">			.append(foreignTable).append(&quot; WHERE &quot;)</span>
+<span class="nc" id="L1668">			.append(foreignColumn).append(&quot;=? AND IsActive='Y' AND AD_Client_ID=?&quot;);</span>
+<span class="nc bnc" id="L1669" title="All 2 branches missed.">	  if (field != null ) {</span>
+<span class="nc bnc" id="L1670" title="All 2 branches missed.">		if (!Util.isEmpty(field.getVO().ValidationCode)) {</span>
+<span class="nc" id="L1671">			String dynamicValid = Env.parseContext(Env.getCtx(), field.getWindowNo(), field.getGridTab().getTabNo(), field.getVO().ValidationCode, false);</span>
+<span class="nc bnc" id="L1672" title="All 2 branches missed.">			if (Util.isEmpty(dynamicValid)) {</span>
+<span class="nc" id="L1673">				return 0;// it's parse error but simple consider like ForeignNotResolved</span>
+			}else {
+<span class="nc" id="L1675">				postSelect.append(&quot; AND (&quot;).append(dynamicValid).append(&quot;)&quot;);</span>
+			}
+		}
+<span class="nc" id="L1678">		int ref = field.getVO().displayType;</span>
+<span class="nc" id="L1679">		int refval = field.getVO().AD_Reference_Value_ID;</span>
+<span class="nc bnc" id="L1680" title="All 6 branches missed.">		if (refval &gt; 0 &amp;&amp; (ref == DisplayType.Table || ref == DisplayType.Search)) {</span>
+<span class="nc" id="L1681">			final MRefTable refTable = new Query(Env.getCtx(), MRefTable.Table_Name, &quot;AD_Reference_ID=?&quot;, trxName)</span>
+<span class="nc" id="L1682">					.setParameters(refval)</span>
+<span class="nc" id="L1683">					.firstOnly();</span>
+<span class="nc" id="L1684">			String whereClause = refTable.getWhereClause();</span>
+<span class="nc bnc" id="L1685" title="All 2 branches missed.">			if (!Util.isEmpty(whereClause)) {</span>
+<span class="nc" id="L1686">				String dynamicValid = Env.parseContext(Env.getCtx(), field.getWindowNo(), field.getGridTab().getTabNo(), whereClause, false);</span>
+<span class="nc bnc" id="L1687" title="All 2 branches missed.">				if (Util.isEmpty(dynamicValid)) {</span>
+<span class="nc" id="L1688">					return 0;// it's parse error but simple consider like ForeignNotResolved</span>
+				}else {
+<span class="nc" id="L1690">					postSelect.append(&quot; AND (&quot;).append(dynamicValid).append(&quot;)&quot;);</span>
+				}
+			}
+		}
+	  }
+<span class="nc" id="L1695">		StringBuilder selectCount = new StringBuilder(&quot;SELECT COUNT(*)&quot;).append(postSelect);</span>
+<span class="nc" id="L1696">		MTable forTab = MTable.get(Env.getCtx(), foreignTable);</span>
+<span class="nc" id="L1697">		StringBuilder selectId = new StringBuilder(&quot;SELECT &quot;).append(forTab.getKeyColumns()[0]).append(postSelect);</span>
+<span class="nc" id="L1698">		int count = DB.getSQLValueEx(trxName, selectCount.toString(), value, thisClientId);</span>
+<span class="nc bnc" id="L1699" title="All 2 branches missed.">		if (count == 1) { // single value found, OK</span>
+<span class="nc bnc" id="L1700" title="All 2 branches missed.">			if (forTab.isUUIDKeyTable())</span>
+<span class="nc" id="L1701">				return DB.getSQLValueStringEx(trxName, selectId.toString(), value, thisClientId);</span>
+			else
+<span class="nc" id="L1703">				return DB.getSQLValueEx(trxName, selectId.toString(), value, thisClientId);</span>
+<span class="nc bnc" id="L1704" title="All 2 branches missed.">		} else if (count &gt; 1) { // multiple values found, error ForeignMultipleResolved</span>
+<span class="nc" id="L1705">			return -2;</span>
+<span class="nc bnc" id="L1706" title="All 2 branches missed.">		} else if (count == 0) { // no values found, error ForeignNotResolved</span>
+<span class="nc bnc" id="L1707" title="All 4 branches missed.">			if (systemAccess &amp;&amp; thisClientId != 0) {</span>
+				// not found in client, try with System
+<span class="nc" id="L1709">				count = DB.getSQLValueEx(trxName, selectCount.toString(), value, 0 /* System */);</span>
+<span class="nc bnc" id="L1710" title="All 2 branches missed.">				if (count == 1) { // single value found, OK</span>
+<span class="nc bnc" id="L1711" title="All 2 branches missed.">					if (forTab.isUUIDKeyTable())</span>
+<span class="nc" id="L1712">						return DB.getSQLValueStringEx(trxName, selectId.toString(), value,  0 /* System */);</span>
+					else
+<span class="nc" id="L1714">						return DB.getSQLValueEx(trxName, selectId.toString(), value,  0 /* System */);</span>
+<span class="nc bnc" id="L1715" title="All 2 branches missed.">				} else if (count &gt; 1) { // multiple values found, error ForeignMultipleResolved</span>
+<span class="nc" id="L1716">					return -2;</span>
+				}
+			}
+		}
+<span class="nc" id="L1720">		return -3;   // no values found, error ForeignNotResolved</span>
+	}
+
+	private int resolveForeignRegionByCountry(String foreignColumn, Object regionValue, GridField field, Trx trx, int countryId) {
+<span class="nc" id="L1724">		String foreignTable = &quot;C_Region&quot;;</span>
+<span class="nc" id="L1725">		boolean systemAccess = true;</span>
+<span class="nc" id="L1726">		int thisClientId = Env.getAD_Client_ID(Env.getCtx());</span>
+		
+<span class="nc" id="L1728">		StringBuilder postSelect = new StringBuilder(&quot; FROM &quot;)</span>
+<span class="nc" id="L1729">				.append(foreignTable).append(&quot; WHERE &quot;)</span>
+<span class="nc" id="L1730">				.append(foreignColumn).append(&quot;=? AND C_Country_ID=? AND IsActive='Y' AND AD_Client_ID=?&quot;);</span>
+		
+<span class="nc" id="L1732">		StringBuilder selectCount = new StringBuilder(&quot;SELECT COUNT(*)&quot;).append(postSelect);</span>
+<span class="nc" id="L1733">		StringBuilder selectId = new StringBuilder(&quot;SELECT &quot;).append(foreignTable).append(&quot;_ID&quot;).append(postSelect);</span>
+<span class="nc" id="L1734">		int count = DB.getSQLValueEx(trxName, selectCount.toString(), regionValue, countryId, thisClientId);</span>
+<span class="nc bnc" id="L1735" title="All 2 branches missed.">		if (count == 1) { // single value found, OK</span>
+<span class="nc" id="L1736">			return DB.getSQLValueEx(trxName, selectId.toString(), regionValue, countryId, thisClientId);</span>
+<span class="nc bnc" id="L1737" title="All 2 branches missed.">		} else if (count &gt; 1) { // multiple values found, error ForeignMultipleResolved</span>
+<span class="nc" id="L1738">			return -2;</span>
+<span class="nc bnc" id="L1739" title="All 2 branches missed.">		} else if (count == 0) { // no values found, error ForeignNotResolved</span>
+<span class="nc bnc" id="L1740" title="All 4 branches missed.">			if (systemAccess &amp;&amp; thisClientId != 0) {</span>
+				// not found in client, try with System
+<span class="nc" id="L1742">				count = DB.getSQLValueEx(trxName, selectCount.toString(), regionValue, countryId, 0 /* System */);</span>
+<span class="nc bnc" id="L1743" title="All 2 branches missed.">				if (count == 1) { // single value found, OK</span>
+<span class="nc" id="L1744">					return DB.getSQLValueEx(trxName, selectId.toString(), regionValue, countryId, 0 /* System */);</span>
+<span class="nc bnc" id="L1745" title="All 2 branches missed.">				} else if (count &gt; 1) { // multiple values found, error ForeignMultipleResolved</span>
+<span class="nc" id="L1746">					return -2;</span>
+				}
+			}
+		}
+<span class="nc" id="L1750">		return -3;   // no values found, error ForeignNotResolved</span>
+	}
+	
+	//Copy from GridTable
+	@SuppressWarnings(&quot;unchecked&quot;)
+	private boolean	isValueChanged(Object oldValue, Object value)
+	{
+<span class="nc bnc" id="L1757" title="All 2 branches missed.">		if ( isNotNullAndIsEmpty(oldValue) ) {</span>
+<span class="nc" id="L1758">			oldValue = null;</span>
+		}
+
+<span class="nc bnc" id="L1761" title="All 2 branches missed.">		if ( isNotNullAndIsEmpty(value) ) {</span>
+<span class="nc" id="L1762">			value = null;</span>
+		}
+
+<span class="nc bnc" id="L1765" title="All 4 branches missed.">		boolean bChanged = (oldValue == null &amp;&amp; value != null) </span>
+<span class="nc bnc" id="L1766" title="All 4 branches missed.">							|| (oldValue != null &amp;&amp; value == null);</span>
+
+<span class="nc bnc" id="L1768" title="All 4 branches missed.">		if (!bChanged &amp;&amp; oldValue != null)</span>
+		{
+<span class="nc bnc" id="L1770" title="All 2 branches missed.">			if (oldValue.getClass().equals(value.getClass()))</span>
+			{
+<span class="nc bnc" id="L1772" title="All 2 branches missed.">				if (oldValue instanceof Comparable&lt;?&gt;)</span>
+				{
+<span class="nc bnc" id="L1774" title="All 2 branches missed.">					bChanged = (((Comparable&lt;Object&gt;)oldValue).compareTo(value) != 0);</span>
+<span class="nc" id="L1775">				}</span>
+				else
+				{
+<span class="nc bnc" id="L1778" title="All 2 branches missed.">					bChanged = !oldValue.equals(value);</span>
+				}
+<span class="nc" id="L1780">			}</span>
+<span class="nc bnc" id="L1781" title="All 2 branches missed.">			else if(value != null)</span>
+			{
+<span class="nc bnc" id="L1783" title="All 2 branches missed.">				bChanged = !(oldValue.toString().equals(value.toString()));</span>
+			}
+		}
+<span class="nc" id="L1786">		return bChanged;	</span>
+	}
+	
+	/**
+	 * @param value
+	 * @return true if value is not null and not an empty string
+	 */
+	private boolean isNotNullAndIsEmpty (Object value) {
+<span class="nc bnc" id="L1794" title="All 2 branches missed.">		if (value != null </span>
+<span class="nc bnc" id="L1795" title="All 2 branches missed.">				&amp;&amp; (value instanceof String) </span>
+<span class="nc bnc" id="L1796" title="All 2 branches missed.">				&amp;&amp; value.toString().equals(&quot;&quot;)</span>
+			) 
+		{
+<span class="nc" id="L1799">			return true;</span>
+		} else {
+<span class="nc" id="L1801">			return false;</span>
+		}
+
+	}
+	
+	@Override
+	public String getFileExtension() {
+<span class="nc" id="L1808">		return &quot;csv&quot;;</span>
+	}
+
+	@Override
+	public String getFileExtensionLabel() {
+<span class="nc" id="L1813">		return Msg.getMsg(Env.getCtx(), &quot;FileCSV&quot;);</span>
+	}
+
+	@Override
+	public String getContentType() {
+<span class="nc" id="L1818">		return &quot;application/csv&quot;;</span>
+	}
+
+	@Override
+	public String getSuggestedFileName(GridTab gridTab) {
+<span class="nc" id="L1823">		Calendar cal = Calendar.getInstance();</span>
+<span class="nc" id="L1824">		SimpleDateFormat sdf = new SimpleDateFormat(&quot;yyyyMMddHHmmss&quot;);</span>
+<span class="nc" id="L1825">		String dt = sdf.format(cal.getTime());</span>
+<span class="nc" id="L1826">		String localFile = &quot;Import_&quot; + gridTab.getTableName() + &quot;_&quot; + dt</span>
+<span class="nc bnc" id="L1827" title="All 2 branches missed.">				+ (m_isError ? &quot;_err&quot; : &quot;_log&quot;)</span>
+<span class="nc" id="L1828">				+ &quot;.&quot; + getFileExtension();</span>
+<span class="nc" id="L1829">		return localFile;</span>
+	}
+	
+    public boolean isError() {
+<span class="nc" id="L1833">		return error;</span>
+	}
+
+	public boolean isSingleTrx() {
+<span class="nc" id="L1837">		return isSingleTrx;</span>
+	}
+
+	public void setSingleTrx(boolean isSingleTrx) {
+<span class="nc" id="L1841">		this.isSingleTrx = isSingleTrx;</span>
+<span class="nc" id="L1842">	}</span>
+
+	public void setError(boolean error) {
+<span class="nc" id="L1845">		this.error = error;</span>
+<span class="nc" id="L1846">	}</span>
+
+	static class ValueComparator implements Comparator&lt;GridTab&gt; {
+    	Map&lt;GridTab,Integer&gt; base;
+<span class="nc" id="L1850">		public ValueComparator(Map&lt;GridTab,Integer&gt; base) {</span>
+<span class="nc" id="L1851">		    this.base = base;</span>
+<span class="nc" id="L1852">		}</span>
+		// Note: this comparator imposes orderings that are inconsistent with equals.    
+		public int compare(GridTab a, GridTab b) {
+<span class="nc bnc" id="L1855" title="All 2 branches missed.">		    if(base.get(a) &gt;= base.get(b))</span>
+<span class="nc" id="L1856">		       return 1;</span>
+		    else
+<span class="nc" id="L1858">		       return -1;</span>
+		}
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

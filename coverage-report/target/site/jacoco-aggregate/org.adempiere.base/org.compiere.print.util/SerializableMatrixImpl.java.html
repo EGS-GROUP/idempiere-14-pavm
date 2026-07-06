@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>SerializableMatrixImpl.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.print.util</a> &gt; <span class="el_source">SerializableMatrixImpl.java</span></div><h1>SerializableMatrixImpl.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2012 Heng Sin Low                                            *
+ * Copyright (C) 2012 Trek Global                 							  *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.print.util;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.compiere.model.MSysConfig;
+import org.compiere.util.CLogger;
+
+/**
+ * Default implementation of {@link SerializableMatrix} 
+ * @author hengsin
+ */
+public class SerializableMatrixImpl&lt;T extends Serializable&gt; implements SerializableMatrix&lt;T&gt; {
+	/** default 4k block size **/
+	private static final int DEFAULT_BLOCK_SIZE = 4*1024;
+
+	/** Default to start swapping after 2k row **/
+	private static final int DEFAULT_SWAP_MAX_ROWS = 2000;
+	
+<span class="nc" id="L40">	private static final CLogger log = CLogger.getCLogger(SerializableMatrixImpl.class);</span>
+	
+	/** Data Structure rows			*/
+<span class="nc" id="L43">	private ArrayList&lt;List&lt;T&gt;&gt;	m_rows = new ArrayList&lt;List&lt;T&gt;&gt;();</span>
+	/**	Current Row					*/
+<span class="nc" id="L45">	private int m_currentRow = -1;</span>
+	
+<span class="nc" id="L47">	private int m_pageSize = 0;</span>
+	
+<span class="nc" id="L49">	private int m_size = 0;</span>
+	
+<span class="nc" id="L51">	private Page currentPage = null;</span>
+	
+<span class="nc" id="L53">	private List&lt;SwapFileSegment&gt; segments = new ArrayList&lt;SwapFileSegment&gt;();</span>
+	
+<span class="nc" id="L55">	private List&lt;Page&gt; pages = new ArrayList&lt;Page&gt;();</span>
+	
+	private SwapFile swapFile;
+	private String prefix;
+	
+	/**
+	 * @param name
+	 */
+<span class="nc" id="L63">	public SerializableMatrixImpl(String name) {</span>
+<span class="nc" id="L64">		this.prefix = name;</span>
+<span class="nc" id="L65">		int pageSize = MSysConfig.getIntValue(MSysConfig.REPORT_SWAP_MAX_ROWS, DEFAULT_SWAP_MAX_ROWS);</span>
+<span class="nc bnc" id="L66" title="All 2 branches missed.">		if (pageSize &lt;= 0) {</span>
+<span class="nc" id="L67">			m_pageSize = Integer.MAX_VALUE;</span>
+<span class="nc" id="L68">		} else {</span>
+<span class="nc" id="L69">			m_pageSize = pageSize;</span>
+		}
+<span class="nc" id="L71">	}</span>
+		
+	/* (non-Javadoc)
+	 * @see org.compiere.print.util.SerializableDataTable#addRow(java.util.ArrayList)
+	 */
+	@Override
+	public void addRow(List&lt;T&gt; data) {
+<span class="nc" id="L78">		m_size++;		</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">		if (currentPage == null) {</span>
+<span class="nc" id="L80">			currentPage = new Page();</span>
+<span class="nc" id="L81">			pages.add(currentPage);</span>
+<span class="nc" id="L82">			currentPage.first = 0;</span>
+<span class="nc" id="L83">			currentPage.last = 0;</span>
+<span class="nc" id="L84">			currentPage.size = 1;</span>
+<span class="nc" id="L85">			currentPage.pageNo = pages.size() - 1;</span>
+			
+<span class="nc" id="L87">			m_rows.add(data);</span>
+<span class="nc" id="L88">			m_currentRow = 0;			</span>
+<span class="nc" id="L89">		} else {</span>
+<span class="nc" id="L90">			Page lastPage = pages.get(pages.size() - 1);</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">			if (lastPage.size == m_pageSize) {</span>
+<span class="nc" id="L92">				pageout(currentPage);			</span>
+<span class="nc" id="L93">				currentPage = new Page();</span>
+<span class="nc" id="L94">				pages.add(currentPage);</span>
+<span class="nc" id="L95">				currentPage.pageNo = pages.size() - 1;</span>
+<span class="nc" id="L96">				currentPage.first = lastPage.last + 1;</span>
+<span class="nc" id="L97">				currentPage.last = currentPage.first;</span>
+<span class="nc" id="L98">				currentPage.size = 1;</span>
+				
+<span class="nc" id="L100">				m_rows = new ArrayList&lt;List&lt;T&gt;&gt;();</span>
+<span class="nc" id="L101">				m_rows.add(data);</span>
+<span class="nc" id="L102">				m_currentRow = currentPage.first;</span>
+<span class="nc" id="L103">			} else {</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">				if (currentPage.pageNo != lastPage.pageNo) {</span>
+<span class="nc" id="L105">					pageout(currentPage);</span>
+<span class="nc" id="L106">					pagein(lastPage.pageNo);</span>
+				}
+<span class="nc" id="L108">				m_rows.add(data);</span>
+<span class="nc" id="L109">				currentPage.last++;</span>
+<span class="nc" id="L110">				currentPage.size++;</span>
+<span class="nc" id="L111">				m_currentRow = currentPage.last;</span>
+			}
+		}
+<span class="nc" id="L114">	}	</span>
+	
+	/* (non-Javadoc)
+	 * @see org.compiere.print.util.SerializableDataTable#setRowIndex(int)
+	 */
+	@Override
+	public boolean setRowIndex (int row) {
+<span class="nc bnc" id="L121" title="All 4 branches missed.">		if (row &lt; 0 || row &gt;= m_size)</span>
+<span class="nc" id="L122">			return false;</span>
+		
+<span class="nc bnc" id="L124" title="All 4 branches missed.">		if (row &gt;= currentPage.first &amp;&amp; row &lt;= currentPage.last) {</span>
+<span class="nc" id="L125">			m_currentRow = row;</span>
+<span class="nc" id="L126">			return true;</span>
+		} else {
+<span class="nc" id="L128">			Page tmp = currentPage;</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">			for(Page page : pages) {</span>
+<span class="nc bnc" id="L130" title="All 4 branches missed.">				if (row &gt;= page.first &amp;&amp; row &lt;= page.last) {					</span>
+<span class="nc" id="L131">					currentPage = page;</span>
+<span class="nc" id="L132">					pageout(tmp);</span>
+<span class="nc" id="L133">					pagein(currentPage.pageNo);</span>
+<span class="nc" id="L134">					m_currentRow = row;</span>
+<span class="nc" id="L135">					return true;</span>
+				}
+			}
+<span class="nc" id="L138">			return false;</span>
+		}
+	}
+	
+	/* (non-Javadoc)
+	 * @see org.compiere.print.util.SerializableDataTable#setRowNext()
+	 */
+	@Override
+	public boolean setRowNext()
+	{
+<span class="nc" id="L148">		return setRowIndex(m_currentRow+1);</span>
+	}	//	setRowNext
+	
+	/* (non-Javadoc)
+	 * @see org.compiere.print.util.SerializableDataTable#getRowCount()
+	 */
+	@Override
+	public int getRowCount()
+	{
+<span class="nc" id="L157">		return m_size;</span>
+	}	//	getRowCount
+
+	/* (non-Javadoc)
+	 * @see org.compiere.print.util.SerializableDataTable#getRowIndex()
+	 */
+	@Override
+	public int getRowIndex()
+	{
+<span class="nc" id="L166">		return m_currentRow;</span>
+	}	//	getRowIndex
+	
+	/* (non-Javadoc)
+	 * @see org.compiere.print.util.SerializableDataTable#getRowData()
+	 */
+	@Override
+	public List&lt;T&gt; getRowData()
+	{
+<span class="nc bnc" id="L175" title="All 2 branches missed.">		return m_rows.isEmpty() ? null : m_rows.get(m_currentRow - currentPage.first);</span>
+	}
+	
+	@Override
+	public void setRowData(List&lt;T&gt; data) {
+<span class="nc bnc" id="L180" title="All 2 branches missed.">		if (currentPage != null) {</span>
+<span class="nc" id="L181">			int index = m_currentRow - currentPage.first; </span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">			if (index &lt; m_rows.size()) {</span>
+<span class="nc" id="L183">				m_rows.set(index, data);</span>
+			}
+		}
+<span class="nc" id="L186">	}</span>
+	
+	/**
+	 * Write current page to swap file
+	 * @param currentPage
+	 */
+	private void pageout(Page currentPage) {
+<span class="nc" id="L193">		ByteArrayOutputStream bas = new ByteArrayOutputStream();</span>
+		try {
+<span class="nc" id="L195">			ObjectOutputStream ous = new ObjectOutputStream(bas);</span>
+<span class="nc" id="L196">			ous.writeObject(m_rows);</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">			if (swapFile == null) {</span>
+<span class="nc" id="L198">				swapFile = new SwapFile(makePrefix(prefix), DEFAULT_BLOCK_SIZE, 2);</span>
+			}
+<span class="nc" id="L200">			swapFile.open();</span>
+<span class="nc" id="L201">			SwapFileSegment segment = swapFile.write(bas.toByteArray());</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">			if (currentPage.pageNo &lt; segments.size())</span>
+<span class="nc" id="L203">				segments.set(currentPage.pageNo, segment);</span>
+			else
+<span class="nc" id="L205">				segments.add(segment);</span>
+<span class="nc" id="L206">		} catch (IOException e) {</span>
+<span class="nc" id="L207">			log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+		} finally {
+<span class="nc bnc" id="L209" title="All 2 branches missed.">			if (swapFile != null)</span>
+<span class="nc" id="L210">				swapFile.close();</span>
+		}		
+<span class="nc" id="L212">	}</span>
+
+	/**
+	 * Read page from swap file
+	 * @param index
+	 */
+	private void pagein(int index) {
+<span class="nc" id="L219">		SwapFileSegment segment = segments.get(index);</span>
+		try {
+<span class="nc" id="L221">			swapFile.open();</span>
+<span class="nc" id="L222">			byte[] data = swapFile.read(segment);</span>
+<span class="nc" id="L223">			swapFile.free(segment);</span>
+<span class="nc" id="L224">			ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data));</span>
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L226">			ArrayList&lt;List&lt;T&gt;&gt; rows = (ArrayList&lt;List&lt;T&gt;&gt;) ois.readObject();</span>
+<span class="nc" id="L227">			this.m_rows = rows;</span>
+<span class="nc" id="L228">			currentPage = pages.get(index);</span>
+<span class="nc" id="L229">			m_currentRow = currentPage.first;</span>
+<span class="nc" id="L230">		} catch (IOException e) {</span>
+<span class="nc" id="L231">			log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+<span class="nc" id="L232">		} catch (ClassNotFoundException e) {</span>
+<span class="nc" id="L233">			log.log(Level.SEVERE, e.getLocalizedMessage(), e);</span>
+		} finally {
+<span class="nc" id="L235">			swapFile.close();</span>
+		}
+<span class="nc" id="L237">	}</span>
+	
+	/**
+	 * Create file name prefix from name parameter
+	 * @param name
+	 * @return file name prefix
+	 */
+	private String makePrefix(String name) {
+<span class="nc" id="L245">		StringBuilder prefix = new StringBuilder();</span>
+<span class="nc" id="L246">		char[] nameArray = name.toCharArray();</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">		for (char ch : nameArray) {</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if (Character.isLetterOrDigit(ch)) {</span>
+<span class="nc" id="L249">				prefix.append(ch);</span>
+<span class="nc" id="L250">			} else {</span>
+<span class="nc" id="L251">				prefix.append(&quot;_&quot;);</span>
+			}
+		}
+<span class="nc" id="L254">		return prefix.toString();</span>
+	}
+	
+	/**
+	 * Page value object
+	 */
+<span class="nc" id="L260">	class Page {</span>
+		protected int pageNo;
+		protected int first;
+		protected int last;
+		protected int size;
+	}	
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

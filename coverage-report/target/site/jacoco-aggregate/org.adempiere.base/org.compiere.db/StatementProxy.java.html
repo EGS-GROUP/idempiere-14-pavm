@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>StatementProxy.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.db</a> &gt; <span class="el_source">StatementProxy.java</span></div><h1>StatementProxy.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Copyright (C) 2008 Low Heng Sin                                            *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ *****************************************************************************/
+package org.compiere.db;
+
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Date;
+import java.util.logging.Level;
+
+import javax.sql.RowSet;
+
+import org.adempiere.exceptions.DBException;
+import org.compiere.model.SystemProperties;
+import org.compiere.util.CCachedRowSet;
+import org.compiere.util.CLogger;
+import org.compiere.util.CStatementVO;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Trx;
+import org.idempiere.db.util.AutoCommitConnectionBroker;
+
+/**
+ * Dynamic proxy for the CStatement interface
+ * @author Low Heng Sin
+ */
+public class StatementProxy implements InvocationHandler {
+
+<span class="nc" id="L43">	protected Connection m_conn = null;</span>
+	
+<span class="nc" id="L45">	private boolean close = false;</span>
+	
+	/**	Logger							*/
+<span class="nc" id="L48">	protected transient CLogger			log = CLogger.getCLogger (getClass());</span>
+	/** Used if local					*/
+<span class="nc" id="L50">	protected transient Statement		p_stmt = null;</span>
+	/**	Value Object					*/
+<span class="nc" id="L52">	protected CStatementVO				p_vo = null;</span>
+
+	/**
+	 * @param resultSetType
+	 * @param resultSetConcurrency
+	 * @param trxName
+	 */
+<span class="nc" id="L59">	public StatementProxy(int resultSetType, int resultSetConcurrency, String trxName) {</span>
+<span class="nc" id="L60">		p_vo = new CStatementVO (resultSetType, resultSetConcurrency);</span>
+<span class="nc" id="L61">		p_vo.setTrxName(trxName);</span>
+
+<span class="nc" id="L63">		init();</span>
+<span class="nc" id="L64">	}</span>
+	
+	/**
+	 * @param vo
+	 */
+<span class="nc" id="L69">	public StatementProxy(CStatementVO vo) {</span>
+<span class="nc" id="L70">		p_vo = vo;</span>
+<span class="nc" id="L71">		init();</span>
+<span class="nc" id="L72">	}</span>
+	
+	//for subclass
+<span class="nc" id="L75">	protected StatementProxy() {}</span>
+	
+	@Override
+	public Object invoke(Object obj, Method method, Object[] args)
+			throws Throwable {
+<span class="nc" id="L80">		String name = method.getName();		</span>
+		//handle special case	
+<span class="nc bnc" id="L82" title="All 4 branches missed.">		if (name.equals(&quot;executeQuery&quot;) || name.equals(&quot;executeUpdate&quot;) </span>
+<span class="nc bnc" id="L83" title="All 4 branches missed.">			|| name.equals(&quot;execute&quot;) || name.equals(&quot;addBatch&quot;)) {</span>
+<span class="nc bnc" id="L84" title="All 8 branches missed.">			if (args != null &amp;&amp; args.length &gt; 0 &amp;&amp; args[0] != null &amp;&amp; args[0] instanceof String) {</span>
+<span class="nc" id="L85">				String sql = (String)args[0];</span>
+<span class="nc" id="L86">				p_vo.setSql(DB.getDatabase().convertStatement(sql));</span>
+<span class="nc" id="L87">				args[0] = p_vo.getSql();</span>
+			}
+<span class="nc bnc" id="L89" title="All 6 branches missed.">		} else if (name.equals(&quot;close&quot;) &amp;&amp; (args == null || args.length == 0)) {</span>
+<span class="nc" id="L90">			close();</span>
+<span class="nc" id="L91">			return null;</span>
+<span class="nc bnc" id="L92" title="All 6 branches missed.">		} else if (name.equals(&quot;getRowSet&quot;) &amp;&amp; (args == null || args.length == 0)) {</span>
+<span class="nc" id="L93">			return getRowSet();</span>
+<span class="nc bnc" id="L94" title="All 6 branches missed.">		} else if (name.equals(&quot;isClosed&quot;) &amp;&amp; (args == null || args.length == 0)) {</span>
+<span class="nc" id="L95">			return close;</span>
+<span class="nc bnc" id="L96" title="All 6 branches missed.">		} else if (name.equals(&quot;finalize&quot;) &amp;&amp; (args == null || args.length == 0)) {</span>
+<span class="nc bnc" id="L97" title="All 4 branches missed.">			if (p_stmt != null &amp;&amp; !close) </span>
+			{
+<span class="nc" id="L99">				this.close();</span>
+			}
+<span class="nc" id="L101">			return null;</span>
+<span class="nc bnc" id="L102" title="All 6 branches missed.">		} else if (name.equals(&quot;commit&quot;) &amp;&amp; (args == null || args.length == 0)) {</span>
+<span class="nc" id="L103">			commit();</span>
+<span class="nc" id="L104">			return null;</span>
+<span class="nc bnc" id="L105" title="All 6 branches missed.">		} else if (name.equals(&quot;getSql&quot;) &amp;&amp; (args == null || args.length == 0)) {</span>
+<span class="nc" id="L106">			return getSql();</span>
+<span class="nc bnc" id="L107" title="All 6 branches missed.">		} else if (name.equals(&quot;equals&quot;) &amp;&amp; (args != null &amp;&amp; args.length == 1)) {</span>
+<span class="nc" id="L108">			return equals(args[0]);</span>
+		}
+		
+<span class="nc" id="L111">		String logSql = null;</span>
+<span class="nc" id="L112">		String logOperation = null;</span>
+<span class="nc bnc" id="L113" title="All 4 branches missed.">		if (log.isLoggable(Level.FINE) &amp;&amp; getSql() != null)</span>
+		{
+<span class="nc bnc" id="L115" title="All 4 branches missed.">			if (name.equals(&quot;executeUpdate&quot;) || name.equals(&quot;execute&quot;))</span>
+			{
+<span class="nc" id="L117">				logSql = getSql().toUpperCase();</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">				if (logSql.startsWith(&quot;UPDATE &quot;)) {</span>
+<span class="nc" id="L119">					logSql = logSql.substring(&quot;UPDATE &quot;.length()).trim();</span>
+<span class="nc" id="L120">					logOperation = &quot;Update&quot;;</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">				} else if (logSql.startsWith(&quot;INSERT INTO &quot;)) {</span>
+<span class="nc" id="L122">					logSql = logSql.substring(&quot;INSERT INTO &quot;.length()).trim();</span>
+<span class="nc" id="L123">					logOperation = &quot;Insert&quot;;</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">				} else if (logSql.startsWith(&quot;DELETE FROM &quot;)) {</span>
+<span class="nc" id="L125">					logSql = logSql.substring(&quot;DELETE FROM &quot;.length()).trim();</span>
+<span class="nc" id="L126">					logOperation = &quot;Delete&quot;;</span>
+				}
+<span class="nc bnc" id="L128" title="All 2 branches missed.">				if (logOperation != null) {</span>
+<span class="nc" id="L129">					int idxspace = logSql.indexOf(' ');</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">					if (idxspace &gt; 0)</span>
+<span class="nc" id="L131">						logSql = logSql.substring(0, logSql.indexOf(' '));</span>
+<span class="nc bnc" id="L132" title="All 4 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine((DisplayType.getDateFormat(DisplayType.DateTime)).format(new Date(System.currentTimeMillis()))+&quot;,&quot;+logOperation+&quot;,&quot;+logSql+&quot;,&quot;+(p_vo.getTrxName() != null ? p_vo.getTrxName() : &quot;&quot;)+&quot; (begin)&quot;);</span>
+				}
+			}
+		}
+<span class="nc" id="L136">		Method m = p_stmt.getClass().getMethod(name, method.getParameterTypes());</span>
+<span class="nc" id="L137">		String nullTrxName = null;</span>
+		try
+		{
+<span class="nc bnc" id="L140" title="All 4 branches missed.">			if (SystemProperties.isTraceNullTrxConnection() &amp;&amp; p_vo.getTrxName() == null)</span>
+<span class="nc" id="L141">				nullTrxName = Trx.registerNullTrx();</span>
+<span class="nc" id="L142">			return m.invoke(p_stmt, args);</span>
+		}
+<span class="nc" id="L144">		catch (InvocationTargetException e)</span>
+		{
+<span class="nc" id="L146">			throw DB.getSQLException(e);</span>
+		}
+		finally
+		{
+<span class="nc bnc" id="L150" title="All 4 branches missed.">			if (nullTrxName != null &amp;&amp; p_vo.getTrxName() == null)</span>
+<span class="nc" id="L151">				Trx.unregisterNullTrx(nullTrxName);</span>
+<span class="nc bnc" id="L152" title="All 6 branches missed.">			if (log.isLoggable(Level.FINE) &amp;&amp; logSql != null &amp;&amp; logOperation != null)</span>
+			{
+<span class="nc bnc" id="L154" title="All 2 branches missed.">				log.fine((DisplayType.getDateFormat(DisplayType.DateTime)).format(new Date(System.currentTimeMillis()))+&quot;,&quot;+logOperation+&quot;,&quot;+logSql+&quot;,&quot;+(p_vo.getTrxName() != null ? p_vo.getTrxName() : &quot;&quot;)+&quot; (end)&quot;);</span>
+			}
+		}
+	}
+	
+	/**
+	 * Initialise the statement wrapper object 
+	 */
+	protected void init()
+	{
+		try
+		{
+<span class="nc" id="L166">			Connection conn = null;</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">			Trx trx = p_vo.getTrxName() == null ? null : Trx.get(p_vo.getTrxName(), false);</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">			if (trx != null)</span>
+			{
+<span class="nc" id="L170">				conn = trx.getConnection();</span>
+<span class="nc" id="L171">			}</span>
+			else
+			{
+<span class="nc" id="L174">				m_conn = AutoCommitConnectionBroker.getConnection();</span>
+<span class="nc" id="L175">				conn = m_conn;</span>
+			}
+<span class="nc bnc" id="L177" title="All 2 branches missed.">			if (conn == null)</span>
+<span class="nc" id="L178">				throw new DBException(&quot;No Connection&quot;);</span>
+<span class="nc" id="L179">			p_stmt = conn.createStatement(p_vo.getResultSetType(), p_vo.getResultSetConcurrency());</span>
+<span class="nc" id="L180">		}</span>
+<span class="nc" id="L181">		catch (SQLException e)</span>
+		{
+<span class="nc" id="L183">			log.log(Level.SEVERE, &quot;CStatement&quot;, e);</span>
+<span class="nc" id="L184">			throw new DBException(e);</span>
+		}
+<span class="nc" id="L186">	}</span>
+	
+	/**
+	 * Close
+	 * @throws SQLException
+	 * @see java.sql.Statement#close()
+	 */
+	protected void close () throws SQLException
+	{
+<span class="nc bnc" id="L195" title="All 2 branches missed.">		if (close) return;</span>
+		
+		try {
+<span class="nc" id="L198">	        DB.close(p_stmt);</span>
+<span class="nc" id="L199">		} finally {</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">			if (m_conn != null)</span>
+			{
+<span class="nc" id="L202">				AutoCommitConnectionBroker.releaseConnection(m_conn);</span>
+			}
+<span class="nc" id="L204">			m_conn = null;</span>
+<span class="nc" id="L205">			p_stmt = null;</span>
+<span class="nc" id="L206">			close = true;</span>
+		}
+<span class="nc" id="L208">	}	//	close</span>
+	
+	/**
+	 * 	Execute the wrapped statement and return row set
+	 * 	@return RowSet
+	 * 	@throws SQLException
+	 *  @see java.sql.PreparedStatement#executeQuery()
+	 */
+	protected RowSet getRowSet()
+	{
+<span class="nc bnc" id="L218" title="All 2 branches missed.">		if (log.isLoggable(Level.FINEST))</span>
+<span class="nc" id="L219">			log.finest(&quot;getRowSet&quot;);</span>
+<span class="nc" id="L220">		RowSet rowSet = null;</span>
+<span class="nc" id="L221">		ResultSet rs = null;</span>
+		try
+		{
+<span class="nc" id="L224">			rs = p_stmt.executeQuery(p_vo.getSql());</span>
+<span class="nc" id="L225">			rowSet = CCachedRowSet.getRowSet(rs);			</span>
+<span class="nc" id="L226">		}</span>
+<span class="nc" id="L227">		catch (Exception ex)</span>
+		{
+<span class="nc" id="L229">			log.log(Level.SEVERE, p_vo.toString(), ex);</span>
+<span class="nc" id="L230">			throw new RuntimeException (ex);</span>
+		}		
+		finally
+		{
+<span class="nc" id="L234">			DB.close(rs);</span>
+<span class="nc" id="L235">			rs = null;</span>
+<span class="nc" id="L236">			DB.close(rowSet);</span>
+<span class="nc" id="L237">			rowSet = null;</span>
+		}
+<span class="nc" id="L239">		return rowSet;</span>
+	}	//	getRowSet
+
+	/**
+	 * 	Commit (if local trx)
+	 *	@throws SQLException
+	 */
+	private void commit() throws SQLException
+	{
+<span class="nc bnc" id="L248" title="All 4 branches missed.">		if (m_conn != null &amp;&amp; !m_conn.getAutoCommit())</span>
+		{
+<span class="nc" id="L250">			m_conn.commit();</span>
+		}
+<span class="nc" id="L252">	}	//	commit</span>
+	
+	/**
+	 * 	Get Sql
+	 *	@return sql
+	 */
+	public String getSql()
+	{
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		if (p_vo != null)</span>
+<span class="nc" id="L261">			return p_vo.getSql();</span>
+<span class="nc" id="L262">		return null;</span>
+	}	//	getSql
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

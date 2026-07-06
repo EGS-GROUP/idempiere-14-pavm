@@ -1,0 +1,453 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>BatchDelete.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">BatchDelete.java</span></div><h1>BatchDelete.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ **********************************************************************/
+package org.compiere.model;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Savepoint;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Trx;
+import org.compiere.util.TrxEventListener;
+import org.compiere.util.Util;
+import org.compiere.util.ValueNamePair;
+import org.idempiere.db.util.SQLFragment;
+
+/**
+ * Batch Delete PO
+ * @param &lt;T&gt; PO type
+ * @author iDempiere
+ */
+public class BatchDelete&lt;T extends PO&gt; implements IBatchOperation&lt;T&gt; {
+<span class="nc" id="L53">	private static final CLogger s_log = CLogger.getCLogger(BatchDelete.class);</span>
+<span class="nc" id="L54">	private List&lt;T&gt; m_list = new ArrayList&lt;&gt;();</span>
+	private Class&lt;T&gt; type;
+
+<span class="nc" id="L57">	private record BatchElement&lt;T extends PO&gt;(T po, List&lt;Object&gt; parameters) {}</span>
+
+<span class="nc" id="L59">	public BatchDelete(Class&lt;T&gt; type) {</span>
+<span class="nc" id="L60">		this.type = type;</span>
+<span class="nc" id="L61">	}</span>
+
+	@Override
+	public void add(T po) {
+<span class="nc bnc" id="L65" title="All 4 branches missed.">		if (po != null &amp;&amp; type.isInstance(po)) {</span>
+<span class="nc" id="L66">			m_list.add(po);</span>
+		}
+<span class="nc" id="L68">	}</span>
+
+	@Override
+	public void executeBatch(String trxName) {
+<span class="nc bnc" id="L72" title="All 2 branches missed.">		if (m_list.isEmpty()) {</span>
+<span class="nc" id="L73">			return;</span>
+		}
+
+<span class="nc" id="L76">		Trx trx = null;</span>
+<span class="nc" id="L77">		boolean internalTrx = false;</span>
+<span class="nc" id="L78">		String localTrxName = trxName;</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">		if (localTrxName != null) {</span>
+<span class="nc" id="L80">			trx = Trx.get(localTrxName, false);</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">			if (trx == null)</span>
+			{
+				// Using a trx that was previously closed or never opened
+				// Creating and starting the transaction right here, but please note
+				// that this is not a good practice
+<span class="nc" id="L86">				trx = Trx.get(localTrxName, true);</span>
+<span class="nc" id="L87">				s_log.severe(&quot;Transaction closed or never opened (&quot;+localTrxName+&quot;) =&gt; starting now --&gt; &quot; + toString());</span>
+			}
+<span class="nc" id="L89">		} else {</span>
+<span class="nc" id="L90">			localTrxName = Trx.createTrxName(&quot;BatchDelete&quot;);</span>
+<span class="nc" id="L91">			trx = Trx.get(localTrxName, true);</span>
+<span class="nc" id="L92">			internalTrx = true;</span>
+		}
+
+<span class="nc" id="L95">		Savepoint savepoint = null;</span>
+<span class="nc" id="L96">		boolean allSuccess = true;</span>
+<span class="nc" id="L97">		Connection conn = null;</span>
+
+		// follow BatchInsert logic for save error and throwing of exception
+		try {
+<span class="nc" id="L101">			conn = trx.getConnection(true);</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">			if (!internalTrx) {</span>
+<span class="nc" id="L103">				savepoint = trx.setSavepoint(null);</span>
+			}
+
+<span class="nc" id="L106">			List&lt;String&gt; preDeleteStatements = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L107">			Map&lt;String, List&lt;BatchElement&lt;T&gt;&gt;&gt; sqlMap = new LinkedHashMap&lt;&gt;();</span>
+
+<span class="nc" id="L109">			List&lt;T&gt; deletes = new ArrayList&lt;&gt;(m_list);</span>
+<span class="nc" id="L110">			List&lt;PO&gt; updates = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L111">			List&lt;PO&gt; preDeletes = new ArrayList&lt;&gt;();</span>
+
+			// 1. Process deletions (including cascades)
+<span class="nc bnc" id="L114" title="All 2 branches missed.">			for (int i = 0; i &lt; deletes.size(); i++) {</span>
+<span class="nc" id="L115">				T po = deletes.get(i);</span>
+<span class="nc" id="L116">				po.set_TrxName(localTrxName);</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">				if (!po.doVerificationForDelete(false)) {</span>
+<span class="nc" id="L118">					allSuccess = false;</span>
+<span class="nc" id="L119">					break;</span>
+				}
+
+<span class="nc" id="L122">				int AD_Table_ID = po.get_Table_ID();</span>
+<span class="nc" id="L123">				int Record_ID = po.get_ID();</span>
+<span class="nc" id="L124">				String Record_UU = po.get_UUID();</span>
+<span class="nc" id="L125">				String errorMsg = PO_Record.exists(AD_Table_ID, Record_ID, localTrxName);</span>
+<span class="nc bnc" id="L126" title="All 4 branches missed.">				if (errorMsg == null &amp;&amp; Record_UU != null)</span>
+<span class="nc" id="L127">					errorMsg = PO_Record.exists(AD_Table_ID, Record_UU, localTrxName);</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">				if (errorMsg != null) {</span>
+<span class="nc" id="L129">					s_log.saveError(&quot;CannotDelete&quot;, errorMsg);</span>
+<span class="nc" id="L130">					allSuccess = false;</span>
+<span class="nc" id="L131">					break;</span>
+				}
+
+<span class="nc bnc" id="L134" title="All 2 branches missed.">				if (!po.beforeDelete()) {</span>
+<span class="nc" id="L135">					s_log.warning(&quot;beforeDelete failed - &quot; + po.toString());</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">					if (CLogger.peekError() == null)</span>
+<span class="nc" id="L137">						s_log.saveError(&quot;Error&quot;, &quot;beforeDelete failed - &quot; + po.toString());</span>
+<span class="nc" id="L138">					allSuccess = false;</span>
+<span class="nc" id="L139">					break;</span>
+				}
+
+<span class="nc bnc" id="L142" title="All 2 branches missed.">				errorMsg = ModelValidationEngine.get().fireModelChange(po, po.isReplication() ? ModelValidator.TYPE_BEFORE_DELETE_REPLICATION : ModelValidator.TYPE_DELETE);</span>
+<span class="nc" id="L143">				po.setReplication(false);</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">				if (errorMsg != null) {</span>
+<span class="nc" id="L145">					s_log.warning(&quot;Validation failed - &quot; + errorMsg);</span>
+<span class="nc" id="L146">					s_log.saveError(errorMsg, &quot;&quot;);</span>
+<span class="nc" id="L147">					allSuccess = false;</span>
+<span class="nc" id="L148">					break;</span>
+				}
+
+				// Translations
+<span class="nc" id="L152">				String sql = po.get_deleteTranslationsSQL();</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">				if (sql != null) {</span>
+<span class="nc" id="L154">					preDeleteStatements.add(sql);</span>
+				}
+				// Trees
+<span class="nc bnc" id="L157" title="All 2 branches missed.">				if (po.is_hasCustomTree()) {</span>
+					try {
+<span class="nc" id="L159">						sql = po.get_deleteTreeSQL(MTree_Base.TREETYPE_CustomTable, true);</span>
+<span class="nc" id="L160">					} catch (Exception e) {</span>
+<span class="nc" id="L161">						s_log.log(Level.SEVERE, &quot;get_deleteTreeSQL failed - &quot; + po.toString(), e);</span>
+<span class="nc" id="L162">						s_log.saveError(&quot;Error&quot;, e.getMessage());</span>
+<span class="nc" id="L163">						allSuccess = false;</span>
+<span class="nc" id="L164">						break;</span>
+					}
+<span class="nc" id="L166">					preDeleteStatements.add(sql);</span>
+				}
+
+				// Cascades
+<span class="nc" id="L170">				String[] keyColumns = po.get_KeyColumns();</span>
+<span class="nc bnc" id="L171" title="All 6 branches missed.">				if (keyColumns != null &amp;&amp; keyColumns.length == 1 &amp;&amp; !MTable.get(po.get_Table_ID()).isUUIDKeyTable()) {</span>
+<span class="nc" id="L172">					PO_Record.deleteModelCascade(po.get_TableName(), Record_ID, localTrxName, preDeletes);</span>
+<span class="nc" id="L173">					PO_Record.deleteRecordCascade(po.get_Table_ID(), Record_ID, &quot;AD_Table.TableName NOT IN ('AD_Attachment','AD_Archive')&quot;, localTrxName, preDeletes);</span>
+<span class="nc" id="L174">					PO_Record.setRecordNull(po.get_Table_ID(), Record_ID, localTrxName, updates);</span>
+				}
+<span class="nc bnc" id="L176" title="All 2 branches missed.">				if (Record_UU != null) {</span>
+<span class="nc" id="L177">					PO_Record.deleteModelCascade(po.get_TableName(), Record_UU, localTrxName, preDeletes);</span>
+<span class="nc" id="L178">					PO_Record.deleteRecordCascade(po.get_Table_ID(), Record_UU, &quot;AD_Table.TableName NOT IN ('AD_Attachment','AD_Archive')&quot;, localTrxName, preDeletes);</span>
+<span class="nc" id="L179">					PO_Record.setRecordNull(po.get_Table_ID(), Record_UU, localTrxName, updates);</span>
+				}
+
+				// Main Delete
+<span class="nc" id="L183">				SQLFragment sqlFragment = po.get_deleteStatement();</span>
+<span class="nc" id="L184">				sqlMap.computeIfAbsent(sqlFragment.sqlClause(), k -&gt; new ArrayList&lt;&gt;()).add(new BatchElement&lt;&gt;(po, sqlFragment.parameters()));</span>
+				
+			}
+
+<span class="nc bnc" id="L188" title="All 2 branches missed.">			if (!allSuccess) {</span>
+<span class="nc" id="L189">				rollback(trx, internalTrx, savepoint);</span>
+<span class="nc" id="L190">				throwSaveError();</span>
+			}
+
+			// 2. Process delete of dependent records
+<span class="nc bnc" id="L194" title="All 2 branches missed.">			if (!preDeletes.isEmpty()) {</span>
+<span class="nc" id="L195">				BatchDelete&lt;PO&gt; batchDelete = new BatchDelete&lt;&gt;(PO.class);</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">				for (PO po : preDeletes)</span>
+<span class="nc" id="L197">					batchDelete.add(po);</span>
+<span class="nc" id="L198">				batchDelete.executeBatch(localTrxName);</span>
+			}
+
+			// 3. Process updates (mostly from setRecordNull)
+<span class="nc bnc" id="L202" title="All 4 branches missed.">			if (allSuccess &amp;&amp; !updates.isEmpty()) {</span>
+<span class="nc" id="L203">				BatchUpdate&lt;PO&gt; batchUpdate = new BatchUpdate&lt;&gt;(PO.class);</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">				for(PO po : updates) {</span>
+<span class="nc" id="L205">					batchUpdate.add(po);</span>
+				}
+<span class="nc" id="L207">				batchUpdate.executeBatch(localTrxName);</span>
+			}
+
+			// 4. Execute pre delete statements (delete translations, trees, etc)
+<span class="nc" id="L211">			Statement stmt = null;</span>
+			try {
+<span class="nc" id="L213">				stmt = conn.createStatement();</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">				for (String sql : preDeleteStatements) {	</span>
+<span class="nc" id="L215">					sql = DB.getDatabase().convertStatement(sql);				</span>
+<span class="nc" id="L216">					stmt.addBatch(sql);</span>
+				}
+<span class="nc" id="L218">				int[] results = stmt.executeBatch();</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">				for (int i = 0; i &lt; results.length; i++) {</span>
+<span class="nc bnc" id="L220" title="All 4 branches missed.">					if (results[i] &lt; 0 &amp;&amp; results[i] != Statement.SUCCESS_NO_INFO) {</span>
+<span class="nc" id="L221">						s_log.warning(&quot;Batch execution failed for &quot; + preDeleteStatements.get(i));</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">						if (CLogger.peekError() == null)</span>
+<span class="nc" id="L223">							s_log.saveError(&quot;Error&quot;, &quot;Batch execution failed - &quot; + preDeleteStatements.get(i));</span>
+<span class="nc" id="L224">						allSuccess = false;</span>
+<span class="nc" id="L225">						break;</span>
+					}
+				}
+<span class="nc" id="L228">			} catch (SQLException e) {</span>
+<span class="nc" id="L229">				s_log.log(Level.SEVERE, &quot;Failed to execute pre delete statements&quot;, e);</span>
+<span class="nc" id="L230">				allSuccess = false;</span>
+<span class="nc" id="L231">				rollback(trx, internalTrx, savepoint);</span>
+<span class="nc" id="L232">				throw new DBException(e);</span>
+			} finally {
+<span class="nc" id="L234">				DB.close(stmt);</span>
+			}
+
+<span class="nc bnc" id="L237" title="All 2 branches missed.">			if (!allSuccess) {</span>
+<span class="nc" id="L238">				rollback(trx, internalTrx, savepoint);</span>
+<span class="nc" id="L239">				throwSaveError();</span>
+			}
+
+			// 5. Execute delete
+<span class="nc bnc" id="L243" title="All 2 branches missed.">			for (Map.Entry&lt;String, List&lt;BatchElement&lt;T&gt;&gt;&gt; entry : sqlMap.entrySet()) {</span>
+<span class="nc" id="L244">				String sql = entry.getKey();</span>
+<span class="nc" id="L245">				sql = DB.getDatabase().convertStatement(sql); </span>
+<span class="nc" id="L246">				try (PreparedStatement pstmt = conn.prepareStatement(sql)) {</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">					for (BatchElement&lt;T&gt; element : entry.getValue()) {</span>
+<span class="nc" id="L248">						List&lt;Object&gt; params = element.parameters();</span>
+<span class="nc bnc" id="L249" title="All 4 branches missed.">						if (params != null &amp;&amp; !params.isEmpty()) {</span>
+<span class="nc" id="L250">							DB.setParameters(pstmt, params);</span>
+						}
+<span class="nc" id="L252">						pstmt.addBatch();</span>
+<span class="nc" id="L253">						pstmt.clearParameters();</span>
+					}
+<span class="nc" id="L255">					int[] results = pstmt.executeBatch();</span>
+
+<span class="nc bnc" id="L257" title="All 2 branches missed.">					for (int i = 0; i &lt; results.length; i++) {</span>
+<span class="nc" id="L258">						T po = entry.getValue().get(i).po();</span>
+<span class="nc bnc" id="L259" title="All 4 branches missed.">						if (results[i] &lt;= 0 &amp;&amp; results[i] != Statement.SUCCESS_NO_INFO) {</span>
+<span class="nc" id="L260">							s_log.warning(&quot;Batch execution failed for &quot; + po.toString());</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">							if (CLogger.peekError() == null)</span>
+<span class="nc" id="L262">								s_log.saveError(&quot;Error&quot;, &quot;Batch execution failed - &quot; + po.toString());</span>
+<span class="nc" id="L263">							allSuccess = false;</span>
+<span class="nc" id="L264">							po.afterDelete(false);</span>
+<span class="nc" id="L265">							break;</span>
+						}
+<span class="nc" id="L267">						po.setupDeleteActionsForTransactionEvent(po.get_ID(), po.get_UUID());						</span>
+					}
+<span class="nc bnc" id="L269" title="All 2 branches missed.">					if (!allSuccess) {</span>
+						break;
+					}
+				}
+			}
+			
+			// Change log
+<span class="nc bnc" id="L276" title="All 6 branches missed.">			if(allSuccess &amp;&amp; !deletes.isEmpty() &amp;&amp; MTable.get(deletes.get(0).get_Table_ID()).isChangeLog() </span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">				&amp;&amp; MSession.get (Env.getCtx()) != null)</span>
+			{				
+<span class="nc" id="L279">				MSession session = MSession.get(Env.getCtx());</span>
+<span class="nc" id="L280">				BatchInsert&lt;MChangeLog&gt; changeLogBatch = new BatchInsert&lt;&gt;(MChangeLog.class);</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">				for(T po : deletes) {					</span>
+<span class="nc bnc" id="L282" title="All 4 branches missed.">					if (po.m_IDs.length == 1 || !Util.isEmpty(po.get_UUID(), true))</span>
+					{
+<span class="nc" id="L284">						int	AD_ChangeLog_ID = 0;</span>
+<span class="nc" id="L285">						int size = po.get_ColumnCount();						</span>
+<span class="nc" id="L286">						POInfo poInfo = POInfo.getPOInfo(Env.getCtx(), po.get_Table_ID());</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">						for (int i = 0; i &lt; size; i++)</span>
+						{
+<span class="nc" id="L289">							Object value = po.get_ValueOld(i);</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">							if (value != null</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">								&amp;&amp; poInfo.isAllowLogging(i)		//	logging allowed</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">								&amp;&amp; !poInfo.isEncrypted(i)		//	not encrypted</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">								&amp;&amp; !poInfo.isVirtualColumn(i)	//	no virtual column</span>
+<span class="nc bnc" id="L294" title="All 2 branches missed.">								&amp;&amp; !&quot;Password&quot;.equals(poInfo.getColumnName(i))</span>
+								)
+							{
+								// change log on delete
+<span class="nc" id="L298">								MChangeLog cLog = session.changeLog (</span>
+<span class="nc" id="L299">									po.get_TrxName(), AD_ChangeLog_ID,</span>
+<span class="nc" id="L300">									poInfo.getAD_Table_ID(), poInfo.getColumn(i).AD_Column_ID,</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">									(po.m_IDs.length == 1 ? po.get_ID() : 0), po.get_UUID(), po.getAD_Client_ID(), po.getAD_Org_ID(), value, null, MChangeLog.EVENTCHANGELOG_Delete, false);</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">								if (cLog != null)</span>
+								{
+<span class="nc" id="L304">									changeLogBatch.add(cLog);</span>
+<span class="nc" id="L305">									AD_ChangeLog_ID = cLog.getAD_ChangeLog_ID();</span>
+								}
+							}
+						} //   for all fields												
+					}
+				}
+<span class="nc bnc" id="L311" title="All 2 branches missed.">				if (!changeLogBatch.isEmpty()) {</span>
+<span class="nc" id="L312">					changeLogBatch.executeBatch(trx.getTrxName());</span>
+				}
+			}
+
+			// After delete
+<span class="nc bnc" id="L317" title="All 2 branches missed.">			if (allSuccess) {</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">				for(T po : deletes) {</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">					if (!po.afterDelete(true)) {</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">						if (CLogger.peekError() == null)</span>
+<span class="nc" id="L321">							s_log.saveError(&quot;Error&quot;, &quot;afterDelete failed - &quot; + po.toString());</span>
+<span class="nc" id="L322">						allSuccess = false;</span>
+<span class="nc" id="L323">						break;</span>
+					}
+<span class="nc" id="L325">					String error = ModelValidationEngine.get().fireModelChange(po, ModelValidator.TYPE_AFTER_DELETE);</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">					if (error != null) {</span>
+<span class="nc" id="L327">						s_log.warning(&quot;Validation failed - &quot; + error);</span>
+<span class="nc" id="L328">						s_log.saveError(error, &quot;&quot;);</span>
+<span class="nc" id="L329">						allSuccess = false;</span>
+<span class="nc" id="L330">						break;</span>
+					}
+				}
+			}
+
+			// Commit/Rollback and fire post-delete event
+<span class="nc bnc" id="L336" title="All 2 branches missed.">			if (allSuccess) {</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">				if (internalTrx) {</span>
+<span class="nc" id="L338">					trx.commit(true);</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">				} else if (savepoint != null) {</span>
+<span class="nc" id="L340">					trx.releaseSavepoint(savepoint);</span>
+<span class="nc" id="L341">					savepoint = null;</span>
+				}
+<span class="nc bnc" id="L343" title="All 2 branches missed.">				for(T po : deletes) {</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">					if (internalTrx) </span>
+					{
+<span class="nc" id="L346">						po.firePostDeleteEvent();</span>
+<span class="nc" id="L347">					}</span>
+					else
+					{
+<span class="nc" id="L350">						Trx trxdel = trx;</span>
+<span class="nc" id="L351">						trxdel.addTrxEventListener(new TrxEventListener() {</span>
+							@Override
+							public void afterRollback(Trx trxdel, boolean success) {
+<span class="nc" id="L354">								trxdel.removeTrxEventListener(this);</span>
+<span class="nc" id="L355">							}</span>
+							@Override
+							public void afterCommit(Trx trxdel, boolean success) {
+<span class="nc bnc" id="L358" title="All 2 branches missed.">								if (success) {</span>
+<span class="nc" id="L359">									po.firePostDeleteEvent();</span>
+								}
+<span class="nc" id="L361">								trxdel.removeTrxEventListener(this);</span>
+<span class="nc" id="L362">							}</span>
+							@Override
+							public void afterClose(Trx trxdel) {
+<span class="nc" id="L365">							}</span>
+						});						
+					}
+<span class="nc" id="L368">					po.resetStateAfterDelete();</span>
+				}
+<span class="nc" id="L370">			} else {</span>
+<span class="nc" id="L371">				rollback(trx, internalTrx, savepoint);</span>
+<span class="nc" id="L372">				throwSaveError();</span>
+			}
+<span class="nc" id="L374">		} catch (Exception e) {</span>
+<span class="nc" id="L375">			s_log.log(Level.SEVERE, &quot;executeBatch&quot;, e);</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">			if (e instanceof BatchDeleteException batchDeleteException)</span>
+<span class="nc" id="L377">				throw batchDeleteException;</span>
+			
+<span class="nc" id="L379">			rollback(trx, internalTrx, savepoint);</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">			if (e instanceof RuntimeException runtimeException)</span>
+<span class="nc" id="L381">				throw runtimeException;</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">			else if (e instanceof SQLException sqlException)</span>
+<span class="nc" id="L383">				throw new DBException(sqlException);</span>
+			else
+<span class="nc" id="L385">				throw new AdempiereException(e);</span>
+		} finally {
+<span class="nc bnc" id="L387" title="All 2 branches missed.">			if (internalTrx) {</span>
+<span class="nc" id="L388">				trx.close();</span>
+			}
+		}
+<span class="nc" id="L391">	}</span>
+
+	@Override
+	public boolean isEmpty() {
+<span class="nc" id="L395">		return m_list.isEmpty();</span>
+	}
+
+	@Override
+	public int getCount() {
+<span class="nc" id="L400">		return m_list.size();</span>
+	}
+
+	/**
+	 * Throw BatchDeleteException based on CLogger error
+	 * @throws BatchDeleteException
+	 */
+	private void throwSaveError() {
+<span class="nc" id="L408">		StringBuilder msg = new StringBuilder();</span>
+<span class="nc" id="L409">		ValueNamePair err = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">		String val = err != null ? Msg.translate(Env.getCtx(), err.getValue()) : &quot;&quot;;</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">		if (err != null) {</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">			if (val != null) {</span>
+<span class="nc" id="L413">				msg.append(val);</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">				if (val.endsWith(&quot;:&quot;))</span>
+<span class="nc" id="L415">					msg.append(&quot; &quot;);</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">				else if (! val.endsWith(&quot;: &quot;))</span>
+<span class="nc" id="L417">					msg.append(&quot;: &quot;);</span>
+			}
+<span class="nc" id="L419">			msg.append(err.getName());</span>
+		}
+<span class="nc bnc" id="L421" title="All 2 branches missed.">		if (msg.length() == 0)</span>
+<span class="nc" id="L422">			msg.append(&quot;SaveError&quot;);</span>
+<span class="nc" id="L423">		Exception ex = CLogger.retrieveException();</span>
+<span class="nc" id="L424">		throw new BatchDeleteException(msg.toString(), ex);</span>
+	}
+
+	/**
+	 * Batch Delete Exception
+	 */
+	private static class BatchDeleteException extends AdempiereException {
+		/**
+		 * 
+		 */
+		private static final long serialVersionUID = -7883775051926324726L;
+
+		public BatchDeleteException(String message, Throwable cause) {
+<span class="nc" id="L437">			super(message, cause);</span>
+<span class="nc" id="L438">		}</span>
+	}
+
+	private void rollback(Trx trx, boolean internalTrx, Savepoint savepoint) {
+<span class="nc bnc" id="L442" title="All 2 branches missed.">		if (internalTrx) {</span>
+<span class="nc" id="L443">			trx.rollback();</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">		} else if (savepoint != null) {</span>
+			try {
+<span class="nc" id="L446">				trx.rollback(savepoint);</span>
+<span class="nc" id="L447">			} catch (SQLException e) {</span>
+<span class="nc" id="L448">				s_log.log(Level.FINE, &quot;Rollback to savepoint failed&quot;, e);</span>
+			}
+		}
+<span class="nc" id="L451">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

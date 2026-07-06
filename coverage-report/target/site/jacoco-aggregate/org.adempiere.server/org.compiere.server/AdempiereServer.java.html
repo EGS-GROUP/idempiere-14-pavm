@@ -1,0 +1,479 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AdempiereServer.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.server</a> &gt; <span class="el_source">AdempiereServer.java</span></div><h1>AdempiereServer.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.server;
+
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.util.ServerContext;
+import org.compiere.model.AdempiereProcessor;
+import org.compiere.model.AdempiereProcessor2;
+import org.compiere.model.AdempiereProcessorLog;
+import org.compiere.model.MClient;
+import org.compiere.model.MClientInfo;
+import org.compiere.model.MOrgInfo;
+import org.compiere.model.MRole;
+import org.compiere.model.MSchedule;
+import org.compiere.model.MSystem;
+import org.compiere.model.MUser;
+import org.compiere.model.PO;
+import org.compiere.model.Query;
+import org.compiere.model.SystemIDs;
+import org.compiere.util.CLogger;
+import org.compiere.util.Env;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Util;
+
+/**
+ *	Adempiere Server Base
+ *
+ *  @author Jorg Janke
+ *  @version $Id: AdempiereServer.java,v 1.3 2006/10/09 00:23:26 jjanke Exp $
+ */
+public abstract class AdempiereServer implements Runnable 
+{
+
+	/**************************************************************************
+	 * 	Server Base Class
+	 * 	@param model model
+	 *	@param initialNap delay time running in sec
+	 */
+<span class="nc" id="L57">	protected AdempiereServer (AdempiereProcessor model, int initialNap)</span>
+	{
+<span class="nc" id="L59">		p_model = model;		</span>
+<span class="nc bnc" id="L60" title="All 2 branches missed.">		if (p_system == null)</span>
+<span class="nc" id="L61">			p_system = MSystem.get(model.getCtx());</span>
+<span class="nc" id="L62">		p_client = MClient.get(model.getCtx(), model.getAD_Client_ID());</span>
+<span class="nc" id="L63">		m_initialNap = initialNap;</span>
+	
+<span class="nc" id="L65">		Timestamp dateNextRun = getDateNextRun(true);</span>
+<span class="nc bnc" id="L66" title="All 2 branches missed.">		if (dateNextRun != null)</span>
+<span class="nc" id="L67">			m_nextWork = dateNextRun.getTime();</span>
+		
+<span class="nc" id="L69">		long now = System.currentTimeMillis();</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">		if (m_nextWork &gt; now) </span>
+		{
+<span class="nc" id="L72">			m_sleepMS = m_nextWork - now;</span>
+		}
+<span class="nc" id="L74">	}	//	ServerBase</span>
+
+	/**	The Processor Model						*/
+	protected	volatile AdempiereProcessor 	p_model;
+	/** Initial nap is seconds		*/
+<span class="nc" id="L79">	private int					m_initialNap = 0;</span>
+
+	/**	Milliseconds to sleep - 0 Sec default	*/
+<span class="nc" id="L82">	protected long				m_sleepMS = 0;</span>
+	/** Sleeping					*/
+<span class="nc" id="L84">	private volatile boolean	m_sleeping = true;</span>
+	/** Server start time					*/
+<span class="nc" id="L86">	protected long				m_start = 0;</span>
+	/** Number of Work executions	*/
+<span class="nc" id="L88">	protected int 				p_runCount = 0;</span>
+	/** Tine start of work				*/
+<span class="nc" id="L90">	protected long				p_startWork = 0;</span>
+	/** Number MS of last Run		*/
+<span class="nc" id="L92">	private long 				m_runLastMS = 0;</span>
+	/** Number of MS total			*/
+<span class="nc" id="L94">	private long 				m_runTotalMS = 0;</span>
+	/** When to run next			*/
+<span class="nc" id="L96">	private long 				m_nextWork = 0;</span>
+
+	/**	Logger						*/
+<span class="nc" id="L99">	protected transient CLogger	log = CLogger.getCLogger(getClass());</span>
+	/** System						*/
+<span class="nc" id="L101">	protected volatile static MSystem p_system = null;</span>
+	/** Client						*/
+<span class="nc" id="L103">	protected MClient	p_client = null;</span>
+
+	/**
+	 * 	Get Server Context
+	 *	@return context
+	 */
+	public Properties getCtx()
+	{
+<span class="nc" id="L111">		return Env.getCtx();</span>
+	}	//	getCtx
+
+	public void recalculateSleepMS()
+	{
+<span class="nc" id="L116">		int adOrgId = 0;</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">		if (p_model instanceof PO) </span>
+		{
+<span class="nc" id="L119">			PO po = (PO) p_model;</span>
+<span class="nc" id="L120">			po.load(null);</span>
+<span class="nc" id="L121">			adOrgId = po.getAD_Org_ID();</span>
+		}
+<span class="nc" id="L123">		m_sleepMS = 0;</span>
+<span class="nc" id="L124">		m_nextWork = 0;</span>
+<span class="nc" id="L125">		Timestamp dateNextRun = getDateNextRun(true);</span>
+<span class="nc" id="L126">		Timestamp now = new Timestamp(System.currentTimeMillis());</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">		if (dateNextRun != null)</span>
+		{
+<span class="nc" id="L129">			m_nextWork = dateNextRun.getTime();</span>
+<span class="nc" id="L130">		}</span>
+		else
+		{		
+<span class="nc" id="L133">			String timeZoneId = null;</span>
+<span class="nc bnc" id="L134" title="All 6 branches missed.">			if((p_model.getAD_Client_ID() == 0 &amp;&amp; adOrgId == 0) || adOrgId &gt; 0) {</span>
+<span class="nc" id="L135">				MOrgInfo orgInfo = MOrgInfo.get(adOrgId);</span>
+<span class="nc" id="L136">				timeZoneId = orgInfo.getTimeZone();</span>
+			}
+			
+<span class="nc bnc" id="L139" title="All 2 branches missed.">			if(Util.isEmpty(timeZoneId, true)) {</span>
+<span class="nc" id="L140">				MClientInfo clientInfo = MClientInfo.get(getCtx(), p_model.getAD_Client_ID());</span>
+<span class="nc" id="L141">				timeZoneId = clientInfo.getTimeZone();</span>
+			}
+			
+<span class="nc" id="L144">			m_nextWork = MSchedule.getNextRunMS(now.getTime(),</span>
+<span class="nc" id="L145">					p_model.getScheduleType(), p_model.getFrequencyType(),</span>
+<span class="nc" id="L146">					p_model.getFrequency(), p_model.getCronPattern(), timeZoneId);</span>
+		}
+
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		if (m_nextWork &gt; now.getTime())</span>
+<span class="nc" id="L150">			m_sleepMS = m_nextWork - now.getTime();</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot; Next run: &quot; + new Timestamp(m_nextWork) + &quot; sleep &quot; + m_sleepMS);</span>
+		//
+<span class="nc" id="L153">		p_model.setDateNextRun(new Timestamp(m_nextWork));</span>
+<span class="nc" id="L154">		p_model.saveEx();		</span>
+<span class="nc" id="L155">	}</span>
+	
+	/**
+	 * @return Returns the sleepMS.
+	 */
+	public long getSleepMS ()
+	{
+<span class="nc" id="L162">		return m_sleepMS;</span>
+	}	//	getSleepMS
+
+	public long getInitialNap()
+	{
+<span class="nc" id="L167">		return m_initialNap;</span>
+	}
+
+	public void runNow()
+	{
+<span class="nc" id="L172">		Properties context = new Properties();</span>
+<span class="nc" id="L173">		MClient schedclient = MClient.get(getCtx(), p_model.getAD_Client_ID());</span>
+<span class="nc" id="L174">		Env.setContext(context, Env.AD_CLIENT_ID, schedclient.getAD_Client_ID());</span>
+<span class="nc" id="L175">		Env.setContext(context, Env.LANGUAGE, schedclient.getAD_Language());</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		if (p_model instanceof PO) {</span>
+<span class="nc" id="L177">			PO po = (PO) p_model;</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">			if (po.get_ColumnIndex(&quot;AD_Org_ID&quot;) &gt;= 0) {</span>
+<span class="nc" id="L179">				Env.setContext(context, Env.AD_ORG_ID, po.get_ValueAsInt(&quot;AD_Org_ID&quot;));</span>
+<span class="nc" id="L180">				MOrgInfo schedorg = new Query(context, MOrgInfo.Table_Name, &quot;AD_Org_ID=?&quot;, null)</span>
+<span class="nc" id="L181">						.setParameters(po.get_ValueAsInt(&quot;AD_Org_ID&quot;)).first();</span>
+<span class="nc bnc" id="L182" title="All 4 branches missed.">				if (schedorg != null &amp;&amp; schedorg.getM_Warehouse_ID() &gt; 0)</span>
+<span class="nc" id="L183">					Env.setContext(context, Env.M_WAREHOUSE_ID, schedorg.getM_Warehouse_ID());</span>
+			}
+<span class="nc" id="L185">			int AD_User_ID = getAD_User_ID(po);</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">			if (AD_User_ID &gt; 0) {</span>
+<span class="nc" id="L187">				Env.setContext(context, Env.AD_USER_ID, AD_User_ID);</span>
+<span class="nc" id="L188">				Env.setContext(context, Env.SALESREP_ID, AD_User_ID);</span>
+<span class="nc" id="L189">				MUser scheduser = new MUser(context, AD_User_ID, null);</span>
+<span class="nc" id="L190">				MRole[] schedroles = scheduser.getRoles(po.get_ValueAsInt(&quot;AD_Org_ID&quot;));</span>
+<span class="nc bnc" id="L191" title="All 4 branches missed.">				if (schedroles != null &amp;&amp; schedroles.length &gt; 0)</span>
+<span class="nc" id="L192">					Env.setContext(context, Env.AD_ROLE_ID, schedroles[0].getAD_Role_ID()); // first role, ordered by AD_Role_ID				</span>
+			}
+		}
+<span class="nc" id="L195">		Timestamp ts = new Timestamp(System.currentTimeMillis());</span>
+<span class="nc" id="L196">		SimpleDateFormat dateFormat4Timestamp = new SimpleDateFormat(&quot;yyyy-MM-dd&quot;); </span>
+<span class="nc" id="L197">		Env.setContext(context, Env.DATE, dateFormat4Timestamp.format(ts)+&quot; 00:00:00&quot; );    //  JDBC format</span>
+		
+<span class="nc" id="L199">		Properties prevContext = ServerContext.getCurrentInstance();</span>
+		try {
+<span class="nc" id="L201">			ServerContext.setCurrentInstance(context);						</span>
+<span class="nc" id="L202">			m_sleeping = false;</span>
+<span class="nc" id="L203">			doRunNow();</span>
+<span class="nc" id="L204">		} finally {</span>
+<span class="nc" id="L205">			ServerContext.dispose();</span>
+<span class="nc" id="L206">			ServerContext.setCurrentInstance(prevContext);</span>
+<span class="nc" id="L207">			m_sleeping = true;</span>
+		}
+<span class="nc" id="L209">	}</span>
+		
+	private int getAD_User_ID(PO po) {
+<span class="nc" id="L212">		int AD_User_ID = -1;</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">		if (po.get_ValueAsInt(&quot;Supervisor_ID&quot;) &gt; 0)</span>
+<span class="nc" id="L214">			AD_User_ID = po.get_ValueAsInt(&quot;Supervisor_ID&quot;);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">		else if (po.get_ValueAsInt(&quot;CreatedBy&quot;) &gt; 0)</span>
+<span class="nc" id="L216">			AD_User_ID = po.get_ValueAsInt(&quot;CreatedBy&quot;);</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		else if (po.get_ValueAsInt(&quot;UpdatedBy&quot;) &gt; 0)</span>
+<span class="nc" id="L218">			AD_User_ID = po.get_ValueAsInt(&quot;UpdatedBy&quot;);</span>
+		else
+<span class="nc" id="L220">			AD_User_ID = SystemIDs.USER_SUPERUSER; //fall back to SuperUser</span>
+<span class="nc" id="L221">		return AD_User_ID;</span>
+	}
+	
+	/**
+	 * 	Run Now
+	 */
+	public void doRunNow()
+	{
+<span class="nc" id="L229">		p_startWork = System.currentTimeMillis();</span>
+<span class="nc" id="L230">		doWork();</span>
+<span class="nc" id="L231">		long now = System.currentTimeMillis();</span>
+		//	---------------
+
+<span class="nc" id="L234">		p_runCount++;</span>
+<span class="nc" id="L235">		m_runLastMS = now - p_startWork;</span>
+<span class="nc" id="L236">		m_runTotalMS += m_runLastMS;</span>
+		//
+<span class="nc" id="L238">		p_model.setDateLastRun(new Timestamp(now));</span>
+<span class="nc" id="L239">		p_model.saveEx();</span>
+		//
+<span class="nc bnc" id="L241" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE))</span>
+<span class="nc" id="L242">			log.fine(getStatistics());		</span>
+<span class="nc" id="L243">	}	//	runNow</span>
+
+	public void run() 
+	{
+<span class="nc" id="L247">		final Thread currentThread = Thread.currentThread();</span>
+<span class="nc" id="L248">		final String oldThreadName = currentThread.getName();</span>
+<span class="nc" id="L249">		String newThreadName = getName();</span>
+<span class="nc" id="L250">		boolean renamed = false;</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">		if (!oldThreadName.equals(newThreadName)) {</span>
+			try {
+<span class="nc" id="L253">				currentThread.setName(newThreadName);</span>
+<span class="nc" id="L254">				renamed = true;</span>
+<span class="nc" id="L255">			} catch (SecurityException e) {}</span>
+		}
+
+<span class="nc" id="L258">		Properties context = new Properties();</span>
+<span class="nc" id="L259">		Env.setContext(context, Env.AD_CLIENT_ID, p_model.getAD_Client_ID());</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		if (p_model instanceof PO) {</span>
+<span class="nc" id="L261">			PO po = (PO) p_model;</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">			if (po.get_ColumnIndex(&quot;AD_Org_ID&quot;) &gt;= 0)</span>
+<span class="nc" id="L263">				Env.setContext(context, Env.AD_ORG_ID, po.get_ValueAsInt(&quot;AD_Org_ID&quot;));</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">			if (po.get_ColumnIndex(&quot;AD_User_ID&quot;) &gt;= 0)</span>
+<span class="nc" id="L265">				Env.setContext(context, Env.AD_USER_ID, po.get_ValueAsInt(&quot;AD_User_ID&quot;));</span>
+		}
+		
+		try {
+<span class="nc" id="L269">			ServerContext.setCurrentInstance(context);					</span>
+<span class="nc" id="L270">			m_sleeping = false;</span>
+<span class="nc" id="L271">			doRun();</span>
+<span class="nc" id="L272">		} finally {</span>
+<span class="nc" id="L273">			m_sleeping = true;</span>
+<span class="nc" id="L274">			ServerContext.dispose(); </span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">			if (renamed) {</span>
+				// Revert the name back if the current thread was renamed.
+				// We do not check the exception here because we know it works.
+<span class="nc" id="L278">				currentThread.setName(oldThreadName);</span>
+			}	
+		}
+<span class="nc" id="L281">	}</span>
+	/**************************************************************************
+	 * 	Run async
+	 */
+	protected void doRun()
+	{		
+<span class="nc bnc" id="L287" title="All 2 branches missed.">		if (m_start == 0)</span>
+<span class="nc" id="L288">			m_start = System.currentTimeMillis();</span>
+		
+		//	---------------
+<span class="nc" id="L291">		p_startWork = System.currentTimeMillis();</span>
+<span class="nc" id="L292">		doWork();</span>
+<span class="nc" id="L293">		long now = System.currentTimeMillis();</span>
+		//	---------------
+
+<span class="nc" id="L296">		p_runCount++;</span>
+<span class="nc" id="L297">		m_runLastMS = now - p_startWork;</span>
+<span class="nc" id="L298">		m_runTotalMS += m_runLastMS;</span>
+
+		// Finished work - calculate datetime for next run
+<span class="nc" id="L301">		Timestamp lastRun = new Timestamp(now);</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">		if (p_model instanceof AdempiereProcessor2)</span>
+		{
+<span class="nc" id="L304">			AdempiereProcessor2 ap = (AdempiereProcessor2) p_model;</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">			if (ap.isIgnoreProcessingTime())</span>
+			{
+<span class="nc" id="L307">				lastRun = new Timestamp(p_startWork);</span>
+			}
+		}
+
+<span class="nc" id="L311">		m_nextWork = MSchedule.getNextRunMS(lastRun.getTime(),</span>
+<span class="nc" id="L312">				p_model.getScheduleType(), p_model.getFrequencyType(),</span>
+<span class="nc" id="L313">				p_model.getFrequency(), p_model.getCronPattern(), MClientInfo.get(getCtx(), p_model.getAD_Client_ID()).getTimeZone());</span>
+
+<span class="nc" id="L315">		m_sleepMS = m_nextWork - now;</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">		if (m_nextWork == 0) {</span>
+<span class="nc" id="L317">			m_sleepMS = 0;</span>
+		}
+<span class="nc bnc" id="L319" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot; Next run: &quot; + new Timestamp(m_nextWork) + &quot; sleep &quot; + m_sleepMS);</span>
+		//
+<span class="nc" id="L321">		p_model.setDateLastRun(lastRun);</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">		if (m_nextWork == 0) {</span>
+<span class="nc" id="L323">			p_model.setDateNextRun(null);</span>
+<span class="nc" id="L324">		} else {</span>
+<span class="nc" id="L325">			p_model.setDateNextRun(new Timestamp(m_nextWork));</span>
+		}
+<span class="nc" id="L327">		p_model.saveEx();			</span>
+<span class="nc" id="L328">	}	//	run</span>
+
+	/**
+	 * 	Get Run Statistics
+	 *	@return Statistic info
+	 */
+	public String getStatistics()
+	{
+<span class="nc" id="L336">		return &quot;Run #&quot; + p_runCount</span>
+<span class="nc" id="L337">			+ &quot; - Last=&quot; + TimeUtil.formatElapsed(m_runLastMS)</span>
+<span class="nc" id="L338">			+ &quot; - Total=&quot; + TimeUtil.formatElapsed(m_runTotalMS)</span>
+<span class="nc" id="L339">			+ &quot; - Next &quot; + TimeUtil.formatElapsed(m_nextWork - System.currentTimeMillis());</span>
+	}	//	getStatistics
+
+	/**
+	 * 	Do the actual Work
+	 */
+	protected abstract void doWork();
+
+	/**
+	 * 	Get Server Info
+	 *	@return info
+	 */
+	public abstract String getServerInfo();
+
+	/**
+	 * 	Get Unique ID
+	 *	@return Unique ID
+	 */
+	public String getServerID()
+	{
+<span class="nc" id="L359">		return p_model.getServerID();</span>
+	}	//	getServerID
+
+	/**
+	 * 	Get the date Next run
+	 * 	@param requery requery database
+	 * 	@return date next run
+	 */
+	public Timestamp getDateNextRun (boolean requery)
+	{
+<span class="nc" id="L369">		return p_model.getDateNextRun(requery);</span>
+	}	//	getDateNextRun
+
+	/**
+	 * 	Get the date Last run
+	 * 	@return date lext run
+	 */
+	public Timestamp getDateLastRun ()
+	{
+<span class="nc" id="L378">		return p_model.getDateLastRun();</span>
+	}	//	getDateLastRun
+
+	/**
+	 * 	Get Description
+	 *	@return Description
+	 */
+	public String getDescription()
+	{
+<span class="nc" id="L387">		return p_model.getDescription();</span>
+	}	//	getDescription
+
+	/**
+	 * 	Get Model
+	 *	@return Model
+	 */
+	public AdempiereProcessor getModel()
+	{
+<span class="nc" id="L396">		return p_model;</span>
+	}	//	getModel
+
+	/**
+	 * 	Is Sleeping
+	 *	@return sleeping
+	 */
+	public boolean isSleeping()
+	{
+<span class="nc" id="L405">		return m_sleeping;</span>
+	}	//	isSleeping
+
+	/**
+	 * 	String Representation
+	 *	@return info
+	 */
+	public String toString ()
+	{
+<span class="nc" id="L414">		StringBuilder sb = new StringBuilder ()</span>
+<span class="nc" id="L415">			.append (&quot;Sleeping=&quot;).append(m_sleeping)</span>
+<span class="nc" id="L416">			.append (&quot;,Last=&quot;).append(getDateLastRun());</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">		if (m_sleeping)</span>
+<span class="nc" id="L418">			sb.append (&quot;,Next=&quot;).append(getDateNextRun(false));</span>
+<span class="nc" id="L419">		return sb.toString ();</span>
+	}	//	toString
+
+	/**
+	 * 	Get Seconds Alive
+	 *	@return seconds alive
+	 */
+	public int getSecondsAlive()
+	{
+<span class="nc bnc" id="L428" title="All 2 branches missed.">		if (m_start == 0)</span>
+<span class="nc" id="L429">			return 0;</span>
+<span class="nc" id="L430">		long now = System.currentTimeMillis();</span>
+<span class="nc" id="L431">		long ms = (now-m_start) / 1000;</span>
+<span class="nc" id="L432">		return (int)ms;</span>
+	}	//	getSecondsAlive
+
+	/**
+	 * 	Get Start Time
+	 *	@return start time
+	 */
+	public Timestamp getStartTime()
+	{
+<span class="nc bnc" id="L441" title="All 2 branches missed.">		if (m_start == 0)</span>
+<span class="nc" id="L442">			return null;</span>
+<span class="nc" id="L443">		return new Timestamp (m_start);</span>
+	}	//	getStartTime
+
+	/**
+	 * 	Get Processor Logs
+	 *	@return logs
+	 */
+	public AdempiereProcessorLog[] getLogs()
+	{
+<span class="nc" id="L452">		return p_model.getLogs();</span>
+	}	//	getLogs
+
+
+	protected boolean isInterrupted() {
+<span class="nc" id="L457">		return Thread.currentThread().isInterrupted();</span>
+	}
+
+
+	public String getName() {
+<span class="nc" id="L462">		return p_model.getName();</span>
+	}
+
+
+	public static boolean isOKtoRunOnIP(AdempiereProcessor model) {
+<span class="nc bnc" id="L467" title="All 2 branches missed.">		if (model instanceof AdempiereProcessor2) {</span>
+<span class="nc" id="L468">			int AD_Schedule_ID = ((AdempiereProcessor2)model).getAD_Schedule_ID();</span>
+<span class="nc" id="L469">			MSchedule schedule = MSchedule.get(Env.getCtx(), AD_Schedule_ID);</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">			if (!schedule.isOKtoRunOnIP())</span>
+			{
+<span class="nc" id="L472">				return false;		//	done</span>
+			}
+		}
+<span class="nc" id="L475">		return true;</span>
+	}
+
+}	//	AdempiereServer
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

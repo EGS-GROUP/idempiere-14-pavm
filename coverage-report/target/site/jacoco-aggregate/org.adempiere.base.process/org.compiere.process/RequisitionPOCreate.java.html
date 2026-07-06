@@ -1,0 +1,513 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>RequisitionPOCreate.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">RequisitionPOCreate.java</span></div><h1>RequisitionPOCreate.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.NoVendorForProductException;
+import org.apache.commons.collections.keyvalue.MultiKey;
+import org.compiere.model.MBPartner;
+import org.compiere.model.MCharge;
+import org.compiere.model.MConversionType;
+import org.compiere.model.MOrder;
+import org.compiere.model.MOrderLine;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MProduct;
+import org.compiere.model.MProductPO;
+import org.compiere.model.MRequisition;
+import org.compiere.model.MRequisitionLine;
+import org.compiere.model.POResultSet;
+import org.compiere.model.Query;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.DB;
+import org.compiere.util.Msg;
+
+/**
+ * 	Create PO from Requisition 
+ *	
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: RequisitionPOCreate.java,v 1.2 2006/07/30 00:51:01 jjanke Exp $
+ *  
+ *  @author Teo Sarca, www.arhipac.ro
+ *  		&lt;li&gt;BF [ 2609760 ] RequisitionPOCreate not using DateRequired
+ *  		&lt;li&gt;BF [ 2605888 ] CreatePOfromRequisition creates more PO than needed
+ *  		&lt;li&gt;BF [ 2811718 ] Create PO from Requisition without any parameter terminate in NPE
+ *  			https://sourceforge.net/p/adempiere/bugs/1954/
+ *  		&lt;li&gt;FR [ 2844074  ] Requisition PO Create - more selection fields
+ *  			https://sourceforge.net/p/adempiere/feature-requests/796/
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L59">public class RequisitionPOCreate extends SvrProcess</span>
+{
+	/** Org					*/
+<span class="nc" id="L62">	private int			p_AD_Org_ID = 0;</span>
+	/** Warehouse			*/
+<span class="nc" id="L64">	private int			p_M_Warehouse_ID = 0;</span>
+	/**	Doc Date From		*/
+	private Timestamp	p_DateDoc_From;
+	/**	Doc Date To			*/
+	private Timestamp	p_DateDoc_To;
+	/**	Doc Date From		*/
+	private Timestamp	p_DateRequired_From;
+	/**	Doc Date To			*/
+	private Timestamp	p_DateRequired_To;
+	/** Priority			*/
+<span class="nc" id="L74">	private String		p_PriorityRule = null;</span>
+	/** User				*/
+<span class="nc" id="L76">	private int			p_AD_User_ID = 0;</span>
+	/** Product				*/
+<span class="nc" id="L78">	private int			p_M_Product_ID = 0;</span>
+	/** Product	Category	*/
+<span class="nc" id="L80">	private int			p_M_Product_Category_ID = 0;</span>
+	/** BPartner Group	*/
+<span class="nc" id="L82">	private int			p_C_BP_Group_ID = 0;</span>
+	/** Requisition			*/
+<span class="nc" id="L84">	private int 		p_M_Requisition_ID = 0;</span>
+
+	/** Consolidate			*/
+<span class="nc" id="L87">	private boolean		p_ConsolidateDocument = false;</span>
+
+	/** Order				*/
+<span class="nc" id="L90">	private MOrder		m_order = null;</span>
+	/** Order Line			*/
+<span class="nc" id="L92">	private MOrderLine	m_orderLine = null;</span>
+	/** Orders Cache : (C_BPartner_ID, DateRequired, M_PriceList_ID) -&gt; MOrder */
+<span class="nc" id="L94">	private HashMap&lt;MultiKey, MOrder&gt; m_cacheOrders = new HashMap&lt;MultiKey, MOrder&gt;();</span>
+	
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L101">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L104">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L105" title="All 4 branches missed.">			if (para[i].getParameter() == null &amp;&amp; para[i].getParameter_To() == null)</span>
+<span class="nc" id="L106">				;</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			else if (name.equals(&quot;AD_Org_ID&quot;))</span>
+<span class="nc" id="L108">				p_AD_Org_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">			else if (name.equals(&quot;M_Warehouse_ID&quot;))</span>
+<span class="nc" id="L110">				p_M_Warehouse_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">			else if (name.equals(&quot;DateDoc&quot;))</span>
+			{
+<span class="nc" id="L113">				p_DateDoc_From = (Timestamp)para[i].getParameter();</span>
+<span class="nc" id="L114">				p_DateDoc_To = (Timestamp)para[i].getParameter_To();</span>
+<span class="nc" id="L115">			}</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">			else if (name.equals(&quot;DateRequired&quot;))</span>
+			{
+<span class="nc" id="L118">				p_DateRequired_From = (Timestamp)para[i].getParameter();</span>
+<span class="nc" id="L119">				p_DateRequired_To = (Timestamp)para[i].getParameter_To();</span>
+<span class="nc" id="L120">			}</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">			else if (name.equals(&quot;PriorityRule&quot;))</span>
+<span class="nc" id="L122">				p_PriorityRule = (String)para[i].getParameter();</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">			else if (name.equals(&quot;AD_User_ID&quot;))</span>
+<span class="nc" id="L124">				p_AD_User_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			else if (name.equals(&quot;M_Product_ID&quot;))</span>
+<span class="nc" id="L126">				p_M_Product_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">			else if (name.equals(&quot;M_Product_Category_ID&quot;))</span>
+<span class="nc" id="L128">				p_M_Product_Category_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">			else if (name.equals(&quot;C_BP_Group_ID&quot;))</span>
+<span class="nc" id="L130">				p_C_BP_Group_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			else if (name.equals(&quot;M_Requisition_ID&quot;))</span>
+<span class="nc" id="L132">				p_M_Requisition_ID = para[i].getParameterAsInt();</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">			else if (name.equals(&quot;ConsolidateDocument&quot;))</span>
+<span class="nc" id="L134">				p_ConsolidateDocument = &quot;Y&quot;.equals(para[i].getParameter());</span>
+			else
+<span class="nc" id="L136">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+<span class="nc" id="L138">	}	//	prepare</span>
+	
+	/**
+	 * 	Process
+	 *	@return info
+	 *	@throws Exception
+	 */
+	protected String doIt() throws Exception
+	{
+		//	Specific
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		if (p_M_Requisition_ID != 0)</span>
+		{
+<span class="nc bnc" id="L150" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;M_Requisition_ID=&quot; + p_M_Requisition_ID);</span>
+<span class="nc" id="L151">			MRequisition req = new MRequisition(getCtx(), p_M_Requisition_ID, get_TrxName());</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">			if (!MRequisition.DOCSTATUS_Completed.equals(req.getDocStatus()))</span>
+			{
+<span class="nc" id="L154">				throw new AdempiereUserError(&quot;@DocStatus@ = &quot; + req.getDocStatus());</span>
+			}
+<span class="nc" id="L156">			MRequisitionLine[] lines = req.getLines();</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">			for (int i = 0; i &lt; lines.length; i++)</span>
+			{
+<span class="nc bnc" id="L159" title="All 2 branches missed.">				if (lines[i].getC_OrderLine_ID() == 0)</span>
+				{
+<span class="nc" id="L161">					process (lines[i]);</span>
+				}
+			}
+<span class="nc" id="L164">			closeOrder();</span>
+<span class="nc" id="L165">			return &quot;&quot;;</span>
+		}	//	single Requisition
+		
+		//	
+<span class="nc bnc" id="L169" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;AD_Org_ID=&quot; + p_AD_Org_ID</span>
+<span class="nc" id="L170">			+ &quot;, M_Warehouse_ID=&quot; + p_M_Warehouse_ID</span>
+<span class="nc" id="L171">			+ &quot;, DateDoc=&quot; + p_DateDoc_From + &quot;/&quot; + p_DateDoc_To</span>
+<span class="nc" id="L172">			+ &quot;, DateRequired=&quot; + p_DateRequired_From + &quot;/&quot; + p_DateRequired_To</span>
+<span class="nc" id="L173">			+ &quot;, PriorityRule=&quot; + p_PriorityRule</span>
+<span class="nc" id="L174">			+ &quot;, AD_User_ID=&quot; + p_AD_User_ID</span>
+<span class="nc" id="L175">			+ &quot;, M_Product_ID=&quot; + p_M_Product_ID</span>
+<span class="nc" id="L176">			+ &quot;, ConsolidateDocument&quot; + p_ConsolidateDocument);</span>
+		
+<span class="nc" id="L178">		ArrayList&lt;Object&gt; params = new ArrayList&lt;Object&gt;();</span>
+<span class="nc" id="L179">		StringBuilder whereClause = new StringBuilder(&quot;C_OrderLine_ID IS NULL&quot;);</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">		if (p_AD_Org_ID &gt; 0)</span>
+		{
+<span class="nc" id="L182">			whereClause.append(&quot; AND AD_Org_ID=?&quot;);</span>
+<span class="nc" id="L183">			params.add(p_AD_Org_ID);</span>
+		}
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		if (p_M_Product_ID &gt; 0)</span>
+		{
+<span class="nc" id="L187">			whereClause.append(&quot; AND M_Product_ID=?&quot;);</span>
+<span class="nc" id="L188">			params.add(p_M_Product_ID);</span>
+<span class="nc" id="L189">		}</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">		else if (p_M_Product_Category_ID &gt; 0)</span>
+		{
+<span class="nc" id="L192">			whereClause.append(&quot; AND EXISTS (SELECT 1 FROM M_Product p WHERE M_RequisitionLine.M_Product_ID=p.M_Product_ID&quot;)</span>
+<span class="nc" id="L193">				.append(&quot; AND p.M_Product_Category_ID=?)&quot;);</span>
+<span class="nc" id="L194">			params.add(p_M_Product_Category_ID);</span>
+		}
+		
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		if (p_C_BP_Group_ID &gt; 0)</span>
+		{
+<span class="nc" id="L199">			whereClause.append(&quot; AND (&quot;)</span>
+<span class="nc" id="L200">			.append(&quot;M_RequisitionLine.C_BPartner_ID IS NULL&quot;)</span>
+<span class="nc" id="L201">			.append(&quot; OR EXISTS (SELECT 1 FROM C_BPartner bp WHERE M_RequisitionLine.C_BPartner_ID=bp.C_BPartner_ID AND bp.C_BP_Group_ID=?)&quot;)</span>
+<span class="nc" id="L202">			.append(&quot;)&quot;);</span>
+<span class="nc" id="L203">			params.add(p_C_BP_Group_ID);</span>
+		}
+		
+		//
+		//	Requisition Header
+<span class="nc" id="L208">		whereClause.append(&quot; AND EXISTS (SELECT 1 FROM M_Requisition r WHERE M_RequisitionLine.M_Requisition_ID=r.M_Requisition_ID&quot;)</span>
+<span class="nc" id="L209">			.append(&quot; AND r.DocStatus=?&quot;);</span>
+<span class="nc" id="L210">		params.add(MRequisition.DOCSTATUS_Completed);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if (p_M_Warehouse_ID &gt; 0)</span>
+		{
+<span class="nc" id="L213">			whereClause.append(&quot; AND r.M_Warehouse_ID=?&quot;);</span>
+<span class="nc" id="L214">			params.add(p_M_Warehouse_ID);</span>
+		}
+<span class="nc bnc" id="L216" title="All 2 branches missed.">		if (p_DateDoc_From != null)</span>
+		{
+<span class="nc" id="L218">			whereClause.append(&quot; AND r.DateDoc &gt;= ?&quot;);</span>
+<span class="nc" id="L219">			params.add(p_DateDoc_From);</span>
+		}
+<span class="nc bnc" id="L221" title="All 2 branches missed.">		if (p_DateDoc_To != null)</span>
+		{
+<span class="nc" id="L223">			whereClause.append(&quot; AND r.DateDoc &lt;= ?&quot;);</span>
+<span class="nc" id="L224">			params.add(p_DateDoc_To);</span>
+		}
+<span class="nc bnc" id="L226" title="All 2 branches missed.">		if (p_DateRequired_From != null)</span>
+		{
+<span class="nc" id="L228">			whereClause.append(&quot; AND r.DateRequired &gt;= ?&quot;);</span>
+<span class="nc" id="L229">			params.add(p_DateRequired_From);</span>
+		}
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		if (p_DateRequired_To != null)</span>
+		{
+<span class="nc" id="L233">			whereClause.append(&quot; AND r.DateRequired &lt;= ?&quot;);</span>
+<span class="nc" id="L234">			params.add(p_DateRequired_To);</span>
+		}
+<span class="nc bnc" id="L236" title="All 2 branches missed.">		if (p_PriorityRule != null)</span>
+		{
+<span class="nc" id="L238">			whereClause.append(&quot; AND r.PriorityRule &gt;= ?&quot;);</span>
+<span class="nc" id="L239">			params.add(p_PriorityRule);</span>
+		}
+<span class="nc bnc" id="L241" title="All 2 branches missed.">		if (p_AD_User_ID &gt; 0)</span>
+		{
+<span class="nc" id="L243">			whereClause.append(&quot; AND r.AD_User_ID=?&quot;);</span>
+<span class="nc" id="L244">			params.add(p_AD_User_ID);</span>
+		}
+<span class="nc" id="L246">		whereClause.append(&quot;)&quot;); // End Requisition Header</span>
+		//
+		// ORDER BY clause
+<span class="nc" id="L249">		StringBuilder orderClause = new StringBuilder();</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">		if (!p_ConsolidateDocument)</span>
+		{
+<span class="nc" id="L252">			orderClause.append(&quot;M_Requisition_ID, &quot;);</span>
+		}
+<span class="nc" id="L254">		orderClause.append(&quot;(SELECT DateRequired FROM M_Requisition r WHERE M_RequisitionLine.M_Requisition_ID=r.M_Requisition_ID),&quot;);</span>
+<span class="nc" id="L255">		orderClause.append(&quot;M_Product_ID, C_Charge_ID, M_AttributeSetInstance_ID&quot;);</span>
+		
+<span class="nc" id="L257">		POResultSet&lt;MRequisitionLine&gt; rs = new Query(getCtx(), MRequisitionLine.Table_Name, whereClause.toString(), get_TrxName())</span>
+<span class="nc" id="L258">											.setParameters(params)</span>
+<span class="nc" id="L259">											.setOrderBy(orderClause.toString())</span>
+<span class="nc" id="L260">											.setClient_ID()</span>
+<span class="nc" id="L261">											.scroll();</span>
+		try
+		{
+<span class="nc bnc" id="L264" title="All 2 branches missed.">			while (rs.hasNext())</span>
+			{
+<span class="nc" id="L266">				process(rs.next());</span>
+			}
+<span class="nc" id="L268">		}</span>
+		finally
+		{
+<span class="nc" id="L271">			DB.close(rs); rs = null;</span>
+		}
+<span class="nc" id="L273">		closeOrder();</span>
+<span class="nc" id="L274">		return &quot;&quot;;</span>
+	}	//	doit
+	
+<span class="nc" id="L277">	private int 		m_M_Requisition_ID = 0;</span>
+<span class="nc" id="L278">	private int 		m_M_Product_ID = 0;</span>
+<span class="nc" id="L279">	private int			m_M_AttributeSetInstance_ID = 0;</span>
+	/** BPartner				*/
+<span class="nc" id="L281">	private MBPartner	m_bpartner = null;</span>
+	
+	/**
+	 * 	Process Line
+	 *	@param rLine request line
+	 * 	@throws Exception
+	 */
+	private void process (MRequisitionLine rLine) throws Exception
+	{
+<span class="nc bnc" id="L290" title="All 4 branches missed.">		if (rLine.getM_Product_ID() == 0 &amp;&amp; rLine.getC_Charge_ID() == 0)</span>
+		{
+<span class="nc" id="L292">			log.warning(&quot;Ignored Line&quot; + rLine.getLine() </span>
+<span class="nc" id="L293">				+ &quot; &quot; + rLine.getDescription()</span>
+<span class="nc" id="L294">				+ &quot; - &quot; + rLine.getLineNetAmt());</span>
+<span class="nc" id="L295">			return;</span>
+		}
+		
+<span class="nc bnc" id="L298" title="All 4 branches missed.">		if (!p_ConsolidateDocument &amp;&amp; rLine.getM_Requisition_ID() != m_M_Requisition_ID)</span>
+		{
+<span class="nc" id="L300">			closeOrder();</span>
+		}
+<span class="nc bnc" id="L302" title="All 2 branches missed.">		if (m_orderLine == null</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">			|| rLine.getM_Product_ID() != m_M_Product_ID</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">			|| rLine.getM_AttributeSetInstance_ID() != m_M_AttributeSetInstance_ID</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">			|| rLine.getC_Charge_ID() != 0		//	single line per charge</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">			|| m_order == null</span>
+<span class="nc bnc" id="L307" title="All 4 branches missed.">			|| (rLine.getC_BPartner_ID() &gt; 0 &amp;&amp; m_order.getC_BPartner_ID() != rLine.getC_BPartner_ID())</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">			|| m_order.getDatePromised().compareTo(rLine.getDateRequired()) != 0</span>
+			)
+		{
+<span class="nc" id="L311">			newLine(rLine);</span>
+			// No Order Line was produced (vendor was not valid/allowed) =&gt; SKIP
+<span class="nc bnc" id="L313" title="All 2 branches missed.">			if (m_orderLine == null)</span>
+<span class="nc" id="L314">				return;</span>
+		}
+
+		//	Update Order Line
+<span class="nc" id="L318">		m_orderLine.setQty(m_orderLine.getQtyOrdered().add(rLine.getQty()));</span>
+		//	Update Requisition Line
+<span class="nc" id="L320">		rLine.setC_OrderLine_ID(m_orderLine.getC_OrderLine_ID());</span>
+<span class="nc" id="L321">		rLine.saveEx();</span>
+<span class="nc" id="L322">	}	//	process</span>
+	
+	/**
+	 * 	Create new Order
+	 *	@param rLine request line
+	 *	@param C_BPartner_ID b.partner
+	 * 	@throws Exception
+	 */
+	private void newOrder(MRequisitionLine rLine, int C_BPartner_ID) throws Exception
+	{
+<span class="nc bnc" id="L332" title="All 2 branches missed.">		if (m_order != null)</span>
+		{
+<span class="nc" id="L334">			closeOrder();</span>
+		}
+		
+		//	BPartner
+<span class="nc bnc" id="L338" title="All 4 branches missed.">		if (m_bpartner == null || C_BPartner_ID != m_bpartner.get_ID())</span>
+		{
+<span class="nc" id="L340">			m_bpartner = MBPartner.get(getCtx(), C_BPartner_ID);</span>
+		}
+		
+		
+		//	Order
+<span class="nc" id="L345">		Timestamp DateRequired = rLine.getDateRequired();</span>
+<span class="nc" id="L346">		int M_PriceList_ID = rLine.getParent().getM_PriceList_ID();</span>
+<span class="nc" id="L347">		MultiKey key = new MultiKey(C_BPartner_ID, DateRequired, M_PriceList_ID);</span>
+<span class="nc" id="L348">		m_order = m_cacheOrders.get(key);</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">		if (m_order == null)</span>
+		{
+<span class="nc" id="L351">			m_order = new MOrder(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L352">			m_order.setAD_Org_ID(rLine.getAD_Org_ID());</span>
+<span class="nc" id="L353">			m_order.setM_Warehouse_ID(rLine.getParent().getM_Warehouse_ID());</span>
+<span class="nc" id="L354">			m_order.setDatePromised(DateRequired);</span>
+<span class="nc" id="L355">			m_order.setIsSOTrx(false);</span>
+<span class="nc" id="L356">			m_order.setC_DocTypeTarget_ID();</span>
+<span class="nc" id="L357">			m_order.setBPartner(m_bpartner);</span>
+<span class="nc" id="L358">			m_order.setM_PriceList_ID(M_PriceList_ID);</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">			if (MConversionType.getDefault(getAD_Client_ID()) &gt; 0)</span>
+<span class="nc" id="L360">				m_order.setC_ConversionType_ID(MConversionType.getDefault(getAD_Client_ID()));</span>
+			//	default po document type
+<span class="nc bnc" id="L362" title="All 2 branches missed.">			if (!p_ConsolidateDocument)</span>
+			{
+<span class="nc" id="L364">				StringBuilder msgsd= new StringBuilder().append(Msg.getElement(getCtx(), &quot;M_Requisition_ID&quot;)) </span>
+<span class="nc" id="L365">						.append(&quot;: &quot;).append(rLine.getParent().getDocumentNo());</span>
+<span class="nc" id="L366">				m_order.setDescription(msgsd.toString());</span>
+			}
+			
+			//	Prepare Save
+<span class="nc" id="L370">			m_order.saveEx();</span>
+			// Put to cache
+<span class="nc" id="L372">			m_cacheOrders.put(key, m_order);</span>
+		}
+<span class="nc" id="L374">		m_M_Requisition_ID = rLine.getM_Requisition_ID();</span>
+<span class="nc" id="L375">	}	//	newOrder</span>
+
+	/**
+	 * 	Close Order
+	 * 	@throws Exception
+	 */
+	private void closeOrder() throws Exception
+	{
+<span class="nc bnc" id="L383" title="All 2 branches missed.">		if (m_orderLine != null)</span>
+		{
+<span class="nc" id="L385">			m_orderLine.saveEx();</span>
+		}
+<span class="nc bnc" id="L387" title="All 2 branches missed.">		if (m_order != null)</span>
+		{
+<span class="nc" id="L389">			m_order.load(get_TrxName());</span>
+<span class="nc" id="L390">			String message = Msg.parseTranslation(getCtx(), &quot;@GeneratedPO@ &quot; + m_order.getDocumentNo());</span>
+<span class="nc" id="L391">			addBufferLog(0, null, m_order.getGrandTotal(), message, m_order.get_Table_ID(), m_order.getC_Order_ID());</span>
+		}
+<span class="nc" id="L393">		m_order = null;</span>
+<span class="nc" id="L394">		m_orderLine = null;</span>
+<span class="nc" id="L395">	}	//	closeOrder</span>
+
+	
+	/**
+	 * 	New Order Line (different Product)
+	 *	@param rLine request line
+	 * 	@throws Exception
+	 */
+	private void newLine(MRequisitionLine rLine) throws Exception
+	{
+<span class="nc bnc" id="L405" title="All 2 branches missed.">		if (m_orderLine != null)</span>
+		{
+<span class="nc" id="L407">			m_orderLine.saveEx();</span>
+		}
+<span class="nc" id="L409">		m_orderLine = null;</span>
+<span class="nc" id="L410">		MProduct product = MProduct.get(getCtx(), rLine.getM_Product_ID());</span>
+
+		//	Get Business Partner
+<span class="nc" id="L413">		int C_BPartner_ID = rLine.getC_BPartner_ID();</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">		if (C_BPartner_ID != 0)</span>
+		{
+			;
+<span class="nc" id="L417">		}</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">		else if (rLine.getC_Charge_ID() != 0)</span>
+		{
+<span class="nc" id="L420">			MCharge charge = MCharge.get(getCtx(), rLine.getC_Charge_ID());</span>
+<span class="nc" id="L421">			C_BPartner_ID = charge.getC_BPartner_ID();</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">			if (C_BPartner_ID == 0)</span>
+			{
+<span class="nc" id="L424">				throw new AdempiereUserError(&quot;No Vendor for Charge &quot; + charge.getName());</span>
+			}
+		}
+		else
+		{
+			// Find Strategic Vendor for Product
+			// TODO: refactor
+<span class="nc" id="L431">			MProductPO[] ppos = MProductPO.getOfProduct(getCtx(), product.getM_Product_ID(), null);</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">			for (int i = 0; i &lt; ppos.length; i++)</span>
+			{
+<span class="nc bnc" id="L434" title="All 4 branches missed.">				if (ppos[i].isCurrentVendor() &amp;&amp; ppos[i].getC_BPartner_ID() != 0)</span>
+				{
+<span class="nc" id="L436">					C_BPartner_ID = ppos[i].getC_BPartner_ID();</span>
+<span class="nc" id="L437">					break;</span>
+				}
+			}
+<span class="nc bnc" id="L440" title="All 4 branches missed.">			if (C_BPartner_ID == 0 &amp;&amp; ppos.length &gt; 0)</span>
+			{
+<span class="nc" id="L442">				C_BPartner_ID = ppos[0].getC_BPartner_ID();</span>
+			}
+<span class="nc bnc" id="L444" title="All 2 branches missed.">			if (C_BPartner_ID == 0)</span>
+			{
+<span class="nc" id="L446">				throw new NoVendorForProductException(product.getName());</span>
+			}
+		}
+		
+<span class="nc bnc" id="L450" title="All 2 branches missed.">		if (!isGenerateForVendor(C_BPartner_ID))</span>
+		{
+<span class="nc bnc" id="L452" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;Skip for partner &quot;+C_BPartner_ID);</span>
+<span class="nc" id="L453">			return;</span>
+		}
+
+		//	New Order - Different Vendor
+<span class="nc bnc" id="L457" title="All 2 branches missed.">		if (m_order == null </span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">			|| m_order.getC_BPartner_ID() != C_BPartner_ID</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">			|| m_order.getDatePromised().compareTo(rLine.getDateRequired()) != 0</span>
+			)
+		{
+<span class="nc" id="L462">			newOrder(rLine, C_BPartner_ID);</span>
+		}
+		
+		//	No Order Line
+<span class="nc" id="L466">		m_orderLine = new MOrderLine(m_order);</span>
+<span class="nc" id="L467">		m_orderLine.setDatePromised(rLine.getDateRequired());</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">		if (product != null)</span>
+		{
+<span class="nc" id="L470">			m_orderLine.setProduct(product);</span>
+<span class="nc" id="L471">			m_orderLine.setM_AttributeSetInstance_ID(rLine.getM_AttributeSetInstance_ID());</span>
+<span class="nc" id="L472">		}</span>
+		else
+		{
+<span class="nc" id="L475">			m_orderLine.setC_Charge_ID(rLine.getC_Charge_ID());</span>
+<span class="nc" id="L476">			m_orderLine.setPriceActual(rLine.getPriceActual());</span>
+		}
+<span class="nc" id="L478">		m_orderLine.setAD_Org_ID(rLine.getAD_Org_ID());</span>
+				
+		
+		//	Prepare Save
+<span class="nc" id="L482">		m_M_Product_ID = rLine.getM_Product_ID();</span>
+<span class="nc" id="L483">		m_M_AttributeSetInstance_ID = rLine.getM_AttributeSetInstance_ID();</span>
+<span class="nc" id="L484">		m_orderLine.saveEx();</span>
+<span class="nc" id="L485">	}	//	newLine</span>
+
+	/**
+	 * Do we need to generate Purchase Orders for given Vendor 
+	 * @param C_BPartner_ID
+	 * @return true if it's allowed
+	 */
+	private boolean isGenerateForVendor(int C_BPartner_ID)
+	{
+		// No filter group was set =&gt; generate for all vendors
+<span class="nc bnc" id="L495" title="All 2 branches missed.">		if (p_C_BP_Group_ID &lt;= 0)</span>
+<span class="nc" id="L496">			return true;</span>
+		
+<span class="nc bnc" id="L498" title="All 2 branches missed.">		if (m_excludedVendors.contains(C_BPartner_ID))</span>
+<span class="nc" id="L499">			return false;</span>
+		//
+<span class="nc" id="L501">		boolean match = new Query(getCtx(), MBPartner.Table_Name, &quot;C_BPartner_ID=? AND C_BP_Group_ID=?&quot;, get_TrxName())</span>
+<span class="nc" id="L502">		.setParameters(new Object[]{C_BPartner_ID, p_C_BP_Group_ID})</span>
+<span class="nc" id="L503">		.match();</span>
+<span class="nc bnc" id="L504" title="All 2 branches missed.">		if (!match)</span>
+		{
+<span class="nc" id="L506">			m_excludedVendors.add(C_BPartner_ID);</span>
+		}
+<span class="nc" id="L508">		return match;</span>
+	}
+<span class="nc" id="L510">	private List&lt;Integer&gt; m_excludedVendors = new ArrayList&lt;Integer&gt;();</span>
+	
+}	//	RequisitionPOCreate
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>MToolBarButtonRestrict.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">MToolBarButtonRestrict.java</span></div><h1>MToolBarButtonRestrict.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.model;
+
+import java.sql.ResultSet;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.compiere.util.CCache;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+
+/**
+ *  ToolBar and Button Restriction
+ *  @author Nicolas Micoud
+ */
+public class MToolBarButtonRestrict extends X_AD_ToolBarButtonRestrict
+{
+
+	/** Cache for toolbar button restricted */
+<span class="nc" id="L36">	private static CCache&lt;String, Boolean&gt;	cache_toolbarBtnRestriction		= new CCache&lt;String, Boolean&gt;(&quot;ToolbarButtonRestricted&quot;, 50);</span>
+
+	private static final String GET_OF_WINDOW_SQL = &quot;SELECT AD_ToolBarButton_ID FROM AD_ToolBarButtonRestrict WHERE IsActive = 'Y'&quot;
+			+ &quot; AND AD_Client_ID IN (0, ?)&quot;
+			+ &quot; AND (AD_Role_ID IS NULL OR AD_Role_ID = ?)&quot;	
+			+ &quot; AND (AD_Window_ID IS NULL OR (Action='W' AND AD_Window_ID=?))&quot;
+			+ &quot; AND AD_Tab_ID IS NULL&quot;
+			+ &quot; AND AD_ToolBarButton_ID IN&quot; 
+			+ &quot; (SELECT AD_ToolBarButton_ID FROM AD_ToolBarButton WHERE AD_Tab_ID IS NULL AND IsActive='Y' AND Action=?)&quot;;
+	
+	private static final String GET_OF_REPORT_SQL = &quot;SELECT AD_ToolBarButton_ID FROM AD_ToolBarButtonRestrict WHERE IsActive = 'Y'&quot;
+			+ &quot; AND AD_Client_ID IN (0, ?)&quot;
+			+ &quot; AND (AD_Role_ID IS NULL OR AD_Role_ID = ?)&quot;	
+			+ &quot; AND (AD_Process_ID IS NULL OR (Action='R' AND AD_Process_ID=?))&quot;
+			+ &quot; AND AD_ToolBarButton_ID IN&quot; 
+			+ &quot; (SELECT AD_ToolBarButton_ID FROM AD_ToolBarButton WHERE AD_Tab_ID IS NULL AND IsActive='Y' AND Action=?)&quot;;
+
+	private static final String GET_PROCESS_BUTTON_OF_TAB_SQL = &quot;SELECT AD_ToolBarButton_ID FROM AD_ToolBarButtonRestrict WHERE IsActive = 'Y'&quot;
+			+ &quot; AND AD_Client_ID IN (0, ?)&quot;
+			+ &quot; AND (AD_Role_ID IS NULL OR AD_Role_ID = ?)&quot;	
+			+ &quot; AND Action='W'&quot;
+			+ &quot; AND AD_ToolBarButton_ID IN&quot; 
+			+ &quot; (SELECT AD_ToolBarButton_ID FROM AD_ToolBarButton WHERE AD_Tab_ID=?&quot; 
+			+ &quot; AND AD_Process_ID IS NOT NULL AND IsActive='Y' AND Action='W')&quot;;
+
+	private static final String GET_OF_TAB_SQL = &quot;SELECT AD_ToolBarButton_ID FROM AD_ToolBarButtonRestrict WHERE IsActive = 'Y'&quot;
+			+ &quot; AND AD_Client_ID IN (0, ?)&quot;
+			+ &quot; AND (AD_Role_ID IS NULL OR AD_Role_ID = ?)&quot;	
+			+ &quot; AND AD_Window_ID=?&quot;
+			+ &quot; AND AD_Tab_ID=?&quot;
+			+ &quot; AND AD_ToolBarButton_ID IN&quot; 
+			+ &quot; (SELECT AD_ToolBarButton_ID FROM AD_ToolBarButton WHERE AD_Process_ID IS NULL AND IsActive='Y')&quot;;
+
+	// Toolbar button access restriction
+	public static final String SQL_IS_TOOLBAR_BTN_EXCLUDED = &quot;SELECT tbr.IsExclude FROM AD_ToolBarButton tb 														&quot;
+			+ &quot; INNER JOIN AD_ToolBarButtonRestrict tbr ON 																											&quot;
+			+ &quot;						  	( tbr.AD_ToolBarButton_ID=tb.AD_ToolBarButton_ID AND tbr.AD_Client_ID IN (0,?) AND tbr.IsActive='Y' AND 					&quot;
+			+ &quot; 						  tbr.Action='W' AND (tbr.AD_Role_ID IS NULL OR tbr.AD_Role_ID=?) AND (tbr.AD_Window_ID IS NULL OR tbr.AD_Window_ID=?))		&quot;
+			+ &quot; LEFT JOIN AD_Tab t ON 	( t.AD_Tab_ID=tbr.AD_Tab_ID AND t.IsActive='Y' AND t.AD_Window_ID=? AND ((t.TabLevel=0 AND 0=?) OR t.AD_Tab_ID=?))			&quot;
+			+ &quot; WHERE tb.IsActive='Y' AND tb.Action='W' AND tb.AD_ToolBarButton_ID=? AND tb.AD_Tab_ID IS NULL AND (tbr.AD_Tab_ID IS NULL OR t.AD_Tab_ID IS NOT NULL)&quot;
+			+ &quot; ORDER BY tbr.AD_Client_ID DESC, tbr.AD_Window_ID, tbr.AD_Tab_ID 																					&quot;;
+
+	/**
+	 * generated serial id
+	 */
+	private static final long serialVersionUID = 751989571891306735L;
+
+<span class="nc" id="L83">	private static CLogger s_log = CLogger.getCLogger(MToolBarButtonRestrict.class);</span>
+
+    /**
+     * UUID based Constructor
+     * @param ctx  Context
+     * @param AD_ToolBarButtonRestrict_UU  UUID key
+     * @param trxName Transaction
+     */
+    public MToolBarButtonRestrict(Properties ctx, String AD_ToolBarButtonRestrict_UU, String trxName) {
+<span class="nc" id="L92">        super(ctx, AD_ToolBarButtonRestrict_UU, trxName);</span>
+<span class="nc" id="L93">    }</span>
+
+	/**
+	 * 	Standard Constructor
+	 * 	@param ctx context
+	 * 	@param AD_ToolBarButtonRestrict_ID id
+	 *	@param trxName transaction
+	 */
+	public MToolBarButtonRestrict (Properties ctx, int AD_ToolBarButtonRestrict_ID, String trxName)
+	{
+<span class="nc" id="L103">		super (ctx, AD_ToolBarButtonRestrict_ID, trxName);</span>
+<span class="nc" id="L104">	}	//	MToolBarButtonRestrict</span>
+
+	/**
+	 * 	Load Constructor
+	 *	@param ctx context
+	 *	@param rs result set
+	 *	@param trxName transaction
+	 */
+	public MToolBarButtonRestrict(Properties ctx, ResultSet rs, String trxName)
+	{
+<span class="nc" id="L114">		super(ctx, rs, trxName);</span>
+<span class="nc" id="L115">	}	//	MToolBarButtonRestrict</span>
+
+	/** 
+	 * Get list of button with restrictions to be applied according to role and window
+	 * @param ctx
+	 * @param AD_Role_ID
+	 * @param AD_Window_ID
+	 * @param reportViewer true for report viewer, false for window (i.e Action=R or W)
+	 * @param trxName
+	 * @return array of AD_ToolBarButton_ID
+	 */
+	public static int[] getOfWindow(Properties ctx, int AD_Role_ID, int AD_Window_ID, boolean reportViewer, String trxName)
+	{		
+<span class="nc bnc" id="L128" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO)) s_log.info(&quot;sql=&quot;+GET_OF_WINDOW_SQL);</span>
+		
+<span class="nc bnc" id="L130" title="All 2 branches missed.">		int[] ids = DB.getIDsEx(trxName, GET_OF_WINDOW_SQL, Env.getAD_Client_ID(ctx), AD_Role_ID, AD_Window_ID, reportViewer ? &quot;R&quot; : &quot;W&quot;);</span>
+
+<span class="nc" id="L132">		return ids;</span>
+	}	//	getOfWindow
+	
+	/** 
+	 * Get list of button with restrictions to be applied according to the role, the tab of the window ...
+	 * @param ctx
+	 * @param AD_Role_ID
+	 * @param AD_Window_ID
+	 * @param AD_Tab_ID
+	 * @param trxName
+	 * @return array of AD_ToolBarButton_ID
+	 */
+	public static int[] getOfTab(Properties ctx, int AD_Role_ID, int AD_Window_ID, int AD_Tab_ID, String trxName)
+	{		
+<span class="nc bnc" id="L146" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO)) s_log.info(&quot;sql=&quot;+GET_OF_TAB_SQL);</span>
+		
+<span class="nc" id="L148">		int[] ids = DB.getIDsEx(trxName, GET_OF_TAB_SQL, Env.getAD_Client_ID(ctx), AD_Role_ID, AD_Window_ID, AD_Tab_ID);</span>
+
+<span class="nc" id="L150">		return ids;</span>
+	}	//	getOfWindow
+	
+	/** 
+	 * Get list of button with restrictions to be applied according to the role, the report/process ...
+	 * @param ctx
+	 * @param AD_Role_ID
+	 * @param AD_Process_ID
+	 * @param trxName
+	 * @return array of AD_ToolBarButton_ID
+	 */
+	public static int[] getOfReport(Properties ctx, int AD_Role_ID, int AD_Process_ID, String trxName)
+	{		
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO)) s_log.info(&quot;sql=&quot;+GET_OF_REPORT_SQL);</span>
+		
+<span class="nc" id="L165">		int[] ids = DB.getIDsEx(trxName, GET_OF_REPORT_SQL, Env.getAD_Client_ID(ctx), AD_Role_ID, AD_Process_ID, &quot;R&quot;);</span>
+
+<span class="nc" id="L167">		return ids;</span>
+	}	//	getOf
+	
+	/** 
+	 * Get list of process button (with AD_Process_ID) with restrictions to be applied according to role and tab
+	 * @param ctx
+	 * @param AD_Role_ID
+	 * @param AD_Tab_ID
+	 * @param trxName 
+	 * @return array of AD_ToolBarButton_ID
+	 */
+	public static int[] getProcessButtonOfTab(Properties ctx, int AD_Role_ID, int AD_Tab_ID, String trxName)
+	{
+<span class="nc bnc" id="L180" title="All 2 branches missed.">		if (s_log.isLoggable(Level.INFO)) s_log.info(&quot;sql=&quot;+GET_PROCESS_BUTTON_OF_TAB_SQL);</span>
+		
+<span class="nc" id="L182">		int[] ids = DB.getIDsEx(trxName, GET_PROCESS_BUTTON_OF_TAB_SQL, Env.getAD_Client_ID(ctx), AD_Role_ID, AD_Tab_ID);</span>
+
+<span class="nc" id="L184">		return ids;</span>
+	}	//	getOfTab
+	
+	/**
+	 * 	String Representation
+	 *	@return	info
+	 */
+	@Override
+	public String toString()
+	{
+<span class="nc" id="L194">		StringBuilder sb = new StringBuilder (&quot;MToolBarButtonRestrict[&quot;)</span>
+<span class="nc" id="L195">			.append(get_ID()).append(&quot;,AD_ToolBarButtonRestrict_ID=&quot;).append(getAD_ToolBarButtonRestrict_ID())</span>
+<span class="nc" id="L196">			.append(&quot;]&quot;);</span>
+<span class="nc" id="L197">		return sb.toString();</span>
+	}	//	toString
+
+	/**
+	 * Check access for &quot;New Record&quot; Toolbar button
+	 * 
+	 * @param  windowID - AD_Window_ID
+	 * @return True if Toolbar button is restricted
+	 */
+	public static boolean isNewButtonRestricted(int windowID)
+	{
+<span class="nc" id="L208">		return isNewButtonRestricted(windowID, 0);</span>
+	} // isNewButtonRestricted
+
+	/**
+	 * Check access for &quot;New Record&quot; Toolbar button
+	 * 
+	 * @param  windowID - AD_Window_ID
+	 * @param  tabID    - AD_Tab_ID
+	 * @return True if Toolbar button is restricted
+	 */
+	public static boolean isNewButtonRestricted(int windowID, int tabID)
+	{
+<span class="nc" id="L220">		boolean isReadWrite = MRole.getDefault().getWindowAccess(windowID);</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">		if (!isReadWrite)</span>
+<span class="nc" id="L222">			return true;</span>
+
+<span class="nc" id="L224">		return isToolbarButtonRestricted(windowID, tabID, SystemIDs.TOOLBAR_BTN_ID_WINDOW_NEW);</span>
+	} // isNewButtonRestricted
+
+	/**
+	 * Check toolbar button restriction
+	 * 
+	 * @param  windowID     - AD_Window_ID
+	 * @param  tabID        - AD_Tab_ID
+	 * @param  toolbarBtnID - Toolbar button ID (AD_ToolBarButton_ID)
+	 * @return True if Toolbar button is restricted
+	 */
+	public static boolean isToolbarButtonRestricted(int windowID, int tabID, int toolbarBtnID)
+	{
+<span class="nc" id="L237">		int clientID = Env.getAD_Client_ID(Env.getCtx());</span>
+<span class="nc" id="L238">		int roleID = MRole.getDefault().getAD_Role_ID();</span>
+
+<span class="nc" id="L240">		String key = clientID + &quot;_&quot; + roleID + &quot;_&quot; + windowID + &quot;_&quot; + tabID + &quot;_&quot; + toolbarBtnID;</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">		if (cache_toolbarBtnRestriction.containsKey(key))</span>
+<span class="nc" id="L242">			return cache_toolbarBtnRestriction.get(key);</span>
+
+<span class="nc" id="L244">		String isExclude = DB.getSQLValueString(null, SQL_IS_TOOLBAR_BTN_EXCLUDED, clientID, roleID, windowID, windowID, tabID, tabID, toolbarBtnID);</span>
+<span class="nc bnc" id="L245" title="All 4 branches missed.">		boolean isRestricted = isExclude != null &amp;&amp; isExclude.equals(&quot;Y&quot;);</span>
+<span class="nc" id="L246">		cache_toolbarBtnRestriction.put(key, isRestricted);</span>
+
+<span class="nc" id="L248">		return isRestricted;</span>
+	} // isToolbarButtonRestricted
+
+}	//	MToolBarButtonRestrict
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

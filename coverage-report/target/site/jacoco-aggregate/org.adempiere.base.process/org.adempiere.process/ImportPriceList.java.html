@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ImportPriceList.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.adempiere.process</a> &gt; <span class="el_source">ImportPriceList.java</span></div><h1>ImportPriceList.java</h1><pre class="source lang-java linenums">/**********************************************************************
+* This file is part of Adempiere ERP Bazaar                           *
+* http://www.adempiere.org                                            *
+*                                                                     *
+* Copyright (C) Contributors                                          *
+*                                                                     *
+* This program is free software; you can redistribute it and/or       *
+* modify it under the terms of the GNU General Public License         *
+* as published by the Free Software Foundation; either version 2      *
+* of the License, or (at your option) any later version.              *
+*                                                                     *
+* This program is distributed in the hope that it will be useful,     *
+* but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+* GNU General Public License for more details.                        *
+*                                                                     *
+* You should have received a copy of the GNU General Public License   *
+* along with this program; if not, write to the Free Software         *
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+* MA 02110-1301, USA.                                                 *
+*                                                                     *
+* Contributors:                                                       *
+* - Carlos Ruiz - globalqss                                           *
+**********************************************************************/
+package org.adempiere.process;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.logging.Level;
+
+import org.compiere.model.MPriceList;
+import org.compiere.model.MPriceListVersion;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MProductPrice;
+import org.compiere.model.X_I_PriceList;
+import org.compiere.model.X_M_ProductPriceVendorBreak;
+import org.compiere.process.ProcessInfoParameter;
+import org.compiere.process.SvrProcess;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+
+/**
+ *	Import Price Lists from I_PriceList
+ *
+ * 	@author 	Carlos Ruiz
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L50">public class ImportPriceList extends SvrProcess</span>
+{
+	/**	Client to be imported to		*/
+<span class="nc" id="L53">	private int				m_AD_Client_ID = 0;</span>
+	/**	Delete old Imported				*/
+<span class="nc" id="L55">	private boolean			m_deleteOldImported = false;</span>
+	
+<span class="nc" id="L57">	private boolean			p_importPriceList  = true;</span>
+<span class="nc" id="L58">	private boolean			p_importPriceStd = true;</span>
+<span class="nc" id="L59">	private boolean			p_importPriceLimit = true;</span>
+	
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L66">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L69">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">			if (name.equals(&quot;AD_Client_ID&quot;))</span>
+<span class="nc" id="L71">				m_AD_Client_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">			else if (name.equals(&quot;DeleteOldImported&quot;))</span>
+<span class="nc" id="L73">				m_deleteOldImported = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">			else if (name.equals(&quot;IsImportPriceList&quot;))</span>
+<span class="nc" id="L75">				p_importPriceList = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L76" title="All 2 branches missed.">			else if (name.equals(&quot;IsImportPriceStd&quot;))</span>
+<span class="nc" id="L77">				p_importPriceStd = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">			else if (name.equals(&quot;IsImportPriceLimit&quot;))</span>
+<span class="nc" id="L79">				p_importPriceLimit = &quot;Y&quot;.equals(para[i].getParameter());</span>
+			else
+<span class="nc" id="L81">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+<span class="nc" id="L83">	}	//	prepare</span>
+
+
+	/**
+	 *  Perform process.
+	 *  @return Message
+	 *  @throws Exception
+	 */
+	protected String doIt() throws Exception
+	{
+<span class="nc" id="L93">		StringBuilder sql = null;</span>
+<span class="nc" id="L94">		int no = 0;</span>
+<span class="nc" id="L95">		StringBuilder clientCheck = new StringBuilder(&quot; AND AD_Client_ID=&quot;).append(m_AD_Client_ID);</span>
+		
+<span class="nc" id="L97">		int m_discountschema_id = DB.getSQLValue(get_TrxName(),</span>
+<span class="nc" id="L98">				&quot;SELECT MIN(M_DiscountSchema_ID) FROM M_DiscountSchema WHERE DiscountType='P' AND IsActive='Y' AND AD_Client_ID=?&quot;,</span>
+<span class="nc" id="L99">				m_AD_Client_ID);</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">		if (m_discountschema_id &lt;= 0)</span>
+<span class="nc" id="L101">			throw new AdempiereUserError(&quot;Price List Schema not configured&quot;);</span>
+
+		//	****	Prepare	****
+
+		//	Delete Old Imported
+<span class="nc bnc" id="L106" title="All 2 branches missed.">		if (m_deleteOldImported)</span>
+		{
+<span class="nc" id="L108">			sql = new StringBuilder(&quot;DELETE FROM I_PriceList &quot;</span>
+<span class="nc" id="L109">				+ &quot;WHERE I_IsImported='Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L110">			no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">			if (log.isLoggable(Level.INFO)) log.info(&quot;Delete Old Impored =&quot; + no);</span>
+		}
+
+		//	Set Client, Org, IsActive, Created/Updated, EnforcePriceLimit, IsSOPriceList, IsTaxIncluded, PricePrecision
+<span class="nc" id="L115">		sql = new StringBuilder(&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L116">			.append(&quot;SET AD_Client_ID = COALESCE (AD_Client_ID, &quot;).append(m_AD_Client_ID).append(&quot;),&quot;)</span>
+<span class="nc" id="L117">			.append(&quot; AD_Org_ID = COALESCE (AD_Org_ID, 0),&quot;)</span>
+<span class="nc" id="L118">			.append(&quot; IsActive = COALESCE (IsActive, 'Y'),&quot;)</span>
+<span class="nc" id="L119">			.append(&quot; Created = COALESCE (Created, getDate()),&quot;)</span>
+<span class="nc" id="L120">			.append(&quot; CreatedBy = COALESCE (CreatedBy, 0),&quot;)</span>
+<span class="nc" id="L121">			.append(&quot; Updated = COALESCE (Updated, getDate()),&quot;)</span>
+<span class="nc" id="L122">			.append(&quot; UpdatedBy = COALESCE (UpdatedBy, 0),&quot;)</span>
+<span class="nc" id="L123">			.append(&quot; EnforcePriceLimit = COALESCE (EnforcePriceLimit, 'N'),&quot;)</span>
+<span class="nc" id="L124">			.append(&quot; IsSOPriceList = COALESCE (IsSOPriceList, 'N'),&quot;)</span>
+<span class="nc" id="L125">			.append(&quot; IsTaxIncluded = COALESCE (IsTaxIncluded, 'N'),&quot;)</span>
+<span class="nc" id="L126">			.append(&quot; PricePrecision = COALESCE (PricePrecision, 2),&quot;)</span>
+<span class="nc" id="L127">			.append(&quot; I_ErrorMsg = ' ',&quot;)</span>
+<span class="nc" id="L128">			.append(&quot; I_IsImported = 'N' &quot;)</span>
+<span class="nc" id="L129">			.append(&quot;WHERE I_IsImported&lt;&gt;'Y' OR I_IsImported IS NULL&quot;);</span>
+<span class="nc" id="L130">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Reset=&quot; + no);</span>
+
+		//	Set Optional BPartner
+<span class="nc" id="L134">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L135">			.append(&quot;SET C_BPartner_ID=(SELECT C_BPartner_ID FROM C_BPartner p&quot;)</span>
+<span class="nc" id="L136">			.append(&quot; WHERE I_PriceList.BPartner_Value=p.Value AND I_PriceList.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L137">			.append(&quot;WHERE C_BPartner_ID IS NULL AND BPartner_Value IS NOT NULL&quot;)</span>
+<span class="nc" id="L138">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L139">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;BPartner=&quot; + no);</span>
+		//
+<span class="nc" id="L142">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L143">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid BPartner,' &quot;)</span>
+<span class="nc" id="L144">			.append(&quot;WHERE C_BPartner_ID IS NULL AND BPartner_Value IS NOT NULL&quot;)</span>
+<span class="nc" id="L145">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L146">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L148">			log.warning(&quot;Invalid BPartner=&quot; + no);</span>
+
+		//	Product
+<span class="nc" id="L151">		sql = new StringBuilder(&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L152">			  .append(&quot;SET M_Product_ID=(SELECT MAX(M_Product_ID) FROM M_Product p&quot;)</span>
+<span class="nc" id="L153">			  .append(&quot; WHERE I_PriceList.ProductValue=p.Value AND I_PriceList.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L154">			  .append(&quot;WHERE M_Product_ID IS NULL AND ProductValue IS NOT NULL&quot;)</span>
+<span class="nc" id="L155">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L156">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L157">		log.fine(&quot;Set Product from Value=&quot; + no);</span>
+<span class="nc" id="L158">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L159">			  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Product, ' &quot;)</span>
+<span class="nc" id="L160">			  .append(&quot;WHERE M_Product_ID IS NULL AND (ProductValue IS NOT NULL)&quot;)</span>
+<span class="nc" id="L161">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L162">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L164">			log.warning (&quot;Invalid Product=&quot; + no);</span>
+
+		//	****	Find Price List
+		//	Name
+<span class="nc" id="L168">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L169">			.append(&quot;SET M_PriceList_ID=(SELECT M_PriceList_ID FROM M_PriceList p&quot;)</span>
+<span class="nc" id="L170">			.append(&quot; WHERE I_PriceList.Name=p.Name AND I_PriceList.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L171">			.append(&quot;WHERE M_PriceList_ID IS NULL&quot;)</span>
+<span class="nc" id="L172">			.append(&quot; AND I_IsImported='N'&quot;).append(clientCheck);</span>
+<span class="nc" id="L173">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Price List Existing Value=&quot; + no);</span>
+
+		//	****	Find Price List Version
+		//	List Name (ID) + ValidFrom
+<span class="nc" id="L178">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L179">			.append(&quot;SET M_PriceList_Version_ID=(SELECT M_PriceList_Version_ID FROM M_PriceList_Version p&quot;)</span>
+<span class="nc" id="L180">			.append(&quot; WHERE I_PriceList.ValidFrom=p.ValidFrom AND I_PriceList.M_PriceList_ID=p.M_PriceList_ID) &quot;)</span>
+<span class="nc" id="L181">			.append(&quot;WHERE M_PriceList_ID IS NOT NULL AND M_PriceList_Version_ID IS NULL&quot;)</span>
+<span class="nc" id="L182">			.append(&quot; AND I_IsImported='N'&quot;).append(clientCheck);</span>
+<span class="nc" id="L183">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;Price List Version Existing Value=&quot; + no);</span>
+		
+		/* UOM For Future USE
+		//	Set UOM (System/own)
+		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;
+			+ &quot;SET X12DE355 = &quot;
+			+ &quot;(SELECT MAX(X12DE355) FROM C_UOM u WHERE u.IsDefault='Y' AND u.AD_Client_ID IN (0,I_PriceList.AD_Client_ID)) &quot;
+			+ &quot;WHERE X12DE355 IS NULL AND C_UOM_ID IS NULL&quot;
+			+ &quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);
+		no = DB.executeUpdate(sql.toString(), get_TrxName());
+		log.fine(&quot;Set UOM Default=&quot; + no);
+		//
+		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;
+			+ &quot;SET C_UOM_ID = (SELECT C_UOM_ID FROM C_UOM u WHERE u.X12DE355=I_PriceList.X12DE355 AND u.AD_Client_ID IN (0,I_PriceList.AD_Client_ID)) &quot;
+			+ &quot;WHERE C_UOM_ID IS NULL&quot;
+			+ &quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);
+		no = DB.executeUpdate(sql.toString(), get_TrxName());
+		log.info(&quot;Set UOM=&quot; + no);
+		//
+		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;
+			+ &quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid UOM, ' &quot;
+			+ &quot;WHERE C_UOM_ID IS NULL&quot;
+			+ &quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);
+		no = DB.executeUpdate(sql.toString(), get_TrxName());
+		if (no != 0)
+			log.warning(&quot;Invalid UOM=&quot; + no);
+		*/
+
+		//	Set Currency
+<span class="nc" id="L213">		sql = new StringBuilder(&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L214">			.append(&quot;SET ISO_Code=(SELECT ISO_Code FROM C_Currency c&quot;)</span>
+<span class="nc" id="L215">			.append(&quot; INNER JOIN C_AcctSchema a ON (a.C_Currency_ID=c.C_Currency_ID)&quot;)</span>
+<span class="nc" id="L216">			.append(&quot; INNER JOIN AD_ClientInfo ci ON (a.C_AcctSchema_ID=ci.C_AcctSchema1_ID)&quot;)</span>
+<span class="nc" id="L217">			.append(&quot; WHERE ci.AD_Client_ID=I_PriceList.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L218">			.append(&quot;WHERE C_Currency_ID IS NULL AND ISO_Code IS NULL&quot;)</span>
+<span class="nc" id="L219">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L220">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L221">		log.fine(&quot;Set Currency Default=&quot; + no);</span>
+		//
+<span class="nc" id="L223">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L224">			.append(&quot;SET C_Currency_ID=(SELECT C_Currency_ID FROM C_Currency c&quot;)</span>
+<span class="nc" id="L225">			.append(&quot; WHERE I_PriceList.ISO_Code=c.ISO_Code AND c.AD_Client_ID IN (0,I_PriceList.AD_Client_ID)) &quot;)</span>
+<span class="nc" id="L226">			.append(&quot;WHERE C_Currency_ID IS NULL&quot;)</span>
+<span class="nc" id="L227">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L228">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;doIt- Set Currency=&quot; + no);</span>
+		//
+<span class="nc" id="L231">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L232">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Currency,' &quot;)</span>
+<span class="nc" id="L233">			.append(&quot;WHERE C_Currency_ID IS NULL&quot;)</span>
+<span class="nc" id="L234">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L235">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L237">			log.warning(&quot;Invalid Currency=&quot; + no);</span>
+
+		//	Mandatory Name or PriceListID
+<span class="nc" id="L240">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L241">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Mandatory Name or PriceListID,' &quot;)</span>
+<span class="nc" id="L242">			.append(&quot;WHERE Name IS NULL AND M_PriceList_ID IS NULL&quot;)</span>
+<span class="nc" id="L243">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L244">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L246">			log.warning(&quot;No Mandatory Name=&quot; + no);</span>
+
+		//	Mandatory ValidFrom or PriceListVersionID
+<span class="nc" id="L249">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L250">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Mandatory ValidFrom or PriceListVersionID,' &quot;)</span>
+<span class="nc" id="L251">			.append(&quot;WHERE ValidFrom IS NULL AND M_PriceList_Version_ID IS NULL&quot;)</span>
+<span class="nc" id="L252">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L253">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L255">			log.warning(&quot;No Mandatory ValidFrom=&quot; + no);</span>
+
+		//	Mandatory BreakValue if BPartner set
+<span class="nc" id="L258">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L259">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No Mandatory BreakValue,' &quot;)</span>
+<span class="nc" id="L260">			.append(&quot;WHERE BreakValue IS NULL AND (C_BPartner_ID IS NOT NULL OR BPartner_Value IS NOT NULL)&quot;)</span>
+<span class="nc" id="L261">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L262">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L264">			log.warning(&quot;No Mandatory BreakValue=&quot; + no);</span>
+
+<span class="nc" id="L266">		commitEx();</span>
+		
+		//	-------------------------------------------------------------------
+<span class="nc" id="L269">		int noInsertpp = 0;</span>
+<span class="nc" id="L270">		int noUpdatepp = 0;</span>
+<span class="nc" id="L271">		int noInsertppvb = 0;</span>
+<span class="nc" id="L272">		int noUpdateppvb = 0;</span>
+<span class="nc" id="L273">		int noInsertpl = 0;</span>
+<span class="nc" id="L274">		int noInsertplv = 0;</span>
+
+		//	Go through Records
+<span class="nc" id="L277">		log.fine(&quot;start inserting/updating ...&quot;);</span>
+<span class="nc" id="L278">		sql = new StringBuilder (&quot;SELECT * FROM I_PriceList WHERE I_IsImported='N'&quot;)</span>
+<span class="nc" id="L279">			.append(clientCheck);</span>
+<span class="nc" id="L280">		PreparedStatement pstmt_setImported = null;</span>
+<span class="nc" id="L281">		PreparedStatement pstmt = null;</span>
+<span class="nc" id="L282">		ResultSet rs = null;</span>
+		try
+		{
+			//	Set Imported = Y
+<span class="nc" id="L286">			pstmt_setImported = DB.prepareStatement</span>
+<span class="nc" id="L287">				(&quot;UPDATE I_PriceList SET I_IsImported='Y', M_PriceList_ID=?, M_PriceList_Version_ID=?, &quot;</span>
+<span class="nc" id="L288">				+ &quot;Updated=getDate(), Processed='Y' WHERE I_PriceList_ID=?&quot;, get_TrxName());</span>
+
+			//
+<span class="nc" id="L291">			pstmt = DB.prepareStatement(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L292">			rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L295">				X_I_PriceList imp = new X_I_PriceList(getCtx(), rs, get_TrxName());</span>
+<span class="nc" id="L296">				int I_PriceList_ID = imp.getI_PriceList_ID();</span>
+<span class="nc" id="L297">				int M_PriceList_ID = imp.getM_PriceList_ID();</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">				if (M_PriceList_ID == 0) {</span>
+					// try to obtain the ID directly from DB
+<span class="nc" id="L300">					M_PriceList_ID = DB.getSQLValue(get_TrxName(), &quot;SELECT M_PriceList_ID FROM M_PriceList WHERE IsActive='Y' AND AD_Client_ID=? AND Name=?&quot;, m_AD_Client_ID, imp.getName());</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">					if (M_PriceList_ID &lt; 0)</span>
+<span class="nc" id="L302">						M_PriceList_ID = 0;</span>
+				}
+<span class="nc bnc" id="L304" title="All 2 branches missed.">				boolean newPriceList = M_PriceList_ID == 0;</span>
+<span class="nc" id="L305">				StringBuilder msglog = new StringBuilder(&quot;I_PriceList_ID=&quot;).append(I_PriceList_ID).append(&quot;, M_PriceList_ID=&quot;).append(M_PriceList_ID);</span>
+<span class="nc" id="L306">				log.fine(msglog.toString());</span>
+
+<span class="nc" id="L308">				MPriceList pricelist = null; </span>
+				//	PriceList
+<span class="nc bnc" id="L310" title="All 2 branches missed.">				if (newPriceList)			//	Insert new Price List</span>
+				{
+<span class="nc" id="L312">					pricelist = new MPriceList(imp);</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">					if (pricelist.save())</span>
+					{
+<span class="nc" id="L315">						M_PriceList_ID = pricelist.getM_PriceList_ID();</span>
+<span class="nc" id="L316">						log.finer(&quot;Insert Price List&quot;);</span>
+<span class="nc" id="L317">						noInsertpl++;</span>
+<span class="nc" id="L318">					}</span>
+					else
+					{
+<span class="nc" id="L321">						StringBuilder sql0 = new StringBuilder (&quot;UPDATE I_PriceList i &quot;)</span>
+<span class="nc" id="L322">							.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||&quot;).append(DB.TO_STRING(&quot;Insert Price List failed&quot;))</span>
+<span class="nc" id="L323">							.append(&quot;WHERE I_PriceList_ID=&quot;).append(I_PriceList_ID);</span>
+<span class="nc" id="L324">						DB.executeUpdate(sql0.toString(), get_TrxName());</span>
+<span class="nc" id="L325">						continue;</span>
+					}
+				} else {
+					// NOTE no else clause - if the price list already exists it's not updated
+<span class="nc" id="L329">					pricelist = new MPriceList(getCtx(), M_PriceList_ID, get_TrxName());</span>
+				}
+				
+<span class="nc" id="L332">				int M_PriceList_Version_ID = imp.getM_PriceList_Version_ID();</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">				if (M_PriceList_Version_ID == 0) {</span>
+					// try to obtain the ID directly from DB
+<span class="nc" id="L335">					M_PriceList_Version_ID = DB.getSQLValue(get_TrxName(), &quot;SELECT M_PriceList_Version_ID FROM M_PriceList_Version WHERE IsActive='Y' AND ValidFrom=? AND M_PriceList_ID=?&quot;, new Object[]{imp.getValidFrom(), M_PriceList_ID});</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">					if (M_PriceList_Version_ID &lt; 0)</span>
+<span class="nc" id="L337">						M_PriceList_Version_ID = 0;</span>
+				}
+<span class="nc bnc" id="L339" title="All 2 branches missed.">				boolean newPriceListVersion = M_PriceList_Version_ID == 0;</span>
+<span class="nc" id="L340">				msglog = new StringBuilder(&quot;I_PriceList_ID=&quot;).append(I_PriceList_ID).append(&quot;, M_PriceList_Version_ID=&quot;).append(M_PriceList_Version_ID);</span>
+<span class="nc" id="L341">				log.fine(msglog.toString());</span>
+
+<span class="nc" id="L343">				MPriceListVersion pricelistversion = null; </span>
+				//	PriceListVersion
+<span class="nc bnc" id="L345" title="All 2 branches missed.">				if (newPriceListVersion)			//	Insert new Price List Version</span>
+				{
+<span class="nc" id="L347">					pricelistversion = new MPriceListVersion(pricelist);</span>
+<span class="nc" id="L348">					pricelistversion.setValidFrom(imp.getValidFrom());</span>
+<span class="nc" id="L349">					pricelistversion.setName(pricelist.getName() + &quot; &quot; + imp.getValidFrom());</span>
+<span class="nc" id="L350">					pricelistversion.setM_DiscountSchema_ID(m_discountschema_id);</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">					if (pricelistversion.save())</span>
+					{
+<span class="nc" id="L353">						M_PriceList_Version_ID = pricelistversion.getM_PriceList_Version_ID();</span>
+<span class="nc" id="L354">						log.finer(&quot;Insert Price List Version&quot;);</span>
+<span class="nc" id="L355">						noInsertplv++;</span>
+<span class="nc" id="L356">					}</span>
+					else
+					{
+<span class="nc" id="L359">						StringBuilder sql0 = new StringBuilder (&quot;UPDATE I_PriceList i &quot;)</span>
+<span class="nc" id="L360">							.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||&quot;).append(DB.TO_STRING(&quot;Insert Price List Version failed&quot;))</span>
+<span class="nc" id="L361">							.append(&quot;WHERE I_PriceList_ID=&quot;).append(I_PriceList_ID);</span>
+<span class="nc" id="L362">						DB.executeUpdate(sql0.toString(), get_TrxName());</span>
+<span class="nc" id="L363">						continue;</span>
+					}
+				} else {
+					// NOTE no else clause - if the price list version already exists it's not updated
+<span class="nc" id="L367">					pricelistversion = new MPriceListVersion(getCtx(), M_PriceList_Version_ID, get_TrxName());</span>
+				}
+				
+				// @TODO: C_UOM is intended for future USE - not useful at this moment
+				
+				// If bpartner then insert/update into M_ProductPriceVendorBreak, otherwise insert/update M_ProductPrice
+<span class="nc bnc" id="L373" title="All 2 branches missed.">				if (imp.getC_BPartner_ID() &gt; 0) {</span>
+					// M_ProductPriceVendorBreak
+<span class="nc" id="L375">					int M_ProductPriceVendorBreak_ID = DB.getSQLValue(get_TrxName(), </span>
+<span class="nc" id="L376">							&quot;SELECT M_ProductPriceVendorBreak_ID &quot; +</span>
+							&quot;FROM M_ProductPriceVendorBreak &quot; +
+							&quot;WHERE M_PriceList_Version_ID=? AND &quot; +
+							&quot;IsActive='Y' AND &quot; +
+							&quot;C_BPartner_ID=? AND &quot; +
+							&quot;M_Product_ID=? AND &quot; +
+							&quot;BreakValue=?&quot;, 
+<span class="nc" id="L383">							new Object[]{pricelistversion.getM_PriceList_Version_ID(), imp.getC_BPartner_ID(), imp.getM_Product_ID(), imp.getBreakValue()});</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">					if (M_ProductPriceVendorBreak_ID &lt; 0)</span>
+<span class="nc" id="L385">						M_ProductPriceVendorBreak_ID = 0;</span>
+<span class="nc" id="L386">					X_M_ProductPriceVendorBreak ppvb = new X_M_ProductPriceVendorBreak(getCtx(), M_ProductPriceVendorBreak_ID, get_TrxName());</span>
+<span class="nc" id="L387">					boolean isInsert = false;</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">					if (M_ProductPriceVendorBreak_ID == 0) {</span>
+<span class="nc" id="L389">						ppvb.setM_PriceList_Version_ID(pricelistversion.getM_PriceList_Version_ID());</span>
+<span class="nc" id="L390">						ppvb.setC_BPartner_ID(imp.getC_BPartner_ID());</span>
+<span class="nc" id="L391">						ppvb.setM_Product_ID(imp.getM_Product_ID());</span>
+<span class="nc" id="L392">						ppvb.setBreakValue(imp.getBreakValue());</span>
+<span class="nc" id="L393">						isInsert = true;</span>
+					}
+<span class="nc bnc" id="L395" title="All 2 branches missed.">					if (p_importPriceLimit) ppvb.setPriceLimit(imp.getPriceLimit());</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">					if (p_importPriceList) ppvb.setPriceList(imp.getPriceList());</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">					if (p_importPriceStd) ppvb.setPriceStd(imp.getPriceStd());</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">					if (ppvb.save())</span>
+					{
+<span class="nc bnc" id="L400" title="All 2 branches missed.">						if (isInsert)</span>
+<span class="nc" id="L401">							noInsertppvb++;</span>
+						else
+<span class="nc" id="L403">							noUpdateppvb++;</span>
+<span class="nc" id="L404">						log.finer(&quot;Insert/Update Product Price Vendor Break&quot;);</span>
+<span class="nc" id="L405">					}</span>
+					else
+					{
+<span class="nc" id="L408">						StringBuilder sql0 = new StringBuilder (&quot;UPDATE I_PriceList i &quot;)</span>
+<span class="nc" id="L409">							.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||&quot;).append(DB.TO_STRING(&quot;Insert/Update Product Price Vendor Break Version failed&quot;))</span>
+<span class="nc" id="L410">							.append(&quot;WHERE I_PriceList_ID=&quot;).append(I_PriceList_ID);</span>
+<span class="nc" id="L411">						DB.executeUpdate(sql0.toString(), get_TrxName());</span>
+<span class="nc" id="L412">						continue;</span>
+					}
+				} else {
+					// M_ProductPrice
+<span class="nc" id="L416">					MProductPrice pp = MProductPrice.get(getCtx(), pricelistversion.getM_PriceList_Version_ID(), imp.getM_Product_ID(), get_TrxName());</span>
+<span class="nc" id="L417">					boolean isInsert = false;</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">					if (pp != null) {</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">						if (p_importPriceLimit) pp.setPriceLimit(imp.getPriceLimit());</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">						if (p_importPriceList) pp.setPriceList(imp.getPriceList());</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">						if (p_importPriceStd) pp.setPriceStd(imp.getPriceStd());</span>
+<span class="nc" id="L422">					} else {</span>
+<span class="nc" id="L423">						pp = new MProductPrice(pricelistversion, imp.getM_Product_ID()</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">								, p_importPriceList?imp.getPriceList():Env.ZERO</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">								, p_importPriceStd?imp.getPriceStd():Env.ZERO</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">								, p_importPriceLimit?imp.getPriceLimit():Env.ZERO);</span>
+<span class="nc" id="L427">						isInsert = true;</span>
+					}
+<span class="nc bnc" id="L429" title="All 2 branches missed.">					if (pp.save())</span>
+					{
+<span class="nc" id="L431">						log.finer(&quot;Insert/Update Product Price&quot;);</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">						if (isInsert)</span>
+<span class="nc" id="L433">							noInsertpp++;</span>
+						else
+<span class="nc" id="L435">							noUpdatepp++;</span>
+<span class="nc" id="L436">					}</span>
+					else
+					{
+<span class="nc" id="L439">						StringBuilder sql0 = new StringBuilder (&quot;UPDATE I_PriceList i &quot;)</span>
+<span class="nc" id="L440">							.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||&quot;).append(DB.TO_STRING(&quot;Insert/Update Product Price failed&quot;))</span>
+<span class="nc" id="L441">							.append(&quot;WHERE I_PriceList_ID=&quot;).append(I_PriceList_ID);</span>
+<span class="nc" id="L442">						DB.executeUpdate(sql0.toString(), get_TrxName());</span>
+<span class="nc" id="L443">						continue;</span>
+					}
+				}
+				
+				//	Update I_PriceList
+<span class="nc" id="L448">				pstmt_setImported.setInt(1, M_PriceList_ID);</span>
+<span class="nc" id="L449">				pstmt_setImported.setInt(2, M_PriceList_Version_ID);</span>
+<span class="nc" id="L450">				pstmt_setImported.setInt(3, I_PriceList_ID);</span>
+<span class="nc" id="L451">				no = pstmt_setImported.executeUpdate();</span>
+				//
+<span class="nc" id="L453">				commitEx();</span>
+			}	//	for all I_PriceList
+			//
+<span class="nc" id="L456">		}</span>
+		finally
+		{
+<span class="nc" id="L459">			DB.close(rs, pstmt);</span>
+<span class="nc" id="L460">			rs = null;</span>
+<span class="nc" id="L461">			pstmt = null;</span>
+<span class="nc" id="L462">			DB.close(pstmt_setImported);</span>
+<span class="nc" id="L463">			pstmt_setImported = null;</span>
+		}
+
+		//	Set Error to indicator to not imported
+<span class="nc" id="L467">		sql = new StringBuilder (&quot;UPDATE I_PriceList &quot;)</span>
+<span class="nc" id="L468">			.append(&quot;SET I_IsImported='N', Updated=getDate() &quot;)</span>
+<span class="nc" id="L469">			.append(&quot;WHERE I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L470">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L471">		addLog (0, null, new BigDecimal (no), &quot;@Errors@&quot;);</span>
+<span class="nc" id="L472">		addLog (0, null, new BigDecimal (noInsertpl), &quot;@M_PriceList_ID@: @Inserted@&quot;);</span>
+<span class="nc" id="L473">		addLog (0, null, new BigDecimal (noInsertplv), &quot;@M_PriceList_Version_ID@: @Inserted@&quot;);</span>
+<span class="nc" id="L474">		addLog (0, null, new BigDecimal (noInsertpp), &quot;Product Price: @Inserted@&quot;);</span>
+<span class="nc" id="L475">		addLog (0, null, new BigDecimal (noUpdatepp), &quot;Product Price: @Updated@&quot;);</span>
+<span class="nc" id="L476">		addLog (0, null, new BigDecimal (noInsertppvb), &quot;@M_ProductPriceVendorBreak_ID@: @Inserted@&quot;);</span>
+<span class="nc" id="L477">		addLog (0, null, new BigDecimal (noUpdateppvb), &quot;@M_ProductPriceVendorBreak_ID@: @Updated@&quot;);</span>
+<span class="nc" id="L478">		return &quot;&quot;;</span>
+	}	//	doIt
+
+}	//	ImportProduct
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

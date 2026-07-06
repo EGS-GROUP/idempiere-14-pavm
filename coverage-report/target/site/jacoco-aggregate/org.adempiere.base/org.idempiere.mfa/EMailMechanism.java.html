@@ -1,0 +1,283 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>EMailMechanism.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.idempiere.mfa</a> &gt; <span class="el_source">EMailMechanism.java</span></div><h1>EMailMechanism.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - Carlos Ruiz (sponsored by FH)                                     *
+ **********************************************************************/
+
+package org.idempiere.mfa;
+
+import java.sql.Timestamp;
+import java.util.Properties;
+import java.util.Random;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.compiere.model.IMFAMechanism;
+import org.compiere.model.MClient;
+import org.compiere.model.MMFAMethod;
+import org.compiere.model.MMFARegistration;
+import org.compiere.model.MMailText;
+import org.compiere.model.MUser;
+import org.compiere.util.EMail;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.Util;
+
+/**
+ * Email based Multi-factor authentication implementation. 
+ */
+<span class="nc" id="L47">public class EMailMechanism implements IMFAMechanism {</span>
+
+	/**
+	 * Implement the registration mechanism for EMail Generate random code and
+	 * return in the array
+	 * 
+	 * @param ctx
+	 * @param method
+	 * @param prm     email
+	 * @param trxName
+	 * @return Object[] - first object is the String with the instructions to follow,
+	 *         second object is the registration generated
+	 */
+	@Override
+	public Object[] register(Properties ctx, MMFAMethod method, String prm, String trxName) {
+<span class="nc bnc" id="L62" title="All 2 branches missed.">		if (Util.isEmpty(prm))</span>
+<span class="nc" id="L63">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFAEMailRequired&quot;));</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">		if (!EMail.validate(prm))</span>
+<span class="nc" id="L65">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFAInvalidEMail&quot;));</span>
+<span class="nc bnc" id="L66" title="All 2 branches missed.">		if (method.getR_MailText_ID() &lt;= 0)</span>
+<span class="nc" id="L67">			throw new AdempiereException(&quot;EMail method wrongly configured - requires mail template&quot;);</span>
+
+		// just one time allowed per EMail
+<span class="nc bnc" id="L70" title="All 2 branches missed.">		if (MMFARegistration.alreadyExistsValid(method, prm))</span>
+<span class="nc" id="L71">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFAMethodAlreadyRegistered&quot;));</span>
+
+		// Generate a random code and save it in MFA_Registration
+<span class="nc" id="L74">		String otp = generateRandomString(6);</span>
+
+<span class="nc" id="L76">		int expireMinutes = method.getExpireInMinutes();</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">		if (expireMinutes &lt;= 0)</span>
+<span class="nc" id="L78">			expireMinutes = 15; // default to 15 minutes</span>
+
+<span class="nc" id="L80">		MUser user = MUser.get(ctx);</span>
+<span class="nc" id="L81">		MMFARegistration reg = new MMFARegistration(ctx, 0, trxName);</span>
+<span class="nc" id="L82">		reg.set_ValueOfColumn(MMFARegistration.COLUMNNAME_AD_Client_ID, user.getAD_Client_ID());</span>
+<span class="nc" id="L83">		reg.setAD_Org_ID(0);</span>
+<span class="nc" id="L84">		reg.setName(obfuscateEMail(prm));</span>
+<span class="nc" id="L85">		reg.setParameterValue(prm);</span>
+<span class="nc" id="L86">		reg.setMFA_Method_ID(method.getMFA_Method_ID());</span>
+<span class="nc" id="L87">		reg.setAD_User_ID(user.getAD_User_ID());</span>
+<span class="nc" id="L88">		reg.setMFASecret(otp);</span>
+<span class="nc" id="L89">		reg.setIsValid(false);</span>
+<span class="nc" id="L90">		reg.setIsUserMFAPreferred(false);</span>
+<span class="nc" id="L91">		reg.setExpiration(new Timestamp(System.currentTimeMillis() + (expireMinutes * 60000)));</span>
+<span class="nc" id="L92">		saveRegistration(reg);</span>
+
+		// send the email
+<span class="nc" id="L95">		MClient client = MClient.get(ctx);</span>
+<span class="nc" id="L96">		MMailText mt = new MMailText(ctx, method.getR_MailText_ID(), trxName);</span>
+<span class="nc" id="L97">		mt.setLanguage(Env.getContext(ctx, &quot;#AD_Language&quot;));</span>
+<span class="nc" id="L98">		mt.setUser(user.getAD_User_ID());</span>
+<span class="nc" id="L99">		mt.setPO(reg);</span>
+<span class="nc" id="L100">		String message = mt.getMailText(true);</span>
+<span class="nc" id="L101">		EMail email = client.createEMail(prm, mt.getMailHeader(), message, mt.isHtml());</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">		if (mt.isHtml())</span>
+<span class="nc" id="L103">			email.setMessageHTML(mt.getMailHeader(), message);</span>
+		else {
+<span class="nc" id="L105">			email.setSubject(mt.getMailHeader());</span>
+<span class="nc" id="L106">			email.setMessageText(message);</span>
+		}
+<span class="nc bnc" id="L108" title="All 4 branches missed.">		if (!email.isValid() &amp;&amp; !email.isValid(true))</span>
+<span class="nc" id="L109">			throw new AdempiereException(&quot;The EMail is not valid, check configuration&quot;);</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">		if (!EMail.SENT_OK.equals(email.send()))</span>
+<span class="nc" id="L111">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFAProblemSendingEMail&quot;));</span>
+
+		// Invalidate any other previous pending registration with same method and email
+<span class="nc" id="L114">		MMFARegistration.invalidatePreviousPending(method, prm, reg);</span>
+
+		// Notify the user to check the email for the code
+<span class="nc" id="L117">		Object[] ret = new Object[2];</span>
+<span class="nc" id="L118">		ret[0] = Msg.getMsg(Env.getCtx(), &quot;MFAEMailCodeSent&quot;);</span>
+<span class="nc" id="L119">		ret[1] = reg;</span>
+<span class="nc" id="L120">		return ret;</span>
+	}
+
+	/**
+	 * Generates a numeric random string of the specified length
+	 * 
+	 * @param len
+	 * @return random String
+	 */
+	public static String generateRandomString(int len) {
+		// String chars = &quot;0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ&quot;; // if upper alphanumeric is wanted
+<span class="nc" id="L131">		String chars = &quot;0123456789&quot;;</span>
+<span class="nc" id="L132">		Random rnd = new Random();</span>
+<span class="nc" id="L133">		StringBuilder sb = new StringBuilder(len);</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">		for (int i = 0; i &lt; len; i++)</span>
+<span class="nc" id="L135">			sb.append(chars.charAt(rnd.nextInt(chars.length())));</span>
+<span class="nc" id="L136">		return sb.toString();</span>
+	}
+
+	/**
+	 * Complete/Validate a previous EMail registration
+	 * 
+	 * @param ctx
+	 * @param reg                 The registration object
+	 * @param p_MFAValidationCode The code to be validated
+	 * @param p_Name              Optional - a name to assign the registration
+	 * @param get_TrxName
+	 * @return msg A message indicating success, errors throw exception
+	 */
+	@Override
+	public String complete(Properties ctx, MMFARegistration reg, String code, String name, boolean preferred, String trxName) {
+<span class="nc" id="L151">		boolean valid = code.equals(reg.getMFASecret());</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		if (! valid) {</span>
+<span class="nc" id="L153">			reg.setLastFailure(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L154">			reg.setFailedLoginCount(reg.getFailedLoginCount() + 1);</span>
+<span class="nc" id="L155">			saveRegistration(reg);</span>
+<span class="nc" id="L156">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFACodeInvalid&quot;));</span>
+		}
+
+		// valid code
+<span class="nc" id="L160">		reg.setMFALastSecret(code);</span>
+<span class="nc" id="L161">		reg.setLastSuccess(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L162">		reg.setFailedLoginCount(0);</span>
+<span class="nc" id="L163">		reg.setIsValid(true);</span>
+<span class="nc" id="L164">		reg.setMFAValidatedAt(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L165">		reg.setExpiration(null);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">		if (!Util.isEmpty(name))</span>
+<span class="nc" id="L167">			reg.setName(name);</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">		if (preferred)</span>
+<span class="nc" id="L169">			reg.setIsUserMFAPreferred(true);</span>
+<span class="nc" id="L170">		saveRegistration(reg);</span>
+
+<span class="nc" id="L172">		return Msg.getMsg(ctx, &quot;MFARegistrationCompleted&quot;);</span>
+	}
+
+	/**
+	 * Send email with validation code
+	 * @param reg
+	 * @return
+	 */
+	@Override
+	public String generateValidationCode(MMFARegistration reg) {
+<span class="nc" id="L182">		Properties ctx = reg.getCtx();</span>
+<span class="nc" id="L183">		MMFAMethod method = new MMFAMethod(ctx, reg.getMFA_Method_ID(), reg.get_TrxName());</span>
+
+		// Generate a random code and save it in MFA_Registration
+<span class="nc" id="L186">		String otp = generateRandomString(6);</span>
+
+<span class="nc" id="L188">		int expireMinutes = method.getExpireInMinutes();</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">		if (expireMinutes &lt;= 0)</span>
+<span class="nc" id="L190">			expireMinutes = 15; // default to 15 minutes</span>
+
+<span class="nc" id="L192">		MUser user = MUser.get(reg.getCtx());</span>
+<span class="nc" id="L193">		reg.setMFASecret(otp);</span>
+<span class="nc" id="L194">		reg.setExpiration(new Timestamp(System.currentTimeMillis() + (expireMinutes * 60000)));</span>
+<span class="nc" id="L195">		saveRegistration(reg);</span>
+
+<span class="nc" id="L197">		String mail_to = reg.getParameterValue();</span>
+		// send the email
+<span class="nc" id="L199">		MClient client = MClient.get(ctx);</span>
+<span class="nc" id="L200">		MMailText mt = new MMailText(ctx, method.getR_MailText_ID(), reg.get_TrxName());</span>
+<span class="nc" id="L201">		mt.setLanguage(Env.getContext(ctx, &quot;#AD_Language&quot;));</span>
+<span class="nc" id="L202">		mt.setUser(user.getAD_User_ID());</span>
+<span class="nc" id="L203">		mt.setPO(reg);</span>
+<span class="nc" id="L204">		String message = mt.getMailText(true);</span>
+<span class="nc" id="L205">		EMail email = client.createEMail(mail_to, mt.getMailHeader(), message, mt.isHtml());</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">		if (mt.isHtml())</span>
+<span class="nc" id="L207">			email.setMessageHTML(mt.getMailHeader(), message);</span>
+		else {
+<span class="nc" id="L209">			email.setSubject(mt.getMailHeader());</span>
+<span class="nc" id="L210">			email.setMessageText(message);</span>
+		}
+<span class="nc bnc" id="L212" title="All 4 branches missed.">		if (!email.isValid() &amp;&amp; !email.isValid(true))</span>
+<span class="nc" id="L213">			throw new AdempiereException(&quot;The EMail is not valid, check configuration&quot;);</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">		if (!EMail.SENT_OK.equals(email.send()))</span>
+<span class="nc" id="L215">			throw new AdempiereException(Msg.getMsg(ctx, &quot;MFAProblemSendingEMail&quot;));</span>
+
+<span class="nc" id="L217">		return Msg.getMsg(Env.getCtx(), &quot;MFAEMailValidationCodeSent&quot;, new Object[] { obfuscateEMail(mail_to) });</span>
+	}
+
+	/**
+	 * Replace internal characters in email with *
+	 * @param mail
+	 * @return
+	 */
+	private String obfuscateEMail(String mail) {
+<span class="nc" id="L226">		StringBuilder mailObfuscated = new StringBuilder();</span>
+<span class="nc" id="L227">		boolean atFound = false;</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">		for (int idx = 0; idx &lt; mail.length(); idx++) {</span>
+<span class="nc" id="L229">			char chr = mail.charAt(idx);</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">			if (chr == '@') {</span>
+<span class="nc" id="L231">				atFound = true;</span>
+<span class="nc bnc" id="L232" title="All 8 branches missed.">			} else if ((!atFound &amp;&amp; idx &gt; 1) || (atFound &amp;&amp; idx &lt; mail.length() - 4)) {</span>
+<span class="nc" id="L233">				chr = '*';</span>
+			}
+<span class="nc" id="L235">			mailObfuscated.append(chr);</span>
+		}
+<span class="nc" id="L237">		return mailObfuscated.toString();</span>
+	}
+
+	/**
+	 * Validate a code
+	 * @param reg
+	 * @param code
+	 * @param setPreferred
+	 * @return message on error, null when OK
+	 */
+	@Override
+	public String validateCode(MMFARegistration reg, String code, boolean setPreferred) {
+<span class="nc" id="L249">		Properties ctx = reg.getCtx();</span>
+<span class="nc" id="L250">		Timestamp now = new Timestamp(System.currentTimeMillis());</span>
+<span class="nc bnc" id="L251" title="All 4 branches missed.">		if (reg.getExpiration() != null &amp;&amp; now.after(reg.getExpiration()))</span>
+<span class="nc" id="L252">			return Msg.getMsg(ctx, &quot;MFARegistrationExpired&quot;);</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">		if (code.equals(reg.getMFALastSecret()))</span>
+<span class="nc" id="L254">			return Msg.getMsg(ctx, &quot;MFACodeAlreadyConsumed&quot;);</span>
+
+<span class="nc" id="L256">		boolean valid = code.equals(reg.getMFASecret());</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">		if (! valid) {</span>
+<span class="nc" id="L258">			reg.setLastFailure(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L259">			reg.setFailedLoginCount(reg.getFailedLoginCount() + 1);</span>
+<span class="nc" id="L260">			saveRegistration(reg);</span>
+<span class="nc" id="L261">			return Msg.getMsg(ctx, &quot;MFACodeInvalid&quot;);</span>
+		}
+
+<span class="nc" id="L264">		reg.setMFALastSecret(code);</span>
+<span class="nc" id="L265">		reg.setLastSuccess(new Timestamp(System.currentTimeMillis()));</span>
+<span class="nc" id="L266">		reg.setFailedLoginCount(0);</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">		if (setPreferred)</span>
+<span class="nc" id="L268">			reg.setIsUserMFAPreferred(true);</span>
+<span class="nc" id="L269">		saveRegistration(reg);</span>
+
+<span class="nc" id="L271">		return null;</span>
+	}
+
+	/**
+	 * Save the registration record allowing cross-tenant (saving for a user in System tenant)
+	 * @param reg
+	 */
+	private void saveRegistration(MMFARegistration reg) {
+<span class="nc" id="L279">		reg.saveCrossTenantSafeEx();</span>
+<span class="nc" id="L280">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

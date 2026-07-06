@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Evaluator.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.util</a> &gt; <span class="el_source">Evaluator.java</span></div><h1>Evaluator.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.util;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+
+import org.idempiere.expression.logic.LogicEvaluator;
+
+/**
+ *	Expression Evaluator	
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: Evaluator.java,v 1.3 2006/07/30 00:54:36 jjanke Exp $
+ */
+<span class="nc" id="L36">public class Evaluator</span>
+{
+	/**	Static Logger	*/
+<span class="nc" id="L39">	private static CLogger	s_log	= CLogger.getCLogger (Evaluator.class);</span>
+	
+<span class="nc" id="L41">	private static final Map&lt;String, SQLLogicResult&gt; sqlLogicCache = new ConcurrentHashMap&lt;&gt;();</span>
+
+	public static final String VARIABLE_PO_PROPERTY_OPERATOR = &quot;=&quot;;
+	public static final String VARIABLE_FORMATTING_OPERATOR_START = &quot;&lt;&quot;;
+	public static final String VARIABLE_FORMATTING_OPERATOR_END = &quot;&gt;&quot;;	
+	public static final String VARIABLE_DEFAULT_VALUE_OPERATOR = &quot;:&quot;;
+	public static final String VARIABLE_START_END_MARKER = &quot;@&quot;;
+	public static final String VARIABLE_SELF_TAB_OPERATOR = &quot;~&quot;;
+	public static final String VARIABLE_REFERENCE_OPERATOR = &quot;.&quot;;
+	public static final String VARIABLE_TAB_NO_SEPARATOR = &quot;|&quot;;
+	
+<span class="nc" id="L52">	public static final String ID_COLUMN_SUFFIX = &quot;_ID&quot;;</span>
+	
+	/** Value object for SQL logic result */
+<span class="nc" id="L55">	public static class SQLLogicResult {</span>
+		long timestamp;
+		boolean value;
+	}
+
+	/**
+	 * 	Check if All Variables are Defined
+	 *	@param source source
+	 *	@param logic logic info
+	 *	@return true if fully defined
+	 */
+	public static boolean isAllVariablesDefined (Evaluatee source, String logic)
+	{
+<span class="nc bnc" id="L68" title="All 4 branches missed.">		if (logic == null || logic.length() == 0)</span>
+<span class="nc" id="L69">			return true;</span>
+		//
+<span class="nc" id="L71">		int pos = 0;</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">		while (pos &lt; logic.length())</span>
+		{
+<span class="nc" id="L74">			int first = logic.indexOf('@', pos);</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">			if (first == -1)</span>
+<span class="nc" id="L76">				return true;</span>
+<span class="nc" id="L77">			int second = logic.indexOf('@', first+1);</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">			if (second == -1)</span>
+			{
+<span class="nc" id="L80">				s_log.severe(&quot;No second @ in Logic: &quot; + logic);</span>
+<span class="nc" id="L81">				return false;</span>
+			}
+<span class="nc" id="L83">			String variable = logic.substring(first+1, second-1);</span>
+<span class="nc" id="L84">			String eval = source.get_ValueAsString (variable);</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">			if (s_log.isLoggable(Level.FINEST)) s_log.finest(variable + &quot;=&quot; + eval);</span>
+<span class="nc bnc" id="L86" title="All 4 branches missed.">			if (eval == null || eval.length() == 0)</span>
+<span class="nc" id="L87">				return false;</span>
+			//	
+<span class="nc" id="L89">			pos = second + 1;</span>
+		}
+<span class="nc" id="L91">		return true;</span>
+	}	//	isAllVariablesDefined
+	
+	/**
+	 *	Evaluate logic expression
+	 *  @see LogicEvaluator#evaluateLogic(Evaluatee, String)
+	 *  @param source class implementing get_ValueAsString(variable)
+	 *  @param logic logic expression
+	 *  @return logic result
+	 */
+	public static boolean evaluateLogic (Evaluatee source, String logic)
+	{
+<span class="nc" id="L103">		return LogicEvaluator.evaluateLogic(source, logic);</span>
+	}   //  evaluateLogic
+
+	/**
+	 *  Parse expression and add variables with @ to the list.
+	 *  @param list list to be added to
+	 *  @param parseString expression to parse for variables
+	 */
+	public static void parseDepends (ArrayList&lt;String&gt; list, String parseString)
+	{
+<span class="nc bnc" id="L113" title="All 4 branches missed.">		if (parseString == null || parseString.length() == 0)</span>
+<span class="nc" id="L114">			return;</span>
+<span class="nc" id="L115">		String s = parseString;</span>
+		//  while we have variables
+<span class="nc bnc" id="L117" title="All 2 branches missed.">		while (s.indexOf('@') != -1)</span>
+		{
+<span class="nc" id="L119">			int pos = s.indexOf('@');</span>
+<span class="nc" id="L120">			s = s.substring(pos+1);</span>
+<span class="nc" id="L121">			pos = s.indexOf('@');</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">			if (pos == -1)</span>
+<span class="nc" id="L123">				continue;	//	error number of @@ not correct</span>
+<span class="nc" id="L124">			String variable = s.substring(0, pos);</span>
+<span class="nc" id="L125">			s = s.substring(pos+1);</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">			if (variable.startsWith(&quot;~&quot;)) </span>
+<span class="nc" id="L127">				variable = variable.substring(1);</span>
+			// strip also @tabno|
+<span class="nc" id="L129">			variable = variable.replaceFirst(&quot;[0-9][0-9]*\\|&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">			if (variable.indexOf(&quot;.&quot;) &gt; 0)</span>
+<span class="nc" id="L131">				variable = variable.substring(0, variable.indexOf(&quot;.&quot;));</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			if (variable.indexOf(&quot;:&quot;) &gt; 0)</span>
+<span class="nc" id="L133">				variable = variable.substring(0, variable.indexOf(&quot;:&quot;));</span>
+<span class="nc" id="L134">			list.add(variable);</span>
+		}
+<span class="nc" id="L136">	}   //  parseDepends</span>
+
+	/**
+	 * Evaluate a SQL logic expression (with @SQL= prefix)
+	 * @param sqlLogic
+	 * @param ctx
+	 * @param windowNo
+	 * @param tabNo
+	 * @param targetObjectName expression logic is evaluated for, that target object (for logging purpose) can be field name, toolbar button name,..
+	 * @return result of logic expression
+	 */
+	public static boolean parseSQLLogic(String sqlLogic, Properties ctx, int windowNo, int tabNo, String targetObjectName) {
+<span class="nc" id="L148">		String sql = sqlLogic.substring(5); // remove @SQL=</span>
+<span class="nc" id="L149">		boolean reverse = false;</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">		if (sql.startsWith(&quot;!&quot;)) {</span>
+<span class="nc" id="L151">			reverse = true;</span>
+<span class="nc" id="L152">			sql = sql.substring(1); //remove !</span>
+		}
+<span class="nc" id="L154">		sql = Env.parseContext(ctx, windowNo, tabNo, sql, false, false); // replace</span>
+
+		// variables
+<span class="nc bnc" id="L157" title="All 2 branches missed.">		if (sql.equals(&quot;&quot;)) {</span>
+<span class="nc" id="L158">			s_log.log(Level.WARNING,&quot;(&quot; + targetObjectName + &quot;) - SQL variable parse failed: &quot; + sqlLogic);</span>
+<span class="nc" id="L159">		} else {</span>
+<span class="nc" id="L160">			SQLLogicResult cache = sqlLogicCache.get(sql);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">			if (cache != null) {</span>
+<span class="nc" id="L162">				long since = System.currentTimeMillis() - cache.timestamp;</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">				if (since &lt;= 500) {</span>
+<span class="nc" id="L164">					cache.timestamp = System.currentTimeMillis();</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">					if (cache.value)</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">						return reverse ? false : true;</span>
+					else
+<span class="nc bnc" id="L168" title="All 2 branches missed.">						return reverse ? true : false;</span>
+				}
+			}
+<span class="nc" id="L171">			PreparedStatement stmt = null;</span>
+<span class="nc" id="L172">			ResultSet rs = null;</span>
+			try {
+<span class="nc" id="L174">				stmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L175">				rs = stmt.executeQuery();</span>
+<span class="nc" id="L176">				boolean hasNext = rs.next();</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">				if (cache == null) {</span>
+<span class="nc" id="L178">					cache = new SQLLogicResult();</span>
+<span class="nc" id="L179">					sqlLogicCache.put(sql, cache);</span>
+				}
+<span class="nc" id="L181">				cache.value = hasNext;</span>
+<span class="nc" id="L182">				cache.timestamp = System.currentTimeMillis();					</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">				if (hasNext)</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">					return reverse ? false : true;</span>
+				else
+<span class="nc bnc" id="L186" title="All 2 branches missed.">					return reverse ? true : false;</span>
+<span class="nc" id="L187">			} catch (SQLException e) {</span>
+<span class="nc" id="L188">				s_log.log(Level.WARNING, &quot;(&quot; + targetObjectName + &quot;) &quot; + sql, e);</span>
+			} finally {
+<span class="nc" id="L190">				DB.close(rs, stmt);</span>
+<span class="nc" id="L191">				rs = null;</span>
+<span class="nc" id="L192">				stmt = null;</span>
+			}
+		}
+<span class="nc" id="L195">		return false;</span>
+	}
+}	//	Evaluator
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

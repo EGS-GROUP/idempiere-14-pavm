@@ -1,0 +1,842 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>Scheduler.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.server</a> &gt; <a href="index.source.html" class="el_package">org.compiere.server</a> &gt; <span class="el_source">Scheduler.java</span></div><h1>Scheduler.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.server;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+
+import org.adempiere.base.Core;
+import org.adempiere.base.upload.IUploadHandler;
+import org.adempiere.base.upload.IUploadService;
+import org.adempiere.base.upload.UploadMedia;
+import org.adempiere.base.upload.UploadResponse;
+import org.compiere.model.MAttachment;
+import org.compiere.model.MAuthorizationAccount;
+import org.compiere.model.MClient;
+import org.compiere.model.MColumn;
+import org.compiere.model.MMailText;
+import org.compiere.model.MNote;
+import org.compiere.model.MOrgInfo;
+import org.compiere.model.MPInstance;
+import org.compiere.model.MPInstancePara;
+import org.compiere.model.MProcess;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MRole;
+import org.compiere.model.MScheduler;
+import org.compiere.model.MSchedulerLog;
+import org.compiere.model.MSchedulerPara;
+import org.compiere.model.MSchedulerRecipient;
+import org.compiere.model.MSession;
+import org.compiere.model.MUser;
+import org.compiere.model.PO;
+import org.compiere.model.SystemIDs;
+import org.compiere.print.MPrintFormat;
+import org.compiere.process.ProcessInfo;
+import org.compiere.process.ProcessInfoUtil;
+import org.compiere.process.ServerProcessCtl;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.EMail;
+import org.compiere.util.Env;
+import org.compiere.util.KeyNamePair;
+import org.compiere.util.Login;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.Trx;
+import org.compiere.util.Util;
+import org.idempiere.cache.ImmutableIntPOCache;
+
+/**
+ *	Scheduler
+ *
+ *  @author Jorg Janke
+ *  @version $Id: Scheduler.java,v 1.5 2006/07/30 00:53:33 jjanke Exp $
+ *  
+ *  Contributors:
+ *    Carlos Ruiz - globalqss - FR [3135351] - Enable Scheduler for buttons
+ */
+public class Scheduler extends AdempiereServer
+{
+	/**
+	 * 	Scheduler
+	 *	@param model model
+	 */
+	public Scheduler (MScheduler model)
+	{
+<span class="nc" id="L92">		super (model, 30);	//	30 seconds delay</span>
+<span class="nc" id="L93">		AD_Scheduler_ID = model.getAD_Scheduler_ID();</span>
+	//	m_client = MClient.get(model.getCtx(), model.getAD_Client_ID());
+<span class="nc" id="L95">	}	//	Scheduler</span>
+
+	/**	Last Summary				*/
+<span class="nc" id="L98">	protected StringBuffer 		m_summary = new StringBuffer();</span>
+	/** Transaction					*/
+<span class="nc" id="L100">	protected Trx					m_trx = null;</span>
+
+	protected int AD_Scheduler_ID;
+	
+	protected ProcessInfo pi;
+
+<span class="nc" id="L106">	private static ImmutableIntPOCache&lt;Integer,MScheduler&gt; s_cache = new ImmutableIntPOCache&lt;Integer,MScheduler&gt;(MScheduler.Table_Name, 10, 60);</span>
+
+	/**
+	 * 	Work
+	 */
+	protected void doWork ()
+	{
+<span class="nc" id="L113">		MScheduler scheduler = get(getCtx(), AD_Scheduler_ID);</span>
+<span class="nc" id="L114">		m_summary = new StringBuffer(scheduler.toString())</span>
+<span class="nc" id="L115">			.append(&quot; - &quot;);</span>
+<span class="nc" id="L116">		pi = null;</span>
+
+		// Prepare a ctx for the report/process - BF [1966880]
+<span class="nc" id="L119">		MClient schedclient = MClient.get(getCtx(), scheduler.getAD_Client_ID());</span>
+<span class="nc" id="L120">		Env.setContext(getCtx(), Env.AD_CLIENT_ID, schedclient.getAD_Client_ID());</span>
+<span class="nc" id="L121">		Env.setContext(getCtx(), Env.LANGUAGE, schedclient.getAD_Language());</span>
+<span class="nc" id="L122">		Env.setContext(getCtx(), Env.AD_ORG_ID, scheduler.getAD_Org_ID());</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">		if (scheduler.getAD_Org_ID() != 0) {</span>
+<span class="nc" id="L124">			MOrgInfo schedorg = MOrgInfo.get(getCtx(), scheduler.getAD_Org_ID(), null);</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">			if (schedorg.getM_Warehouse_ID() &gt; 0)</span>
+<span class="nc" id="L126">				Env.setContext(getCtx(), Env.M_WAREHOUSE_ID, schedorg.getM_Warehouse_ID());</span>
+		}
+<span class="nc" id="L128">		Env.setContext(getCtx(), Env.AD_USER_ID, getAD_User_ID());</span>
+<span class="nc" id="L129">		Env.setContext(getCtx(), Env.SALESREP_ID, getAD_User_ID());</span>
+		// TODO: It can be convenient to add  AD_Scheduler.AD_Role_ID
+<span class="nc" id="L131">		MUser scheduser = MUser.get(getCtx(), getAD_User_ID());</span>
+<span class="nc" id="L132">		MRole[] schedroles = scheduser.getRoles(scheduler.getAD_Org_ID());</span>
+<span class="nc bnc" id="L133" title="All 4 branches missed.">		if (schedroles != null &amp;&amp; schedroles.length &gt; 0)</span>
+<span class="nc" id="L134">			Env.setContext(getCtx(), Env.AD_ROLE_ID, schedroles[0].getAD_Role_ID()); // first role, ordered by AD_Role_ID</span>
+<span class="nc" id="L135">		Timestamp ts = new Timestamp(System.currentTimeMillis());</span>
+<span class="nc" id="L136">		SimpleDateFormat dateFormat4Timestamp = new SimpleDateFormat(&quot;yyyy-MM-dd&quot;); </span>
+<span class="nc" id="L137">		Env.setContext(getCtx(), Env.DATE, dateFormat4Timestamp.format(ts)+&quot; 00:00:00&quot; );    //  JDBC format</span>
+
+		// validate login to check if session is valid
+<span class="nc" id="L140">		String errorMessage = new Login(Env.getCtx()).validateLogin(new KeyNamePair(scheduler.getAD_Org_ID(), &quot;&quot;));</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">		if (Util.isEmpty(errorMessage)) {</span>
+			//Create new Session and set #AD_Session_ID to context
+<span class="nc" id="L143">			MSession session = MSession.get(Env.getCtx());</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">			if(session == null) {</span>
+<span class="nc" id="L145">				session = MSession.create(Env.getCtx());</span>
+<span class="nc" id="L146">			} else {</span>
+<span class="nc" id="L147">				session = new MSession(Env.getCtx(), session.getAD_Session_ID(), null);</span>
+			}
+<span class="nc" id="L149">			MProcess process = new MProcess(getCtx(), scheduler.getAD_Process_ID(), null);</span>
+			try
+			{
+<span class="nc" id="L152">				m_trx = Trx.get(Trx.createTrxName(&quot;Scheduler&quot;), true);</span>
+<span class="nc" id="L153">				m_trx.setDisplayName(getClass().getName()+&quot;_&quot;+getModel().getName()+&quot;_doWork&quot;);</span>
+<span class="nc" id="L154">				m_summary.append(runProcess(process));</span>
+<span class="nc" id="L155">				m_trx.commit(true);</span>
+<span class="nc" id="L156">			}</span>
+<span class="nc" id="L157">			catch (Throwable e)</span>
+			{
+<span class="nc bnc" id="L159" title="All 2 branches missed.">				if (m_trx != null)</span>
+<span class="nc" id="L160">					m_trx.rollback();</span>
+<span class="nc" id="L161">				log.log(Level.WARNING, process.toString(), e);</span>
+<span class="nc" id="L162">				m_summary.append(e.toString());</span>
+			}
+			finally
+			{
+<span class="nc bnc" id="L166" title="All 2 branches missed.">				if (m_trx != null)</span>
+<span class="nc" id="L167">					m_trx.close();</span>
+<span class="nc" id="L168">				m_trx = null;</span>
+<span class="nc" id="L169">				session.logout();</span>
+<span class="nc" id="L170">				getCtx().remove(Env.AD_SESSION_ID);</span>
+			}
+		} else {
+<span class="nc" id="L173">			log.log(Level.WARNING, errorMessage);</span>
+<span class="nc" id="L174">			m_summary.append(errorMessage);</span>
+		}
+
+		//
+<span class="nc" id="L178">		int no = scheduler.deleteLog();</span>
+<span class="nc" id="L179">		m_summary.append(&quot; Logs deleted=&quot;).append(no);</span>
+		//
+<span class="nc" id="L181">		MSchedulerLog pLog = new MSchedulerLog(scheduler, m_summary.toString());</span>
+<span class="nc" id="L182">		pLog.setReference(&quot;#&quot; + String.valueOf(p_runCount)</span>
+<span class="nc" id="L183">			+ &quot; - &quot; + TimeUtil.formatElapsed(new Timestamp(p_startWork))</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">			+ (pi != null ? &quot; AD_PInstance_ID=&quot;+pi.getAD_PInstance_ID() : &quot;&quot;));</span>
+<span class="nc" id="L185">		pi = null;</span>
+<span class="nc" id="L186">		pLog.saveEx();</span>
+<span class="nc" id="L187">	}	//	doWork</span>
+
+	/**
+	 * 	Run Process or Report
+	 *	@param process process
+	 *	@return summary
+	 *	@throws Exception
+	 */
+	protected String runProcess(MProcess process) throws Exception
+	{
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(process.toString());</span>
+<span class="nc" id="L198">		MScheduler scheduler = get(getCtx(), AD_Scheduler_ID);</span>
+		
+<span class="nc bnc" id="L200" title="All 8 branches missed.">		boolean isReport = (process.isReport() || process.getAD_ReportView_ID() &gt; 0 || process.getJasperReport() != null || process.getAD_PrintFormat_ID() &gt; 0);</span>
+<span class="nc" id="L201">		String schedulerName = Env.parseContext(getCtx(), -1, scheduler.getName(), false, true, false, false);</span>
+		
+		//	Process (see also MWFActivity.performWork
+<span class="nc" id="L204">		int AD_Table_ID = scheduler.getAD_Table_ID();</span>
+<span class="nc" id="L205">		int Record_ID = scheduler.getRecord_ID();</span>
+		//
+<span class="nc" id="L207">		MPInstance pInstance = new MPInstance(getCtx(), process.getAD_Process_ID(), AD_Table_ID, Record_ID, null); // TODO: Support Schedule with Record_UU</span>
+<span class="nc" id="L208">		pInstance.saveEx();</span>
+<span class="nc" id="L209">		fillParameter(pInstance);</span>
+		//
+<span class="nc" id="L211">		pi = new ProcessInfo (process.getName(), process.getAD_Process_ID(), AD_Table_ID, Record_ID);</span>
+<span class="nc" id="L212">		pi.setAD_User_ID(getAD_User_ID());</span>
+<span class="nc" id="L213">		pi.setAD_Client_ID(scheduler.getAD_Client_ID());</span>
+<span class="nc" id="L214">		pi.setAD_PInstance_ID(pInstance.getAD_PInstance_ID());</span>
+<span class="nc" id="L215">		pi.setAD_Process_UU(process.getAD_Process_UU());</span>
+<span class="nc" id="L216">		pi.setIsBatch(true);</span>
+<span class="nc" id="L217">		pi.setPrintPreview(true);</span>
+<span class="nc" id="L218">		pi.setReportType(scheduler.getReportOutputType());</span>
+<span class="nc" id="L219">		pi.setAD_Scheduler_ID(scheduler.getAD_Scheduler_ID());</span>
+<span class="nc" id="L220">		int AD_PrintFormat_ID = scheduler.getAD_PrintFormat_ID();</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">		if (AD_PrintFormat_ID &gt; 0) </span>
+		{
+<span class="nc" id="L223">			MPrintFormat format = new MPrintFormat(Env.getCtx(), AD_PrintFormat_ID, null);</span>
+<span class="nc" id="L224">			pi.setSerializableObject(format);</span>
+		}
+<span class="nc" id="L226">		MUser from = new MUser(getCtx(), pi.getAD_User_ID(), null);</span>
+		
+<span class="nc bnc" id="L228" title="All 2 branches missed.">		pi.setTransactionName(m_trx != null ? m_trx.getTrxName() : null);</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">		if (!Util.isEmpty(process.getJasperReport())) </span>
+		{
+<span class="nc" id="L231">			pi.setExport(true);</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">			if (&quot;HTML&quot;.equals(pi.getReportType())) </span>
+<span class="nc" id="L233">				pi.setExportFileExtension(&quot;html&quot;);</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">			else if (&quot;CSV&quot;.equals(pi.getReportType()))</span>
+<span class="nc" id="L235">				pi.setExportFileExtension(&quot;csv&quot;);</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">			else if (&quot;XLS&quot;.equals(pi.getReportType()))</span>
+<span class="nc" id="L237">				pi.setExportFileExtension(&quot;xls&quot;);</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">			else if (&quot;XLSX&quot;.equals(pi.getReportType()))</span>
+<span class="nc" id="L239">				pi.setExportFileExtension(&quot;xlsx&quot;);</span>
+			else
+<span class="nc" id="L241">				pi.setExportFileExtension(&quot;pdf&quot;);</span>
+		}
+<span class="nc" id="L243">		ServerProcessCtl.process(pi, m_trx);</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">		if ( pi.isError() ) // note, this call close the transaction, don't use m_trx below</span>
+		{
+			// notify supervisor if error
+<span class="nc" id="L247">			int supervisor = scheduler.getSupervisor_ID();</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if (supervisor &gt; 0)</span>
+			{
+<span class="nc" id="L250">				MUser user = new MUser(getCtx(), supervisor, null);</span>
+<span class="nc" id="L251">				boolean email = user.isNotificationEMail();</span>
+<span class="nc" id="L252">				boolean notice = user.isNotificationNote();</span>
+				
+<span class="nc bnc" id="L254" title="All 4 branches missed.">				if (email || notice)</span>
+<span class="nc" id="L255">					ProcessInfoUtil.setLogFromDB(pi);</span>
+				
+<span class="nc bnc" id="L257" title="All 2 branches missed.">				if (email)</span>
+				{
+<span class="nc" id="L259">					MClient client = MClient.get(scheduler.getCtx(), scheduler.getAD_Client_ID());</span>
+<span class="nc" id="L260">					client.sendEMail(from, user, schedulerName, pi.getSummary() + &quot; &quot; + pi.getLogInfo(), null);</span>
+				}
+<span class="nc bnc" id="L262" title="All 2 branches missed.">				if (notice) {</span>
+<span class="nc" id="L263">					int AD_Message_ID = 442; // HARDCODED ProcessRunError</span>
+<span class="nc" id="L264">					MNote note = new MNote(getCtx(), AD_Message_ID, supervisor, null);</span>
+<span class="nc" id="L265">					note.setClientOrg(scheduler.getAD_Client_ID(), scheduler.getAD_Org_ID());</span>
+<span class="nc" id="L266">					note.setTextMsg(schedulerName+&quot;\n&quot;+pi.getSummary());</span>
+<span class="nc" id="L267">					note.setRecord(MPInstance.Table_ID, pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L268">					note.saveEx();</span>
+<span class="nc" id="L269">					String log = pi.getLogInfo(true);</span>
+<span class="nc bnc" id="L270" title="All 4 branches missed.">					if (log != null &amp;&amp;  log.trim().length() &gt; 0) {</span>
+<span class="nc" id="L271">						MAttachment attachment = new MAttachment (getCtx(), MNote.Table_ID, note.getAD_Note_ID(), note.getAD_Note_UU(), null);</span>
+<span class="nc" id="L272">						attachment.setClientOrg(scheduler.getAD_Client_ID(), scheduler.getAD_Org_ID());</span>
+<span class="nc" id="L273">						attachment.setTextMsg(schedulerName);</span>
+<span class="nc" id="L274">						attachment.addEntry(&quot;ProcessLog.html&quot;, log.getBytes(&quot;UTF-8&quot;));</span>
+<span class="nc" id="L275">						attachment.saveEx();</span>
+<span class="nc" id="L276">						attachment.close();</span>
+					}
+				}
+			}
+		}
+		
+<span class="nc" id="L282">		List&lt;String&gt; sendErrors = new ArrayList&lt;&gt;();</span>
+		// notify recipients
+<span class="nc" id="L284">		Integer[] userIDs = scheduler.getRecipientAD_User_IDs(true);</span>
+<span class="nc bnc" id="L285" title="All 4 branches missed.">		if (userIDs.length &gt; 0 &amp;&amp; pi.isNotifyRecipients()) </span>
+		{
+<span class="nc" id="L287">			ProcessInfoUtil.setLogFromDB(pi);</span>
+<span class="nc" id="L288">			List&lt;File&gt; fileList = new ArrayList&lt;File&gt;();</span>
+<span class="nc bnc" id="L289" title="All 4 branches missed.">			if (isReport &amp;&amp; pi.getPDFReport() != null) {</span>
+<span class="nc" id="L290">				fileList.add(pi.getPDFReport());</span>
+			}
+<span class="nc bnc" id="L292" title="All 4 branches missed.">			if (pi.isExport() &amp;&amp; pi.getExportFile() != null)</span>
+			{
+<span class="nc" id="L294">				fileList.add(pi.getExportFile());</span>
+			}
+			
+<span class="nc bnc" id="L297" title="All 2 branches missed.">			for (int i = 0; i &lt; userIDs.length; i++)</span>
+			{
+<span class="nc" id="L299">				MUser user = new MUser(getCtx(), userIDs[i].intValue(), null);</span>
+<span class="nc" id="L300">				boolean email = user.isNotificationEMail();</span>
+<span class="nc" id="L301">				boolean notice = user.isNotificationNote();</span>
+								
+<span class="nc bnc" id="L303" title="All 2 branches missed.">				if (notice) {</span>
+<span class="nc" id="L304">					int AD_Message_ID = 441; // ProcessOK</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">					if (isReport)</span>
+<span class="nc" id="L306">						AD_Message_ID = 884; //	HARDCODED SchedulerResult</span>
+<span class="nc" id="L307">					MNote note = new MNote(getCtx(), AD_Message_ID, userIDs[i].intValue(), null);</span>
+<span class="nc" id="L308">					note.setClientOrg(scheduler.getAD_Client_ID(), scheduler.getAD_Org_ID());</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">					if (isReport) {</span>
+<span class="nc" id="L310">						note.setTextMsg(schedulerName);</span>
+<span class="nc" id="L311">						note.setDescription(scheduler.getDescription());</span>
+<span class="nc" id="L312">						note.setRecord(AD_Table_ID, Record_ID);</span>
+<span class="nc" id="L313">					} else {</span>
+<span class="nc" id="L314">						note.setTextMsg(schedulerName + &quot;\n&quot; + pi.getSummary());</span>
+<span class="nc" id="L315">						note.setRecord(MPInstance.Table_ID, pi.getAD_PInstance_ID());</span>
+					}
+<span class="nc bnc" id="L317" title="All 2 branches missed.">					if (note.save()) {</span>
+<span class="nc" id="L318">						MAttachment attachment = null;</span>
+<span class="nc bnc" id="L319" title="All 4 branches missed.">						if (fileList != null &amp;&amp; !fileList.isEmpty()) {</span>
+							//	Attachment
+<span class="nc" id="L321">							attachment = new MAttachment (getCtx(), MNote.Table_ID, note.getAD_Note_ID(), note.getAD_Note_UU(), null);</span>
+<span class="nc" id="L322">							attachment.setClientOrg(scheduler.getAD_Client_ID(), scheduler.getAD_Org_ID());</span>
+<span class="nc" id="L323">							attachment.setTextMsg(schedulerName);</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">							for (File entry : fileList)</span>
+<span class="nc" id="L325">								attachment.addEntry(entry);</span>
+							
+						} 
+<span class="nc" id="L328">						String log = pi.getLogInfo(true);</span>
+<span class="nc bnc" id="L329" title="All 4 branches missed.">						if (log != null &amp;&amp;  log.trim().length() &gt; 0) {</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">							if (attachment == null) {</span>
+<span class="nc" id="L331">								attachment = new MAttachment (getCtx(), MNote.Table_ID, note.getAD_Note_ID(), note.getAD_Note_UU(), null);</span>
+<span class="nc" id="L332">								attachment.setClientOrg(scheduler.getAD_Client_ID(), scheduler.getAD_Org_ID());</span>
+<span class="nc" id="L333">								attachment.setTextMsg(schedulerName);</span>
+							}
+<span class="nc" id="L335">							attachment.addEntry(&quot;ProcessLog.html&quot;, log.getBytes(&quot;UTF-8&quot;));</span>
+<span class="nc" id="L336">							attachment.saveEx();</span>
+						}
+<span class="nc bnc" id="L338" title="All 2 branches missed.">						if (attachment != null)</span>
+<span class="nc" id="L339">							attachment.saveEx();</span>
+					}
+				}
+				
+<span class="nc bnc" id="L343" title="All 2 branches missed.">				if (email)</span>
+				{
+<span class="nc" id="L345">					MMailText mailTemplate = new MMailText(getCtx(), scheduler.getR_MailText_ID(), null);</span>
+<span class="nc" id="L346">					String mailContent = &quot;&quot;;</span>
+					
+<span class="nc bnc" id="L348" title="All 2 branches missed.">					if (mailTemplate.is_new()){</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">						mailContent = scheduler.getDescription() != null ? scheduler.getDescription() : &quot;&quot;;</span>
+<span class="nc" id="L350">					}else{</span>
+<span class="nc" id="L351">						mailTemplate.setUser(user);</span>
+<span class="nc" id="L352">						mailTemplate.setLanguage(Env.getContext(getCtx(), Env.LANGUAGE));</span>
+						// if user has bpartner link. maybe use language depend user
+<span class="nc" id="L354">						mailContent = mailTemplate.getMailText(true);</span>
+<span class="nc" id="L355">						schedulerName = mailTemplate.getMailHeader();</span>
+					}
+
+<span class="nc" id="L358">					MClient client = MClient.get(scheduler.getCtx(), scheduler.getAD_Client_ID());</span>
+<span class="nc bnc" id="L359" title="All 4 branches missed.">					if (fileList != null &amp;&amp; !fileList.isEmpty()) {</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">						if (!client.sendEMailAttachments(from, user, schedulerName, mailContent, fileList)) {</span>
+<span class="nc" id="L361">							StringBuilder summary = new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;SchedulerSendAttachmentFailed&quot;));</span>
+<span class="nc" id="L362">							summary.append(user.getName());</span>
+<span class="nc" id="L363">							String error = (String) Env.getCtx().remove(EMail.EMAIL_SEND_MSG);</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">							if (!Util.isEmpty(error)) {</span>
+<span class="nc" id="L365">								summary.append(&quot;. Error: &quot;).append(error);</span>
+							}
+<span class="nc" id="L367">							sendErrors.add(summary.toString());</span>
+<span class="nc" id="L368">							MSchedulerLog pLog = new MSchedulerLog(get(getCtx(), AD_Scheduler_ID),  summary.toString());</span>
+<span class="nc" id="L369">							pLog.setTextMsg(&quot;From: &quot; + from.getName() + &quot; (&quot; + from.getEMail() + &quot;) To: &quot; + user.getName() + &quot; (&quot; + user.getEMail() + &quot;)&quot;);</span>
+<span class="nc" id="L370">							pLog.setIsError(true);</span>
+<span class="nc" id="L371">							pLog.saveEx();</span>
+						}
+<span class="nc" id="L373">					} else {</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">						if (!client.sendEMail(from, user, schedulerName, mailContent + &quot;\n&quot; + pi.getSummary() + &quot;\n&quot; + pi.getLogInfo(), null)) {</span>
+<span class="nc" id="L375">							StringBuilder summary = new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;SchedulerSendNotificationFailed&quot;));</span>
+<span class="nc" id="L376">							summary.append(user.getName());</span>
+<span class="nc" id="L377">							String error = (String) Env.getCtx().remove(EMail.EMAIL_SEND_MSG);</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">							if (!Util.isEmpty(error)) {</span>
+<span class="nc" id="L379">								summary.append(&quot;. Error: &quot;).append(error);</span>
+							}
+<span class="nc" id="L381">							sendErrors.add(summary.toString());</span>
+<span class="nc" id="L382">							MSchedulerLog pLog = new MSchedulerLog(get(getCtx(), AD_Scheduler_ID), summary.toString());</span>
+<span class="nc" id="L383">							pLog.setTextMsg(&quot;From: &quot; + from.getName() + &quot; (&quot; + from.getEMail() + &quot;) To: &quot; + user.getName() + &quot; (&quot; + user.getEMail() + &quot;)&quot;);</span>
+<span class="nc" id="L384">							pLog.setIsError(true);</span>
+<span class="nc" id="L385">							pLog.saveEx();</span>
+						}
+					}
+					
+				}
+				
+			}
+			
+			// IDEMPIERE-2864
+<span class="nc bnc" id="L394" title="All 2 branches missed.">			for(File file : fileList)</span>
+			{
+<span class="nc bnc" id="L396" title="All 4 branches missed.">				if(file.exists() &amp;&amp; !file.delete())</span>
+<span class="nc" id="L397">					file.deleteOnExit();</span>
+			}
+		}
+		
+		//cloud upload
+<span class="nc" id="L402">		List&lt;String&gt; uploadErrors = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L403">		MSchedulerRecipient[] uploads = scheduler.getUploadRecipients();</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">		if (uploads.length &gt; 0) {</span>
+<span class="nc" id="L405">			File file = pi.getPDFReport();</span>
+<span class="nc" id="L406">			String contentType = &quot;application/pdf&quot;;</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">			if (file == null) {</span>
+<span class="nc" id="L408">				file = pi.getExportFile();</span>
+<span class="nc" id="L409">				String extension = pi.getExportFileExtension();</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">				if (&quot;xls&quot;.equals(extension))</span>
+<span class="nc" id="L411">					contentType = &quot;application/vnd.ms-excel&quot;;</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">				else if (&quot;csv&quot;.equals(extension))</span>
+<span class="nc" id="L413">					contentType = &quot;text/csv&quot;;</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">				else if (&quot;html&quot;.equals(extension))</span>
+<span class="nc" id="L415">					contentType = &quot;text/html&quot;;</span>
+			}
+<span class="nc bnc" id="L417" title="All 2 branches missed.">			if (file != null) {</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">				for(MSchedulerRecipient upload : uploads) {</span>
+<span class="nc" id="L419">					MAuthorizationAccount account = new MAuthorizationAccount(Env.getCtx(), upload.getAD_AuthorizationAccount_ID(), null);</span>
+<span class="nc" id="L420">					IUploadService service = Core.getUploadService(account);					</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">					if (service != null) {</span>
+<span class="nc" id="L422">						MUser user = MUser.get(upload.getAD_User_ID());</span>
+						try {
+<span class="nc" id="L424">							IUploadHandler[] handlers = service.getUploadHandlers(contentType);</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">							if (handlers.length &gt; 0) {</span>
+<span class="nc" id="L426">								String fileName = null;</span>
+<span class="nc" id="L427">								fileName = upload.getFileName();</span>
+<span class="nc bnc" id="L428" title="All 4 branches missed.">								if (fileName != null &amp;&amp; fileName.contains(&quot;@&quot;)) {</span>
+<span class="nc" id="L429">									fileName = parseFileName(upload, fileName);</span>
+								}
+<span class="nc bnc" id="L431" title="All 2 branches missed.">								if (Util.isEmpty(fileName))</span>
+<span class="nc" id="L432">									fileName = file.getName();</span>
+							
+<span class="nc" id="L434">								UploadResponse response = handlers[0].uploadMedia(new UploadMedia(fileName, contentType, new FileInputStream(file), file.length()), account);</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">								if (response.getLink() != null) {</span>
+<span class="nc" id="L436">									MSchedulerLog pLog = new MSchedulerLog(get(getCtx(), AD_Scheduler_ID), Msg.getMsg(Env.getCtx(), &quot;UploadSuccess&quot;));</span>
+<span class="nc" id="L437">									pLog.setTextMsg(&quot;User: &quot; + user.getName() + &quot; Account: &quot; + account.getEMail() + </span>
+<span class="nc" id="L438">											&quot; Link: &quot; + response.getLink());</span>
+<span class="nc" id="L439">									pLog.setIsError(false);</span>
+<span class="nc" id="L440">									pLog.saveEx();</span>
+<span class="nc" id="L441">								} else {</span>
+<span class="nc" id="L442">									MSchedulerLog pLog = new MSchedulerLog(get(getCtx(), AD_Scheduler_ID), Msg.getMsg(Env.getCtx(), &quot;UploadFailed&quot;));</span>
+<span class="nc" id="L443">									pLog.setTextMsg(&quot;User: &quot; + user.getName() + &quot; Account: &quot; + account.getEMail());</span>
+<span class="nc" id="L444">									pLog.setIsError(true);</span>
+<span class="nc" id="L445">									pLog.saveEx();</span>
+<span class="nc" id="L446">									uploadErrors.add(pLog.getTextMsg());</span>
+								}
+							}
+<span class="nc" id="L449">						} catch (Throwable e) {</span>
+<span class="nc" id="L450">							log.log(Level.WARNING, process.toString(), e);</span>
+<span class="nc" id="L451">							MSchedulerLog pLog = new MSchedulerLog(get(getCtx(), AD_Scheduler_ID), Msg.getMsg(Env.getCtx(), &quot;UploadFailed&quot;));</span>
+<span class="nc" id="L452">							pLog.setTextMsg(&quot;User: &quot; + user.getName() + &quot; Account: &quot; + account.getEMail() + </span>
+<span class="nc" id="L453">									&quot; Error: &quot; + e.getMessage());</span>
+<span class="nc" id="L454">							pLog.setIsError(true);</span>
+<span class="nc" id="L455">							pLog.saveEx();</span>
+<span class="nc" id="L456">							uploadErrors.add(pLog.getTextMsg());</span>
+						}
+					}
+				}
+			}
+		}
+		
+		//notify supervisor if there are errors
+<span class="nc" id="L464">		int supervisor = get(getCtx(), AD_Scheduler_ID).getSupervisor_ID();</span>
+<span class="nc bnc" id="L465" title="All 6 branches missed.">		if (supervisor &gt; 0 &amp;&amp; (sendErrors.size()&gt;0 || uploadErrors.size()&gt;0)) {</span>
+<span class="nc" id="L466">			MUser user = new MUser(getCtx(), supervisor, null);</span>
+<span class="nc" id="L467">			boolean email = user.isNotificationEMail();</span>
+<span class="nc" id="L468">			boolean notice = user.isNotificationNote();</span>
+<span class="nc" id="L469">			StringBuilder errors = new StringBuilder();</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">			for(String error : sendErrors) {</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">				if (errors.length() &gt; 0)</span>
+<span class="nc" id="L472">					errors.append(&quot;\r\n\r\n&quot;);</span>
+<span class="nc" id="L473">				errors.append(error);</span>
+			}
+<span class="nc bnc" id="L475" title="All 2 branches missed.">			for(String error : uploadErrors) {</span>
+<span class="nc bnc" id="L476" title="All 2 branches missed.">				if (errors.length() &gt; 0)</span>
+<span class="nc" id="L477">					errors.append(&quot;\r\n\r\n&quot;);</span>
+<span class="nc" id="L478">				errors.append(error);</span>
+			}
+<span class="nc bnc" id="L480" title="All 2 branches missed.">			if (email)</span>
+			{
+<span class="nc" id="L482">				MClient client = MClient.get(get(getCtx(), AD_Scheduler_ID).getCtx(), get(getCtx(), AD_Scheduler_ID).getAD_Client_ID());</span>
+<span class="nc bnc" id="L483" title="All 2 branches missed.">				if (!client.sendEMail(from, user, schedulerName + &quot;: &quot; + Msg.getMsg(Env.getCtx(), &quot;SchedulerSendAttachmentFailed&quot;), errors.toString(), null, false))</span>
+				{
+<span class="nc" id="L485">					StringBuilder summary = new StringBuilder(Msg.getMsg(Env.getCtx(), &quot;SchedulerSendNotificationFailed&quot;));</span>
+<span class="nc" id="L486">					summary.append(user.getName());</span>
+<span class="nc" id="L487">					String error = (String) Env.getCtx().remove(EMail.EMAIL_SEND_MSG);</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">					if (!Util.isEmpty(error)) {</span>
+<span class="nc" id="L489">						summary.append(&quot;. Error: &quot;).append(error);</span>
+					}
+<span class="nc" id="L491">					MSchedulerLog pLog = new MSchedulerLog(get(getCtx(), AD_Scheduler_ID), summary.toString());</span>
+<span class="nc" id="L492">					pLog.setTextMsg(&quot;From: &quot; + from.getName() + &quot; (&quot; + from.getEMail() + &quot;) To: &quot; + user.getName() + &quot; (&quot; + user.getEMail() + &quot;)&quot;);</span>
+<span class="nc" id="L493">					pLog.setIsError(true);</span>
+<span class="nc" id="L494">					pLog.saveEx();</span>
+				}
+			}
+<span class="nc bnc" id="L497" title="All 2 branches missed.">			if (notice) {</span>
+<span class="nc" id="L498">				int AD_Message_ID = 442; // HARDCODED ProcessRunError</span>
+<span class="nc" id="L499">				MNote note = new MNote(getCtx(), AD_Message_ID, supervisor, null);</span>
+<span class="nc" id="L500">				note.setClientOrg(get(getCtx(), AD_Scheduler_ID).getAD_Client_ID(), get(getCtx(), AD_Scheduler_ID).getAD_Org_ID());</span>
+<span class="nc" id="L501">				note.setTextMsg(schedulerName+&quot;\n&quot;+errors.toString());</span>
+<span class="nc" id="L502">				note.setRecord(MPInstance.Table_ID, pi.getAD_PInstance_ID());</span>
+<span class="nc" id="L503">				note.saveEx();</span>
+			}
+		}
+		
+<span class="nc" id="L507">		return pi.getSummary();</span>
+	}	//	runProcess
+
+	protected int getAD_User_ID() {
+<span class="nc" id="L511">		MScheduler scheduler = get(getCtx(), AD_Scheduler_ID);</span>
+		int AD_User_ID;
+<span class="nc bnc" id="L513" title="All 2 branches missed.">		if (scheduler.getSupervisor_ID() &gt; 0)</span>
+<span class="nc" id="L514">			AD_User_ID = scheduler.getSupervisor_ID();</span>
+<span class="nc bnc" id="L515" title="All 2 branches missed.">		else if (scheduler.getCreatedBy() &gt; 0)</span>
+<span class="nc" id="L516">			AD_User_ID = scheduler.getCreatedBy();</span>
+<span class="nc bnc" id="L517" title="All 2 branches missed.">		else if (scheduler.getUpdatedBy() &gt; 0)</span>
+<span class="nc" id="L518">			AD_User_ID = scheduler.getUpdatedBy();</span>
+		else
+<span class="nc" id="L520">			AD_User_ID = SystemIDs.USER_SUPERUSER; //fall back to SuperUser</span>
+<span class="nc" id="L521">		return AD_User_ID;</span>
+	}
+	
+	/**
+	 * 	Fill Parameter
+	 *	@param pInstance process instance
+	 */
+	protected void fillParameter(MPInstance pInstance)
+	{
+<span class="nc" id="L530">		MSchedulerPara[] sParams = get(getCtx(), AD_Scheduler_ID).getParameters (false);</span>
+<span class="nc" id="L531">		MProcessPara[] processParams = pInstance.getProcessParameters();</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">		for (int pi = 0; pi &lt; processParams.length; pi++)</span>
+		{
+<span class="nc" id="L534">			MPInstancePara iPara = new MPInstancePara (pInstance, processParams[pi].getSeqNo());</span>
+<span class="nc" id="L535">			iPara.setParameterName(processParams[pi].getColumnName());</span>
+<span class="nc" id="L536">			iPara.setInfo(processParams[pi].getName());</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">			for (int np = 0; np &lt; sParams.length; np++)</span>
+			{
+<span class="nc" id="L539">				MSchedulerPara sPara = sParams[np];</span>
+<span class="nc bnc" id="L540" title="All 2 branches missed.">				if (iPara.getParameterName().equals(sPara.getColumnName()))</span>
+				{
+<span class="nc" id="L542">					String paraDesc = sPara.getDescription();</span>
+<span class="nc bnc" id="L543" title="All 4 branches missed.">					if (paraDesc != null &amp;&amp; paraDesc.trim().length() &gt; 0)</span>
+<span class="nc" id="L544">						iPara.setInfo(sPara.getDescription());</span>
+<span class="nc" id="L545">					String variable = sPara.getParameterDefault();</span>
+<span class="nc" id="L546">					String toVariable = sPara.getParameterToDefault();</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">					if (log.isLoggable(Level.FINE)) log.fine(sPara.getColumnName() + &quot; = &quot; + variable);</span>
+					//	Value - Constant/Variable
+<span class="nc" id="L549">					Object value = parseVariable(sPara, variable);</span>
+<span class="nc bnc" id="L550" title="All 2 branches missed.">					Object toValue = toVariable != null ? parseVariable(sPara, toVariable) : null;</span>
+
+					//	No Value
+<span class="nc bnc" id="L553" title="All 4 branches missed.">					if (value == null &amp;&amp; toValue == null)</span>
+					{
+<span class="nc bnc" id="L555" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(sPara.getColumnName() + &quot; - empty&quot;);</span>
+<span class="nc" id="L556">						break;</span>
+					}
+<span class="nc bnc" id="L558" title="All 2 branches missed.">					if( DisplayType.isText(sPara.getDisplayType())</span>
+<span class="nc bnc" id="L559" title="All 2 branches missed.">							&amp;&amp; Util.isEmpty(String.valueOf(value)) </span>
+<span class="nc bnc" id="L560" title="All 2 branches missed.">							&amp;&amp; Util.isEmpty(String.valueOf(toValue))) {</span>
+<span class="nc bnc" id="L561" title="All 2 branches missed.">						if (log.isLoggable(Level.FINE)) log.fine(sPara.getColumnName() + &quot; - empty string&quot;);</span>
+<span class="nc" id="L562">							break;</span>
+					}
+
+					//	Convert to Type
+					try
+					{
+<span class="nc bnc" id="L568" title="All 2 branches missed.">						if (DisplayType.isNumeric(sPara.getDisplayType())</span>
+<span class="nc bnc" id="L569" title="All 2 branches missed.">							|| DisplayType.isID(sPara.getDisplayType()))</span>
+						{
+<span class="nc" id="L571">							DecimalFormat decimalFormat = DisplayType.getNumberFormat(sPara.getDisplayType());</span>
+<span class="nc" id="L572">							BigDecimal bd = toBigDecimal(value);</span>
+<span class="nc" id="L573">							iPara.setP_Number(bd);							</span>
+<span class="nc bnc" id="L574" title="All 2 branches missed.">							if (toValue != null)</span>
+							{
+<span class="nc" id="L576">								bd = toBigDecimal(toValue);</span>
+<span class="nc" id="L577">								iPara.setP_Number_To(bd);</span>
+							}
+<span class="nc bnc" id="L579" title="All 2 branches missed.">							if (Util.isEmpty(paraDesc)) </span>
+							{
+<span class="nc" id="L581">								String info = decimalFormat.format(iPara.getP_Number());</span>
+<span class="nc bnc" id="L582" title="All 2 branches missed.">								if (iPara.getP_Number_To() != null)</span>
+<span class="nc" id="L583">									info = info + &quot; - &quot; + decimalFormat.format(iPara.getP_Number_To());</span>
+<span class="nc" id="L584">								iPara.setInfo(info);</span>
+							}
+<span class="nc bnc" id="L586" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(sPara.getColumnName()</span>
+<span class="nc" id="L587">								+ &quot; = &quot; + variable + &quot; (=&quot; + bd + &quot;=)&quot;);</span>
+<span class="nc" id="L588">						}</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">						else if (DisplayType.isDate(sPara.getDisplayType()))</span>
+						{
+<span class="nc" id="L591">							SimpleDateFormat dateFormat = DisplayType.getDateFormat(sPara.getDisplayType());</span>
+<span class="nc" id="L592">							Timestamp ts = toTimestamp(value);</span>
+<span class="nc" id="L593">							iPara.setP_Date(ts);</span>
+<span class="nc bnc" id="L594" title="All 2 branches missed.">							if (toValue != null) {</span>
+<span class="nc" id="L595">								ts = toTimestamp(toValue);</span>
+<span class="nc" id="L596">								iPara.setP_Date_To(ts);</span>
+							}
+<span class="nc bnc" id="L598" title="All 2 branches missed.">							if (Util.isEmpty(paraDesc)) </span>
+							{
+<span class="nc" id="L600">								String info = dateFormat.format(iPara.getP_Date());</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">								if (iPara.getP_Date_To() != null)</span>
+								{
+<span class="nc" id="L603">									info = info + &quot; - &quot; + dateFormat.format(iPara.getP_Date_To());</span>
+								}
+<span class="nc" id="L605">								iPara.setInfo(info);</span>
+							}
+<span class="nc bnc" id="L607" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(sPara.getColumnName()</span>
+<span class="nc" id="L608">								+ &quot; = &quot; + variable + &quot; (=&quot; + ts + &quot;=)&quot;);</span>
+<span class="nc" id="L609">						}</span>
+						else
+						{
+<span class="nc" id="L612">							iPara.setP_String(value.toString());</span>
+<span class="nc bnc" id="L613" title="All 2 branches missed.">							if (toValue != null) </span>
+							{
+<span class="nc" id="L615">								iPara.setP_String_To(toValue.toString());</span>
+							}
+<span class="nc bnc" id="L617" title="All 2 branches missed.">							if (Util.isEmpty(paraDesc))</span>
+							{
+<span class="nc" id="L619">								String info = iPara.getP_String();</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">								if (iPara.getP_String_To() != null)</span>
+								{
+<span class="nc" id="L622">									info = info + &quot; - &quot; + iPara.getP_String_To();</span>
+								}
+<span class="nc" id="L624">								iPara.setInfo(info);</span>
+							}
+<span class="nc bnc" id="L626" title="All 2 branches missed.">							if (log.isLoggable(Level.FINE)) log.fine(sPara.getColumnName()</span>
+<span class="nc" id="L627">								+ &quot; = &quot; + variable</span>
+<span class="nc" id="L628">								+ &quot; (=&quot; + value + &quot;=) &quot; + value.getClass().getName());</span>
+						}
+<span class="nc bnc" id="L630" title="All 2 branches missed.">						if (!iPara.save())</span>
+<span class="nc" id="L631">							log.warning(&quot;Not Saved - &quot; + sPara.getColumnName());</span>
+<span class="nc" id="L632">					}</span>
+<span class="nc" id="L633">					catch (Exception e)</span>
+					{
+<span class="nc" id="L635">						log.warning(sPara.getColumnName()</span>
+<span class="nc" id="L636">							+ &quot; = &quot; + variable + &quot; (&quot; + value</span>
+<span class="nc" id="L637">							+ &quot;) &quot; + value.getClass().getName()</span>
+<span class="nc" id="L638">							+ &quot; - &quot; + e.getLocalizedMessage());</span>
+					}
+<span class="nc" id="L640">					break;</span>
+				}	//	parameter match
+			}	//	scheduler parameter loop
+		}	//	instance parameter loop
+<span class="nc" id="L644">	}	//	fillParameter</span>
+
+	private Timestamp toTimestamp(Object value) {
+<span class="nc" id="L647">		Timestamp ts = null;</span>
+<span class="nc bnc" id="L648" title="All 2 branches missed.">		if (value instanceof Timestamp)</span>
+<span class="nc" id="L649">			ts = (Timestamp)value;</span>
+		else
+<span class="nc" id="L651">			ts = Timestamp.valueOf(value.toString());</span>
+<span class="nc" id="L652">		return ts;</span>
+	}
+
+	private BigDecimal toBigDecimal(Object value) {
+<span class="nc" id="L656">		BigDecimal bd = null;</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">		if (value instanceof BigDecimal)</span>
+<span class="nc" id="L658">			bd = (BigDecimal)value;</span>
+<span class="nc bnc" id="L659" title="All 2 branches missed.">		else if (value instanceof Integer)</span>
+<span class="nc" id="L660">			bd = new BigDecimal (((Integer)value).intValue());</span>
+		else
+<span class="nc" id="L662">			bd = new BigDecimal (value.toString());</span>
+<span class="nc" id="L663">		return bd;</span>
+	}
+
+	private String parseFileName(PO source, String inStr) {
+<span class="nc" id="L667">		StringBuilder outStr = new StringBuilder();</span>
+<span class="nc" id="L668">		int i = inStr.indexOf('@');</span>
+<span class="nc bnc" id="L669" title="All 2 branches missed.">		while (i != -1)</span>
+		{
+<span class="nc" id="L671">			outStr.append(inStr.substring(0, i));			// up to @</span>
+<span class="nc" id="L672">			inStr = inStr.substring(i+1, inStr.length());	// from first @</span>
+
+<span class="nc" id="L674">			int j = inStr.indexOf('@');						// next @</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">			if (j &lt; 0)</span>
+			{
+<span class="nc bnc" id="L677" title="All 2 branches missed.">				if (log.isLoggable(Level.INFO)) log.log(Level.INFO, &quot;No second tag: &quot; + inStr);</span>
+				//not context variable, add back @ and break
+<span class="nc" id="L679">				outStr.append(&quot;@&quot;);</span>
+<span class="nc" id="L680">				break;</span>
+			}
+			
+<span class="nc" id="L683">			String token = inStr.substring(0, j);</span>
+<span class="nc" id="L684">			Object value = parseVariable(source, &quot;@&quot;+token+&quot;@&quot;);</span>
+<span class="nc bnc" id="L685" title="All 2 branches missed.">			outStr.append(value != null ? value.toString() : &quot; &quot;);				// replace context with Context</span>
+
+<span class="nc" id="L687">			inStr = inStr.substring(j+1, inStr.length());	// from second @</span>
+<span class="nc" id="L688">			i = inStr.indexOf('@');</span>
+		}
+<span class="nc" id="L690">		return outStr.toString();</span>
+	}
+	
+	private Object parseVariable(PO source, String variable) {
+<span class="nc" id="L694">		Object value = variable;</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">		if (variable == null</span>
+<span class="nc bnc" id="L696" title="All 4 branches missed.">			|| (variable != null &amp;&amp; variable.length() == 0))</span>
+<span class="nc" id="L697">			value = null;</span>
+<span class="nc bnc" id="L698" title="All 2 branches missed.">		else if (variable.startsWith(MColumn.VIRTUAL_UI_COLUMN_PREFIX)) {</span>
+<span class="nc" id="L699">			String	defStr = &quot;&quot;;</span>
+<span class="nc" id="L700">			String sql = variable.substring(5);	//	w/o tag</span>
+			//sql = Env.parseContext(m_vo.ctx, m_vo.WindowNo, sql, false, true);	//	replace variables
+			//hengsin, capture unparseable error to avoid subsequent sql exception
+<span class="nc" id="L703">			sql = Env.parseContext(getCtx(), 0, sql, false, false);	//	replace variables</span>
+<span class="nc bnc" id="L704" title="All 2 branches missed.">			if (sql.equals(&quot;&quot;))</span>
+<span class="nc" id="L705">				log.log(Level.WARNING, &quot;(&quot; + source.toString() + &quot;) - Default SQL variable parse failed: &quot; + variable);</span>
+			else {
+<span class="nc" id="L707">				PreparedStatement stmt = null;</span>
+<span class="nc" id="L708">				ResultSet rs = null;</span>
+				try {
+<span class="nc" id="L710">					stmt = DB.prepareStatement(sql, null);</span>
+<span class="nc" id="L711">					rs = stmt.executeQuery();</span>
+<span class="nc bnc" id="L712" title="All 2 branches missed.">					if (rs.next())</span>
+<span class="nc" id="L713">						defStr = rs.getString(1);</span>
+					else {
+<span class="nc bnc" id="L715" title="All 2 branches missed.">						if (log.isLoggable(Level.INFO))</span>
+<span class="nc" id="L716">							log.log(Level.INFO, &quot;(&quot; + source.toString() + &quot;) - no Result: &quot; + sql);</span>
+					}
+<span class="nc" id="L718">				}</span>
+<span class="nc" id="L719">				catch (SQLException e) {</span>
+<span class="nc" id="L720">					log.log(Level.WARNING, &quot;(&quot; + source.toString() + &quot;) &quot; + sql, e);</span>
+				}
+				finally{
+<span class="nc" id="L723">					DB.close(rs, stmt);</span>
+<span class="nc" id="L724">					rs = null;</span>
+<span class="nc" id="L725">					stmt = null;</span>
+				}
+			}
+<span class="nc bnc" id="L728" title="All 2 branches missed.">			if (!Util.isEmpty(defStr))</span>
+<span class="nc" id="L729">				value = defStr;</span>
+<span class="nc" id="L730">		}	//	SQL Statement</span>
+<span class="nc bnc" id="L731" title="All 2 branches missed.">		else if (  variable.indexOf('@') != -1</span>
+<span class="nc bnc" id="L732" title="All 2 branches missed.">				&amp;&amp; variable.indexOf('@') != variable.lastIndexOf('@'))	//	we have a variable / BF [1926032]</span>
+		{
+			//	Strip
+<span class="nc" id="L735">			int index = variable.indexOf('@');</span>
+<span class="nc" id="L736">			String columnName = variable.substring(index+1);</span>
+<span class="nc" id="L737">			index = columnName.indexOf('@');</span>
+<span class="nc bnc" id="L738" title="All 2 branches missed.">			if (index == -1)</span>
+			{
+<span class="nc" id="L740">				log.warning(source.toString()</span>
+<span class="nc" id="L741">					+ &quot; - cannot evaluate=&quot; + variable);</span>
+<span class="nc" id="L742">				return null;</span>
+			}
+<span class="nc bnc" id="L744" title="All 2 branches missed.">			String tail=index &lt; (columnName.length()-1) ? columnName.substring(index+1) : null;</span>
+<span class="nc" id="L745">			columnName = columnName.substring(0, index);</span>
+			//	try Env
+<span class="nc" id="L747">			String env = Env.getContext(getCtx(), columnName);</span>
+<span class="nc bnc" id="L748" title="All 4 branches missed.">			if (env == null || env.length() == 0)</span>
+<span class="nc" id="L749">				env = Env.getContext(getCtx(), columnName);</span>
+<span class="nc bnc" id="L750" title="All 2 branches missed.">			if (env.length() == 0)</span>
+			{
+<span class="nc" id="L752">				log.warning(source.toString()</span>
+<span class="nc" id="L753">					+ &quot; - not in environment =&quot; + columnName</span>
+<span class="nc" id="L754">					+ &quot;(&quot; + variable + &quot;)&quot;);</span>
+<span class="nc" id="L755">				return null;</span>
+			}
+			else
+<span class="nc" id="L758">				value = env;</span>
+			
+<span class="nc bnc" id="L760" title="All 4 branches missed.">			if (tail != null &amp;&amp; columnName.equals(Env.DATE))</span>
+			{
+<span class="nc" id="L762">				tail = tail.trim();</span>
+<span class="nc bnc" id="L763" title="All 4 branches missed.">				if (tail.startsWith(&quot;-&quot;) || tail.startsWith(&quot;+&quot;))</span>
+				{
+<span class="nc" id="L765">					boolean negate = tail.startsWith(&quot;-&quot;);</span>
+<span class="nc" id="L766">					int type = Calendar.DATE;</span>
+<span class="nc" id="L767">					tail = tail.substring(1);</span>
+<span class="nc bnc" id="L768" title="All 2 branches missed.">					if (tail.endsWith(&quot;d&quot;)) </span>
+					{
+<span class="nc" id="L770">						tail = tail.substring(0, tail.length()-1);</span>
+<span class="nc" id="L771">					}</span>
+<span class="nc bnc" id="L772" title="All 2 branches missed.">					else if (tail.endsWith(&quot;m&quot;))</span>
+					{
+<span class="nc" id="L774">						type = Calendar.MONTH;</span>
+<span class="nc" id="L775">						tail = tail.substring(0, tail.length()-1);</span>
+<span class="nc" id="L776">					}</span>
+<span class="nc bnc" id="L777" title="All 2 branches missed.">					else if (tail.endsWith(&quot;y&quot;))</span>
+					{
+<span class="nc" id="L779">						type = Calendar.YEAR;</span>
+<span class="nc" id="L780">						tail = tail.substring(0, tail.length()-1);</span>
+					}
+					
+<span class="nc" id="L783">					int toApply = 0;</span>
+					try
+					{
+<span class="nc" id="L786">						toApply = Integer.parseInt(tail);</span>
+<span class="nc" id="L787">					} catch(Exception e){}</span>
+<span class="nc bnc" id="L788" title="All 2 branches missed.">					if (toApply &gt; 0)</span>
+					{
+<span class="nc bnc" id="L790" title="All 2 branches missed.">						if (negate) toApply = toApply * -1;</span>
+<span class="nc" id="L791">						Timestamp ts = toTimestamp(value);</span>
+<span class="nc" id="L792">						Calendar cal = Calendar.getInstance();</span>
+<span class="nc" id="L793">						cal.setTimeInMillis(ts.getTime());</span>
+<span class="nc" id="L794">						cal.add(type, toApply);				</span>
+<span class="nc" id="L795">						value = new Timestamp(cal.getTimeInMillis());</span>
+					}
+				}
+				
+			}
+		}	//	@variable@
+<span class="nc" id="L801">		return value;</span>
+	}
+
+
+	/**
+	 * 	Get Server Info
+	 *	@return info
+	 */
+	public String getServerInfo()
+	{
+<span class="nc" id="L811">		return &quot;#&quot; + p_runCount + &quot; - Last=&quot; + m_summary.toString();</span>
+	}	//	getServerInfo
+
+	/**
+	 * Get MScheduler from cache (immutable)
+	 * @param ctx
+	 * @param AD_Scheduler_ID
+	 * @return MScheduler
+	 */
+	protected static MScheduler get(Properties ctx, int AD_Scheduler_ID)
+	{
+<span class="nc" id="L822">		Integer key = Integer.valueOf(AD_Scheduler_ID);</span>
+<span class="nc" id="L823">		MScheduler retValue = s_cache.get(ctx, key, e -&gt; new MScheduler(ctx, e));</span>
+<span class="nc bnc" id="L824" title="All 2 branches missed.">		if (retValue == null)</span>
+		{
+<span class="nc" id="L826">			retValue = new MScheduler(ctx, AD_Scheduler_ID, (String)null);</span>
+<span class="nc bnc" id="L827" title="All 2 branches missed.">			if (AD_Scheduler_ID == 0)</span>
+			{
+<span class="nc" id="L829">				String trxName = null;</span>
+<span class="nc" id="L830">				retValue.load(trxName);	//	load System Record</span>
+			}
+<span class="nc bnc" id="L832" title="All 2 branches missed.">			if (retValue.get_ID() == AD_Scheduler_ID)</span>
+			{
+<span class="nc" id="L834">				s_cache.put(key, retValue, e -&gt; new MScheduler(Env.getCtx(), e));</span>
+<span class="nc" id="L835">				return retValue;</span>
+			}
+<span class="nc" id="L837">			return null;</span>
+		}
+<span class="nc" id="L839">		return retValue;</span>
+	}	//	get
+}	//	Scheduler
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

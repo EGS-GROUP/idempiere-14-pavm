@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>AttachmentDBLazyDataSource.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base</a> &gt; <a href="index.source.html" class="el_package">org.compiere.model</a> &gt; <span class="el_source">AttachmentDBLazyDataSource.java</span></div><h1>AttachmentDBLazyDataSource.java</h1><pre class="source lang-java linenums">/***********************************************************************
+ * This file is part of iDempiere ERP Open Source                      *
+ * http://www.idempiere.org                                            *
+ *                                                                     *
+ * Copyright (C) Contributors                                          *
+ *                                                                     *
+ * This program is free software; you can redistribute it and/or       *
+ * modify it under the terms of the GNU General Public License         *
+ * as published by the Free Software Foundation; either version 2      *
+ * of the License, or (at your option) any later version.              *
+ *                                                                     *
+ * This program is distributed in the hope that it will be useful,     *
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of      *
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the        *
+ * GNU General Public License for more details.                        *
+ *                                                                     *
+ * You should have received a copy of the GNU General Public License   *
+ * along with this program; if not, write to the Free Software         *
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,          *
+ * MA 02110-1301, USA.                                                 *
+ *                                                                     *
+ * Contributors:                                                       *
+ * - hengsin                         								   *
+ **********************************************************************/
+package org.compiere.model;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.DBException;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Util;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.sql.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+/**
+ * Lazy loading data source for {@link AttachmentDBLOB}
+ */
+public class AttachmentDBLazyDataSource implements IAttachmentLazyDataSource {
+
+<span class="nc" id="L48">    private static final org.compiere.util.CLogger log = CLogger.getCLogger(AttachmentDBLazyDataSource.class);</span>
+
+    private final int AD_Attachment_ID;
+    private int index;
+    private final String fileName;
+<span class="nc" id="L53">    private final AtomicBoolean dataLoaded = new AtomicBoolean(false);</span>
+    private File file;
+    private byte[] data;
+<span class="nc" id="L56">    private long size = -1;</span>
+
+    /**
+     * @param AD_Attachment_ID attachment record id
+     * @param index attachment entry index (start from 0)
+     * @param fileName attachment entry file name
+     * @param sizeValue attachment entry uncompress size
+     */
+<span class="nc" id="L64">    public AttachmentDBLazyDataSource(int AD_Attachment_ID, int index, String fileName, String sizeValue) {</span>
+<span class="nc" id="L65">        this.AD_Attachment_ID = AD_Attachment_ID;</span>
+<span class="nc" id="L66">        this.index = index;</span>
+<span class="nc" id="L67">        this.fileName = fileName;</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">        if (!Util.isEmpty(sizeValue, true)) {</span>
+            try {
+<span class="nc" id="L70">                this.size = Long.parseLong(sizeValue);</span>
+<span class="nc" id="L71">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L72">                log.log(Level.WARNING, e.getMessage(), e);</span>
+            }
+        }
+<span class="nc" id="L75">    }</span>
+
+    @Override
+    public byte[] getData() {
+<span class="nc bnc" id="L79" title="All 2 branches missed.">        if (!dataLoaded.get()) {</span>
+<span class="nc" id="L80">            loadEntry(false);</span>
+        }
+<span class="nc bnc" id="L82" title="All 4 branches missed.">        if (file == null &amp;&amp; data == null)</span>
+<span class="nc" id="L83">            return  null;</span>
+
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        if (file != null) {</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">            if (file.length() &gt; Integer.MAX_VALUE) {</span>
+<span class="nc" id="L87">                throw new IllegalStateException(&quot;File too large to load into a byte array&quot;);</span>
+            }
+<span class="nc" id="L89">            try (FileInputStream inputStream = new FileInputStream(file)) {</span>
+<span class="nc" id="L90">                ByteArrayOutputStream baos = new ByteArrayOutputStream();</span>
+                int length;
+<span class="nc" id="L92">                byte[] buffer = new byte[2048];</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">                while ((length = inputStream.read(buffer)) != -1)</span>
+<span class="nc" id="L94">                    baos.write(buffer, 0, length);</span>
+<span class="nc" id="L95">                return baos.toByteArray();</span>
+<span class="nc" id="L96">            } catch (IOException e) {</span>
+<span class="nc" id="L97">                throw new AdempiereException(e);</span>
+            }
+        } else {
+<span class="nc" id="L100">            return data;</span>
+        }
+    }
+
+    @Override
+    public InputStream getInputStream() {
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        if (!dataLoaded.get()) {</span>
+<span class="nc" id="L107">            loadEntry(false);</span>
+        }
+<span class="nc bnc" id="L109" title="All 4 branches missed.">        if (file == null &amp;&amp; data == null)</span>
+<span class="nc" id="L110">            return  null;</span>
+        try {
+<span class="nc bnc" id="L112" title="All 2 branches missed.">            return file != null ? new FileInputStream(file) : new ByteArrayInputStream(data);</span>
+<span class="nc" id="L113">        } catch (FileNotFoundException e) {</span>
+<span class="nc" id="L114">            throw new AdempiereException(e);</span>
+        }
+    }
+
+    @Override
+    public File getFile() {
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        if (!dataLoaded.get()) {</span>
+<span class="nc" id="L121">            loadEntry(false);</span>
+        }
+<span class="nc bnc" id="L123" title="All 4 branches missed.">        if (file == null &amp;&amp; data != null) {</span>
+<span class="nc" id="L124">            Path tempDir = null;</span>
+            try {
+<span class="nc" id="L126">                tempDir = Files.createTempDirectory(&quot;attachment_&quot;);</span>
+<span class="nc" id="L127">            } catch (IOException e) {</span>
+<span class="nc" id="L128">                throw new AdempiereException(e);</span>
+            }
+<span class="nc" id="L130">            Path tempFile = tempDir.resolve(fileName);</span>
+            try {
+<span class="nc" id="L132">                Files.copy(new ByteArrayInputStream(data), tempFile, StandardCopyOption.REPLACE_EXISTING);</span>
+<span class="nc" id="L133">            } catch (IOException e) {</span>
+<span class="nc" id="L134">                throw new AdempiereException(e);</span>
+            }
+<span class="nc" id="L136">            file = tempFile.toFile();</span>
+        }
+<span class="nc" id="L138">        return file;</span>
+    }
+
+    @Override
+    public void cleanUp() {
+<span class="nc bnc" id="L143" title="All 4 branches missed.">        if (file != null &amp;&amp; file.exists()) {</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">            if (!file.delete())</span>
+<span class="nc" id="L145">                file.deleteOnExit();</span>
+<span class="nc" id="L146">            file = null;</span>
+        }
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (data != null)</span>
+<span class="nc" id="L149">            data = null;</span>
+<span class="nc" id="L150">        dataLoaded.set(false);</span>
+<span class="nc" id="L151">    }</span>
+
+    @Override
+    public long getSize() {
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        if (size == -1) {</span>
+<span class="nc" id="L156">            loadEntry(true);</span>
+        }
+<span class="nc" id="L158">        return size;</span>
+    }
+
+    protected void afterDelete(int deletedIndex) {
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        if (index &gt; deletedIndex)</span>
+<span class="nc" id="L163">            index--;</span>
+<span class="nc" id="L164">    }</span>
+
+<span class="nc" id="L166">    private static final String AD_ATTACHMENT_ENTRY_GET = &quot;SELECT BinaryData FROM AD_Attachment_Entry WHERE AD_Attachment_ID=? AND SeqNo=?&quot;;</span>
+
+    /**
+     * Load attachment entry content from ad_attachment_entry table
+     */
+    private void loadEntry(boolean getSize) {
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (!getSize)</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">            if (!dataLoaded.compareAndSet(false, true))</span>
+<span class="nc" id="L174">                return;</span>
+
+<span class="nc" id="L176">        Connection conn = null;</span>
+        // With Postgresql, you need to keep transaction open to access blob
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        if (DB.isPostgreSQL()) {</span>
+<span class="nc" id="L179">            conn = DB.createConnection(true, Connection.TRANSACTION_READ_COMMITTED);</span>
+            try {
+<span class="nc" id="L181">                conn.setAutoCommit(false);</span>
+<span class="nc" id="L182">            } catch (SQLException e) {</span>
+                try {
+<span class="nc" id="L184">                    conn.close();</span>
+<span class="nc" id="L185">                } catch (SQLException e1) {</span>
+<span class="nc" id="L186">                    log.log(Level.WARNING, e1.getMessage(), e1);</span>
+                }
+<span class="nc" id="L188">                throw new AdempiereException(&quot;Error setting auto commit to false&quot;, e);</span>
+            }
+        }
+<span class="nc" id="L191">        String sql = AD_ATTACHMENT_ENTRY_GET;</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        try (PreparedStatement pstmt = conn != null</span>
+<span class="nc" id="L193">                ? DB.prepareStatement(conn, sql)</span>
+<span class="nc" id="L194">                : DB.prepareStatement(sql, null)) {</span>
+<span class="nc" id="L195">            pstmt.setInt(1, AD_Attachment_ID);</span>
+<span class="nc" id="L196">            pstmt.setInt(2, index);</span>
+<span class="nc" id="L197">            try (ResultSet rs = pstmt.executeQuery()) {</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">                if (rs.next()) {</span>
+<span class="nc" id="L199">                    Blob blob = rs.getBlob(1);</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">                    if (blob != null) {</span>
+<span class="nc" id="L201">                        try (InputStream inputStream = blob.getBinaryStream();</span>
+<span class="nc" id="L202">                             ZipInputStream zis = new ZipInputStream(inputStream)) {</span>
+<span class="nc" id="L203">                            ZipEntry entry = zis.getNextEntry();</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">                            assert entry != null;</span>
+<span class="nc bnc" id="L205" title="All 4 branches missed.">                            if (getSize || size == -1)</span>
+<span class="nc" id="L206">                                size = entry.getSize();</span>
+                            // always load data if size is less than 2mb
+<span class="nc bnc" id="L208" title="All 4 branches missed.">                            if (size &lt; (1024 * 1024 * 2) &amp;&amp; size &gt; 0) {</span>
+<span class="nc" id="L209">                                ByteArrayOutputStream baos = new ByteArrayOutputStream();</span>
+                                int length;
+<span class="nc" id="L211">                                byte[] buffer = new byte[2048];</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                                while ((length = zis.read(buffer)) != -1)</span>
+<span class="nc" id="L213">                                    baos.write(buffer, 0, length);</span>
+<span class="nc" id="L214">                                data = baos.toByteArray();</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                                if (getSize)</span>
+<span class="nc" id="L216">                                    dataLoaded.set(true);</span>
+<span class="nc bnc" id="L217" title="All 4 branches missed.">                            } else if (!getSize || size == -1) { // delay loading of data for getSize call if temp file is needed</span>
+<span class="nc" id="L218">                                Path tempDir = Files.createTempDirectory(&quot;attachment_&quot;);</span>
+<span class="nc" id="L219">                                Path tempFile = tempDir.resolve(fileName);</span>
+<span class="nc" id="L220">                                Files.copy(zis, tempFile, StandardCopyOption.REPLACE_EXISTING);</span>
+<span class="nc" id="L221">                                file = tempFile.toFile();</span>
+                                // make sure size is correct
+<span class="nc" id="L223">                                size = file.length();</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">                                if (getSize)</span>
+<span class="nc" id="L225">                                    dataLoaded.set(true);</span>
+                            }
+<span class="nc" id="L227">                        } catch (SQLException e) {</span>
+<span class="nc" id="L228">                            throw new DBException(&quot;Error reading blob data&quot;, e);</span>
+                        } finally {
+                            try {
+<span class="nc" id="L231">                                blob.free();</span>
+<span class="nc" id="L232">                            } catch (SQLException e) {</span>
+<span class="nc" id="L233">                                log.log(Level.WARNING, e.getMessage(), e);</span>
+                            }
+                        }
+                    }
+                }
+            }
+<span class="nc" id="L239">        } catch (Exception e) {</span>
+<span class="nc" id="L240">            log.log(Level.SEVERE, e.getMessage(), e);</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">            if (conn != null) {</span>
+                try {
+<span class="nc" id="L243">                    conn.rollback();</span>
+<span class="nc" id="L244">                } catch (SQLException e1) {</span>
+<span class="nc" id="L245">                    log.log(Level.WARNING, e1.getMessage(), e1);</span>
+                }
+            }
+        } finally {
+<span class="nc bnc" id="L249" title="All 2 branches missed.">            if (conn != null) {</span>
+                try {
+<span class="nc" id="L251">                    conn.commit();</span>
+<span class="nc" id="L252">                } catch (SQLException e) {</span>
+<span class="nc" id="L253">                    log.log(Level.WARNING, e.getMessage(), e);</span>
+                }
+                try {
+<span class="nc" id="L256">                    conn.setAutoCommit(true);</span>
+<span class="nc" id="L257">                } catch (SQLException e) {</span>
+<span class="nc" id="L258">                    log.log(Level.WARNING, e.getMessage(), e);</span>
+                }
+                try {
+<span class="nc" id="L261">                    conn.close();</span>
+<span class="nc" id="L262">                } catch (SQLException e) {</span>
+<span class="nc" id="L263">                    log.log(Level.WARNING, e.getMessage(), e);</span>
+                }
+            }
+        }
+<span class="nc" id="L267">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

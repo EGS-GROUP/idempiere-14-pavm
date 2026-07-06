@@ -1,0 +1,455 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>CommissionCalc.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">CommissionCalc.java</span></div><h1>CommissionCalc.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+import java.util.logging.Level;
+
+import org.compiere.model.MCommission;
+import org.compiere.model.MCommissionAmt;
+import org.compiere.model.MCommissionDetail;
+import org.compiere.model.MCommissionLine;
+import org.compiere.model.MCommissionRun;
+import org.compiere.model.MCurrency;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MUser;
+import org.compiere.util.AdempiereSystemError;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.DB;
+import org.compiere.util.DisplayType;
+import org.compiere.util.Language;
+
+/**
+ *	Commission Calculation	
+ *	
+ *  @author Jorg Janke
+ *  @version $Id: CommissionCalc.java,v 1.3 2006/09/25 00:59:41 jjanke Exp $
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L48">public class CommissionCalc extends SvrProcess</span>
+{
+	protected Timestamp		p_StartDate;
+	//
+	protected Timestamp		m_EndDate;
+	protected MCommission		m_com;
+	//
+
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L61">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L64">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">			if (para[i].getParameter() == null)</span>
+<span class="nc" id="L66">				;</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">			else if (name.equals(&quot;StartDate&quot;))</span>
+<span class="nc" id="L68">				p_StartDate = (Timestamp)para[i].getParameter();</span>
+			else
+<span class="nc" id="L70">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+<span class="nc" id="L72">	}	//	prepare</span>
+
+	/**
+	 *  Perform process.
+	 *  @return Message (text with variables)
+	 *  @throws Exception if not successful
+	 */
+	protected String doIt() throws Exception
+	{
+<span class="nc" id="L81">		checkParameters();</span>
+<span class="nc" id="L82">		setStartEndDate();</span>
+<span class="nc" id="L83">		MCommissionRun comRun = createCommissionRun();</span>
+		
+<span class="nc bnc" id="L85" title="All 2 branches missed.">		for (MCommissionLine commissionLine : m_com.getLines())</span>
+		{
+			//	Amt for Line - Updated By Trigger
+<span class="nc" id="L88">			MCommissionAmt comAmt = new MCommissionAmt(comRun, commissionLine.getC_CommissionLine_ID());</span>
+<span class="nc" id="L89">			comAmt.saveEx();</span>
+
+<span class="nc" id="L91">			String sql = getCommissionCalculationSQL(commissionLine);</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Line=&quot; + commissionLine.getLine() + &quot; - &quot; + sql);</span>
+
+<span class="nc" id="L94">			createDetail(sql, comAmt);</span>
+<span class="nc" id="L95">			comAmt.calculateCommission();</span>
+<span class="nc" id="L96">			comAmt.saveEx();</span>
+		}	//	for all commission lines
+		
+		//	Save Last Run
+<span class="nc" id="L100">		m_com.setDateLastRun (p_StartDate);</span>
+<span class="nc" id="L101">		m_com.saveEx();</span>
+<span class="nc" id="L102">		StringBuilder msgreturn = new StringBuilder(&quot;@C_CommissionRun_ID@ = &quot;).append(comRun.getDocumentNo()) </span>
+<span class="nc" id="L103">				.append(&quot; - &quot;).append(comRun.getDescription());</span>
+<span class="nc" id="L104">		addLog(comRun.getC_CommissionRun_ID(), null, null, msgreturn.toString(), MCommissionRun.Table_ID, comRun.getC_CommissionRun_ID());</span>
+<span class="nc" id="L105">		return &quot;@OK@&quot;;</span>
+	}	//	doIt
+	
+	/**
+	 *  Check if the process parameters are valid
+	 *  @throws Exception if the commission record is not valid
+	 */
+	protected void checkParameters() {
+<span class="nc bnc" id="L113" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(&quot;C_Commission_ID=&quot; + getRecord_ID() + &quot;, StartDate=&quot; + p_StartDate);</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">		if (p_StartDate == null)</span>
+<span class="nc" id="L115">			p_StartDate = new Timestamp (System.currentTimeMillis());</span>
+<span class="nc" id="L116">		m_com = new MCommission (getCtx(), getRecord_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">		if (m_com.get_ID() == 0)</span>
+<span class="nc" id="L118">			throw new AdempiereUserError (&quot;No Commission&quot;);</span>
+<span class="nc" id="L119">	}</span>
+	
+	/**
+	 *  Creates the Commission run with the parameter start date
+	 *  and sets the description
+	 *  @return MCommissionRun
+	 */
+	protected MCommissionRun createCommissionRun() {
+<span class="nc" id="L127">		MCommissionRun comRun = new MCommissionRun(m_com);</span>
+<span class="nc" id="L128">		comRun.setStartDate(p_StartDate);</span>
+<span class="nc" id="L129">		comRun.setDescription(getCommissionRunDescription());</span>
+<span class="nc" id="L130">		comRun.saveEx();</span>
+<span class="nc" id="L131">		return comRun;</span>
+	}
+	
+	/**
+	 *  Returns the String that will be used for the description column
+	 *  in the Commission Run
+	 *  @return Description String
+	 */
+	protected String getCommissionRunDescription() {
+		// 01-Jan-2000 - 31-Jan-2001 - USD
+<span class="nc" id="L141">		SimpleDateFormat format = DisplayType.getDateFormat(DisplayType.Date);</span>
+<span class="nc" id="L142">		StringBuilder description = new StringBuilder().append(format.format(p_StartDate))</span>
+<span class="nc" id="L143">				.append(&quot; - &quot;).append(format.format(m_EndDate))</span>
+<span class="nc" id="L144">				.append(&quot; - &quot;).append(MCurrency.getISO_Code(getCtx(), m_com.getC_Currency_ID()));</span>
+<span class="nc" id="L145">		return description.toString();</span>
+	}
+	
+	/**
+	 *  Creates the SQL statement string that is used to generate the
+	 *  Commission detail records 
+	 *  @param commissionLine MCommissionLine
+	 *  @return SQL statement
+	 */
+	protected String getCommissionCalculationSQL(MCommissionLine commissionLine) {
+<span class="nc" id="L155">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">		if (MCommission.DOCBASISTYPE_Receipt.equals(m_com.getDocBasisType()))</span>
+		{
+<span class="nc" id="L158">			sql.append(getPaymentCommissionSQL());</span>
+<span class="nc" id="L159">		}</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		else if (MCommission.DOCBASISTYPE_Order.equals(m_com.getDocBasisType()))</span>
+		{
+<span class="nc" id="L162">			sql.append(getOrderCommissionSQL());</span>
+<span class="nc" id="L163">		}</span>
+		else 	//	Invoice Basis
+		{
+<span class="nc" id="L166">			sql.append(getInvoiceCommissionSQL());</span>
+		}
+<span class="nc" id="L168">		sql.append(getCommissionLineWhereClause(commissionLine));</span>
+		//	Grouping
+<span class="nc bnc" id="L170" title="All 2 branches missed.">		if (!m_com.isListDetails())</span>
+<span class="nc" id="L171">			sql.append(&quot; GROUP BY h.C_Currency_ID&quot;);</span>
+		
+<span class="nc" id="L173">		return sql.toString();</span>
+	}
+	
+	/**
+	 *  Creates the SQL statement for payments (C_Payment)
+	 *  @return SQL statement
+	 */
+	protected String getPaymentCommissionSQL() {
+<span class="nc" id="L181">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">		if (m_com.isListDetails())</span>
+		{
+<span class="nc" id="L184">			sql.append(&quot;SELECT h.C_Currency_ID, CASE WHEN h.GrandTotal &lt;&gt; 0 &quot;)</span>
+<span class="nc" id="L185">				.append(&quot; 		THEN (l.LineNetAmt*al.Amount/h.GrandTotal) &quot;)</span>
+<span class="nc" id="L186">				.append(&quot;		ELSE 0 END AS Amt,&quot;)</span>
+<span class="nc" id="L187">				.append(&quot; CASE WHEN h.GrandTotal &lt;&gt; 0 &quot;)</span>
+<span class="nc" id="L188">				.append(&quot;		THEN (l.QtyInvoiced*al.Amount/h.GrandTotal) &quot;)</span>
+<span class="nc" id="L189">				.append(&quot;		ELSE 0 END AS Qty,&quot;)</span>
+<span class="nc" id="L190">				.append(&quot; NULL, l.C_InvoiceLine_ID, p.DocumentNo||'_'||h.DocumentNo,&quot;)</span>
+<span class="nc" id="L191">				.append(&quot; COALESCE(prd.Value,l.Description), h.DateInvoiced &quot;)</span>
+<span class="nc" id="L192">				.append(&quot;FROM C_Payment p&quot;)</span>
+<span class="nc" id="L193">				.append(&quot; INNER JOIN C_AllocationLine al ON (p.C_Payment_ID=al.C_Payment_ID)&quot;)</span>
+<span class="nc" id="L194">				.append(&quot; INNER JOIN C_Invoice h ON (al.C_Invoice_ID = h.C_Invoice_ID)&quot;)</span>
+<span class="nc" id="L195">				.append(&quot; INNER JOIN C_InvoiceLine l ON (h.C_Invoice_ID = l.C_Invoice_ID) &quot;)</span>
+<span class="nc" id="L196">				.append(&quot; LEFT OUTER JOIN M_Product prd ON (l.M_Product_ID = prd.M_Product_ID) &quot;)</span>
+<span class="nc" id="L197">				.append(&quot;WHERE p.DocStatus IN ('CL','CO','RE')&quot;)</span>
+<span class="nc" id="L198">				.append(&quot; AND h.IsSOTrx='Y'&quot;)</span>
+<span class="nc" id="L199">				.append(&quot; AND p.AD_Client_ID = ?&quot;)</span>
+<span class="nc" id="L200">				.append(&quot; AND p.DateTrx BETWEEN ? AND ?&quot;);</span>
+<span class="nc" id="L201">		}</span>
+		else
+		{
+<span class="nc" id="L204">			sql.append(&quot;SELECT h.C_Currency_ID, &quot;)</span>
+<span class="nc" id="L205">				.append(&quot; SUM(CASE WHEN h.GrandTotal &lt;&gt; 0 &quot;)</span>
+<span class="nc" id="L206">				.append(&quot;		THEN l.LineNetAmt*al.Amount/h.GrandTotal ELSE 0 END) AS Amt,&quot;)</span>
+<span class="nc" id="L207">				.append(&quot; SUM(CASE WHEN h.GrandTotal &lt;&gt; 0 &quot;)</span>
+<span class="nc" id="L208">				.append(&quot;		THEN l.QtyInvoiced*al.Amount/h.GrandTotal ELSE 0 END) AS Qty,&quot;)</span>
+<span class="nc" id="L209">				.append(&quot; NULL, NULL, NULL, NULL, MAX(h.DateInvoiced) &quot;)</span>
+<span class="nc" id="L210">				.append(&quot;FROM C_Payment p&quot;)</span>
+<span class="nc" id="L211">				.append(&quot; INNER JOIN C_AllocationLine al ON (p.C_Payment_ID=al.C_Payment_ID)&quot;)</span>
+<span class="nc" id="L212">				.append(&quot; INNER JOIN C_Invoice h ON (al.C_Invoice_ID = h.C_Invoice_ID)&quot;)</span>
+<span class="nc" id="L213">				.append(&quot; INNER JOIN C_InvoiceLine l ON (h.C_Invoice_ID = l.C_Invoice_ID) &quot;)</span>
+<span class="nc" id="L214">				.append(&quot;WHERE p.DocStatus IN ('CL','CO','RE')&quot;)</span>
+<span class="nc" id="L215">				.append(&quot; AND h.IsSOTrx='Y'&quot;)</span>
+<span class="nc" id="L216">				.append(&quot; AND p.AD_Client_ID = ?&quot;)</span>
+<span class="nc" id="L217">				.append(&quot; AND p.DateTrx BETWEEN ? AND ?&quot;);</span>
+		}
+<span class="nc" id="L219">		return sql.toString();</span>
+	}
+	
+	/**
+	 *  Creates the SQL statement for orders (C_Order)
+	 *  @return SQL statement
+	 */
+	protected String getOrderCommissionSQL() {
+<span class="nc" id="L227">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">		if (m_com.isListDetails())</span>
+		{
+<span class="nc" id="L230">			sql.append(&quot;SELECT h.C_Currency_ID, l.LineNetAmt, l.QtyOrdered, &quot;)</span>
+<span class="nc" id="L231">				.append(&quot;l.C_OrderLine_ID, NULL, h.DocumentNo,&quot;)</span>
+<span class="nc" id="L232">				.append(&quot; COALESCE(prd.Value,l.Description),h.DateOrdered &quot;)</span>
+<span class="nc" id="L233">				.append(&quot;FROM C_Order h&quot;)</span>
+<span class="nc" id="L234">				.append(&quot; INNER JOIN C_OrderLine l ON (h.C_Order_ID = l.C_Order_ID)&quot;)</span>
+<span class="nc" id="L235">				.append(&quot; LEFT OUTER JOIN M_Product prd ON (l.M_Product_ID = prd.M_Product_ID) &quot;)</span>
+<span class="nc" id="L236">				.append(&quot;WHERE h.DocStatus IN ('CL','CO')&quot;)</span>
+<span class="nc" id="L237">				.append(&quot; AND h.IsSOTrx='Y'&quot;)</span>
+<span class="nc" id="L238">				.append(&quot; AND h.AD_Client_ID = ?&quot;)</span>
+<span class="nc" id="L239">				.append(&quot; AND h.DateOrdered BETWEEN ? AND ?&quot;);</span>
+<span class="nc" id="L240">		}</span>
+		else
+		{
+<span class="nc" id="L243">			sql.append(&quot;SELECT h.C_Currency_ID, SUM(l.LineNetAmt) AS Amt,&quot;)</span>
+<span class="nc" id="L244">				.append(&quot; SUM(l.QtyOrdered) AS Qty, &quot;)</span>
+<span class="nc" id="L245">				.append(&quot;NULL, NULL, NULL, NULL, MAX(h.DateOrdered) &quot;)</span>
+<span class="nc" id="L246">				.append(&quot;FROM C_Order h&quot;)</span>
+<span class="nc" id="L247">				.append(&quot; INNER JOIN C_OrderLine l ON (h.C_Order_ID = l.C_Order_ID) &quot;)</span>
+<span class="nc" id="L248">				.append(&quot;WHERE h.DocStatus IN ('CL','CO')&quot;)</span>
+<span class="nc" id="L249">				.append(&quot; AND h.IsSOTrx='Y'&quot;)</span>
+<span class="nc" id="L250">				.append(&quot; AND h.AD_Client_ID = ?&quot;)</span>
+<span class="nc" id="L251">				.append(&quot; AND h.DateOrdered BETWEEN ? AND ?&quot;);</span>
+		}
+<span class="nc" id="L253">		return sql.toString();</span>
+	}
+	
+	/**
+	 *  Creates the SQL statement for invoices (C_Invoice)
+	 *  @return SQL statement
+	 */
+	protected String getInvoiceCommissionSQL() {
+<span class="nc" id="L261">		StringBuilder sql = new StringBuilder();</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">		if (m_com.isListDetails())</span>
+		{
+<span class="nc" id="L264">			sql.append(&quot;SELECT h.C_Currency_ID, l.LineNetAmt, l.QtyInvoiced, &quot;)</span>
+<span class="nc" id="L265">				.append(&quot;NULL, l.C_InvoiceLine_ID, h.DocumentNo,&quot;)</span>
+<span class="nc" id="L266">				.append(&quot; COALESCE(prd.Value,l.C_InvoiceLine_Description),h.DateInvoiced &quot;)</span>
+<span class="nc" id="L267">				.append(&quot;FROM RV_C_Invoice h&quot;)</span>
+<span class="nc" id="L268">				.append(&quot; INNER JOIN RV_C_InvoiceLine l ON (h.C_Invoice_ID = l.C_Invoice_ID)&quot;)</span>
+<span class="nc" id="L269">				.append(&quot; LEFT OUTER JOIN M_Product prd ON (l.M_Product_ID = prd.M_Product_ID) &quot;)</span>
+<span class="nc" id="L270">				.append(&quot;WHERE h.DocStatus IN ('CL','CO','RE')&quot;)</span>
+<span class="nc" id="L271">				.append(&quot; AND h.IsSOTrx='Y'&quot;)</span>
+<span class="nc" id="L272">				.append(&quot; AND h.AD_Client_ID = ?&quot;)</span>
+<span class="nc" id="L273">				.append(&quot; AND h.DateInvoiced BETWEEN ? AND ?&quot;);</span>
+<span class="nc" id="L274">		}</span>
+		else
+		{
+<span class="nc" id="L277">			sql.append(&quot;SELECT h.C_Currency_ID, SUM(l.LineNetAmt) AS Amt,&quot;)</span>
+<span class="nc" id="L278">				.append(&quot; SUM(l.QtyInvoiced) AS Qty, &quot;)</span>
+<span class="nc" id="L279">				.append(&quot;NULL, NULL, NULL, NULL, MAX(h.DateInvoiced) &quot;)</span>
+<span class="nc" id="L280">				.append(&quot;FROM RV_C_Invoice h&quot;)</span>
+<span class="nc" id="L281">				.append(&quot; INNER JOIN RV_C_InvoiceLine l ON (h.C_Invoice_ID = l.C_Invoice_ID) &quot;)</span>
+<span class="nc" id="L282">				.append(&quot;WHERE h.DocStatus IN ('CL','CO','RE')&quot;)</span>
+<span class="nc" id="L283">				.append(&quot; AND h.IsSOTrx='Y'&quot;)</span>
+<span class="nc" id="L284">				.append(&quot; AND h.AD_Client_ID = ?&quot;)</span>
+<span class="nc" id="L285">				.append(&quot; AND h.DateInvoiced BETWEEN ? AND ?&quot;);</span>
+		}
+<span class="nc" id="L287">		return sql.toString();</span>
+	}
+	
+	/**
+	 *  Creates the SQL WHERE clause based on the field values 
+	 *  defined in the Commission Lien record
+	 *  @return SQL statement
+	 */
+	protected String getCommissionLineWhereClause(MCommissionLine commissionLine) {
+<span class="nc" id="L296">		StringBuilder sql = new StringBuilder();</span>
+		//		CommissionOrders/Invoices
+<span class="nc bnc" id="L298" title="All 2 branches missed.">		if (commissionLine.isCommissionOrders())</span>
+		{
+<span class="nc" id="L300">			MUser[] users = MUser.getOfBPartner(getCtx(), m_com.getC_BPartner_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L301" title="All 4 branches missed.">			if (users == null || users.length == 0)</span>
+<span class="nc" id="L302">				throw new AdempiereUserError (&quot;Commission Business Partner has no Users/Contact&quot;);</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">			if (users.length == 1)</span>
+			{
+<span class="nc" id="L305">				int SalesRep_ID = users[0].getAD_User_ID();</span>
+<span class="nc" id="L306">				sql.append(&quot; AND h.SalesRep_ID=&quot;).append(SalesRep_ID);</span>
+<span class="nc" id="L307">			}</span>
+			else
+			{
+<span class="nc" id="L310">				log.warning(&quot;Not 1 User/Contact for C_BPartner_ID=&quot; </span>
+<span class="nc" id="L311">						+ m_com.getC_BPartner_ID() + &quot; but &quot; + users.length);</span>
+<span class="nc" id="L312">				sql.append(&quot; AND h.SalesRep_ID IN (SELECT AD_User_ID FROM AD_User WHERE C_BPartner_ID=&quot;)</span>
+<span class="nc" id="L313">				.append(m_com.getC_BPartner_ID()).append(&quot;)&quot;);</span>
+			}
+		}
+		//		Organization
+<span class="nc bnc" id="L317" title="All 2 branches missed.">		if (commissionLine.getOrg_ID() != 0)</span>
+<span class="nc" id="L318">			sql.append(&quot; AND h.AD_Org_ID=&quot;).append(commissionLine.getOrg_ID());</span>
+		//	BPartner
+<span class="nc bnc" id="L320" title="All 2 branches missed.">		if (commissionLine.getC_BPartner_ID() != 0)</span>
+<span class="nc" id="L321">			sql.append(&quot; AND h.C_BPartner_ID=&quot;).append(commissionLine.getC_BPartner_ID());</span>
+		//	BPartner Group
+<span class="nc bnc" id="L323" title="All 2 branches missed.">		if (commissionLine.getC_BP_Group_ID() != 0)</span>
+<span class="nc" id="L324">			sql.append(&quot; AND h.C_BPartner_ID IN &quot;)</span>
+<span class="nc" id="L325">			.append(&quot;(SELECT C_BPartner_ID FROM C_BPartner WHERE C_BP_Group_ID=&quot;).append(commissionLine.getC_BP_Group_ID()).append(&quot;)&quot;);</span>
+		//	Sales Region
+<span class="nc bnc" id="L327" title="All 2 branches missed.">		if (commissionLine.getC_SalesRegion_ID() != 0)</span>
+<span class="nc" id="L328">			sql.append(&quot; AND h.C_BPartner_Location_ID IN &quot;)</span>
+<span class="nc" id="L329">			.append(&quot;(SELECT C_BPartner_Location_ID FROM C_BPartner_Location WHERE C_SalesRegion_ID=&quot;).append(commissionLine.getC_SalesRegion_ID()).append(&quot;)&quot;);</span>
+		//	Product
+<span class="nc bnc" id="L331" title="All 2 branches missed.">		if (commissionLine.getM_Product_ID() != 0)</span>
+<span class="nc" id="L332">			sql.append(&quot; AND l.M_Product_ID=&quot;).append(commissionLine.getM_Product_ID());</span>
+		//	Product Category
+<span class="nc bnc" id="L334" title="All 2 branches missed.">		if (commissionLine.getM_Product_Category_ID() != 0)</span>
+<span class="nc" id="L335">			sql.append(&quot; AND l.M_Product_ID IN &quot;)</span>
+<span class="nc" id="L336">			.append(&quot;(SELECT M_Product_ID FROM M_Product WHERE M_Product_Category_ID=&quot;).append(commissionLine.getM_Product_Category_ID()).append(&quot;)&quot;);</span>
+		//	Payment Rule
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		if (commissionLine.getPaymentRule() != null)</span>
+<span class="nc" id="L339">			sql.append(&quot; AND h.PaymentRule='&quot;).append(commissionLine.getPaymentRule()).append(&quot;'&quot;);</span>
+
+<span class="nc" id="L341">		return sql.toString();</span>
+	}
+
+	/**
+	 * 	Set Start and End Date
+	 */
+	protected void setStartEndDate()
+	{
+<span class="nc" id="L349">		GregorianCalendar cal = new GregorianCalendar(Language.getLoginLanguage().getLocale());</span>
+<span class="nc" id="L350">		cal.setTimeInMillis(p_StartDate.getTime());</span>
+<span class="nc" id="L351">		cal.set(Calendar.HOUR_OF_DAY, 0);</span>
+<span class="nc" id="L352">		cal.set(Calendar.MINUTE, 0);</span>
+<span class="nc" id="L353">		cal.set(Calendar.SECOND, 0);</span>
+<span class="nc" id="L354">		cal.set(Calendar.MILLISECOND, 0);</span>
+		//	Yearly
+<span class="nc bnc" id="L356" title="All 2 branches missed.">		if (MCommission.FREQUENCYTYPE_Yearly.equals(m_com.getFrequencyType()))</span>
+		{
+<span class="nc" id="L358">			cal.set(Calendar.DAY_OF_YEAR, 1);</span>
+<span class="nc" id="L359">			p_StartDate = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L361">			cal.add(Calendar.YEAR, 1);</span>
+<span class="nc" id="L362">			cal.add(Calendar.DAY_OF_YEAR, -1); </span>
+<span class="nc" id="L363">			m_EndDate = new Timestamp (cal.getTimeInMillis());</span>
+			
+<span class="nc" id="L365">		}</span>
+		//	Quarterly
+<span class="nc bnc" id="L367" title="All 2 branches missed.">		else if (MCommission.FREQUENCYTYPE_Quarterly.equals(m_com.getFrequencyType()))</span>
+		{
+<span class="nc" id="L369">			cal.set(Calendar.DAY_OF_MONTH, 1);</span>
+<span class="nc" id="L370">			int month = cal.get(Calendar.MONTH);</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">			if (month &lt; Calendar.APRIL)</span>
+<span class="nc" id="L372">				cal.set(Calendar.MONTH, Calendar.JANUARY);</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">			else if (month &lt; Calendar.JULY)</span>
+<span class="nc" id="L374">				cal.set(Calendar.MONTH, Calendar.APRIL);</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">			else if (month &lt; Calendar.OCTOBER)</span>
+<span class="nc" id="L376">				cal.set(Calendar.MONTH, Calendar.JULY);</span>
+			else
+<span class="nc" id="L378">				cal.set(Calendar.MONTH, Calendar.OCTOBER);</span>
+<span class="nc" id="L379">			p_StartDate = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L381">			cal.add(Calendar.MONTH, 3);</span>
+<span class="nc" id="L382">			cal.add(Calendar.DAY_OF_YEAR, -1); </span>
+<span class="nc" id="L383">			m_EndDate = new Timestamp (cal.getTimeInMillis());</span>
+<span class="nc" id="L384">		}</span>
+		//	Weekly
+<span class="nc bnc" id="L386" title="All 2 branches missed.">		else if (MCommission.FREQUENCYTYPE_Weekly.equals(m_com.getFrequencyType()))</span>
+		{
+<span class="nc" id="L388">			cal.set(Calendar.DAY_OF_WEEK, Calendar.SUNDAY);</span>
+<span class="nc" id="L389">			p_StartDate = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L391">			cal.add(Calendar.DAY_OF_YEAR, 7); </span>
+<span class="nc" id="L392">			m_EndDate = new Timestamp (cal.getTimeInMillis());</span>
+<span class="nc" id="L393">		}</span>
+		//	Monthly
+		else
+		{
+<span class="nc" id="L397">			cal.set(Calendar.DAY_OF_MONTH, 1);</span>
+<span class="nc" id="L398">			p_StartDate = new Timestamp (cal.getTimeInMillis());</span>
+			//
+<span class="nc" id="L400">			cal.add(Calendar.MONTH, 1);</span>
+<span class="nc" id="L401">			cal.add(Calendar.DAY_OF_YEAR, -1); </span>
+<span class="nc" id="L402">			m_EndDate = new Timestamp (cal.getTimeInMillis());</span>
+		}
+<span class="nc bnc" id="L404" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;setStartEndDate = &quot; + p_StartDate + &quot; - &quot; + m_EndDate);</span>
+		
+<span class="nc" id="L406">	}	//	setStartEndDate</span>
+
+	/**
+	 * 	Create Commission Detail
+	 *	@param sql sql statement
+	 *	@param comAmt parent
+	 * @throws Exception 
+	 */
+	protected void createDetail (String sql, MCommissionAmt comAmt) throws Exception
+	{
+<span class="nc" id="L416">		try (PreparedStatement pstmt = DB.prepareStatement(sql, get_TrxName());)</span>
+		{
+<span class="nc" id="L418">			pstmt.setInt(1, m_com.getAD_Client_ID());</span>
+<span class="nc" id="L419">			pstmt.setTimestamp(2, p_StartDate);</span>
+<span class="nc" id="L420">			pstmt.setTimestamp(3, m_EndDate);</span>
+<span class="nc" id="L421">			ResultSet rs = pstmt.executeQuery();</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+				//	CommissionAmount, C_Currency_ID, Amt, Qty,
+<span class="nc" id="L425">				MCommissionDetail cd = new MCommissionDetail (comAmt,</span>
+<span class="nc" id="L426">					rs.getInt(1), rs.getBigDecimal(2), rs.getBigDecimal(3));</span>
+					
+				//	C_OrderLine_ID, C_InvoiceLine_ID,
+<span class="nc" id="L429">				cd.setLineIDs(rs.getInt(4), rs.getInt(5));</span>
+				
+				//	Reference, Info,
+<span class="nc" id="L432">				String s = rs.getString(6);</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">				if (s != null)</span>
+<span class="nc" id="L434">					cd.setReference(s);</span>
+<span class="nc" id="L435">				s = rs.getString(7);</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">				if (s != null)</span>
+<span class="nc" id="L437">					cd.setInfo(s);</span>
+				
+				//	Date
+<span class="nc" id="L440">				Timestamp date = rs.getTimestamp(8);</span>
+<span class="nc" id="L441">				cd.setConvertedAmt(date);</span>
+				
+				//
+<span class="nc bnc" id="L444" title="All 2 branches missed.">				if (!cd.save())</span>
+<span class="nc" id="L445">					throw new IllegalArgumentException (&quot;CommissionCalc - Detail Not saved&quot;);</span>
+			}
+		}
+<span class="nc" id="L448">		catch (Exception e)</span>
+		{
+<span class="nc" id="L450">			throw new AdempiereSystemError(&quot;System Error: &quot; + e.getLocalizedMessage(), e);</span>
+		}
+<span class="nc" id="L452">	}	//	createDetail</span>
+
+}	//	CommissionCalc
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

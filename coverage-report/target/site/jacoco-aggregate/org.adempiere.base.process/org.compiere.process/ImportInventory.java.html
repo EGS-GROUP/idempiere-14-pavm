@@ -1,0 +1,587 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../../jacoco-resources/report.gif" type="image/gif"/><title>ImportInventory.java</title><link rel="stylesheet" href="../../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../../index.html" class="el_report">coverage-report</a> &gt; <a href="../index.html" class="el_bundle">org.adempiere.base.process</a> &gt; <a href="index.source.html" class="el_package">org.compiere.process</a> &gt; <span class="el_source">ImportInventory.java</span></div><h1>ImportInventory.java</h1><pre class="source lang-java linenums">/******************************************************************************
+ * Product: Adempiere ERP &amp; CRM Smart Business Solution                       *
+ * Copyright (C) 1999-2006 ComPiere, Inc. All Rights Reserved.                *
+ * This program is free software; you can redistribute it and/or modify it    *
+ * under the terms version 2 of the GNU General Public License as published   *
+ * by the Free Software Foundation. This program is distributed in the hope   *
+ * that it will be useful, but WITHOUT ANY WARRANTY; without even the implied *
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.           *
+ * See the GNU General Public License for more details.                       *
+ * You should have received a copy of the GNU General Public License along    *
+ * with this program; if not, write to the Free Software Foundation, Inc.,    *
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.                     *
+ * For the text or an alternative of this public license, you may reach us    *
+ * ComPiere, Inc., 2620 Augustine Dr. #245, Santa Clara, CA 95054, USA        *
+ * or via info@compiere.org or http://www.compiere.org/license.html           *
+ *****************************************************************************/
+package org.compiere.process;
+
+import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.util.logging.Level;
+
+import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.model.ImportValidator;
+import org.adempiere.process.ImportProcess;
+import org.compiere.model.I_C_DocType;
+import org.compiere.model.MAcctSchema;
+import org.compiere.model.MAttributeSet;
+import org.compiere.model.MAttributeSetInstance;
+import org.compiere.model.MCost;
+import org.compiere.model.MCostElement;
+import org.compiere.model.MDocType;
+import org.compiere.model.MInventory;
+import org.compiere.model.MInventoryLine;
+import org.compiere.model.MProcessPara;
+import org.compiere.model.MProduct;
+import org.compiere.model.MProductCategoryAcct;
+import org.compiere.model.ModelValidationEngine;
+import org.compiere.model.X_I_Inventory;
+import org.compiere.util.AdempiereUserError;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
+import org.compiere.util.Env;
+import org.compiere.util.Msg;
+import org.compiere.util.TimeUtil;
+import org.compiere.util.ValueNamePair;
+
+/**
+ *	Import Physical Inventory from I_Inventory
+ *
+ * 	@author 	Jorg Janke
+ * 	@version 	$Id: ImportInventory.java,v 1.2 2006/07/30 00:51:01 jjanke Exp $
+ * 
+ *  Contributor:
+ *  Carlos Ruiz - globalqss - IDEMPIERE-281 Extend Import Inventory to support also internal use
+ *  Deepak Pansheriya - logilite - IDEMPIERE-2314 Making import inventory process extendible
+ */
+@org.adempiere.base.annotation.Process
+<span class="nc" id="L61">public class ImportInventory extends SvrProcess implements ImportProcess</span>
+{
+	/**	Client to be imported to		*/
+<span class="nc" id="L64">	private int				p_AD_Client_ID = 0;</span>
+	/**	Organization to be imported to	*/
+<span class="nc" id="L66">	private int				p_AD_Org_ID = 0;</span>
+	/**	Location to be imported to		*/
+<span class="nc" id="L68">	private int				p_M_Locator_ID = 0;</span>
+	/**	Default Date					*/
+<span class="nc" id="L70">	private Timestamp		p_MovementDate = null;</span>
+	/**	Delete old Imported				*/
+<span class="nc" id="L72">	private boolean			p_DeleteOldImported = false;</span>
+	
+	//@Trifon
+	/**	Update Costing					*/
+<span class="nc" id="L76">	private boolean			p_UpdateCosting = false;</span>
+	/**	Accounting Schema in which costing to be updated	*/
+<span class="nc" id="L78">	private int				p_C_AcctSchema_ID = 0;</span>
+<span class="nc" id="L79">	MAcctSchema acctSchema 	= null;</span>
+	/**	Cost Type for which costing to be updated		*/
+<span class="nc" id="L81">	private int				p_M_CostType_ID = 0;</span>
+	/**	Cost Element for which costing to be updated	*/
+<span class="nc" id="L83">	private int				p_M_CostElement_ID = 0;</span>
+	/**	Organization for which Costing record must be updated	*/
+<span class="nc" id="L85">	private int				p_AD_OrgTrx_ID = 0;</span>
+	/**	Document Action					*/
+<span class="nc" id="L87">	private String			m_docAction = null;</span>
+<span class="nc" id="L88">	private MInventory 		costingDoc = null;</span>
+	
+<span class="nc" id="L90">	private int 			p_C_DocType_ID = 0;</span>
+	/**
+	 *  Prepare - e.g., get Parameters.
+	 */
+	protected void prepare()
+	{
+<span class="nc" id="L96">		ProcessInfoParameter[] para = getParameter();</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">		for (int i = 0; i &lt; para.length; i++)</span>
+		{
+<span class="nc" id="L99">			String name = para[i].getParameterName();</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">			if (para[i].getParameter() == null)</span>
+<span class="nc" id="L101">				;</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">			else if (name.equals(&quot;AD_Client_ID&quot;))</span>
+<span class="nc" id="L103">				p_AD_Client_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">			else if (name.equals(&quot;AD_Org_ID&quot;))</span>
+<span class="nc" id="L105">				p_AD_Org_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">			else if (name.equals(&quot;M_Locator_ID&quot;))</span>
+<span class="nc" id="L107">				p_M_Locator_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">			else if (name.equals(&quot;MovementDate&quot;))</span>
+<span class="nc" id="L109">				p_MovementDate = (Timestamp)para[i].getParameter();</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">			else if (name.equals(&quot;DeleteOldImported&quot;))</span>
+<span class="nc" id="L111">				p_DeleteOldImported = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">			else if (name.equals(&quot;IsUpdateCosting&quot;))</span>
+<span class="nc" id="L113">				p_UpdateCosting = &quot;Y&quot;.equals(para[i].getParameter());</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">			else if (name.equals(&quot;C_AcctSchema_ID&quot;))</span>
+<span class="nc" id="L115">				p_C_AcctSchema_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">			else if (name.equals(&quot;M_CostType_ID&quot;))</span>
+<span class="nc" id="L117">				p_M_CostType_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">			else if (name.equals(&quot;M_CostElement_ID&quot;))</span>
+<span class="nc" id="L119">				p_M_CostElement_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">			else if (name.equals(&quot;AD_OrgTrx_ID&quot;))</span>
+<span class="nc" id="L121">				p_AD_OrgTrx_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">			else if (name.equals(&quot;DocAction&quot;))</span>
+<span class="nc" id="L123">				m_docAction = (String)para[i].getParameter();</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">			else if (name.equals(&quot;C_DocType_ID&quot;))</span>
+<span class="nc" id="L125">				p_C_DocType_ID = ((BigDecimal)para[i].getParameter()).intValue();</span>
+			else
+<span class="nc" id="L127">				MProcessPara.validateUnknownParameter(getProcessInfo().getAD_Process_ID(), para[i]);</span>
+		}
+<span class="nc" id="L129">	}	//	prepare</span>
+
+
+	/**
+	 *  Perform process.
+	 *  @return Message
+	 *  @throws Exception
+	 */
+	protected String doIt() throws java.lang.Exception
+	{
+<span class="nc" id="L139">		StringBuilder msglog = new StringBuilder(&quot;M_Locator_ID=&quot;).append(p_M_Locator_ID).append(&quot;,MovementDate=&quot;).append(p_MovementDate);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info(msglog.toString());</span>
+		
+<span class="nc bnc" id="L142" title="All 2 branches missed.">		if (p_UpdateCosting) {</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">			if (p_C_AcctSchema_ID &lt;= 0) {</span>
+<span class="nc" id="L144">				throw new IllegalArgumentException(&quot;Accounting Schema required!&quot;);</span>
+			}
+<span class="nc bnc" id="L146" title="All 2 branches missed.">			if (p_M_CostType_ID &lt;= 0) {</span>
+<span class="nc" id="L147">				throw new IllegalArgumentException(&quot;Cost Type required!&quot;);</span>
+			}
+<span class="nc bnc" id="L149" title="All 2 branches missed.">			if (p_M_CostElement_ID &lt;= 0 ) {</span>
+<span class="nc" id="L150">				throw new IllegalArgumentException(&quot;Cost Element required!&quot;);</span>
+			}
+<span class="nc bnc" id="L152" title="All 2 branches missed.">			if (p_AD_OrgTrx_ID &lt; 0 ) {</span>
+<span class="nc" id="L153">				throw new IllegalArgumentException(&quot;AD_OrgTrx required!&quot;);</span>
+			}
+<span class="nc bnc" id="L155" title="All 2 branches missed.">			if (p_C_DocType_ID &lt;= 0 ) {</span>
+<span class="nc" id="L156">				throw new IllegalArgumentException(&quot;Cost Adjustment Document Type required!&quot;);</span>
+			}
+<span class="nc" id="L158">			 acctSchema = MAcctSchema.get(getCtx(), p_C_AcctSchema_ID, get_TrxName());</span>
+		}
+		
+<span class="nc" id="L161">		StringBuilder sql = null;</span>
+<span class="nc" id="L162">		int no = 0;</span>
+<span class="nc" id="L163">		StringBuilder clientCheck = new StringBuilder(&quot; AND AD_Client_ID=&quot;).append(p_AD_Client_ID);</span>
+
+		//	****	Prepare	****
+
+		//	Delete Old Imported
+<span class="nc bnc" id="L168" title="All 2 branches missed.">		if (p_DeleteOldImported)</span>
+		{
+<span class="nc" id="L170">			sql = new StringBuilder (&quot;DELETE FROM I_Inventory &quot;)</span>
+<span class="nc" id="L171">				  .append(&quot;WHERE I_IsImported='Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L172">			no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Delete Old Imported=&quot; + no);</span>
+		}
+
+		//	Set Client, Org, Location, IsActive, Created/Updated
+<span class="nc" id="L177">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L178">			  .append(&quot;SET AD_Client_ID = COALESCE (AD_Client_ID,&quot;).append (p_AD_Client_ID).append (&quot;),&quot;)</span>
+<span class="nc" id="L179">			  .append(&quot; AD_Org_ID = CASE WHEN COALESCE(AD_Org_ID,0)=0 THEN &quot;).append (p_AD_Org_ID).append (&quot; ELSE AD_Org_ID END,&quot;);</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">		if (p_MovementDate != null)</span>
+<span class="nc" id="L181">			sql.append(&quot; MovementDate = COALESCE (MovementDate,&quot;).append (DB.TO_DATE(p_MovementDate)).append (&quot;),&quot;);</span>
+<span class="nc" id="L182">		sql.append(&quot; IsActive = COALESCE (IsActive, 'Y'),&quot;)</span>
+<span class="nc" id="L183">			  .append(&quot; Created = COALESCE (Created, getDate()),&quot;)</span>
+<span class="nc" id="L184">			  .append(&quot; CreatedBy = COALESCE (CreatedBy, 0),&quot;)</span>
+<span class="nc" id="L185">			  .append(&quot; Updated = COALESCE (Updated, getDate()),&quot;)</span>
+<span class="nc" id="L186">			  .append(&quot; UpdatedBy = COALESCE (UpdatedBy, 0),&quot;)</span>
+<span class="nc" id="L187">			  .append(&quot; I_ErrorMsg = ' ',&quot;)</span>
+<span class="nc" id="L188">			  .append(&quot; M_Warehouse_ID = NULL,&quot;)	//	reset</span>
+<span class="nc" id="L189">			  .append(&quot; I_IsImported = 'N' &quot;)</span>
+<span class="nc" id="L190">			  .append(&quot;WHERE I_IsImported&lt;&gt;'Y' OR I_IsImported IS NULL&quot;);</span>
+<span class="nc" id="L191">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">		if (log.isLoggable(Level.INFO)) log.info (&quot;Reset=&quot; + no);</span>
+
+<span class="nc" id="L194">		ModelValidationEngine.get().fireImportValidate(this, null, null, ImportValidator.TIMING_BEFORE_VALIDATE);</span>
+		
+<span class="nc" id="L196">		sql = new StringBuilder (&quot;UPDATE I_Inventory o &quot;)</span>
+<span class="nc" id="L197">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Org, '&quot;)</span>
+<span class="nc" id="L198">			.append(&quot;WHERE (AD_Org_ID IS NULL OR AD_Org_ID=0&quot;)</span>
+<span class="nc" id="L199">			.append(&quot; OR EXISTS (SELECT * FROM AD_Org oo WHERE o.AD_Org_ID=oo.AD_Org_ID AND (oo.IsSummary='Y' OR oo.IsActive='N')))&quot;)</span>
+<span class="nc" id="L200">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L201">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L203">			log.warning (&quot;Invalid Org=&quot; + no);</span>
+
+		//	Document Type
+<span class="nc" id="L206">		sql = new StringBuilder (&quot;UPDATE I_Inventory i &quot;)</span>
+<span class="nc" id="L207">			.append(&quot;SET C_DocType_ID=(SELECT d.C_DocType_ID FROM C_DocType d&quot;)</span>
+<span class="nc" id="L208">			.append(&quot; WHERE d.Name=i.DocTypeName AND d.DocBaseType='MMI' AND i.AD_Client_ID=d.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L209">			.append(&quot;WHERE C_DocType_ID IS NULL AND DocTypeName IS NOT NULL&quot;)</span>
+<span class="nc" id="L210">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L211">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set DocType=&quot; + no);</span>
+<span class="nc" id="L213">		sql = new StringBuilder (&quot;UPDATE I_Inventory i &quot;)</span>
+<span class="nc" id="L214">				.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid DocType, ' &quot;)</span>
+<span class="nc" id="L215">			    .append(&quot;WHERE C_DocType_ID IS NULL AND DocTypeName IS NOT NULL&quot;)</span>
+<span class="nc" id="L216">				.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L217">			no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">			if (no != 0)</span>
+<span class="nc" id="L219">				log.warning (&quot;Invalid DocType=&quot; + no);</span>
+
+		//	Locator
+<span class="nc" id="L222">		sql = new StringBuilder (&quot;UPDATE I_Inventory i &quot;)</span>
+<span class="nc" id="L223">			.append(&quot;SET M_Locator_ID=(SELECT MAX(M_Locator_ID) FROM M_Locator l&quot;)</span>
+<span class="nc" id="L224">			.append(&quot; WHERE i.LocatorValue=l.Value AND i.AD_Client_ID=l.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L225">			.append(&quot;WHERE M_Locator_ID IS NULL AND LocatorValue IS NOT NULL&quot;)</span>
+<span class="nc" id="L226">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L227">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Locator from Value =&quot; + no);</span>
+<span class="nc" id="L229">		sql = new StringBuilder (&quot;UPDATE I_Inventory i &quot;)</span>
+<span class="nc" id="L230">			.append(&quot;SET M_Locator_ID=(SELECT MAX(M_Locator_ID) FROM M_Locator l&quot;)</span>
+<span class="nc" id="L231">			.append(&quot; WHERE i.X=l.X AND i.Y=l.Y AND i.Z=l.Z AND i.AD_Client_ID=l.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L232">			.append(&quot;WHERE M_Locator_ID IS NULL AND X IS NOT NULL AND Y IS NOT NULL AND Z IS NOT NULL&quot;)</span>
+<span class="nc" id="L233">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L234">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Locator from X,Y,Z =&quot; + no);</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">		if (p_M_Locator_ID != 0)</span>
+		{
+<span class="nc" id="L238">			sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L239">				.append(&quot;SET M_Locator_ID = &quot;).append (p_M_Locator_ID)</span>
+<span class="nc" id="L240">				.append (&quot; WHERE M_Locator_ID IS NULL&quot;)</span>
+<span class="nc" id="L241">				.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L242">			no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">			if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Locator from Parameter=&quot; + no);</span>
+		}
+<span class="nc" id="L245">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L246">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No Location, ' &quot;)</span>
+<span class="nc" id="L247">			.append(&quot;WHERE M_Locator_ID IS NULL&quot;)</span>
+<span class="nc" id="L248">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L249">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L251">			log.warning (&quot;No Location=&quot; + no);</span>
+
+		//	Set M_Warehouse_ID
+<span class="nc" id="L254">		sql = new StringBuilder (&quot;UPDATE I_Inventory i &quot;)</span>
+<span class="nc" id="L255">			.append(&quot;SET M_Warehouse_ID=(SELECT M_Warehouse_ID FROM M_Locator l WHERE i.M_Locator_ID=l.M_Locator_ID) &quot;)</span>
+<span class="nc" id="L256">			.append(&quot;WHERE M_Locator_ID IS NOT NULL&quot;)</span>
+<span class="nc" id="L257">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L258">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Warehouse from Locator =&quot; + no);</span>
+<span class="nc" id="L260">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L261">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No Warehouse, ' &quot;)</span>
+<span class="nc" id="L262">			.append(&quot;WHERE M_Warehouse_ID IS NULL&quot;)</span>
+<span class="nc" id="L263">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L264">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L266">			log.warning (&quot;No Warehouse=&quot; + no);</span>
+
+		// IDEMPIERE-590 do not allow locator/wh from different org
+<span class="nc" id="L269">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L270">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Locator not from Org, ' &quot;)</span>
+<span class="nc" id="L271">			.append(&quot;WHERE AD_Org_ID &lt;&gt; (SELECT AD_Org_ID FROM M_Warehouse WHERE M_Warehouse_ID = I_Inventory.M_Warehouse_ID&quot;)</span>
+<span class="nc" id="L272">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck).append(&quot; )&quot;);</span>
+<span class="nc" id="L273">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L275">			log.warning (&quot;Locator not from Org=&quot; + no);</span>
+
+		//	Product
+<span class="nc" id="L278">		sql = new StringBuilder (&quot;UPDATE I_Inventory i &quot;)</span>
+<span class="nc" id="L279">			  .append(&quot;SET M_Product_ID=(SELECT MAX(M_Product_ID) FROM M_Product p&quot;)</span>
+<span class="nc" id="L280">			  .append(&quot; WHERE i.Value=p.Value AND i.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L281">			  .append(&quot;WHERE M_Product_ID IS NULL AND Value IS NOT NULL&quot;)</span>
+<span class="nc" id="L282">			  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L283">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Product from Value=&quot; + no);</span>
+<span class="nc" id="L285">		sql = new StringBuilder (&quot;UPDATE I_Inventory i &quot;)</span>
+<span class="nc" id="L286">				  .append(&quot;SET M_Product_ID=(SELECT MAX(M_Product_ID) FROM M_Product p&quot;)</span>
+<span class="nc" id="L287">				  .append(&quot; WHERE i.UPC=p.UPC AND i.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L288">				  .append(&quot;WHERE M_Product_ID IS NULL AND UPC IS NOT NULL&quot;)</span>
+<span class="nc" id="L289">				  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L290">			no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Product from UPC=&quot; + no);</span>
+<span class="nc" id="L292">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L293">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No Product, ' &quot;)</span>
+<span class="nc" id="L294">			.append(&quot;WHERE M_Product_ID IS NULL&quot;)</span>
+<span class="nc" id="L295">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L296">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L298">			log.warning (&quot;No Product=&quot; + no);</span>
+
+		//	Charge
+<span class="nc" id="L301">		sql = new StringBuilder (&quot;UPDATE I_Inventory o &quot;)</span>
+<span class="nc" id="L302">			  .append(&quot;SET C_Charge_ID=(SELECT C_Charge_ID FROM C_Charge p&quot;)</span>
+<span class="nc" id="L303">			  .append(&quot; WHERE o.ChargeName=p.Name AND o.AD_Client_ID=p.AD_Client_ID) &quot;)</span>
+<span class="nc" id="L304">			  .append(&quot;WHERE C_Charge_ID IS NULL AND ChargeName IS NOT NULL AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L305">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		if (log.isLoggable(Level.FINE)) log.fine(&quot;Set Charge=&quot; + no);</span>
+<span class="nc" id="L307">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L308">				  .append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Invalid Charge, ' &quot;)</span>
+<span class="nc" id="L309">				  .append(&quot;WHERE C_Charge_ID IS NULL AND (ChargeName IS NOT NULL)&quot;)</span>
+<span class="nc" id="L310">				  .append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L311">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L313">			log.warning (&quot;Invalid Charge=&quot; + no);</span>
+
+		//	No QtyCount or QtyInternalUse
+<span class="nc" id="L316">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L317">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=No Qty Count or Internal Use, ' &quot;)</span>
+<span class="nc" id="L318">			.append(&quot;WHERE QtyCount IS NULL AND QtyInternalUse IS NULL&quot;)</span>
+<span class="nc" id="L319">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L320">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L322">			log.warning (&quot;No QtyCount or QtyInternalUse=&quot; + no);</span>
+
+		//	Excluding quantities
+<span class="nc" id="L325">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L326">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Excluding quantities, ' &quot;)</span>
+<span class="nc" id="L327">			.append(&quot;WHERE NVL(QtyInternalUse,0)&lt;&gt;0 AND (NVL(QtyCount,0)&lt;&gt;0 OR NVL(QtyBook,0)&lt;&gt;0) &quot;)</span>
+<span class="nc" id="L328">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L329">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L331">			log.warning (&quot;Excluding quantities=&quot; + no);</span>
+
+		//	Required charge for internal use
+<span class="nc" id="L334">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L335">			.append(&quot;SET I_IsImported='E', I_ErrorMsg=I_ErrorMsg||'ERR=Required charge, ' &quot;)</span>
+<span class="nc" id="L336">			.append(&quot;WHERE NVL(QtyInternalUse,0)&lt;&gt;0 AND NVL(C_Charge_ID,0)=0 &quot;)</span>
+<span class="nc" id="L337">			.append(&quot; AND I_IsImported&lt;&gt;'Y'&quot;).append (clientCheck);</span>
+<span class="nc" id="L338">		no = DB.executeUpdate (sql.toString (), get_TrxName());</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">		if (no != 0)</span>
+<span class="nc" id="L340">			log.warning (&quot;Required charge=&quot; + no);</span>
+
+<span class="nc" id="L342">		ModelValidationEngine.get().fireImportValidate(this, null, null, ImportValidator.TIMING_AFTER_VALIDATE);</span>
+		
+<span class="nc" id="L344">		commitEx();</span>
+		
+		/*********************************************************************/
+
+<span class="nc" id="L348">		MInventory inventory = null;</span>
+
+<span class="nc" id="L350">		int noInsert = 0;</span>
+<span class="nc" id="L351">		int noInsertLine = 0;</span>
+
+		//	Go through Inventory Records
+<span class="nc" id="L354">		sql = new StringBuilder (&quot;SELECT * FROM I_Inventory &quot;)</span>
+<span class="nc" id="L355">			.append(&quot;WHERE I_IsImported='N'&quot;).append (clientCheck)</span>
+<span class="nc" id="L356">			.append(&quot; ORDER BY M_Warehouse_ID, TRUNC(MovementDate), I_Inventory_ID&quot;);</span>
+<span class="nc" id="L357">		try (PreparedStatement pstmt = DB.prepareStatement (sql.toString (), get_TrxName());)</span>
+		{
+<span class="nc" id="L359">			ResultSet rs = pstmt.executeQuery ();</span>
+			//
+<span class="nc" id="L361">			int x_M_Warehouse_ID = -1;</span>
+<span class="nc" id="L362">			int x_C_DocType_ID = -1;</span>
+<span class="nc" id="L363">			Timestamp x_MovementDate = null;</span>
+<span class="nc" id="L364">			int x_isInternalUse = -1;</span>
+			
+<span class="nc" id="L366">			X_I_Inventory lastImp=null;</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">			while (rs.next())</span>
+			{
+<span class="nc" id="L369">				X_I_Inventory imp = new X_I_Inventory (getCtx (), rs, get_TrxName());</span>
+<span class="nc" id="L370">				Timestamp MovementDate = TimeUtil.getDay(imp.getMovementDate());</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">				int isInternalUse = (imp.getQtyInternalUse().signum() != 0) ? 1 : 0;</span>
+
+<span class="nc bnc" id="L373" title="All 2 branches missed.">				if (inventory == null</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">					|| imp.getM_Warehouse_ID() != x_M_Warehouse_ID</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">					|| imp.getC_DocType_ID() != x_C_DocType_ID</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">					|| !MovementDate.equals(x_MovementDate)</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">					|| isInternalUse != x_isInternalUse)</span>
+				{
+<span class="nc bnc" id="L379" title="All 2 branches missed.">					if (inventory != null) {</span>
+						
+<span class="nc" id="L381">						ModelValidationEngine.get().fireImportValidate(this, lastImp, inventory, ImportValidator.TIMING_AFTER_IMPORT);</span>
+						
+<span class="nc bnc" id="L383" title="All 4 branches missed.">						if (m_docAction != null &amp;&amp; m_docAction.length() &gt; 0) {</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">							if (!inventory.processIt(m_docAction)) {</span>
+<span class="nc" id="L385">								log.warning(&quot;Inventory Process Failed: &quot; + inventory + &quot; - &quot; + inventory.getProcessMsg());</span>
+<span class="nc" id="L386">								throw new IllegalStateException(&quot;Inventory Process Failed: &quot; + inventory + &quot; - &quot; + inventory.getProcessMsg());</span>
+
+							}
+<span class="nc" id="L389">							inventory.saveEx();</span>
+						}
+					}
+<span class="nc" id="L392">					inventory = new MInventory (getCtx(), 0, get_TrxName());</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">					if (imp.getC_DocType_ID() &gt; 0)</span>
+<span class="nc" id="L394">						inventory.setC_DocType_ID(imp.getC_DocType_ID());</span>
+<span class="nc" id="L395">					inventory.setClientOrg(imp.getAD_Client_ID(), imp.getAD_Org_ID());</span>
+<span class="nc" id="L396">					inventory.setDescription(&quot;I &quot; + imp.getM_Warehouse_ID() + &quot; &quot; + MovementDate);</span>
+<span class="nc" id="L397">					inventory.setM_Warehouse_ID(imp.getM_Warehouse_ID());</span>
+<span class="nc" id="L398">					inventory.setMovementDate(MovementDate);</span>
+					
+<span class="nc" id="L400">					ModelValidationEngine.get().fireImportValidate(this, imp, inventory, ImportValidator.TIMING_BEFORE_IMPORT);</span>
+					//
+<span class="nc bnc" id="L402" title="All 2 branches missed.">					if (!inventory.save())</span>
+					{
+<span class="nc" id="L404">						ValueNamePair vnp = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">						if (vnp != null) {</span>
+<span class="nc" id="L406">							imp.setI_ErrorMsg(vnp.getValue() + &quot;: &quot; + vnp.getName());</span>
+<span class="nc" id="L407">							imp.saveEx();</span>
+						}
+<span class="nc" id="L409">						log.log(Level.SEVERE, &quot;Inventory not saved&quot;);</span>
+<span class="nc" id="L410">						break;</span>
+					}
+<span class="nc" id="L412">					x_M_Warehouse_ID = imp.getM_Warehouse_ID();</span>
+<span class="nc" id="L413">					x_C_DocType_ID = imp.getC_DocType_ID();</span>
+<span class="nc" id="L414">					x_MovementDate = MovementDate;</span>
+<span class="nc" id="L415">					x_isInternalUse = isInternalUse;</span>
+<span class="nc" id="L416">					noInsert++;</span>
+				}
+<span class="nc" id="L418">				MProduct product = new MProduct(getCtx(), imp.getM_Product_ID(), get_TrxName());</span>
+				//	Line
+<span class="nc" id="L420">				int M_AttributeSetInstance_ID = generateASI(product,imp);</span>
+
+<span class="nc" id="L422">				MInventoryLine line = new MInventoryLine (inventory, </span>
+<span class="nc" id="L423">					imp.getM_Locator_ID(), imp.getM_Product_ID(), M_AttributeSetInstance_ID,</span>
+<span class="nc" id="L424">					imp.getQtyBook(), imp.getQtyCount(), imp.getQtyInternalUse());</span>
+<span class="nc" id="L425">				line.setDescription(imp.getDescription());</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">				if (imp.getC_Charge_ID() &gt; 0)</span>
+<span class="nc" id="L427">					line.setInventoryType(MInventoryLine.INVENTORYTYPE_ChargeAccount);</span>
+				else
+<span class="nc" id="L429">					line.setInventoryType(MInventoryLine.INVENTORYTYPE_InventoryDifference);</span>
+<span class="nc" id="L430">				line.setC_Charge_ID(imp.getC_Charge_ID());</span>
+				
+<span class="nc" id="L432">				ModelValidationEngine.get().fireImportValidate(this, imp, line, ImportValidator.TIMING_BEFORE_IMPORT);</span>
+				
+<span class="nc bnc" id="L434" title="All 2 branches missed.">				if (line.save())</span>
+				{
+<span class="nc" id="L436">					imp.setI_IsImported(true);</span>
+<span class="nc" id="L437">					imp.setM_Inventory_ID(line.getM_Inventory_ID());</span>
+<span class="nc" id="L438">					imp.setM_InventoryLine_ID(line.getM_InventoryLine_ID());</span>
+<span class="nc" id="L439">					imp.setProcessed(true);</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">					if (imp.save()) {</span>
+<span class="nc" id="L441">						noInsertLine++;</span>
+						//@Trifon update Product cost record if Update costing is enabled
+<span class="nc bnc" id="L443" title="All 2 branches missed.">						if (p_UpdateCosting) {</span>
+<span class="nc" id="L444">							updateCosting(imp, product, line);</span>
+						}
+					}
+<span class="nc" id="L447">				} else {</span>
+<span class="nc" id="L448">					ValueNamePair vnp = CLogger.retrieveError();</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">					if (vnp != null) {</span>
+<span class="nc" id="L450">						imp.setI_ErrorMsg(vnp.getValue() + &quot;: &quot; + vnp.getName());</span>
+<span class="nc" id="L451">						imp.saveEx();</span>
+					}
+<span class="nc" id="L453">					log.log(Level.SEVERE, &quot;Inventory Line not saved&quot;);</span>
+<span class="nc" id="L454">					break;</span>
+				}
+				
+<span class="nc" id="L457">				ModelValidationEngine.get().fireImportValidate(this, imp, line, ImportValidator.TIMING_AFTER_IMPORT);</span>
+<span class="nc" id="L458">				lastImp = imp;</span>
+			}
+<span class="nc bnc" id="L460" title="All 2 branches missed.">			if (inventory != null) {</span>
+<span class="nc bnc" id="L461" title="All 4 branches missed.">				if (m_docAction != null &amp;&amp; m_docAction.length() &gt; 0) {</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">					if (!inventory.processIt(m_docAction)) {</span>
+<span class="nc" id="L463">						log.warning(&quot;Inventory Process Failed: &quot; + inventory + &quot; - &quot; + inventory.getProcessMsg());</span>
+<span class="nc" id="L464">						throw new IllegalStateException(&quot;Inventory Process Failed: &quot; + inventory + &quot; - &quot; + inventory.getProcessMsg());</span>
+
+					}
+<span class="nc" id="L467">					inventory.saveEx();</span>
+				}
+			}
+			
+<span class="nc bnc" id="L471" title="All 2 branches missed.">			if (costingDoc != null) {</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">				if (!DocumentEngine.processIt(costingDoc, DocAction.ACTION_Complete)) </span>
+				{
+<span class="nc" id="L474">					StringBuilder msg = new StringBuilder();</span>
+<span class="nc" id="L475">					MDocType docType = MDocType.get(getCtx(), costingDoc.getC_DocType_ID());</span>
+<span class="nc" id="L476">					msg.append(Msg.getMsg(getCtx(), &quot;ProcessFailed&quot;)).append(&quot;: &quot;);</span>
+<span class="nc bnc" id="L477" title="All 2 branches missed.">					if (Env.isBaseLanguage(getCtx(), I_C_DocType.Table_Name))</span>
+<span class="nc" id="L478">						msg.append(docType.getName());</span>
+					else
+<span class="nc" id="L480">						msg.append(docType.get_Translation(I_C_DocType.COLUMNNAME_Name));</span>
+<span class="nc" id="L481">					throw new AdempiereUserError(msg.toString());</span>
+				}
+<span class="nc" id="L483">				costingDoc.saveEx();</span>
+			}
+		}
+<span class="nc" id="L486">		catch (Exception e)</span>
+		{
+<span class="nc" id="L488">			throw new AdempiereException(e);</span>
+		}
+
+		//	Set Error to indicator to not imported
+<span class="nc" id="L492">		sql = new StringBuilder (&quot;UPDATE I_Inventory &quot;)</span>
+<span class="nc" id="L493">			.append(&quot;SET I_IsImported='N', Updated=getDate() &quot;)</span>
+<span class="nc" id="L494">			.append(&quot;WHERE I_IsImported&lt;&gt;'Y'&quot;).append(clientCheck);</span>
+<span class="nc" id="L495">		no = DB.executeUpdate(sql.toString(), get_TrxName());</span>
+<span class="nc" id="L496">		addLog (0, null, new BigDecimal (no), &quot;@Errors@&quot;);</span>
+		//
+<span class="nc" id="L498">		addLog (0, null, new BigDecimal (noInsert), &quot;@M_Inventory_ID@: @Inserted@&quot;);</span>
+<span class="nc" id="L499">		addLog (0, null, new BigDecimal (noInsertLine), &quot;@M_InventoryLine_ID@: @Inserted@&quot;);</span>
+<span class="nc" id="L500">		return &quot;&quot;;</span>
+	}	//	doIt
+
+	protected int generateASI(MProduct product,X_I_Inventory imp){
+<span class="nc" id="L504">		int M_AttributeSetInstance_ID = 0;</span>
+<span class="nc bnc" id="L505" title="All 8 branches missed.">		if ((imp.getLot() != null &amp;&amp; imp.getLot().length() &gt; 0) || (imp.getSerNo() != null &amp;&amp; imp.getSerNo().length() &gt; 0))</span>
+		{
+			
+<span class="nc bnc" id="L508" title="All 2 branches missed.">			if (product.isInstanceAttribute())</span>
+			{
+<span class="nc" id="L510">				MAttributeSet mas = product.getAttributeSet();</span>
+<span class="nc" id="L511">				MAttributeSetInstance masi = new MAttributeSetInstance(getCtx(), 0, mas.getM_AttributeSet_ID(), get_TrxName());</span>
+<span class="nc bnc" id="L512" title="All 4 branches missed.">				if (mas.isLot() &amp;&amp; imp.getLot() != null)</span>
+<span class="nc" id="L513">					masi.setLot(imp.getLot(), imp.getM_Product_ID());</span>
+<span class="nc bnc" id="L514" title="All 4 branches missed.">				if (mas.isSerNo() &amp;&amp; imp.getSerNo() != null)</span>
+<span class="nc" id="L515">					masi.setSerNo(imp.getSerNo());</span>
+<span class="nc" id="L516">				masi.setDescription();</span>
+<span class="nc" id="L517">				masi.saveEx();</span>
+<span class="nc" id="L518">				M_AttributeSetInstance_ID = masi.getM_AttributeSetInstance_ID();</span>
+			}
+		}
+<span class="nc" id="L521">		return M_AttributeSetInstance_ID;</span>
+	}
+
+	protected void updateCosting(X_I_Inventory imp, MProduct product,
+			MInventoryLine line) {
+<span class="nc" id="L526">		String costingLevel = null;</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">		if(product.getM_Product_Category_ID() &gt; 0){</span>
+<span class="nc" id="L528">			MProductCategoryAcct pca = MProductCategoryAcct.get(getCtx(), product.getM_Product_Category_ID(), p_C_AcctSchema_ID, get_TrxName());</span>
+<span class="nc" id="L529">			costingLevel = pca.getCostingLevel();</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">			if (costingLevel == null) {</span>
+<span class="nc" id="L531">				costingLevel = acctSchema.getCostingLevel();</span>
+			}
+
+		}
+
+<span class="nc" id="L536">		int costOrgID = p_AD_OrgTrx_ID;</span>
+<span class="nc" id="L537">		int costASI = line.getM_AttributeSetInstance_ID();</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">		if (MAcctSchema.COSTINGLEVEL_Client.equals(costingLevel)){</span>
+<span class="nc" id="L539">			costOrgID = 0;</span>
+<span class="nc" id="L540">			costASI = 0;</span>
+<span class="nc bnc" id="L541" title="All 2 branches missed.">		} else if (MAcctSchema.COSTINGLEVEL_Organization.equals(costingLevel)) { </span>
+<span class="nc" id="L542">			costASI = 0;</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">		} else if (MAcctSchema.COSTINGLEVEL_BatchLot.equals(costingLevel)) {</span>
+<span class="nc" id="L544">			costOrgID = 0;</span>
+		}
+<span class="nc" id="L546">		MCost cost = MCost.get (product, costASI</span>
+<span class="nc" id="L547">				, acctSchema, costOrgID, p_M_CostElement_ID, get_TrxName());</span>
+<span class="nc bnc" id="L548" title="All 2 branches missed.">		if (cost.is_new())</span>
+<span class="nc" id="L549">			cost.saveEx();</span>
+<span class="nc bnc" id="L550" title="All 2 branches missed.">		if (costingDoc == null) {</span>
+<span class="nc" id="L551">			costingDoc = new MInventory(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L552">			costingDoc.setC_DocType_ID(p_C_DocType_ID);</span>
+<span class="nc" id="L553">			MCostElement costElement = MCostElement.get(cost.getM_CostElement_ID());</span>
+<span class="nc" id="L554">			costingDoc.setCostingMethod(costElement.getCostingMethod());</span>
+<span class="nc" id="L555">			costingDoc.setAD_Org_ID(imp.getAD_Org_ID());</span>
+<span class="nc" id="L556">			costingDoc.setDocAction(DocAction.ACTION_Complete);</span>
+<span class="nc" id="L557">			costingDoc.saveEx();</span>
+		}
+		
+<span class="nc" id="L560">		MInventoryLine costingLine = new MInventoryLine(getCtx(), 0, get_TrxName());</span>
+<span class="nc" id="L561">		costingLine.setM_Inventory_ID(costingDoc.getM_Inventory_ID());</span>
+<span class="nc" id="L562">		costingLine.setM_Product_ID(cost.getM_Product_ID());</span>
+<span class="nc" id="L563">		costingLine.setCurrentCostPrice(cost.getCurrentCostPrice());</span>
+<span class="nc" id="L564">		costingLine.setNewCostPrice(imp.getCurrentCostPrice());</span>
+<span class="nc" id="L565">		costingLine.setM_Locator_ID(0);</span>
+<span class="nc" id="L566">		costingLine.setAD_Org_ID(imp.getAD_Org_ID());</span>
+<span class="nc" id="L567">		costingLine.setM_AttributeSetInstance_ID(costASI);</span>
+<span class="nc" id="L568">		costingLine.saveEx();</span>
+		
+<span class="nc" id="L570">		imp.setM_CostingLine_ID(costingLine.getM_InventoryLine_ID());</span>
+<span class="nc" id="L571">		imp.saveEx();</span>
+<span class="nc" id="L572">	}</span>
+
+
+	@Override
+	public String getImportTableName() {
+<span class="nc" id="L577">		return X_I_Inventory.Table_Name;</span>
+	}
+
+
+	@Override
+	public String getWhereClause() {
+<span class="nc" id="L583">		StringBuilder msgreturn = new StringBuilder(&quot; AND AD_Client_ID=&quot;).append(p_AD_Client_ID);</span>
+<span class="nc" id="L584">		return msgreturn.toString();</span>
+	}
+}	//	ImportInventory
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>
